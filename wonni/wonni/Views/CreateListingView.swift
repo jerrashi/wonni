@@ -6,6 +6,7 @@
 import SwiftUI
 import SwiftData
 import Photos
+import UniformTypeIdentifiers
 
 struct FramePreferenceKey: PreferenceKey {
     static var defaultValue: [String: CGRect] = [:]
@@ -22,6 +23,7 @@ struct CustomPhotoPickerView: View {
     
     @State private var itemFrames = [String: CGRect]()
     @State private var isDragging = false
+    @State private var draggedAsset: PhotoAsset?
     
     @Environment(\.displayScale) private var displayScale
     private static let itemSpacing = 2.0
@@ -122,6 +124,11 @@ struct CustomPhotoPickerView: View {
                                         }
                                         .offset(x: 5, y: -5)
                                     }
+                                    .onDrag {
+                                        self.draggedAsset = asset
+                                        return NSItemProvider(object: asset.id as NSString)
+                                    }
+                                    .onDrop(of: [UTType.text], delegate: PhotoAssetDropDelegate(item: asset, items: $selectedAssets, draggedItem: $draggedAsset))
                             }
                         }
                         .padding()
@@ -136,31 +143,29 @@ struct CustomPhotoPickerView: View {
         .navigationTitle("Select Photos")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItem(placement: .navigationBarLeading) {
                 Button("Clear") {
                     withAnimation { selectedAssets.removeAll() }
                 }
                 .disabled(selectedAssets.isEmpty)
             }
-            ToolbarItem(placement: .bottomBar) {
-                HStack {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                HStack(spacing: 20) {
                     Button {
                         saveSelectionToDraft()
                         withAnimation { selectedAssets.removeAll() }
                     } label: {
                         Image(systemName: "plus.circle.fill")
-                            .font(.system(size: 32))
+                            .font(.system(size: 24))
                     }
                     .disabled(selectedAssets.isEmpty)
-                    
-                    Spacer()
                     
                     Button {
                         saveSelectionToDraft()
                         navigateToOverview = true
                     } label: {
                         Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 32))
+                            .font(.system(size: 24))
                             .foregroundColor(.green)
                     }
                     .disabled(selectedAssets.isEmpty)
@@ -191,10 +196,39 @@ struct CustomPhotoPickerView: View {
     
     private func saveSelectionToDraft() {
         guard !selectedAssets.isEmpty else { return }
-        // In a real app, convert PhotoAsset to Data. Here we mock it by adding an item with a blurb indicating count.
-        let newItem = Item(blurb: "Draft from \(selectedAssets.count) selected photos")
+        let newItem = Item(
+            blurb: "Draft from \(selectedAssets.count) selected photos",
+            sourceAssetIdentifiers: selectedAssets.map { $0.id }
+        )
         modelContext.insert(newItem)
         try? modelContext.save()
+    }
+}
+
+// MARK: - DropDelegate
+struct PhotoAssetDropDelegate: DropDelegate {
+    let item: PhotoAsset
+    @Binding var items: [PhotoAsset]
+    @Binding var draggedItem: PhotoAsset?
+
+    func dropEntered(info: DropInfo) {
+        guard let draggedItem = self.draggedItem else { return }
+        if draggedItem != item {
+            let from = items.firstIndex(of: draggedItem)!
+            let to = items.firstIndex(of: item)!
+            withAnimation {
+                items.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+            }
+        }
+    }
+    
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        return DropProposal(operation: .move)
+    }
+    
+    func performDrop(info: DropInfo) -> Bool {
+        self.draggedItem = nil
+        return true
     }
 }
 
