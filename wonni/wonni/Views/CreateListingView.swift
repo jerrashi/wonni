@@ -19,7 +19,11 @@ struct CustomPhotoPickerView: View {
     @StateObject var photoCollection = PhotoCollection(smartAlbum: .smartAlbumUserLibrary)
     @State private var selectedAssets: [PhotoAsset] = []
     @State private var navigateToOverview = false
+    @State private var showingDraftHistory = false
+    @State private var hidePreviouslySelected = false
+    
     @Environment(\.modelContext) private var modelContext
+    @Query private var allItems: [Item]
     
     @State private var itemFrames = [String: CGRect]()
     @State private var isDragging = false
@@ -35,12 +39,47 @@ struct CustomPhotoPickerView: View {
         GridItem(.adaptive(minimum: 100, maximum: 150), spacing: 2)
     ]
     
+    private var usedAssetIDs: Set<String> {
+        Set(allItems.filter { $0.isDraft }.flatMap { $0.sourceAssetIdentifiers })
+    }
+    
+    private var displayedAssets: [PhotoAsset] {
+        // Fast path for massive libraries when filter is off
+        if !hidePreviouslySelected {
+            return Array(photoCollection.photoAssets)
+        }
+        // Protect against massive iterations
+        if photoCollection.photoAssets.count > 50000 {
+            return Array(photoCollection.photoAssets)
+        }
+        return photoCollection.photoAssets.filter { !usedAssetIDs.contains($0.id) }
+    }
+    
     var body: some View {
         VStack(spacing: 0) {
+            // Invisible navigation link to fix navigation stack pushing issues
+            NavigationLink(destination: BulkListingOverviewView(selectedAssets: selectedAssets), isActive: $navigateToOverview) {
+                EmptyView()
+            }
+            .hidden()
+            
+            if !usedAssetIDs.isEmpty && photoCollection.photoAssets.count <= 50000 {
+                Toggle(isOn: $hidePreviouslySelected) {
+                    HStack {
+                        Image(systemName: hidePreviouslySelected ? "eye.slash" : "eye")
+                        Text("Hide previously selected")
+                    }
+                    .font(.subheadline)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(Color(.systemGray6))
+            }
+            
             // Photo Grid
             ScrollView {
                 LazyVGrid(columns: columns, spacing: Self.itemSpacing) {
-                    ForEach(photoCollection.photoAssets) { asset in
+                    ForEach(displayedAssets) { asset in
                         ZStack(alignment: .topTrailing) {
                             Color.clear
                                 .aspectRatio(1, contentMode: .fit)
@@ -88,7 +127,7 @@ struct CustomPhotoPickerView: View {
                             isDragging = true
                             for (id, frame) in itemFrames {
                                 if frame.contains(value.location) {
-                                    if let asset = photoCollection.photoAssets.first(where: { $0.id == id }) {
+                                    if let asset = displayedAssets.first(where: { $0.id == id }) {
                                         if !selectedAssets.contains(asset) {
                                             withAnimation {
                                                 selectedAssets.append(asset)
@@ -133,7 +172,6 @@ struct CustomPhotoPickerView: View {
                         }
                         .padding()
                     }
-                        // Use scrollReader to scroll to end if needed, skipping for now
                     .frame(height: 100)
                     .background(Color(.systemBackground))
                 }
@@ -144,10 +182,19 @@ struct CustomPhotoPickerView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
-                Button("Clear") {
-                    withAnimation { selectedAssets.removeAll() }
+                HStack(spacing: 16) {
+                    Button {
+                        showingDraftHistory = true
+                    } label: {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 20))
+                    }
+                    
+                    Button("Clear") {
+                        withAnimation { selectedAssets.removeAll() }
+                    }
+                    .disabled(selectedAssets.isEmpty)
                 }
-                .disabled(selectedAssets.isEmpty)
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 20) {
@@ -179,8 +226,8 @@ struct CustomPhotoPickerView: View {
                 print("Failed to load photos: \(error)")
             }
         }
-        .navigationDestination(isPresented: $navigateToOverview) {
-            BulkListingOverviewView(selectedAssets: selectedAssets)
+        .sheet(isPresented: $showingDraftHistory) {
+            DraftHistoryModal(photoCollection: photoCollection)
         }
     }
     
@@ -232,6 +279,116 @@ struct PhotoAssetDropDelegate: DropDelegate {
     }
 }
 
+// MARK: - DraftHistoryModal
+struct DraftHistoryModal: View {
+    @Environment(\.dismiss) private var dismiss
+    @Query private var allItems: [Item]
+    @ObservedObject var photoCollection: PhotoCollection
+    @Environment(\.modelContext) private var modelContext
+    
+    var drafts: [Item] {
+        allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty }
+    }
+    
+    var body: some View {
+        NavigationStack {
+            Group {
+                if drafts.isEmpty {
+                    VStack {
+                        Image(systemName: "photo.on.rectangle.angled")
+                            .font(.system(size: 60))
+                            .foregroundColor(.gray)
+                            .padding()
+                        Text("No active drafts found.")
+                            .foregroundColor(.gray)
+                    }
+                } else {
+                    List {
+                        ForEach(drafts) { draft in
+                            Section(header: Text(draft.userEditedTitle ?? draft.aiSuggestedTitle ?? "Draft (\(draft.sourceAssetIdentifiers.count) photos)")) {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack {
+                                        if draft.sourceAssetIdentifiers.isEmpty {
+                                            Text("No photos")
+                                                .foregroundColor(.gray)
+                                                .italic()
+                                        } else {
+                                            ForEach(draft.sourceAssetIdentifiers, id: \.self) { assetId in
+                                                let asset = PhotoAsset(identifier: assetId)
+                                                PhotoItemView(asset: asset, cache: photoCollection.cache, imageSize: CGSize(width: 80, height: 80))
+                                                    .frame(width: 80, height: 80)
+                                                    .cornerRadius(8)
+                                                    .overlay(alignment: .topTrailing) {
+                                                        Button {
+                                                            var ids = draft.sourceAssetIdentifiers
+                                                            ids.removeAll(where: { $0 == assetId })
+                                                            draft.sourceAssetIdentifiers = ids
+                                                            try? modelContext.save()
+                                                        } label: {
+                                                            Image(systemName: "xmark.circle.fill")
+                                                                .foregroundColor(.red)
+                                                                .background(Circle().fill(Color.white))
+                                                        }
+                                                        .offset(x: 5, y: -5)
+                                                    }
+                                                    .onDrag {
+                                                        NSItemProvider(object: "\(draft.id.uuidString)|\(assetId)" as NSString)
+                                                    }
+                                            }
+                                        }
+                                    }
+                                    .padding(.vertical, 8)
+                                }
+                                .onDrop(of: [.text], isTargeted: nil) { providers in
+                                    providers.first?.loadObject(ofClass: NSString.self) { string, error in
+                                        if let str = string as? String {
+                                            let parts = str.components(separatedBy: "|")
+                                            if parts.count == 2 {
+                                                let sourceDraftId = parts[0]
+                                                let assetId = parts[1]
+                                                if sourceDraftId != draft.id.uuidString {
+                                                    DispatchQueue.main.async {
+                                                        if let sourceDraft = drafts.first(where: { $0.id.uuidString == sourceDraftId }) {
+                                                            var sourceIds = sourceDraft.sourceAssetIdentifiers
+                                                            sourceIds.removeAll(where: { $0 == assetId })
+                                                            sourceDraft.sourceAssetIdentifiers = sourceIds
+                                                            
+                                                            var destIds = draft.sourceAssetIdentifiers
+                                                            if !destIds.contains(assetId) {
+                                                                destIds.append(assetId)
+                                                            }
+                                                            draft.sourceAssetIdentifiers = destIds
+                                                            try? modelContext.save()
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    return true
+                                }
+                            }
+                        }
+                        .onDelete { indexSet in
+                            for index in indexSet {
+                                modelContext.delete(drafts[index])
+                            }
+                            try? modelContext.save()
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Draft History")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
 // MARK: - BulkListingOverviewView
 struct BulkListingOverviewView: View {
     var selectedAssets: [PhotoAsset]
@@ -249,7 +406,7 @@ struct BulkListingOverviewView: View {
                         .fill(Color.gray.opacity(0.3))
                         .frame(width: 50, height: 50)
                         .cornerRadius(8)
-                        .overlay(Text("\(item.photosData.count) img").font(.caption2))
+                        .overlay(Text("\(item.sourceAssetIdentifiers.count) img").font(.caption2))
                     
                     VStack(alignment: .leading) {
                         Text(item.userEditedTitle ?? item.aiSuggestedTitle ?? "New Draft Item")
@@ -289,7 +446,7 @@ struct BulkListingOverviewView: View {
         }
         .onAppear {
             if allItems.filter({ $0.isDraft }).isEmpty && !selectedAssets.isEmpty {
-                let newItem = Item(blurb: "Draft from selected photos")
+                let newItem = Item(blurb: "Draft from selected photos", sourceAssetIdentifiers: selectedAssets.map { $0.id })
                 modelContext.insert(newItem)
                 try? modelContext.save()
             }
