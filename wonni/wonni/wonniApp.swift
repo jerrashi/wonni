@@ -18,5 +18,6 @@ struct wonniApp: App {
                 // Inject ModelData into the environment
                 .environmentObject(modelData)
         }
+        .modelContainer(for: [Item.self, Listing.self, Expense.self, Mileage.self])
     }
 }
