@@ -7,10 +7,21 @@ import SwiftUI
 import SwiftData
 import Photos
 
+struct FramePreferenceKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
 struct CustomPhotoPickerView: View {
     @StateObject var photoCollection = PhotoCollection(smartAlbum: .smartAlbumUserLibrary)
     @State private var selectedAssets: [PhotoAsset] = []
     @State private var navigateToOverview = false
+    @Environment(\.modelContext) private var modelContext
+    
+    @State private var itemFrames = [String: CGRect]()
+    @State private var isDragging = false
     
     @Environment(\.displayScale) private var displayScale
     private static let itemSpacing = 2.0
@@ -29,9 +40,14 @@ struct CustomPhotoPickerView: View {
                 LazyVGrid(columns: columns, spacing: Self.itemSpacing) {
                     ForEach(photoCollection.photoAssets) { asset in
                         ZStack(alignment: .topTrailing) {
-                            PhotoItemView(asset: asset, cache: photoCollection.cache, imageSize: imageSize)
-                                .aspectRatio(1, contentMode: .fill)
+                            Color.clear
+                                .aspectRatio(1, contentMode: .fit)
+                                .overlay(
+                                    PhotoItemView(asset: asset, cache: photoCollection.cache, imageSize: imageSize)
+                                        .scaledToFill()
+                                )
                                 .clipped()
+                                .opacity(selectedAssets.contains(asset) ? 0.5 : 1.0)
                                 .onTapGesture {
                                     toggleSelection(asset)
                                 }
@@ -52,8 +68,38 @@ struct CustomPhotoPickerView: View {
                                     .padding(4)
                             }
                         }
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear
+                                    .preference(key: FramePreferenceKey.self, value: [asset.id: geo.frame(in: .named("GridSpace"))])
+                            }
+                        )
                     }
                 }
+                .coordinateSpace(name: "GridSpace")
+                .onPreferenceChange(FramePreferenceKey.self) { frames in
+                    self.itemFrames = frames
+                }
+                .gesture(
+                    DragGesture(minimumDistance: 10)
+                        .onChanged { value in
+                            isDragging = true
+                            for (id, frame) in itemFrames {
+                                if frame.contains(value.location) {
+                                    if let asset = photoCollection.photoAssets.first(where: { $0.id == id }) {
+                                        if !selectedAssets.contains(asset) {
+                                            withAnimation {
+                                                selectedAssets.append(asset)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .onEnded { _ in
+                            isDragging = false
+                        }
+                )
             }
             
             // Bottom Carousel
@@ -80,6 +126,7 @@ struct CustomPhotoPickerView: View {
                         }
                         .padding()
                     }
+                        // Use scrollReader to scroll to end if needed, skipping for now
                     .frame(height: 100)
                     .background(Color(.systemBackground))
                 }
@@ -90,10 +137,34 @@ struct CustomPhotoPickerView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Next") {
-                    navigateToOverview = true
+                Button("Clear") {
+                    withAnimation { selectedAssets.removeAll() }
                 }
                 .disabled(selectedAssets.isEmpty)
+            }
+            ToolbarItem(placement: .bottomBar) {
+                HStack {
+                    Button {
+                        saveSelectionToDraft()
+                        withAnimation { selectedAssets.removeAll() }
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 32))
+                    }
+                    .disabled(selectedAssets.isEmpty)
+                    
+                    Spacer()
+                    
+                    Button {
+                        saveSelectionToDraft()
+                        navigateToOverview = true
+                    } label: {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundColor(.green)
+                    }
+                    .disabled(selectedAssets.isEmpty)
+                }
             }
         }
         .task {
@@ -116,6 +187,14 @@ struct CustomPhotoPickerView: View {
                 selectedAssets.append(asset)
             }
         }
+    }
+    
+    private func saveSelectionToDraft() {
+        guard !selectedAssets.isEmpty else { return }
+        // In a real app, convert PhotoAsset to Data. Here we mock it by adding an item with a blurb indicating count.
+        let newItem = Item(blurb: "Draft from \(selectedAssets.count) selected photos")
+        modelContext.insert(newItem)
+        try? modelContext.save()
     }
 }
 
@@ -175,9 +254,6 @@ struct BulkListingOverviewView: View {
             BulkEditModal(selection: $selection)
         }
         .onAppear {
-            // If we navigated here with selected photos, create a draft item for them
-            // In a full implementation, we'd asynchronously convert PhotoAsset to Data.
-            // For now, we just create a placeholder draft to show it works.
             if allItems.filter({ $0.isDraft }).isEmpty && !selectedAssets.isEmpty {
                 let newItem = Item(blurb: "Draft from selected photos")
                 modelContext.insert(newItem)
