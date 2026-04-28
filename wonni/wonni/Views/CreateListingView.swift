@@ -15,12 +15,42 @@ struct FramePreferenceKey: PreferenceKey {
     }
 }
 
+struct DraftsStackIcon: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color.blue)
+                .frame(width: 35, height: 45)
+                .rotationEffect(.degrees(-15), anchor: .bottom)
+                .shadow(color: .black.opacity(0.2), radius: 2, x: -1, y: 1)
+            
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color.green)
+                .frame(width: 35, height: 45)
+                .rotationEffect(.degrees(0), anchor: .bottom)
+                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 1)
+            
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color.orange)
+                .frame(width: 35, height: 45)
+                .rotationEffect(.degrees(15), anchor: .bottom)
+                .shadow(color: .black.opacity(0.2), radius: 2, x: 1, y: 1)
+        }
+        .frame(width: 60, height: 60)
+        .background(Color(.systemGray5))
+        .cornerRadius(8)
+    }
+}
+
 struct CustomPhotoPickerView: View {
     @StateObject var photoCollection = PhotoCollection(smartAlbum: .smartAlbumUserLibrary)
     @State private var selectedAssets: [PhotoAsset] = []
     @State private var navigateToOverview = false
     @State private var showingDraftHistory = false
     @State private var hidePreviouslySelected = false
+    @State private var sessionDraftIDs: [UUID] = []
+    @State private var showingExitAlert = false
+    @Environment(\.dismiss) private var dismiss
     
     @Environment(\.modelContext) private var modelContext
     @Query private var allItems: [Item]
@@ -104,21 +134,16 @@ struct CustomPhotoPickerView: View {
             }
             
             // Bottom Carousel
-            if !selectedAssets.isEmpty || !usedAssetIDs.isEmpty {
+            if !selectedAssets.isEmpty || !sessionDraftIDs.isEmpty {
                 VStack {
                     Divider()
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 16) {
-                            if !usedAssetIDs.isEmpty {
+                            if !sessionDraftIDs.isEmpty {
                                 Button {
                                     showingDraftHistory = true
                                 } label: {
-                                    Image(systemName: "clock.arrow.circlepath")
-                                        .font(.system(size: 24))
-                                        .foregroundColor(.primary)
-                                        .frame(width: 60, height: 60)
-                                        .background(Color(.systemGray5))
-                                        .cornerRadius(8)
+                                    DraftsStackIcon()
                                 }
                             }
                             
@@ -166,7 +191,22 @@ struct CustomPhotoPickerView: View {
         }
         .navigationTitle("Select Photos")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
         .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    if sessionDraftIDs.isEmpty {
+                        dismiss()
+                    } else {
+                        showingExitAlert = true
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text("Back")
+                    }
+                }
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 20) {
                     Button {
@@ -199,6 +239,21 @@ struct CustomPhotoPickerView: View {
         }
         .sheet(isPresented: $showingDraftHistory) {
             DraftHistoryModal(photoCollection: photoCollection)
+        }
+        .alert("Save Drafts?", isPresented: $showingExitAlert) {
+            Button("Discard", role: .destructive) {
+                for draft in allItems where sessionDraftIDs.contains(draft.id) {
+                    modelContext.delete(draft)
+                }
+                try? modelContext.save()
+                dismiss()
+            }
+            Button("Save") {
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You have created drafts in this session. Would you like to save or discard them?")
         }
     }
     
@@ -259,6 +314,7 @@ struct CustomPhotoPickerView: View {
         )
         modelContext.insert(newItem)
         try? modelContext.save()
+        sessionDraftIDs.append(newItem.id)
     }
 }
 
@@ -396,7 +452,7 @@ struct DraftHistoryModal: View {
                     }
                 }
             }
-            .navigationTitle("Draft History")
+            .navigationTitle("Drafts")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
