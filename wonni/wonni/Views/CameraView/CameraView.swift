@@ -8,6 +8,8 @@ struct CameraView: View {
     @StateObject private var model = DataModel()
     @State private var isFlashing = false // Controls the flash animation
     @State private var capturedImage: UIImage? // Stores the captured photo
+    @State private var showingModal = false // Property to control whether modal is showing
+    @State private var selectedStackIndex = 0 // Track which stack is selected for editing
     
     private static let barHeightFactor = 0.15
     
@@ -74,6 +76,13 @@ struct CameraView: View {
             //.navigationBarHidden(true)
             //.ignoresSafeArea()
             //.statusBar(hidden: true)
+            .sheet(isPresented: $showingModal) {
+                PhotoStackModalView(
+                    dataModel: model,
+                    isPresented: $showingModal,
+                    stackIndex: selectedStackIndex
+                )
+            }
         }
     }
     
@@ -83,7 +92,7 @@ struct CameraView: View {
             Spacer()
             
             NavigationLink {
-                PhotoCollectionView(photoCollection: model.photoCollection)
+                CustomPhotoPickerView()
                     .onAppear {
                         model.camera.isPreviewPaused = true
                     }
@@ -135,7 +144,13 @@ struct CameraView: View {
 
     private func photoStacksScrollView() -> some View {
         HStack {
-            PhotoStackView(sessionPhotos: model.sessionPhotos)
+            PhotoStackView(
+                sessionPhotos: model.sessionPhotos,
+                onStackTapped: { stackIndex in
+                    selectedStackIndex = stackIndex
+                    showingModal = true
+                }
+            )
                 .frame(height: 100)
             
             Button(action: {
@@ -153,6 +168,7 @@ struct CameraView: View {
 
     private struct PhotoStackView: View {
         let sessionPhotos: [[UIImage]]
+        let onStackTapped: (Int) -> Void
         
         var body: some View {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -162,6 +178,9 @@ struct CameraView: View {
                             .padding(.top, 20)   // Adds 20 points of padding to the top
                             .padding(.leading, stackIndex == 0 ? 15 : 0) // Only first stack gets leading padding
                             .padding(.trailing, 20)
+                            .onTapGesture {
+                                onStackTapped(stackIndex)
+                            }
                     }
                 }
             }
