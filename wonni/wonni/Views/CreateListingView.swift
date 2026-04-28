@@ -104,11 +104,24 @@ struct CustomPhotoPickerView: View {
             }
             
             // Bottom Carousel
-            if !selectedAssets.isEmpty {
+            if !selectedAssets.isEmpty || !usedAssetIDs.isEmpty {
                 VStack {
                     Divider()
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack {
+                        HStack(spacing: 16) {
+                            if !usedAssetIDs.isEmpty {
+                                Button {
+                                    showingDraftHistory = true
+                                } label: {
+                                    Image(systemName: "clock.arrow.circlepath")
+                                        .font(.system(size: 24))
+                                        .foregroundColor(.primary)
+                                        .frame(width: 60, height: 60)
+                                        .background(Color(.systemGray5))
+                                        .cornerRadius(8)
+                                }
+                            }
+                            
                             ForEach(selectedAssets) { asset in
                                 PhotoItemView(asset: asset, cache: photoCollection.cache, imageSize: imageSize)
                                     .frame(width: 60, height: 60)
@@ -129,6 +142,19 @@ struct CustomPhotoPickerView: View {
                                     }
                                     .onDrop(of: [UTType.text], delegate: PhotoAssetDropDelegate(item: asset, items: $selectedAssets, draggedItem: $draggedAsset))
                             }
+                            
+                            if !selectedAssets.isEmpty {
+                                Button {
+                                    withAnimation { selectedAssets.removeAll() }
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .font(.system(size: 24))
+                                        .foregroundColor(.red)
+                                        .frame(width: 60, height: 60)
+                                        .background(Color(.systemGray5))
+                                        .cornerRadius(8)
+                                }
+                            }
                         }
                         .padding()
                     }
@@ -141,21 +167,6 @@ struct CustomPhotoPickerView: View {
         .navigationTitle("Select Photos")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
-                HStack(spacing: 16) {
-                    Button {
-                        showingDraftHistory = true
-                    } label: {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .font(.system(size: 20))
-                    }
-                    
-                    Button("Clear") {
-                        withAnimation { selectedAssets.removeAll() }
-                    }
-                    .disabled(selectedAssets.isEmpty)
-                }
-            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 20) {
                     Button {
@@ -337,6 +348,14 @@ struct DraftHistoryModal: View {
                                         }
                                     }
                                     .padding(.vertical, 8)
+                                }
+                                .contextMenu {
+                                    Button(role: .destructive) {
+                                        modelContext.delete(draft)
+                                        try? modelContext.save()
+                                    } label: {
+                                        Label("Delete Draft", systemImage: "trash")
+                                    }
                                 }
                                 .onDrop(of: [.text], isTargeted: nil) { providers in
                                     providers.first?.loadObject(ofClass: NSString.self) { string, error in
