@@ -43,18 +43,6 @@ struct CustomPhotoPickerView: View {
         Set(allItems.filter { $0.isDraft }.flatMap { $0.sourceAssetIdentifiers })
     }
     
-    private var displayedAssets: [PhotoAsset] {
-        // Fast path for massive libraries when filter is off
-        if !hidePreviouslySelected {
-            return Array(photoCollection.photoAssets)
-        }
-        // Protect against massive iterations
-        if photoCollection.photoAssets.count > 50000 {
-            return Array(photoCollection.photoAssets)
-        }
-        return photoCollection.photoAssets.filter { !usedAssetIDs.contains($0.id) }
-    }
-    
     var body: some View {
         VStack(spacing: 0) {
             // Invisible navigation link to fix navigation stack pushing issues
@@ -79,42 +67,14 @@ struct CustomPhotoPickerView: View {
             // Photo Grid
             ScrollView {
                 LazyVGrid(columns: columns, spacing: Self.itemSpacing) {
-                    ForEach(displayedAssets) { asset in
-                        ZStack(alignment: .topTrailing) {
-                            Color.clear
-                                .aspectRatio(1, contentMode: .fit)
-                                .overlay(
-                                    PhotoItemView(asset: asset, cache: photoCollection.cache, imageSize: imageSize)
-                                        .scaledToFill()
-                                )
-                                .clipped()
-                                .opacity(selectedAssets.contains(asset) ? 0.5 : 1.0)
-                                .onTapGesture {
-                                    toggleSelection(asset)
-                                }
-                                .onAppear {
-                                    Task { await photoCollection.cache.startCaching(for: [asset], targetSize: imageSize) }
-                                }
-                            
-                            if let index = selectedAssets.firstIndex(of: asset) {
-                                Circle()
-                                    .fill(Color.blue)
-                                    .frame(width: 24, height: 24)
-                                    .overlay(Text("\(index + 1)").foregroundColor(.white).font(.caption))
-                                    .padding(4)
-                            } else {
-                                Circle()
-                                    .strokeBorder(Color.white, lineWidth: 2)
-                                    .frame(width: 24, height: 24)
-                                    .padding(4)
-                            }
+                    if hidePreviouslySelected && photoCollection.photoAssets.count <= 50000 {
+                        ForEach(photoCollection.photoAssets.filter { !usedAssetIDs.contains($0.id) }) { asset in
+                            photoGridItem(asset: asset)
                         }
-                        .background(
-                            GeometryReader { geo in
-                                Color.clear
-                                    .preference(key: FramePreferenceKey.self, value: [asset.id: geo.frame(in: .named("GridSpace"))])
-                            }
-                        )
+                    } else {
+                        ForEach(photoCollection.photoAssets) { asset in
+                            photoGridItem(asset: asset)
+                        }
                     }
                 }
                 .coordinateSpace(name: "GridSpace")
@@ -127,7 +87,7 @@ struct CustomPhotoPickerView: View {
                             isDragging = true
                             for (id, frame) in itemFrames {
                                 if frame.contains(value.location) {
-                                    if let asset = displayedAssets.first(where: { $0.id == id }) {
+                                    if let asset = photoCollection.photoAssets.first(where: { $0.id == id }) {
                                         if !selectedAssets.contains(asset) {
                                             withAnimation {
                                                 selectedAssets.append(asset)
@@ -229,6 +189,45 @@ struct CustomPhotoPickerView: View {
         .sheet(isPresented: $showingDraftHistory) {
             DraftHistoryModal(photoCollection: photoCollection)
         }
+    }
+    
+    @ViewBuilder
+    private func photoGridItem(asset: PhotoAsset) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Color.clear
+                .aspectRatio(1, contentMode: .fit)
+                .overlay(
+                    PhotoItemView(asset: asset, cache: photoCollection.cache, imageSize: imageSize)
+                        .scaledToFill()
+                )
+                .clipped()
+                .opacity(selectedAssets.contains(asset) ? 0.5 : 1.0)
+                .onTapGesture {
+                    toggleSelection(asset)
+                }
+                .onAppear {
+                    Task { await photoCollection.cache.startCaching(for: [asset], targetSize: imageSize) }
+                }
+            
+            if let index = selectedAssets.firstIndex(of: asset) {
+                Circle()
+                    .fill(Color.blue)
+                    .frame(width: 24, height: 24)
+                    .overlay(Text("\(index + 1)").foregroundColor(.white).font(.caption))
+                    .padding(4)
+            } else {
+                Circle()
+                    .strokeBorder(Color.white, lineWidth: 2)
+                    .frame(width: 24, height: 24)
+                    .padding(4)
+            }
+        }
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .preference(key: FramePreferenceKey.self, value: [asset.id: geo.frame(in: .named("GridSpace"))])
+            }
+        )
     }
     
     private func toggleSelection(_ asset: PhotoAsset) {

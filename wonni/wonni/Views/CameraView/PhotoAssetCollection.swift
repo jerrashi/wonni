@@ -6,7 +6,6 @@ import Photos
 
 class PhotoAssetCollection: RandomAccessCollection {
     private(set) var fetchResult: PHFetchResult<PHAsset>
-    private var iteratorIndex: Int = 0
     
     private var cache = [Int : PhotoAsset]()
     
@@ -32,20 +31,5 @@ class PhotoAssetCollection: RandomAccessCollection {
             assets.append(object)
         }
         return assets
-    }
-}
-
-extension PhotoAssetCollection: Sequence, IteratorProtocol {
-
-    func next() -> PhotoAsset? {
-        if iteratorIndex >= count {
-            return nil
-        }
-        
-        defer {
-            iteratorIndex += 1
-        }
-        
-        return self[iteratorIndex]
     }
 }
