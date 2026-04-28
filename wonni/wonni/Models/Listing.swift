@@ -22,8 +22,9 @@ class Item {
     var handlingFee: Double
     var estimatedShippingDays: Int
     var isDraft: Bool
+    var sourceAssetIdentifiers: [String]
     
-    init(id: UUID = UUID(), createdAt: Date = Date(), photosData: [Data] = [], blurb: String = "", buyerPaysShipping: Bool = true, handlingFee: Double = 0.0, estimatedShippingDays: Int = 3, isDraft: Bool = true) {
+    init(id: UUID = UUID(), createdAt: Date = Date(), photosData: [Data] = [], blurb: String = "", buyerPaysShipping: Bool = true, handlingFee: Double = 0.0, estimatedShippingDays: Int = 3, isDraft: Bool = true, sourceAssetIdentifiers: [String] = []) {
         self.id = id
         self.createdAt = createdAt
         self.photosData = photosData
@@ -32,6 +33,7 @@ class Item {
         self.handlingFee = handlingFee
         self.estimatedShippingDays = estimatedShippingDays
         self.isDraft = isDraft
+        self.sourceAssetIdentifiers = sourceAssetIdentifiers
     }
 }
 
