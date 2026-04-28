@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		614A039C2E9C48620057A837 /* PhotoStackModalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 614A039B2E9C48620057A837 /* PhotoStackModalView.swift */; };
 		6192AA542D7E194300EC2EFA /* ItemDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6192AA532D7E194300EC2EFA /* ItemDetailView.swift */; };
 		6192AA562D7E31A900EC2EFA /* ShortcutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6192AA552D7E31A900EC2EFA /* ShortcutView.swift */; };
 		6192AA582D7E3D8B00EC2EFA /* ProductTileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6192AA572D7E3D8B00EC2EFA /* ProductTileView.swift */; };
@@ -46,6 +47,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		614A039B2E9C48620057A837 /* PhotoStackModalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoStackModalView.swift; sourceTree = "<group>"; };
 		6192AA532D7E194300EC2EFA /* ItemDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItemDetailView.swift; sourceTree = "<group>"; };
 		6192AA552D7E31A900EC2EFA /* ShortcutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutView.swift; sourceTree = "<group>"; };
 		6192AA572D7E3D8B00EC2EFA /* ProductTileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductTileView.swift; sourceTree = "<group>"; };
@@ -111,6 +113,7 @@
 				6192AA6C2D7F65DE00EC2EFA /* PhotoCollectionView.swift */,
 				6192AA682D7F65DD00EC2EFA /* PhotoItemView.swift */,
 				6192AA6D2D7F65DE00EC2EFA /* PhotoLibrary.swift */,
+				614A039B2E9C48620057A837 /* PhotoStackModalView.swift */,
 				6192AA712D7F65DE00EC2EFA /* PhotoView.swift */,
 				6192AA702D7F65DE00EC2EFA /* ThumbnailView.swift */,
 				6192AA692D7F65DD00EC2EFA /* ViewfinderView.swift */,
@@ -282,6 +285,7 @@
 				61EE00772D778B42006063C3 /* Helper.swift in Sources */,
 				6192AA752D7F65DE00EC2EFA /* PhotoCollection.swift in Sources */,
 				6192AA7E2D7F65DF00EC2EFA /* ThumbnailView.swift in Sources */,
+				614A039C2E9C48620057A837 /* PhotoStackModalView.swift in Sources */,
 				61EE00682D765D37006063C3 /* MainView.swift in Sources */,
 				61BCCD072D7B9A710037E4B9 /* SearchBarView.swift in Sources */,
 				6192AA782D7F65DE00EC2EFA /* CachedImageManager.swift in Sources */,
@@ -438,6 +442,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = wonni/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Wonni;
 				INFOPLIST_KEY_NSCameraUsageDescription = "We need access to your camera to take photos for your listings.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "We need to access your photo library to enable photo uploads for listings.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -474,6 +479,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = wonni/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Wonni;
 				INFOPLIST_KEY_NSCameraUsageDescription = "We need access to your camera to take photos for your listings.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "We need to access your photo library to enable photo uploads for listings.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
