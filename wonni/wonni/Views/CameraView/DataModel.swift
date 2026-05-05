@@ -69,6 +69,44 @@ final class DataModel: ObservableObject {
         }
     }
     
+    // Move photo within the same stack
+    func movePhotoWithinStack(stackIndex: Int, from: Int, to: Int) {
+        // safe guard that stackIndex is within bounds of the number of stacks we have
+        // safe guard that to and from are within bounds of the current stack
+        guard stackIndex < sessionPhotos.count,
+              from < sessionPhotos[stackIndex].count,
+              to < sessionPhotos[stackIndex].count else { return }
+        
+        let photo = sessionPhotos[stackIndex].remove(at: from)
+        sessionPhotos[stackIndex].insert(photo, at: to)
+    }
+    
+    // Move photo between different stacks
+    func movePhotoBetweenStacks(fromStack: Int, fromIndex: Int, toStack: Int, toIndex: Int) {
+        // safe guard that both stacks are within bounds of the number of stacks we have
+        // safe guard that to and from are within bounds of the respective stacks
+        guard fromStack < sessionPhotos.count,
+              toStack < sessionPhotos.count,
+              fromIndex < sessionPhotos[fromStack].count,
+              toIndex <= sessionPhotos[toStack].count else { return }
+        
+        let photo = sessionPhotos[fromStack].remove(at: fromIndex)
+        sessionPhotos[toStack].insert(photo, at: toIndex)
+    }
+    
+    // Remove photo from stack
+    func removePhoto(stackIndex: Int, photoIndex: Int) {
+        // safe guard that stack is within bounds of the number of stacks we have
+        // safe guard that photo is within bounds of the stack selected
+        guard stackIndex < sessionPhotos.count,
+              photoIndex < sessionPhotos[stackIndex].count else { return }
+        
+        sessionPhotos[stackIndex].remove(at: photoIndex)
+        
+        // Remove empty stacks
+        sessionPhotos.removeAll { $0.isEmpty }
+    }
+    
     private func unpackPhoto(_ photo: AVCapturePhoto) -> PhotoData? {
         guard let imageData = photo.fileDataRepresentation() else { return nil }
 

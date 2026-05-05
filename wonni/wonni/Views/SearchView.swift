@@ -8,8 +8,6 @@
 import SwiftUI
 
 struct SearchView: View {
-    @EnvironmentObject var modelData: ModelData  // Access model data
-
     var body: some View {
         SearchBarView()
         Spacer()

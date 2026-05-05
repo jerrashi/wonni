@@ -8,9 +8,6 @@
 import SwiftUI
 
 struct MainView: View {
-    // See ModelData.swift for json decoding logic
-    @EnvironmentObject var modelData: ModelData
-    
     var body: some View {
         TabView {
             NavigationStack {

@@ -8,22 +8,23 @@
 import SwiftUI
 
 struct HomeView: View {
-    // See ModelData.swift for json decoding logic
-    @EnvironmentObject var modelData: ModelData
-    
     var body: some View {
         NavigationStack {
             VStack(spacing: 10) {
                 SearchBarView()
                 
-                ScrollView {
-                    VStack(spacing: 15) {
-                        FeaturedCarouselView()
-                        QuickActionsCarouselView()
-                        FeedView()
-                    }
-                    .padding(.horizontal)
+                Spacer()
+                
+                VStack(spacing: 16) {
+                    Image(systemName: "square.grid.2x2")
+                        .font(.system(size: 50))
+                        .foregroundColor(.gray)
+                    Text("Feed Coming Soon")
+                        .font(.headline)
+                        .foregroundColor(.gray)
                 }
+                
+                Spacer()
             }
         }
     }
