@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct SearchBarView: View {
-    @EnvironmentObject var modelData: ModelData  // Access model data
+    @State private var searchText: String = ""
     @FocusState private var isTextFieldFocused: Bool // Tracks whether the TextField is focused
 
     var body: some View {
@@ -43,7 +43,7 @@ struct SearchBarView: View {
                 }
                 
                 /// Search text field
-                TextField("Search...", text: $modelData.searchText)
+                TextField("Search...", text: $searchText)
                     .padding(10)
                     .foregroundColor(.black)
                     .background(Color.clear)  // Transparent background for text field
@@ -59,10 +59,10 @@ struct SearchBarView: View {
                      
                 /// We display search Icon when not editing, clear button if editing and there is text present
                 if isTextFieldFocused {
-                    if !modelData.searchText.isEmpty{
+                    if !searchText.isEmpty{
                         // MARK: Clear button
                         Button(action: {
-                            modelData.searchText = ""  // Clear text
+                            searchText = ""  // Clear text
                         }) {
                             Image(systemName: "xmark.circle.fill")
                                 .padding(10)
