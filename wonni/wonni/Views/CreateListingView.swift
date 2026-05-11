@@ -4,42 +4,60 @@
 //
 
 import SwiftUI
-import SwiftData
 import Photos
 import UniformTypeIdentifiers
+import FirebaseFirestore
+import FirebaseAuth
 
 
 
 struct DraftsStackIcon: View {
-    var drafts: [Item]
+    var drafts: [UserListing]
     var cache: CachedImageManager
-    
+    /// Drives the spring bounce when a new draft is received.
+    var bouncing: Bool = false
+
+    private var coverAsset: PhotoAsset? {
+        drafts.last
+            .flatMap { $0.sourceAssetIdentifiers.first }
+            .map { PhotoAsset(identifier: $0) }
+    }
+
     var body: some View {
-        let assets: [PhotoAsset] = drafts.compactMap { $0.sourceAssetIdentifiers.first.map(PhotoAsset.init(identifier:)) }
-        let topAssets = Array(assets.prefix(3))
-        
         ZStack {
-            if topAssets.isEmpty {
-                RoundedRectangle(cornerRadius: 4).fill(Color.gray)
-                    .frame(width: 35, height: 45)
-            } else {
-                ForEach(topAssets.indices, id: \.self) { index in
-                    let asset = topAssets[index]
-                    let rotation = index == 0 ? -15.0 : (index == 1 ? 0.0 : 15.0)
-                    let xOffset = index == 0 ? -1.0 : (index == 1 ? 0.0 : 1.0)
-                    
-                    PhotoItemView(asset: asset, cache: cache, imageSize: CGSize(width: 35, height: 45))
+            // Back card 2 (furthest)
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color(.systemGray4))
+                .frame(width: 35, height: 45)
+                .rotationEffect(.degrees(-12), anchor: .bottom)
+                .offset(x: -4, y: 0)
+
+            // Back card 1
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color(.systemGray3))
+                .frame(width: 35, height: 45)
+                .rotationEffect(.degrees(-5), anchor: .bottom)
+                .offset(x: -2, y: 0)
+
+            // Top card — most recent draft's cover photo
+            Group {
+                if let asset = coverAsset {
+                    PhotoItemView(asset: asset, cache: cache, imageSize: CGSize(width: 70, height: 90))
                         .scaledToFill()
                         .frame(width: 35, height: 45)
+                        .clipped()
                         .cornerRadius(4)
-                        .rotationEffect(.degrees(topAssets.count > 1 ? rotation : 0), anchor: .bottom)
-                        .shadow(color: .black.opacity(0.2), radius: 2, x: xOffset, y: 1)
+                } else {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color(.systemGray2))
+                        .frame(width: 35, height: 45)
                 }
             }
+            .shadow(color: .black.opacity(0.25), radius: 3, x: 0, y: 2)
         }
         .frame(width: 60, height: 60)
-        .background(Color(.systemGray5))
-        .cornerRadius(8)
+        .scaleEffect(bouncing ? 1.25 : 1.0)
+        .animation(.spring(response: 0.35, dampingFraction: 0.45), value: bouncing)
     }
 }
 
@@ -100,15 +118,23 @@ struct CustomPhotoPickerView: View {
         @State private var navigateToOverview = false
         @State private var showingDraftHistory = false
         @State private var hidePreviouslySelected = false
-        @State private var sessionDraftIDs: [UUID] = []
+        @State private var sessionDraftIDs: [String] = []
         @State private var showingExitAlert = false
         @Environment(\.dismiss) private var dismiss
         
-        @Environment(\.modelContext) private var modelContext
-        @Query private var allItems: [Item]
-        
+        @StateObject private var repository = ListingRepository.shared
+        @State private var firestoreDrafts: [UserListing] = []
+        @State private var listener: ListenerRegistration?
         
         @State private var draggedAsset: PhotoAsset?
+        /// Phase 1: carousel thumbnails collapse inward
+        @State private var carouselCollapsing = false
+        /// Phase 2: DraftsStackIcon spring-bounces to confirm receipt
+        @State private var stackBouncing = false
+        
+        @State private var showingIdentification = false
+        @State private var lastCreatedListingId: String?
+        @State private var lastCreatedImages: [UIImage] = []
         
         @Environment(\.displayScale) private var displayScale
         private static let itemSpacing = 2.0
@@ -121,7 +147,7 @@ struct CustomPhotoPickerView: View {
         ]
         
         var body: some View {
-            let currentDrafts = allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty }
+            let currentDrafts = firestoreDrafts
             let currentUsedAssetIDs = Set(currentDrafts.flatMap { $0.sourceAssetIdentifiers })
             
             // Invisible navigation link to fix navigation stack pushing issues
@@ -181,21 +207,29 @@ struct CustomPhotoPickerView: View {
                             ScrollViewReader { scrollView in
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     HStack(spacing: 16) {
-                                        ForEach(selectedAssets) { asset in
+                                        ForEach(Array(selectedAssets.enumerated()), id: \.element.id) { index, asset in
+                                            let totalCount = selectedAssets.count
+                                            let centerIndex = Double(totalCount - 1) / 2.0
+                                            let direction = Double(index) - centerIndex
                                             PhotoItemView(asset: asset, cache: photoCollection.cache, imageSize: imageSize)
                                                 .frame(width: 60, height: 60)
                                                 .cornerRadius(8)
                                                 .id(asset.id)
                                                 .overlay(alignment: .topTrailing) {
-                                                    Button {
-                                                        toggleSelection(asset)
-                                                    } label: {
-                                                        Image(systemName: "xmark.circle.fill")
-                                                            .foregroundColor(.red)
-                                                            .background(Circle().fill(Color.white))
+                                                    if !carouselCollapsing {
+                                                        Button {
+                                                            toggleSelection(asset)
+                                                        } label: {
+                                                            Image(systemName: "xmark.circle.fill")
+                                                                .foregroundColor(.red)
+                                                                .background(Circle().fill(Color.white))
+                                                        }
+                                                        .offset(x: 5, y: -5)
                                                     }
-                                                    .offset(x: 5, y: -5)
                                                 }
+                                                .scaleEffect(carouselCollapsing ? 0.05 : 1.0)
+                                                .offset(x: carouselCollapsing ? -direction * 28 : 0)
+                                                .opacity(carouselCollapsing ? 0 : 1)
                                                 .onDrag {
                                                     self.draggedAsset = asset
                                                     return NSItemProvider(object: asset.id as NSString)
@@ -222,7 +256,11 @@ struct CustomPhotoPickerView: View {
                                 Button {
                                     showingDraftHistory = true
                                 } label: {
-                                    DraftsStackIcon(drafts: currentDrafts, cache: photoCollection.cache)
+                                    DraftsStackIcon(
+                                        drafts: currentDrafts,
+                                        cache: photoCollection.cache,
+                                        bouncing: stackBouncing
+                                    )
                                 }
                             } else {
                                 Spacer().frame(width: 60)
@@ -232,12 +270,25 @@ struct CustomPhotoPickerView: View {
                             
                             if !selectedAssets.isEmpty {
                                 Button {
-                                    saveSelectionToDraft()
-                                    withAnimation { selectedAssets.removeAll() }
+                                    // Phase 1: collapse the carousel thumbnails inward
+                                    withAnimation(.easeIn(duration: 0.28)) {
+                                        carouselCollapsing = true
+                                    }
+                                    // Phase 2: save draft + bounce the stack icon
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                                        saveSelectionToDraft()
+                                        selectedAssets.removeAll()
+                                        stackBouncing = true
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                            stackBouncing = false
+                                            carouselCollapsing = false
+                                        }
+                                    }
                                 } label: {
                                     Image(systemName: "plus.circle.fill")
                                         .font(.system(size: 40))
                                 }
+                                .disabled(carouselCollapsing)
                             } else {
                                 Spacer().frame(width: 40)
                             }
@@ -248,6 +299,12 @@ struct CustomPhotoPickerView: View {
                     .background(Color(.systemBackground))
                     .transition(.move(edge: .bottom))
                 }
+            }
+            .onAppear {
+                startListening()
+            }
+            .onDisappear {
+                listener?.remove()
             }
             .navigationTitle("Photos")
             .navigationBarTitleDisplayMode(.inline)
@@ -290,16 +347,24 @@ struct CustomPhotoPickerView: View {
                     print("Failed to load photos: \(error)")
                 }
             }
+            .sheet(isPresented: $showingIdentification) {
+                if let id = lastCreatedListingId {
+                    IdentificationConfirmationView(listingId: id, images: lastCreatedImages)
+                }
+            }
             .sheet(isPresented: $showingDraftHistory) {
                 DraftHistoryModal(photoCollection: photoCollection)
             }
             .alert("Save Drafts?", isPresented: $showingExitAlert) {
                 Button("Discard", role: .destructive) {
-                    for draft in allItems where sessionDraftIDs.contains(draft.id) {
-                        modelContext.delete(draft)
+                    Task {
+                        for id in sessionDraftIDs {
+                            try? await repository.deleteListing(id: id)
+                        }
+                        await MainActor.run {
+                            dismiss()
+                        }
                     }
-                    try? modelContext.save()
-                    dismiss()
                 }
                 Button("Save") {
                     dismiss()
@@ -322,13 +387,59 @@ struct CustomPhotoPickerView: View {
         
         private func saveSelectionToDraft() {
             guard !selectedAssets.isEmpty else { return }
-            let newItem = Item(
-                blurb: "Draft from \(selectedAssets.count) selected photos",
-                sourceAssetIdentifiers: selectedAssets.map { $0.id }
-            )
-            modelContext.insert(newItem)
-            try? modelContext.save()
-            sessionDraftIDs.append(newItem.id)
+            
+            let assetsToUpload = selectedAssets
+            let userId = Auth.auth().currentUser?.uid ?? "anonymous"
+            
+            // 1. Clear selection and trigger animation immediately
+            selectedAssets.removeAll()
+            
+            Task {
+                var photoPaths: [String] = []
+                var imagesToProcess: [UIImage] = []
+                
+                // 2. Fetch and upload each image
+                for asset in assetsToUpload {
+                    if let image = await asset.fullResolutionImage() {
+                        imagesToProcess.append(image)
+                        if let path = try? await StorageService.shared.uploadTempImage(image: image) {
+                            photoPaths.append(path)
+                        }
+                    }
+                }
+                
+                // 3. Create the draft with the uploaded paths
+                let newListing = UserListing.newDraft(
+                    userId: userId,
+                    sourceAssetIdentifiers: assetsToUpload.map { $0.id }
+                )
+                var listingWithPhotos = newListing
+                listingWithPhotos.photoPaths = photoPaths
+                listingWithPhotos.coverPhotoPath = photoPaths.first
+                
+                do {
+                    let docId = try await repository.saveDraft(listingWithPhotos)
+                    await MainActor.run {
+                        self.lastCreatedListingId = docId
+                        self.lastCreatedImages = imagesToProcess
+                        self.sessionDraftIDs.append(docId)
+                        self.showingIdentification = true
+                    }
+                } catch {
+                    print("Error saving draft with photos: \(error.localizedDescription)")
+                }
+            }
+        }
+        
+        private func startListening() {
+            listener = repository.draftsPublisher { result in
+                switch result {
+                case .success(let drafts):
+                    self.firestoreDrafts = drafts
+                case .failure(let error):
+                    print("Error listening for drafts: \(error.localizedDescription)")
+                }
+            }
         }
     }
     
@@ -362,10 +473,9 @@ struct CustomPhotoPickerView: View {
     // MARK: - DraftPhotoDropDelegate
     struct DraftPhotoDropDelegate: DropDelegate {
         let targetAssetId: String
-        let draft: Item
+        let draft: UserListing
         @Binding var draggedCompositeId: String?
-        let modelContext: ModelContext
-        let drafts: [Item]
+        let drafts: [UserListing]
         
         func dropEntered(info: DropInfo) {
             guard let dragged = draggedCompositeId else { return }
@@ -374,14 +484,20 @@ struct CustomPhotoPickerView: View {
             let sourceDraftId = parts[0]
             let assetId = parts[1]
             
-            if sourceDraftId == draft.id.uuidString {
+            if sourceDraftId == draft.id {
                 if assetId != targetAssetId {
                     if let from = draft.sourceAssetIdentifiers.firstIndex(of: assetId),
                        let to = draft.sourceAssetIdentifiers.firstIndex(of: targetAssetId) {
                         withAnimation {
+                            var updatedDraft = draft
                             var ids = draft.sourceAssetIdentifiers
                             ids.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
-                            draft.sourceAssetIdentifiers = ids
+                            updatedDraft.sourceAssetIdentifiers = ids
+                            
+                            // Optimistic UI or wait for Task
+                            Task {
+                                try? await ListingRepository.shared.saveDraft(updatedDraft)
+                            }
                         }
                     }
                 }
@@ -399,23 +515,23 @@ struct CustomPhotoPickerView: View {
             let sourceDraftId = parts[0]
             let assetId = parts[1]
             
-            if sourceDraftId != draft.id.uuidString {
-                if let sourceDraft = drafts.first(where: { $0.id.uuidString == sourceDraftId }) {
-                    var sourceIds = sourceDraft.sourceAssetIdentifiers
-                    sourceIds.removeAll(where: { $0 == assetId })
-                    sourceDraft.sourceAssetIdentifiers = sourceIds
+            if sourceDraftId != draft.id {
+                if let sourceDraft = drafts.first(where: { $0.id == sourceDraftId }) {
+                    var updatedSource = sourceDraft
+                    updatedSource.sourceAssetIdentifiers.removeAll(where: { $0 == assetId })
                     
-                    var destIds = draft.sourceAssetIdentifiers
+                    var updatedDest = draft
                     if let to = draft.sourceAssetIdentifiers.firstIndex(of: targetAssetId) {
-                        destIds.insert(assetId, at: to)
+                        updatedDest.sourceAssetIdentifiers.insert(assetId, at: to)
                     } else {
-                        destIds.append(assetId)
+                        updatedDest.sourceAssetIdentifiers.append(assetId)
                     }
-                    draft.sourceAssetIdentifiers = destIds
-                    try? modelContext.save()
+                    
+                    Task {
+                        try? await ListingRepository.shared.saveDraft(updatedSource)
+                        try? await ListingRepository.shared.saveDraft(updatedDest)
+                    }
                 }
-            } else {
-                try? modelContext.save()
             }
             
             draggedCompositeId = nil
@@ -426,18 +542,15 @@ struct CustomPhotoPickerView: View {
     // MARK: - DraftHistoryModal
     struct DraftHistoryModal: View {
         @Environment(\.dismiss) private var dismiss
-        @Query private var allItems: [Item]
         @ObservedObject var photoCollection: PhotoCollection
-        @Environment(\.modelContext) private var modelContext
+        @StateObject private var repository = ListingRepository.shared
         
+        @State private var drafts: [UserListing] = []
+        @State private var listener: ListenerRegistration?
         @State private var isSelectionMode = false
         @State private var selectedPhotos = Set<String>()
         @State private var showingDeleteConfirm = false
         @State private var draggedCompositeId: String?
-        
-        var drafts: [Item] {
-            allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty }
-        }
         
         var body: some View {
             NavigationStack {
@@ -456,7 +569,8 @@ struct CustomPhotoPickerView: View {
                             LazyVStack(spacing: 20) {
                                 ForEach(drafts) { draft in
                                     VStack(alignment: .leading, spacing: 8) {
-                                        let draftCompositeIDs = draft.sourceAssetIdentifiers.map { "\(draft.id.uuidString)|\($0)" }
+                                        let draftId = draft.id ?? ""
+                                        let draftCompositeIDs = draft.sourceAssetIdentifiers.map { "\(draftId)|\($0)" }
                                         let selectedCount = draftCompositeIDs.filter { selectedPhotos.contains($0) }.count
                                         let isFullySelected = selectedCount > 0 && selectedCount == draftCompositeIDs.count
                                         let isPartiallySelected = selectedCount > 0 && selectedCount < draftCompositeIDs.count
@@ -483,7 +597,7 @@ struct CustomPhotoPickerView: View {
                                         ScrollView(.horizontal, showsIndicators: false) {
                                             HStack(spacing: 12) {
                                                 ForEach(draft.sourceAssetIdentifiers, id: \.self) { assetId in
-                                                    let compositeId = "\(draft.id.uuidString)|\(assetId)"
+                                                    let compositeId = "\(draftId)|\(assetId)"
                                                     let asset = PhotoAsset(identifier: assetId)
                                                     
                                                     ZStack(alignment: .topTrailing) {
@@ -501,7 +615,6 @@ struct CustomPhotoPickerView: View {
                                                                 targetAssetId: assetId,
                                                                 draft: draft,
                                                                 draggedCompositeId: $draggedCompositeId,
-                                                                modelContext: modelContext,
                                                                 drafts: drafts
                                                             ))
                                                         
@@ -562,11 +675,21 @@ struct CustomPhotoPickerView: View {
                         }
                     }
                 }
-                .alert("Delete Selected?", isPresented: $showingDeleteConfirm) {
-                    Button("Cancel", role: .cancel) { }
+                .onAppear {
+                    listener = repository.draftsPublisher { result in
+                        if case .success(let drafts) = result {
+                            self.drafts = drafts
+                        }
+                    }
+                }
+                .onDisappear {
+                    listener?.remove()
+                }
+                .alert("Delete Photos?", isPresented: $showingDeleteConfirm) {
                     Button("Delete", role: .destructive) {
                         deleteSelectedItems()
                     }
+                    Button("Cancel", role: .cancel) {}
                 } message: {
                     Text("Are you sure you want to delete the selected items?")
                 }
@@ -574,46 +697,46 @@ struct CustomPhotoPickerView: View {
         }
         
         private func deleteSelectedItems() {
-            // Find drafts that will be fully emptied
-            var draftsToDelete = Set<UUID>()
-            
-            for draft in allItems {
-                let draftCompositeIDs = draft.sourceAssetIdentifiers.map { "\(draft.id.uuidString)|\($0)" }
-                let selectedCount = draftCompositeIDs.filter { selectedPhotos.contains($0) }.count
-                
-                if selectedCount > 0 {
-                    if selectedCount == draftCompositeIDs.count {
-                        draftsToDelete.insert(draft.id)
-                        modelContext.delete(draft)
-                    } else {
-                        // Partially delete photos
-                        var updatedPhotos = draft.sourceAssetIdentifiers
-                        updatedPhotos.removeAll { assetId in
-                            selectedPhotos.contains("\(draft.id.uuidString)|\(assetId)")
+            Task {
+                for draft in drafts {
+                    let draftId = draft.id ?? ""
+                    let draftCompositeIDs = draft.sourceAssetIdentifiers.map { "\(draftId)|\($0)" }
+                    let selectedForThisDraft = draftCompositeIDs.filter { selectedPhotos.contains($0) }
+                    
+                    if !selectedForThisDraft.isEmpty {
+                        if selectedForThisDraft.count == draftCompositeIDs.count {
+                            try? await repository.deleteListing(id: draftId)
+                        } else {
+                            var updatedDraft = draft
+                            updatedDraft.sourceAssetIdentifiers.removeAll { assetId in
+                                selectedPhotos.contains("\(draftId)|\(assetId)")
+                            }
+                            try? await repository.saveDraft(updatedDraft)
                         }
-                        draft.sourceAssetIdentifiers = updatedPhotos
                     }
                 }
+                
+                await MainActor.run {
+                    isSelectionMode = false
+                    selectedPhotos.removeAll()
+                }
             }
-            
-            try? modelContext.save()
-            isSelectionMode = false
-            selectedPhotos.removeAll()
         }
     }
     
     // MARK: - BulkListingOverviewView
     struct BulkListingOverviewView: View {
         var selectedAssets: [PhotoAsset]
-        @State private var selection = Set<UUID>()
+        @State private var selection = Set<String>()
         @State private var showingBulkEdit = false
+        @StateObject private var repository = ListingRepository.shared
         
-        @Environment(\.modelContext) private var modelContext
-        @Query private var allItems: [Item]
+        @State private var drafts: [UserListing] = []
+        @State private var listener: ListenerRegistration?
         
         var body: some View {
             List(selection: $selection) {
-                ForEach(allItems.filter { $0.isDraft }) { item in
+                ForEach(drafts) { item in
                     HStack {
                         Rectangle()
                             .fill(Color.gray.opacity(0.3))
@@ -622,14 +745,15 @@ struct CustomPhotoPickerView: View {
                             .overlay(Text("\(item.sourceAssetIdentifiers.count) img").font(.caption2))
                         
                         VStack(alignment: .leading) {
-                            Text(item.userEditedTitle ?? item.aiSuggestedTitle ?? "New Draft Item")
+                            Text(item.customTitle ?? "New Draft Item")
                                 .font(.headline)
-                            Text(item.blurb.isEmpty ? "No blurb" : item.blurb)
+                            Text(item.customDescription ?? "No description")
                                 .font(.subheadline)
                                 .foregroundColor(.gray)
                                 .lineLimit(1)
                         }
                     }
+                    .tag(item.id ?? "")
                 }
             }
             .navigationTitle("Bulk Overview")
@@ -655,33 +779,56 @@ struct CustomPhotoPickerView: View {
                 }
             }
             .sheet(isPresented: $showingBulkEdit) {
-                BulkEditModal(selection: $selection)
+                BulkEditModal(selection: $selection, drafts: drafts)
             }
             .onAppear {
-                if allItems.filter({ $0.isDraft }).isEmpty && !selectedAssets.isEmpty {
-                    let newItem = Item(blurb: "Draft from selected photos", sourceAssetIdentifiers: selectedAssets.map { $0.id })
-                    modelContext.insert(newItem)
-                    try? modelContext.save()
+                startListening()
+                
+                // If we came from the picker with new photos but no drafts exist yet
+                if drafts.isEmpty && !selectedAssets.isEmpty {
+                    let userId = Auth.auth().currentUser?.uid ?? "anonymous"
+                    let newListing = UserListing.newDraft(
+                        userId: userId,
+                        sourceAssetIdentifiers: selectedAssets.map { $0.id }
+                    )
+                    Task {
+                        try? await repository.saveDraft(newListing)
+                    }
+                }
+            }
+            .onDisappear {
+                listener?.remove()
+            }
+        }
+        
+        private func startListening() {
+            listener = repository.draftsPublisher { result in
+                if case .success(let drafts) = result {
+                    self.drafts = drafts
                 }
             }
         }
         
         private func deleteSelected() {
-            for item in allItems where selection.contains(item.id) {
-                modelContext.delete(item)
+            Task {
+                for id in selection {
+                    try? await repository.deleteListing(id: id)
+                }
+                await MainActor.run {
+                    selection.removeAll()
+                }
             }
-            selection.removeAll()
         }
     }
     
     // MARK: - BulkEditModal
     struct BulkEditModal: View {
-        @Binding var selection: Set<UUID>
+        @Binding var selection: Set<String>
+        let drafts: [UserListing]
         @Environment(\.dismiss) private var dismiss
-        @Environment(\.modelContext) private var modelContext
-        @Query private var allItems: [Item]
+        @StateObject private var repository = ListingRepository.shared
         
-        @State private var appendBlurb = ""
+        @State private var appendDescription = ""
         @State private var buyerPaysShipping = true
         @State private var handlingFee: Double = 0.0
         
@@ -689,7 +836,7 @@ struct CustomPhotoPickerView: View {
             NavigationStack {
                 Form {
                     Section(header: Text("Description")) {
-                        TextField("Append to description...", text: $appendBlurb, axis: .vertical)
+                        TextField("Append to description...", text: $appendDescription, axis: .vertical)
                             .lineLimit(3...6)
                     }
                     
@@ -723,18 +870,25 @@ struct CustomPhotoPickerView: View {
         }
         
         private func applyChanges() {
-            for item in allItems where selection.contains(item.id) {
-                if !appendBlurb.isEmpty {
-                    if item.blurb.isEmpty {
-                        item.blurb = appendBlurb
-                    } else {
-                        item.blurb += "\n" + appendBlurb
+            Task {
+                for id in selection {
+                    if var draft = drafts.first(where: { $0.id == id }) {
+                        if !appendDescription.isEmpty {
+                            let current = draft.customDescription ?? ""
+                            draft.customDescription = current.isEmpty ? appendDescription : (current + "\n" + appendDescription)
+                        }
+                        
+                        var shipping = draft.shippingInfo ?? ShippingInfo(buyerPaysShipping: buyerPaysShipping, handlingFee: handlingFee, estimatedShippingDays: 3)
+                        shipping.buyerPaysShipping = buyerPaysShipping
+                        shipping.handlingFee = handlingFee
+                        draft.shippingInfo = shipping
+                        
+                        try? await repository.saveDraft(draft)
                     }
                 }
-                item.buyerPaysShipping = buyerPaysShipping
-                item.handlingFee = handlingFee
+                await MainActor.run {
+                    selection.removeAll()
+                }
             }
-            try? modelContext.save()
-            selection.removeAll()
         }
     }
