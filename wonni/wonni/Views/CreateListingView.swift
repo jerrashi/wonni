@@ -184,15 +184,16 @@ struct CustomPhotoPickerView: View {
                 }
             }
             .safeAreaInset(edge: .top) {
-                if !currentUsedAssetIDs.isEmpty {
+                if !photoCollection.photoAssets.isEmpty {
                     Toggle(isOn: $hidePreviouslySelected) {
-                        HStack {
+                        HStack(spacing: 6) {
                             Image(systemName: hidePreviouslySelected ? "eye.slash" : "eye")
                             Text("Hide previously selected")
                         }
                         .font(.subheadline)
+                        .foregroundStyle(.primary)
                     }
-                    .disabled(photoCollection.photoAssets.count > 50000)
+                    .disabled(currentUsedAssetIDs.isEmpty)
                     .padding(.horizontal)
                     .padding(.vertical, 8)
                     .background(.bar)
@@ -326,18 +327,18 @@ struct CustomPhotoPickerView: View {
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    if !selectedAssets.isEmpty || !currentDrafts.isEmpty {
-                        Button {
-                            if !selectedAssets.isEmpty {
-                                saveSelectionToDraft()
-                            }
-                            navigateToOverview = true
-                        } label: {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 24))
-                                .foregroundColor(.green)
+                    let canProceed = !selectedAssets.isEmpty || !currentDrafts.isEmpty
+                    Button {
+                        if !selectedAssets.isEmpty {
+                            saveSelectionToDraft()
                         }
+                        navigateToOverview = true
+                    } label: {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 24))
+                            .foregroundColor(canProceed ? .green : .secondary)
                     }
+                    .disabled(!canProceed)
                 }
             }
             .task {
@@ -730,27 +731,24 @@ struct CustomPhotoPickerView: View {
         @State private var selection = Set<String>()
         @State private var showingBulkEdit = false
         @StateObject private var repository = ListingRepository.shared
-        
+        @State private var cache = CachedImageManager()
+
         @State private var drafts: [UserListing] = []
         @State private var listener: ListenerRegistration?
-        
+
+        private let thumbSize = CGSize(width: 120, height: 120)
+
         var body: some View {
             List(selection: $selection) {
                 ForEach(drafts) { item in
-                    HStack {
-                        Rectangle()
-                            .fill(Color.gray.opacity(0.3))
-                            .frame(width: 50, height: 50)
-                            .cornerRadius(8)
-                            .overlay(Text("\(item.sourceAssetIdentifiers.count) img").font(.caption2))
-                        
-                        VStack(alignment: .leading) {
-                            Text(item.customTitle ?? "New Draft Item")
+                    HStack(spacing: 12) {
+                        thumbnailStrip(for: item)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.customTitle ?? "New Draft")
                                 .font(.headline)
-                            Text(item.customDescription ?? "No description")
+                            Text("\(item.sourceAssetIdentifiers.count) photo\(item.sourceAssetIdentifiers.count == 1 ? "" : "s")")
                                 .font(.subheadline)
-                                .foregroundColor(.gray)
-                                .lineLimit(1)
+                                .foregroundStyle(.secondary)
                         }
                     }
                     .tag(item.id ?? "")
@@ -809,6 +807,20 @@ struct CustomPhotoPickerView: View {
             }
         }
         
+        @ViewBuilder
+        private func thumbnailStrip(for item: UserListing) -> some View {
+            let ids = Array(item.sourceAssetIdentifiers.prefix(3))
+            HStack(spacing: 4) {
+                ForEach(ids, id: \.self) { assetId in
+                    PhotoItemView(asset: PhotoAsset(identifier: assetId), cache: cache, imageSize: thumbSize)
+                        .scaledToFill()
+                        .frame(width: 50, height: 50)
+                        .clipped()
+                        .cornerRadius(6)
+                }
+            }
+        }
+
         private func deleteSelected() {
             Task {
                 for id in selection {
@@ -820,7 +832,7 @@ struct CustomPhotoPickerView: View {
             }
         }
     }
-    
+
     // MARK: - BulkEditModal
     struct BulkEditModal: View {
         @Binding var selection: Set<String>
