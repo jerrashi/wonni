@@ -4,6 +4,7 @@ See the License.txt file for this sample’s licensing information.
 
 import Photos
 import os.log
+import UIKit
 
 struct PhotoAsset: Identifiable {
     var id: String { identifier }
@@ -60,6 +61,21 @@ struct PhotoAsset: Identifiable {
             logger.debug("PhotoAsset asset deleted: \(index ?? -1)")
         } catch (let error) {
             logger.error("Failed to delete photo: \(error.localizedDescription)")
+        }
+    }
+    
+    func fullResolutionImage() async -> UIImage? {
+        guard let phAsset = phAsset else { return nil }
+        
+        let options = PHImageRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.deliveryMode = .highQualityFormat
+        options.isSynchronous = false
+        
+        return await withCheckedContinuation { continuation in
+            PHImageManager.default().requestImage(for: phAsset, targetSize: PHImageManagerMaximumSize, contentMode: .aspectFit, options: options) { image, _ in
+                continuation.resume(returning: image)
+            }
         }
     }
 }
