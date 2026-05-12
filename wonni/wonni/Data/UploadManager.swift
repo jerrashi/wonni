@@ -142,7 +142,9 @@ class UploadManager: ObservableObject {
                         listing.price = draft.userEditedPrice ?? gemini.suggestedPrice
                     }
 
-                    // 5. Persist to Firestore; capture doc ID for receipt-view edits
+                    // 5. Persist to Firestore as active (not draft)
+                    listing.status = .active
+                    listing.publishedAt = Timestamp(date: Date())
                     let docId = try await ListingRepository.shared.saveDraft(listing)
                     draftListingIDs[draft.id] = docId
 
