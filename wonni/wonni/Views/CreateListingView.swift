@@ -686,16 +686,10 @@ struct CustomPhotoPickerView: View {
 
         @FocusState private var focusedID: UUID?
         @State private var cache = CachedImageManager()
-        @State private var showingUploadScreen = false
 
         private var drafts: [Item] { allItems.filter { $0.isDraft } }
 
         var body: some View {
-            NavigationLink(destination: UploadingView(), isActive: $showingUploadScreen) {
-                EmptyView()
-            }
-            .hidden()
-
             List {
                 ForEach(drafts) { item in
                     DraftRow(item: item, focusedID: $focusedID, cache: cache)
@@ -711,7 +705,7 @@ struct CustomPhotoPickerView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Upload All") {
                         uploadManager.startUpload(drafts: drafts, modelContext: modelContext)
-                        showingUploadScreen = true
+                        uploadManager.shouldReturnToRoot = true
                     }
                     .disabled(drafts.isEmpty || uploadManager.isPillVisible)
                     .fontWeight(.semibold)
@@ -883,6 +877,7 @@ struct CustomPhotoPickerView: View {
 
 struct UploadingView: View {
     @EnvironmentObject private var uploadManager: UploadManager
+    @Environment(\.dismiss) private var dismiss
 
     private var allDone: Bool {
         !uploadManager.statuses.isEmpty &&
@@ -930,18 +925,27 @@ struct UploadingView: View {
                 ForEach(uploadManager.orderedDraftIDs, id: \.self) { id in
                     let name = uploadManager.draftNames[id] ?? "Draft"
                     let status = uploadManager.statuses[id] ?? .pending
-                    HStack(spacing: 14) {
-                        StatusIconView(status: status)
-                            .frame(width: 28, height: 28)
-                        Text(name)
-                            .font(.body)
-                            .lineLimit(1)
-                        Spacer()
-                        if case .uploading(let p) = status {
-                            Text("\(Int(p * 100))%")
-                                .font(.caption)
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
+                    let errorMsg = uploadManager.uploadErrors[id]
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 14) {
+                            StatusIconView(status: status)
+                                .frame(width: 28, height: 28)
+                            Text(name)
+                                .font(.body)
+                                .lineLimit(1)
+                            Spacer()
+                            if case .uploading(let p) = status {
+                                Text("\(Int(p * 100))%")
+                                    .font(.caption)
+                                    .monospacedDigit()
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        if let err = errorMsg {
+                            Text(err)
+                                .font(.caption2)
+                                .foregroundStyle(.red)
+                                .padding(.leading, 42)
                         }
                     }
                 }
@@ -967,7 +971,7 @@ struct UploadingView: View {
                 }
 
                 Button {
-                    uploadManager.shouldReturnToRoot = true
+                    dismiss()
                 } label: {
                     Label(
                         allDone ? "Done" : "Minimize to pill",
@@ -986,7 +990,17 @@ struct UploadingView: View {
         }
         .navigationTitle("Uploading")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(!allDone)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if !allDone {
+                    Button("Cancel") {
+                        uploadManager.cancel()
+                        dismiss()
+                    }
+                    .foregroundStyle(.red)
+                }
+            }
+        }
     }
 }
 

@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import Photos
 
 struct UploadPillView: View {
     @EnvironmentObject var uploadManager: UploadManager
@@ -25,8 +26,10 @@ struct UploadPillView: View {
         .padding(.bottom, 83)
         .animation(.spring(response: 0.3), value: uploadManager.pillState)
         .sheet(isPresented: $uploadManager.showExpandedModal) {
-            UploadExpandedModal()
-                .environmentObject(uploadManager)
+            NavigationStack {
+                UploadingView()
+            }
+            .environmentObject(uploadManager)
         }
     }
 
@@ -58,14 +61,6 @@ struct UploadPillView: View {
             Spacer()
 
             Button {
-                uploadManager.showExpandedModal = true
-            } label: {
-                Image(systemName: "chevron.up")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.white)
-            }
-
-            Button {
                 withAnimation(.spring(response: 0.3)) {
                     uploadManager.pillState = .minimized
                 }
@@ -84,6 +79,10 @@ struct UploadPillView: View {
                 .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
         )
         .padding(.horizontal, 16)
+        .contentShape(Capsule())
+        .onTapGesture {
+            uploadManager.showExpandedModal = true
+        }
     }
 
     // MARK: - Minimized progress bar
@@ -99,82 +98,6 @@ struct UploadPillView: View {
                     uploadManager.pillState = .pill
                 }
             }
-    }
-}
-
-// MARK: - Expanded modal
-
-struct UploadExpandedModal: View {
-    @EnvironmentObject var uploadManager: UploadManager
-    @Environment(\.dismiss) private var dismiss
-
-    private var sortedIDs: [UUID] {
-        uploadManager.statuses.keys.sorted {
-            let a = uploadManager.draftNames[$0] ?? ""
-            let b = uploadManager.draftNames[$1] ?? ""
-            return a < b
-        }
-    }
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                VStack(spacing: 8) {
-                    ProgressView(value: uploadManager.overallProgress)
-                        .tint(.blue)
-                        .padding(.horizontal, 20)
-
-                    Text("Uploading draft \(uploadManager.currentIndex) of \(uploadManager.totalCount)…")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 20)
-
-                Divider()
-
-                List {
-                    ForEach(sortedIDs, id: \.self) { id in
-                        let status = uploadManager.statuses[id] ?? .pending
-                        let name = uploadManager.draftNames[id] ?? "Draft"
-
-                        HStack(spacing: 14) {
-                            StatusIconView(status: status)
-                                .frame(width: 28, height: 28)
-
-                            Text(name)
-                                .font(.body)
-                                .lineLimit(1)
-
-                            Spacer()
-
-                            if case .uploading(let p) = status {
-                                Text("\(Int(p * 100))%")
-                                    .font(.caption)
-                                    .monospacedDigit()
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-                .listStyle(.plain)
-            }
-            .navigationTitle("Upload Progress")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button { dismiss() } label: {
-                        Image(systemName: "chevron.down")
-                    }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Cancel") {
-                        uploadManager.cancel()
-                        dismiss()
-                    }
-                    .foregroundStyle(.red)
-                }
-            }
-        }
     }
 }
 
