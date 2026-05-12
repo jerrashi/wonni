@@ -963,88 +963,93 @@ struct UploadingView: View {
         }
     }
 
+    private var liveCount: Int {
+        uploadManager.orderedDraftIDs.filter { uploadManager.statuses[$0] == .done }.count
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            // Overall progress header
-            VStack(spacing: 8) {
-                ProgressView(value: uploadManager.overallProgress)
-                    .tint(allDone ? .green : .blue)
-                    .padding(.horizontal, 20)
-
+            // Header: progress bar while uploading → compact receipt summary when done
+            Group {
                 if allDone {
-                    Label("Upload complete", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .font(.subheadline.weight(.semibold))
+                    HStack(spacing: 10) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.title3)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(liveCount) item\(liveCount == 1 ? "" : "s") live")
+                                .font(.subheadline.weight(.semibold))
+                            Text("Tap a title or price to edit")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 20)
                 } else {
-                    HStack(spacing: 4) {
-                        Text("Uploading \(uploadManager.currentIndex) of \(uploadManager.totalCount)")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        if let eta = uploadManager.etaString {
-                            Text("· \(eta)")
+                    VStack(spacing: 8) {
+                        ProgressView(value: uploadManager.overallProgress)
+                            .tint(.blue)
+                            .padding(.horizontal, 20)
+                        HStack(spacing: 4) {
+                            Text("Uploading \(uploadManager.currentIndex) of \(uploadManager.totalCount)")
                                 .font(.subheadline)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(.secondary)
+                            if let eta = uploadManager.etaString {
+                                Text("· \(eta)")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
                     }
                 }
             }
-            .padding(.vertical, 20)
+            .padding(.vertical, 16)
+            .animation(.easeInOut(duration: 0.35), value: allDone)
 
             Divider()
 
-            // Per-draft status list
+            // List rows transform from status indicators → editable result cards on completion
             List {
                 ForEach(uploadManager.orderedDraftIDs, id: \.self) { id in
                     let name = uploadManager.draftNames[id] ?? "Draft"
                     let status = uploadManager.statuses[id] ?? .pending
                     let errorMsg = uploadManager.uploadErrors[id]
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 14) {
-                            StatusIconView(status: status)
-                                .frame(width: 28, height: 28)
-                            Text(name)
-                                .font(.body)
-                                .lineLimit(1)
-                            Spacer()
-                            if case .uploading(let p) = status {
-                                Text("\(Int(p * 100))%")
-                                    .font(.caption)
-                                    .monospacedDigit()
-                                    .foregroundStyle(.secondary)
+
+                    if allDone, case .done = status {
+                        ResultCard(draftID: id, initialTitle: name)
+                            .environmentObject(uploadManager)
+                    } else {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 14) {
+                                StatusIconView(status: status)
+                                    .frame(width: 28, height: 28)
+                                Text(name)
+                                    .font(.body)
+                                    .lineLimit(1)
+                                Spacer()
+                                if case .uploading(let p) = status {
+                                    Text("\(Int(p * 100))%")
+                                        .font(.caption)
+                                        .monospacedDigit()
+                                        .foregroundStyle(.secondary)
+                                }
                             }
-                        }
-                        if let err = errorMsg {
-                            Text(err)
-                                .font(.caption2)
-                                .foregroundStyle(.red)
-                                .padding(.leading, 42)
+                            if let err = errorMsg {
+                                Text(err)
+                                    .font(.caption2)
+                                    .foregroundStyle(.red)
+                                    .padding(.leading, 42)
+                            }
                         }
                     }
                 }
             }
             .listStyle(.plain)
-
-            if allDone {
-                Divider()
-                NavigationLink {
-                    PublishedListingsView()
-                } label: {
-                    Label("View Published Listings", systemImage: "checkmark.circle.fill")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.green)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 16)
-            }
         }
         .navigationTitle("Upload")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            // "..." hides Cancel — it's a destructive action users shouldn't stumble on
             ToolbarItem(placement: .navigationBarLeading) {
                 if !allDone {
                     Menu {
@@ -1057,15 +1062,89 @@ struct UploadingView: View {
                     }
                 }
             }
-            // Chevron dismisses the sheet back to the pill
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    dismiss()
-                } label: {
+                Button { dismiss() } label: {
                     Image(systemName: "chevron.down")
                         .font(.body.weight(.semibold))
                 }
             }
+        }
+    }
+}
+
+// MARK: - ResultCard
+
+struct ResultCard: View {
+    let draftID: UUID
+    let initialTitle: String
+
+    @EnvironmentObject private var uploadManager: UploadManager
+    @State private var cache = CachedImageManager()
+    @State private var titleText = ""
+    @State private var priceText = ""
+    @State private var saveTask: Task<Void, Never>?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if let assetID = uploadManager.draftFirstAssetID[draftID] {
+                PhotoItemView(
+                    asset: PhotoAsset(identifier: assetID),
+                    cache: cache,
+                    imageSize: CGSize(width: 120, height: 120)
+                )
+                .scaledToFill()
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(.systemGray5))
+                    .frame(width: 56, height: 56)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                TextField("Title", text: $titleText)
+                    .font(.subheadline.weight(.medium))
+                    .onChange(of: titleText) { _, _ in scheduleSave() }
+
+                HStack(spacing: 2) {
+                    Text("$").font(.caption).foregroundStyle(.secondary)
+                    TextField("Price", text: $priceText)
+                        .font(.caption)
+                        .keyboardType(.decimalPad)
+                        .onChange(of: priceText) { _, _ in scheduleSave() }
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            Text("Live")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(Color.green, in: Capsule())
+        }
+        .padding(.vertical, 2)
+        .onAppear {
+            titleText = initialTitle
+            if let outer = uploadManager.draftPrices[draftID], let price = outer {
+                priceText = String(format: "%.2f", price)
+            }
+        }
+    }
+
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard !Task.isCancelled,
+                  let listingID = uploadManager.draftListingIDs[draftID] else { return }
+            let price = Double(priceText.filter { $0.isNumber || $0 == "." })
+            try? await ListingRepository.shared.updateFields(
+                id: listingID,
+                title: titleText.isEmpty ? nil : titleText,
+                price: price
+            )
         }
     }
 }

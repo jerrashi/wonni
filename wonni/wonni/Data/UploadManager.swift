@@ -32,6 +32,10 @@ class UploadManager: ObservableObject {
     @Published var uploadErrors: [UUID: String] = [:]
     @Published var uploadedAssetIDs: [String] = []
     @Published var showDeletePhotosPrompt = false
+    // Receipt data — populated as each draft completes, survives SwiftData deletion
+    @Published var draftFirstAssetID: [UUID: String] = [:]
+    @Published var draftListingIDs: [UUID: String] = [:]
+    @Published var draftPrices: [UUID: Double?] = [:]
 
     // Derived from elapsed time + linear progress — equivalent to bytes_remaining / upload_speed
     // but requires no byte-size measurement.
@@ -64,6 +68,9 @@ class UploadManager: ObservableObject {
         uploadErrors = [:]
         uploadedAssetIDs = []
         showDeletePhotosPrompt = false
+        draftFirstAssetID = [:]
+        draftListingIDs = [:]
+        draftPrices = [:]
         uploadStartTime = Date()
 
         for (i, draft) in drafts.enumerated() {
@@ -135,10 +142,16 @@ class UploadManager: ObservableObject {
                         listing.price = draft.userEditedPrice ?? gemini.suggestedPrice
                     }
 
-                    // 5. Persist to Firestore
-                    _ = try await ListingRepository.shared.saveDraft(listing)
+                    // 5. Persist to Firestore; capture doc ID for receipt-view edits
+                    let docId = try await ListingRepository.shared.saveDraft(listing)
+                    draftListingIDs[draft.id] = docId
 
-                    // 6. Delete SwiftData draft — it now lives in Firestore
+                    // 6. Save receipt data before deleting the SwiftData draft
+                    if let firstAsset = draft.sourceAssetIdentifiers.first {
+                        draftFirstAssetID[draft.id] = firstAsset
+                    }
+                    draftPrices[draft.id] = listing.price
+
                     statuses[draft.id] = .done
                     uploadedAssetIDs.append(contentsOf: draft.sourceAssetIdentifiers)
                     modelContext.delete(draft)
@@ -173,6 +186,9 @@ class UploadManager: ObservableObject {
         orderedDraftIDs.removeAll()
         uploadErrors.removeAll()
         uploadedAssetIDs.removeAll()
+        draftFirstAssetID.removeAll()
+        draftListingIDs.removeAll()
+        draftPrices.removeAll()
         uploadStartTime = nil
     }
 }
