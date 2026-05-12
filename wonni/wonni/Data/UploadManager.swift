@@ -105,10 +105,13 @@ class UploadManager: ObservableObject {
                         }
                     }
 
-                    // 2. Upload each image to Firebase Storage
+                    // 2. Pre-generate listing ID so photos go straight to the permanent path
+                    let listingId = UUID().uuidString
                     var photoPaths: [String] = []
                     for (imgIdx, image) in images.enumerated() {
-                        if let path = try? await StorageService.shared.uploadTempImage(image: image) {
+                        if let path = try? await StorageService.shared.uploadListingImage(
+                            image: image, index: imgIdx, userId: userId, listingId: listingId
+                        ) {
                             photoPaths.append(path)
                         }
                         let p = Double(imgIdx + 1) / Double(max(images.count, 1))
@@ -116,11 +119,12 @@ class UploadManager: ObservableObject {
                         overallProgress = (Double(index) + p * 0.7) / Double(totalCount)
                     }
 
-                    // 3. Build draft listing struct
+                    // 3. Build listing struct with pre-set ID
                     var listing = UserListing.newDraft(
                         userId: userId,
                         sourceAssetIdentifiers: draft.sourceAssetIdentifiers
                     )
+                    listing.id = listingId
                     listing.photoPaths = photoPaths
                     listing.coverPhotoPath = photoPaths.first
                     listing.customTitle = draft.userEditedTitle ?? draft.aiSuggestedTitle
@@ -129,17 +133,20 @@ class UploadManager: ObservableObject {
                     overallProgress = (Double(index) + 0.8) / Double(totalCount)
 
                     // 4. Run Gemini identification (first 3 images for speed)
-                    if !images.isEmpty,
-                       let gemini = try? await GeminiService.shared.identifyItem(images: Array(images.prefix(3))) {
-                        // Write AI results back to SwiftData for PublishedListingsView
-                        draft.aiSuggestedTitle = gemini.name
-                        draft.aiSuggestedPrice = gemini.suggestedPrice
-                        draft.aiSuggestedDescription = gemini.description
+                    if !images.isEmpty {
+                        do {
+                            let gemini = try await GeminiService.shared.identifyItem(images: Array(images.prefix(3)))
+                            draft.aiSuggestedTitle = gemini.name
+                            draft.aiSuggestedPrice = gemini.suggestedPrice
+                            draft.aiSuggestedDescription = gemini.description
 
-                        if listing.customTitle == nil { listing.customTitle = gemini.name }
-                        listing.customDescription = gemini.description
-                        // Respect user-set price — only use Gemini price if user hasn't specified one
-                        listing.price = draft.userEditedPrice ?? gemini.suggestedPrice
+                            if listing.customTitle == nil { listing.customTitle = gemini.name }
+                            listing.customDescription = gemini.description
+                            listing.price = draft.userEditedPrice ?? gemini.suggestedPrice
+                            listing.geminiIdentificationConfirmed = true
+                        } catch {
+                            print("[UploadManager] Gemini failed for draft \(draft.id): \(error)")
+                        }
                     }
 
                     // 5. Persist to Firestore as active (not draft)
