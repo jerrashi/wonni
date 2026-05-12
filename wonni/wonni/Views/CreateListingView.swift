@@ -7,6 +7,7 @@ import SwiftUI
 import SwiftData
 import Photos
 import UniformTypeIdentifiers
+import Vision
 import FirebaseFirestore
 import FirebaseAuth
 
@@ -675,139 +676,157 @@ struct CustomPhotoPickerView: View {
         }
     }
     
-    // MARK: - BulkListingOverviewView
+    // MARK: - BulkListingOverviewView (Drafts)
     struct BulkListingOverviewView: View {
         var selectedAssets: [PhotoAsset]
-        @State private var selection = Set<UUID>()
-        @State private var showingBulkEdit = false
 
         @Environment(\.modelContext) private var modelContext
         @Query private var allItems: [Item]
+        @EnvironmentObject private var uploadManager: UploadManager
+
+        @FocusState private var focusedID: UUID?
+        @State private var cache = CachedImageManager()
+
+        private var drafts: [Item] { allItems.filter { $0.isDraft } }
 
         var body: some View {
-            List(selection: $selection) {
-                ForEach(allItems.filter { $0.isDraft }) { item in
-                    HStack {
-                        Rectangle()
-                            .fill(Color.gray.opacity(0.3))
-                            .frame(width: 50, height: 50)
-                            .cornerRadius(8)
-                            .overlay(Text("\(item.sourceAssetIdentifiers.count) img").font(.caption2))
-
-                        VStack(alignment: .leading) {
-                            Text(item.userEditedTitle ?? item.aiSuggestedTitle ?? "New Draft Item")
-                                .font(.headline)
-                            Text(item.blurb.isEmpty ? "No blurb" : item.blurb)
-                                .font(.subheadline)
-                                .foregroundColor(.gray)
-                                .lineLimit(1)
-                        }
-                    }
+            List {
+                ForEach(drafts) { item in
+                    DraftRow(item: item, focusedID: $focusedID, cache: cache)
+                }
+                .onDelete { offsets in
+                    for i in offsets { modelContext.delete(drafts[i]) }
+                    try? modelContext.save()
                 }
             }
-            .navigationTitle("Bulk Overview")
+            .listStyle(.plain)
+            .navigationTitle("Drafts")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-                ToolbarItem(placement: .bottomBar) {
-                    HStack {
-                        Button("Delete") {
-                            deleteSelected()
-                        }
-                        .disabled(selection.isEmpty)
-                        .foregroundColor(.red)
-
-                        Spacer()
-
-                        Button("Bulk Edit") {
-                            showingBulkEdit = true
-                        }
-                        .disabled(selection.isEmpty)
+                    Button("Upload All") {
+                        uploadManager.startUpload(drafts: drafts, modelContext: modelContext)
                     }
+                    .disabled(drafts.isEmpty || uploadManager.isPillVisible)
+                    .fontWeight(.semibold)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Button { moveFocus(by: -1) } label: {
+                        Image(systemName: "chevron.up")
+                    }
+                    .disabled(focusedIndex.map { $0 == 0 } ?? true)
+
+                    Button { moveFocus(by: 1) } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                    .disabled(focusedIndex.map { $0 == drafts.count - 1 } ?? true)
+
+                    Spacer()
+
+                    Button("Done") { focusedID = nil }
                 }
             }
-            .sheet(isPresented: $showingBulkEdit) {
-                BulkEditModal(selection: $selection)
+            .task {
+                for item in drafts where item.aiSuggestedTitle == nil {
+                    item.aiSuggestedTitle = await classifyFirstImage(for: item) ?? "Item"
+                    try? modelContext.save()
+                }
+            }
+            .onChange(of: focusedID) { oldID, _ in
+                if oldID != nil { try? modelContext.save() }
             }
             .onAppear {
-                if allItems.filter({ $0.isDraft }).isEmpty && !selectedAssets.isEmpty {
-                    let newItem = Item(blurb: "Draft from selected photos", sourceAssetIdentifiers: selectedAssets.map { $0.id })
+                if drafts.isEmpty && !selectedAssets.isEmpty {
+                    let newItem = Item(
+                        blurb: "Draft from selected photos",
+                        sourceAssetIdentifiers: selectedAssets.map { $0.id }
+                    )
                     modelContext.insert(newItem)
                     try? modelContext.save()
                 }
             }
         }
 
-        private func deleteSelected() {
-            for item in allItems where selection.contains(item.id) {
-                modelContext.delete(item)
-            }
-            selection.removeAll()
+        private var focusedIndex: Int? {
+            guard let id = focusedID else { return nil }
+            return drafts.firstIndex { $0.id == id }
+        }
+
+        private func moveFocus(by delta: Int) {
+            guard let idx = focusedIndex else { return }
+            let next = idx + delta
+            guard next >= 0 && next < drafts.count else { return }
+            focusedID = drafts[next].id
+        }
+
+        private func classifyFirstImage(for item: Item) async -> String? {
+            guard let assetId = item.sourceAssetIdentifiers.first else { return nil }
+            guard let image = await PhotoAsset(identifier: assetId).fullResolutionImage(),
+                  let cgImage = image.cgImage else { return nil }
+
+            return await Task.detached(priority: .userInitiated) {
+                let request = VNClassifyImageRequest()
+                let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+                try? handler.perform([request])
+                let top = (request.results as? [VNClassificationObservation] ?? [])
+                    .filter { $0.confidence > 0.35 }
+                    .prefix(3)
+                    .compactMap { obs -> String? in
+                        let raw = (obs.identifier.components(separatedBy: ",").first ?? obs.identifier)
+                            .replacingOccurrences(of: "_", with: " ")
+                        return raw.split(separator: " ").map { $0.capitalized }.joined(separator: " ")
+                    }
+                return top.isEmpty ? nil : top.joined(separator: " · ")
+            }.value
         }
     }
 
-    // MARK: - BulkEditModal
-    struct BulkEditModal: View {
-        @Binding var selection: Set<UUID>
-        @Environment(\.dismiss) private var dismiss
-        @Environment(\.modelContext) private var modelContext
-        @Query private var allItems: [Item]
+    // MARK: - DraftRow
+    struct DraftRow: View {
+        let item: Item
+        var focusedID: FocusState<UUID?>.Binding
+        let cache: CachedImageManager
 
-        @State private var appendBlurb = ""
-        @State private var buyerPaysShipping = true
-        @State private var handlingFee: Double = 0.0
+        @Environment(\.modelContext) private var modelContext
+
+        private var isUserEdited: Bool { item.userEditedTitle != nil }
+
+        private var titleBinding: Binding<String> {
+            Binding(
+                get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? "" },
+                set: { newValue in
+                    item.userEditedTitle = newValue.isEmpty ? nil : newValue
+                }
+            )
+        }
 
         var body: some View {
-            NavigationStack {
-                Form {
-                    Section(header: Text("Description")) {
-                        TextField("Append to description...", text: $appendBlurb, axis: .vertical)
-                            .lineLimit(3...6)
-                    }
-
-                    Section(header: Text("Shipping Rules")) {
-                        Toggle("Buyer Pays Shipping", isOn: $buyerPaysShipping)
-                        HStack {
-                            Text("Handling Fee")
-                            Spacer()
-                            TextField("$0.00", value: $handlingFee, format: .currency(code: "USD"))
-                                .keyboardType(.decimalPad)
-                                .multilineTextAlignment(.trailing)
-                        }
-                    }
-
-                    Section {
-                        Button("Apply Changes") {
-                            applyChanges()
-                            dismiss()
-                        }
-                        .frame(maxWidth: .infinity, alignment: .center)
-                    }
+            HStack(spacing: 12) {
+                if let assetId = item.sourceAssetIdentifiers.first {
+                    PhotoItemView(
+                        asset: PhotoAsset(identifier: assetId),
+                        cache: cache,
+                        imageSize: CGSize(width: 120, height: 120)
+                    )
+                    .scaledToFill()
+                    .frame(width: 60, height: 60)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                } else {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(.systemGray5))
+                        .frame(width: 60, height: 60)
                 }
-                .navigationTitle("Bulk Edit (\(selection.count))")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
-                    }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    TextField("Add title…", text: titleBinding)
+                        .font(.headline)
+                        .foregroundStyle(isUserEdited ? Color.primary : Color.secondary)
+                        .focused(focusedID, equals: item.id)
+
+                    Text("\(item.sourceAssetIdentifiers.count) photo\(item.sourceAssetIdentifiers.count == 1 ? "" : "s")")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
             }
-        }
-        
-        private func applyChanges() {
-            for item in allItems where selection.contains(item.id) {
-                if !appendBlurb.isEmpty {
-                    if item.blurb.isEmpty {
-                        item.blurb = appendBlurb
-                    } else {
-                        item.blurb += "\n" + appendBlurb
-                    }
-                }
-                item.buyerPaysShipping = buyerPaysShipping
-                item.handlingFee = handlingFee
-            }
-            try? modelContext.save()
-            selection.removeAll()
+            .padding(.vertical, 4)
         }
     }
