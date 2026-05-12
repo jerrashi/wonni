@@ -40,6 +40,22 @@ class ListingRepository: ObservableObject {
         }
     }
     
+    /// Fetches all active listings for the current user, sorted by most recently updated.
+    func fetchActiveListings() async throws -> [UserListing] {
+        guard let userId = Auth.auth().currentUser?.uid else {
+            throw NSError(domain: "ListingRepository", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
+        }
+
+        let snapshot = try await db.collection(listingsCollection)
+            .whereField("userId", isEqualTo: userId)
+            .getDocuments()
+
+        return snapshot.documents
+            .compactMap { try? $0.data(as: UserListing.self) }
+            .filter { $0.status == .active }
+            .sorted { ($0.updatedAt?.dateValue() ?? .distantPast) > ($1.updatedAt?.dateValue() ?? .distantPast) }
+    }
+
     /// Fetches all draft listings for the current user.
     func fetchDrafts() async throws -> [UserListing] {
         guard let userId = Auth.auth().currentUser?.uid else {
