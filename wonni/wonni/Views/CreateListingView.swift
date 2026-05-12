@@ -8,6 +8,7 @@ import SwiftData
 import Photos
 import UniformTypeIdentifiers
 import Vision
+import UIKit
 import FirebaseFirestore
 import FirebaseAuth
 
@@ -810,15 +811,14 @@ struct CustomPhotoPickerView: View {
 
         @Environment(\.modelContext) private var modelContext
         @State private var priceText: String = ""
+        @State private var showingPriceField = false
 
         private var isUserEdited: Bool { item.userEditedTitle != nil }
 
         private var titleBinding: Binding<String> {
             Binding(
                 get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? "" },
-                set: { newValue in
-                    item.userEditedTitle = newValue
-                }
+                set: { item.userEditedTitle = $0 }
             )
         }
 
@@ -839,35 +839,63 @@ struct CustomPhotoPickerView: View {
                         .frame(width: 60, height: 60)
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    TextField("Add title…", text: titleBinding)
-                        .font(.headline)
-                        .foregroundStyle(isUserEdited ? Color.primary : Color.secondary)
-                        .focused(focusedID, equals: item.id)
-
-                    HStack(spacing: 2) {
-                        Text("$")
-                            .foregroundStyle(item.userEditedPrice != nil ? Color.primary : Color.secondary)
-                        TextField("Price (optional)", text: $priceText)
-                            .foregroundStyle(item.userEditedPrice != nil ? Color.primary : Color.secondary)
-                            .keyboardType(.decimalPad)
+                VStack(alignment: .leading, spacing: 6) {
+                    // Title row — pencil signals editability
+                    HStack(spacing: 4) {
+                        Image(systemName: "pencil")
+                            .font(.caption2)
+                            .foregroundStyle(.quaternary)
+                        TextField("Add title…", text: titleBinding)
+                            .font(.headline)
+                            .foregroundStyle(isUserEdited ? Color.primary : Color.secondary)
+                            .focused(focusedID, equals: item.id)
+                            // Select all text when this field becomes active so typing
+                            // immediately replaces the AI suggestion
+                            .onReceive(NotificationCenter.default.publisher(
+                                for: UITextField.textDidBeginEditingNotification
+                            )) { notification in
+                                guard let tf = notification.object as? UITextField else { return }
+                                DispatchQueue.main.async { tf.selectAll(nil) }
+                            }
                     }
-                    .font(.subheadline)
 
-                    Text("\(item.sourceAssetIdentifiers.count) photo\(item.sourceAssetIdentifiers.count == 1 ? "" : "s")")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    // Price: tap $ to reveal field; auto-hides when cleared
+                    if showingPriceField || item.userEditedPrice != nil {
+                        HStack(spacing: 4) {
+                            Text("$")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            TextField("0.00", text: $priceText)
+                                .font(.subheadline)
+                                .keyboardType(.decimalPad)
+                        }
+                    } else {
+                        Button {
+                            showingPriceField = true
+                        } label: {
+                            Image(systemName: "dollarsign.circle")
+                                .font(.subheadline)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
             .padding(.vertical, 4)
             .onAppear {
                 if let p = item.userEditedPrice {
                     priceText = String(format: "%.2f", p)
+                    showingPriceField = true
                 }
             }
             .onChange(of: priceText) { _, newValue in
                 let cleaned = newValue.filter { $0.isNumber || $0 == "." }
-                item.userEditedPrice = cleaned.isEmpty ? nil : Double(cleaned)
+                if cleaned.isEmpty {
+                    item.userEditedPrice = nil
+                    showingPriceField = false
+                } else {
+                    item.userEditedPrice = Double(cleaned)
+                }
                 try? modelContext.save()
             }
         }
