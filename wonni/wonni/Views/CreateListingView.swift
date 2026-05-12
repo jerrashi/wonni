@@ -14,46 +14,32 @@ import FirebaseAuth
 struct DraftsStackIcon: View {
     var drafts: [UserListing]
     var cache: CachedImageManager
-    /// Drives the spring bounce when a new draft is received.
     var bouncing: Bool = false
 
-    private var coverAsset: PhotoAsset? {
-        drafts.last
-            .flatMap { $0.sourceAssetIdentifiers.first }
-            .map { PhotoAsset(identifier: $0) }
-    }
-
     var body: some View {
+        let assets: [PhotoAsset] = drafts.compactMap {
+            $0.sourceAssetIdentifiers.first.map(PhotoAsset.init(identifier:))
+        }
+        let topAssets = Array(assets.prefix(3))
+
         ZStack {
-            // Back card 2 (furthest)
-            RoundedRectangle(cornerRadius: 4)
-                .fill(Color(.systemGray4))
-                .frame(width: 35, height: 45)
-                .rotationEffect(.degrees(-12), anchor: .bottom)
-                .offset(x: -4, y: 0)
-
-            // Back card 1
-            RoundedRectangle(cornerRadius: 4)
-                .fill(Color(.systemGray3))
-                .frame(width: 35, height: 45)
-                .rotationEffect(.degrees(-5), anchor: .bottom)
-                .offset(x: -2, y: 0)
-
-            // Top card — most recent draft's cover photo
-            Group {
-                if let asset = coverAsset {
+            if topAssets.isEmpty {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color(.systemGray2))
+                    .frame(width: 35, height: 45)
+            } else {
+                ForEach(topAssets.indices, id: \.self) { index in
+                    let asset = topAssets[index]
+                    let rotation = index == 0 ? -15.0 : (index == 1 ? 0.0 : 15.0)
+                    let xOffset  = index == 0 ? -1.0  : (index == 1 ? 0.0  : 1.0)
                     PhotoItemView(asset: asset, cache: cache, imageSize: CGSize(width: 70, height: 90))
                         .scaledToFill()
                         .frame(width: 35, height: 45)
-                        .clipped()
                         .cornerRadius(4)
-                } else {
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(Color(.systemGray2))
-                        .frame(width: 35, height: 45)
+                        .rotationEffect(.degrees(topAssets.count > 1 ? rotation : 0), anchor: .bottom)
+                        .shadow(color: .black.opacity(0.2), radius: 2, x: xOffset, y: 1)
                 }
             }
-            .shadow(color: .black.opacity(0.25), radius: 3, x: 0, y: 2)
         }
         .frame(width: 60, height: 60)
         .scaleEffect(bouncing ? 1.25 : 1.0)
@@ -200,7 +186,7 @@ struct CustomPhotoPickerView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                if !selectedAssets.isEmpty || !currentDrafts.isEmpty {
+                if !selectedAssets.isEmpty || !currentDrafts.isEmpty || !sessionDraftIDs.isEmpty {
                     VStack(spacing: 0) {
                         Divider()
                         
@@ -253,7 +239,7 @@ struct CustomPhotoPickerView: View {
                         }
                         
                         HStack {
-                            if !currentDrafts.isEmpty {
+                            if !currentDrafts.isEmpty || !sessionDraftIDs.isEmpty {
                                 Button {
                                     showingDraftHistory = true
                                 } label: {
@@ -303,6 +289,11 @@ struct CustomPhotoPickerView: View {
             }
             .onAppear {
                 startListening()
+                Task {
+                    if let initial = try? await repository.fetchDrafts() {
+                        firestoreDrafts = initial
+                    }
+                }
             }
             .onDisappear {
                 listener?.remove()
@@ -327,7 +318,7 @@ struct CustomPhotoPickerView: View {
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    let canProceed = !selectedAssets.isEmpty || !currentDrafts.isEmpty
+                    let canProceed = !selectedAssets.isEmpty || !currentDrafts.isEmpty || !sessionDraftIDs.isEmpty
                     Button {
                         if !selectedAssets.isEmpty {
                             saveSelectionToDraft()
@@ -388,18 +379,24 @@ struct CustomPhotoPickerView: View {
         
         private func saveSelectionToDraft() {
             guard !selectedAssets.isEmpty else { return }
-            
+
             let assetsToUpload = selectedAssets
             let userId = Auth.auth().currentUser?.uid ?? "anonymous"
-            
-            // 1. Clear selection and trigger animation immediately
+
+            // Optimistically add a placeholder draft so the deck appears immediately,
+            // without waiting for the Firestore listener round-trip.
+            let placeholder = UserListing.newDraft(
+                userId: userId,
+                sourceAssetIdentifiers: assetsToUpload.map { $0.id }
+            )
+            firestoreDrafts.insert(placeholder, at: 0)
+
             selectedAssets.removeAll()
-            
+
             Task {
                 var photoPaths: [String] = []
                 var imagesToProcess: [UIImage] = []
-                
-                // 2. Fetch and upload each image
+
                 for asset in assetsToUpload {
                     if let image = await asset.fullResolutionImage() {
                         imagesToProcess.append(image)
@@ -408,16 +405,11 @@ struct CustomPhotoPickerView: View {
                         }
                     }
                 }
-                
-                // 3. Create the draft with the uploaded paths
-                let newListing = UserListing.newDraft(
-                    userId: userId,
-                    sourceAssetIdentifiers: assetsToUpload.map { $0.id }
-                )
-                var listingWithPhotos = newListing
+
+                var listingWithPhotos = placeholder
                 listingWithPhotos.photoPaths = photoPaths
                 listingWithPhotos.coverPhotoPath = photoPaths.first
-                
+
                 do {
                     let docId = try await repository.saveDraft(listingWithPhotos)
                     await MainActor.run {
@@ -425,8 +417,11 @@ struct CustomPhotoPickerView: View {
                         self.lastCreatedImages = imagesToProcess
                         self.sessionDraftIDs.append(docId)
                         self.showingIdentification = true
+                        // Listener will replace firestoreDrafts with authoritative data shortly
                     }
                 } catch {
+                    // Roll back the optimistic entry on failure
+                    firestoreDrafts.removeAll { $0.sourceAssetIdentifiers == assetsToUpload.map { $0.id } && $0.id == nil }
                     print("Error saving draft with photos: \(error.localizedDescription)")
                 }
             }
