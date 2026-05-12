@@ -82,11 +82,12 @@ class ListingRepository: ObservableObject {
         ])
     }
     
-    /// Patches title and/or price after upload. Used by the receipt view for inline edits.
-    func updateFields(id: String, title: String?, price: Double?) async throws {
+    /// Patches title, price, and/or description after upload. Used by the receipt view for inline edits.
+    func updateFields(id: String, title: String?, price: Double?, description: String? = nil) async throws {
         var data: [String: Any] = ["updatedAt": Timestamp(date: Date())]
         if let title { data["customTitle"] = title }
         if let price { data["price"] = price }
+        if let description { data["customDescription"] = description }
         try await db.collection(listingsCollection).document(id).updateData(data)
     }
 

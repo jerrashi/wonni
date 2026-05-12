@@ -382,19 +382,23 @@ struct CustomPhotoPickerView: View {
 
             // Upload to Firebase Storage + Firestore in background for AI/publish flow.
             Task {
+                let listingId = UUID().uuidString
                 var photoPaths: [String] = []
                 var imagesToProcess: [UIImage] = []
 
-                for asset in assetsToUpload {
+                for (idx, asset) in assetsToUpload.enumerated() {
                     if let image = await asset.fullResolutionImage() {
                         imagesToProcess.append(image)
-                        if let path = try? await StorageService.shared.uploadTempImage(image: image) {
+                        if let path = try? await StorageService.shared.uploadListingImage(
+                            image: image, index: idx, userId: userId, listingId: listingId
+                        ) {
                             photoPaths.append(path)
                         }
                     }
                 }
 
                 var listing = UserListing.newDraft(userId: userId, sourceAssetIdentifiers: assetsToUpload.map { $0.id })
+                listing.id = listingId
                 listing.photoPaths = photoPaths
                 listing.coverPhotoPath = photoPaths.first
 
@@ -1082,10 +1086,11 @@ struct ResultCard: View {
     @State private var cache = CachedImageManager()
     @State private var titleText = ""
     @State private var priceText = ""
+    @State private var descriptionText = ""
     @State private var saveTask: Task<Void, Never>?
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
             if let assetID = uploadManager.draftFirstAssetID[draftID] {
                 PhotoItemView(
                     asset: PhotoAsset(identifier: assetID),
@@ -1102,9 +1107,18 @@ struct ResultCard: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                TextField("Title", text: $titleText)
-                    .font(.subheadline.weight(.medium))
-                    .onChange(of: titleText) { _, _ in scheduleSave() }
+                HStack(alignment: .top) {
+                    TextField("Title", text: $titleText)
+                        .font(.subheadline.weight(.medium))
+                        .onChange(of: titleText) { _, _ in scheduleSave() }
+
+                    Text("Live")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.green, in: Capsule())
+                }
 
                 HStack(spacing: 2) {
                     Text("$").font(.caption).foregroundStyle(.secondary)
@@ -1113,22 +1127,22 @@ struct ResultCard: View {
                         .keyboardType(.decimalPad)
                         .onChange(of: priceText) { _, _ in scheduleSave() }
                 }
+
+                TextField("Add a description...", text: $descriptionText, axis: .vertical)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2...4)
+                    .onChange(of: descriptionText) { _, _ in scheduleSave() }
             }
-
-            Spacer(minLength: 4)
-
-            Text("Live")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(Color.green, in: Capsule())
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
         .onAppear {
             titleText = initialTitle
             if let outer = uploadManager.draftPrices[draftID], let price = outer {
                 priceText = String(format: "%.2f", price)
+            }
+            if let outer = uploadManager.draftDescriptions[draftID], let desc = outer {
+                descriptionText = desc
             }
         }
     }
@@ -1143,7 +1157,8 @@ struct ResultCard: View {
             try? await ListingRepository.shared.updateFields(
                 id: listingID,
                 title: titleText.isEmpty ? nil : titleText,
-                price: price
+                price: price,
+                description: descriptionText.isEmpty ? nil : descriptionText
             )
         }
     }
