@@ -16,15 +16,13 @@ struct wonniApp: App {
 
     init() {
         FirebaseApp.configure()
-
-        // Ensure user is signed in for Firestore/Storage access
-        if Auth.auth().currentUser == nil {
-            Auth.auth().signInAnonymously { result, error in
-                if let error = error {
-                    print("Error signing in anonymously: \(error.localizedDescription)")
-                } else {
-                    print("Signed in anonymously with UID: \(result?.user.uid ?? "unknown")")
-                }
+        Task {
+            guard Auth.auth().currentUser == nil else { return }
+            do {
+                let result = try await Auth.auth().signInAnonymously()
+                print("[Auth] signed in anonymously: \(result.user.uid)")
+            } catch {
+                print("[Auth] anonymous sign-in failed: \(error.localizedDescription)")
             }
         }
     }
