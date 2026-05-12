@@ -66,6 +66,14 @@ class ListingRepository: ObservableObject {
         ])
     }
     
+    /// Patches title and/or price after upload. Used by the receipt view for inline edits.
+    func updateFields(id: String, title: String?, price: Double?) async throws {
+        var data: [String: Any] = ["updatedAt": Timestamp(date: Date())]
+        if let title { data["customTitle"] = title }
+        if let price { data["price"] = price }
+        try await db.collection(listingsCollection).document(id).updateData(data)
+    }
+
     /// Deletes a listing from Firestore.
     func deleteListing(id: String) async throws {
         try await db.collection(listingsCollection).document(id).delete()
