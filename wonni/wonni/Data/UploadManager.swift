@@ -7,6 +7,7 @@ import Foundation
 import SwiftUI
 import SwiftData
 import FirebaseAuth
+import FirebaseFirestore
 import UIKit
 
 enum DraftUploadStatus: Equatable {
