@@ -6,10 +6,12 @@ import SwiftUI
 
 struct CameraView: View {
     @StateObject private var model = DataModel()
-    @State private var isFlashing = false // Controls the flash animation
-    @State private var capturedImage: UIImage? // Stores the captured photo
-    @State private var showingModal = false // Property to control whether modal is showing
-    @State private var selectedStackIndex = 0 // Track which stack is selected for editing
+    @EnvironmentObject private var uploadManager: UploadManager
+    @State private var isFlashing = false
+    @State private var capturedImage: UIImage?
+    @State private var showingModal = false
+    @State private var selectedStackIndex = 0
+    @State private var showingPicker = false
     
     private static let barHeightFactor = 0.15
     
@@ -91,19 +93,21 @@ struct CameraView: View {
             
             Spacer()
             
-            NavigationLink {
+            NavigationLink(isActive: $showingPicker) {
                 CustomPhotoPickerView()
-                    .onAppear {
-                        model.camera.isPreviewPaused = true
-                    }
-                    .onDisappear {
-                        model.camera.isPreviewPaused = false
-                    }
+                    .onAppear { model.camera.isPreviewPaused = true }
+                    .onDisappear { model.camera.isPreviewPaused = false }
             } label: {
                 Label {
                     Text("Gallery")
                 } icon: {
                     ThumbnailView(image: model.thumbnailImage)
+                }
+            }
+            .onChange(of: uploadManager.shouldReturnToRoot) { _, should in
+                if should {
+                    showingPicker = false
+                    uploadManager.shouldReturnToRoot = false
                 }
             }
             

@@ -686,10 +686,16 @@ struct CustomPhotoPickerView: View {
 
         @FocusState private var focusedID: UUID?
         @State private var cache = CachedImageManager()
+        @State private var showingUploadScreen = false
 
         private var drafts: [Item] { allItems.filter { $0.isDraft } }
 
         var body: some View {
+            NavigationLink(destination: UploadingView(), isActive: $showingUploadScreen) {
+                EmptyView()
+            }
+            .hidden()
+
             List {
                 ForEach(drafts) { item in
                     DraftRow(item: item, focusedID: $focusedID, cache: cache)
@@ -705,6 +711,7 @@ struct CustomPhotoPickerView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Upload All") {
                         uploadManager.startUpload(drafts: drafts, modelContext: modelContext)
+                        showingUploadScreen = true
                     }
                     .disabled(drafts.isEmpty || uploadManager.isPillVisible)
                     .fontWeight(.semibold)
@@ -764,17 +771,38 @@ struct CustomPhotoPickerView: View {
                   let cgImage = image.cgImage else { return nil }
 
             return await Task.detached(priority: .userInitiated) {
-                let request = VNClassifyImageRequest()
                 let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-                try? handler.perform([request])
-                let top = (request.results as? [VNClassificationObservation] ?? [])
-                    .filter { $0.confidence > 0.35 }
-                    .prefix(3)
+
+                // OCR first — brand names / text on the object are most specific
+                let ocrRequest = VNRecognizeTextRequest()
+                ocrRequest.recognitionLevel = .accurate
+                ocrRequest.usesLanguageCorrection = false
+                let classifyRequest = VNClassifyImageRequest()
+                try? handler.perform([ocrRequest, classifyRequest])
+
+                let ocrText = (ocrRequest.results as? [VNRecognizedTextObservation] ?? [])
+                    .compactMap { $0.topCandidates(1).first?.string }
+                    .filter { $0.count > 2 && $0.count < 50 }
+                    .prefix(2)
+                    .joined(separator: " · ")
+                if !ocrText.isEmpty { return ocrText }
+
+                // Classifier fallback — lower threshold catches specific labels before generic ones
+                let skipLabels: Set<String> = [
+                    "people", "person", "adult", "man", "woman", "child", "indoor", "outdoor",
+                    "nature", "object", "item", "thing", "animal", "food", "vehicle", "plant",
+                    "building", "interior", "exterior", "surface", "text", "number", "furniture"
+                ]
+                let top = (classifyRequest.results as? [VNClassificationObservation] ?? [])
+                    .filter { $0.confidence > 0.08 }
                     .compactMap { obs -> String? in
                         let raw = (obs.identifier.components(separatedBy: ",").first ?? obs.identifier)
                             .replacingOccurrences(of: "_", with: " ")
-                        return raw.split(separator: " ").map { $0.capitalized }.joined(separator: " ")
+                            .trimmingCharacters(in: .whitespaces)
+                        let label = raw.split(separator: " ").map { $0.capitalized }.joined(separator: " ")
+                        return skipLabels.contains(label.lowercased()) ? nil : label
                     }
+                    .prefix(3)
                 return top.isEmpty ? nil : top.joined(separator: " · ")
             }.value
         }
@@ -787,6 +815,7 @@ struct CustomPhotoPickerView: View {
         let cache: CachedImageManager
 
         @Environment(\.modelContext) private var modelContext
+        @State private var priceText: String = ""
 
         private var isUserEdited: Bool { item.userEditedTitle != nil }
 
@@ -794,7 +823,7 @@ struct CustomPhotoPickerView: View {
             Binding(
                 get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? "" },
                 set: { newValue in
-                    item.userEditedTitle = newValue.isEmpty ? nil : newValue
+                    item.userEditedTitle = newValue
                 }
             )
         }
@@ -822,11 +851,234 @@ struct CustomPhotoPickerView: View {
                         .foregroundStyle(isUserEdited ? Color.primary : Color.secondary)
                         .focused(focusedID, equals: item.id)
 
+                    HStack(spacing: 2) {
+                        Text("$")
+                            .foregroundStyle(item.userEditedPrice != nil ? Color.primary : Color.secondary)
+                        TextField("Price (optional)", text: $priceText)
+                            .foregroundStyle(item.userEditedPrice != nil ? Color.primary : Color.secondary)
+                            .keyboardType(.decimalPad)
+                    }
+                    .font(.subheadline)
+
                     Text("\(item.sourceAssetIdentifiers.count) photo\(item.sourceAssetIdentifiers.count == 1 ? "" : "s")")
-                        .font(.subheadline)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
             .padding(.vertical, 4)
+            .onAppear {
+                if let p = item.userEditedPrice {
+                    priceText = String(format: "%.2f", p)
+                }
+            }
+            .onChange(of: priceText) { _, newValue in
+                let cleaned = newValue.filter { $0.isNumber || $0 == "." }
+                item.userEditedPrice = cleaned.isEmpty ? nil : Double(cleaned)
+                try? modelContext.save()
+            }
         }
     }
+
+// MARK: - UploadingView
+
+struct UploadingView: View {
+    @EnvironmentObject private var uploadManager: UploadManager
+
+    private var allDone: Bool {
+        !uploadManager.statuses.isEmpty &&
+        uploadManager.statuses.values.allSatisfy {
+            switch $0 { case .done, .failed: return true; default: return false }
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Overall progress header
+            VStack(spacing: 8) {
+                ProgressView(value: uploadManager.overallProgress)
+                    .tint(allDone ? .green : .blue)
+                    .padding(.horizontal, 20)
+
+                if allDone {
+                    Label("Upload complete", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.subheadline.weight(.semibold))
+                } else {
+                    Text("Uploading \(uploadManager.currentIndex) of \(uploadManager.totalCount): \(uploadManager.currentDraftName)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 20)
+                }
+            }
+            .padding(.vertical, 20)
+
+            Divider()
+
+            // Per-draft status list
+            List {
+                ForEach(uploadManager.orderedDraftIDs, id: \.self) { id in
+                    let name = uploadManager.draftNames[id] ?? "Draft"
+                    let status = uploadManager.statuses[id] ?? .pending
+                    HStack(spacing: 14) {
+                        StatusIconView(status: status)
+                            .frame(width: 28, height: 28)
+                        Text(name)
+                            .font(.body)
+                            .lineLimit(1)
+                        Spacer()
+                        if case .uploading(let p) = status {
+                            Text("\(Int(p * 100))%")
+                                .font(.caption)
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .listStyle(.plain)
+
+            Divider()
+
+            // Action buttons
+            VStack(spacing: 12) {
+                if allDone {
+                    NavigationLink {
+                        PublishedListingsView()
+                    } label: {
+                        Label("View Published Listings", systemImage: "checkmark.circle.fill")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.green)
+                            .foregroundStyle(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+
+                Button {
+                    uploadManager.shouldReturnToRoot = true
+                } label: {
+                    Label(
+                        allDone ? "Done" : "Minimize to pill",
+                        systemImage: allDone ? "checkmark" : "minus.circle.fill"
+                    )
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(allDone ? Color(.systemGray5) : Color.accentColor)
+                    .foregroundStyle(allDone ? Color.primary : .white)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 16)
+        }
+        .navigationTitle("Uploading")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(!allDone)
+    }
+}
+
+// MARK: - PublishedListingsView
+
+struct PublishedListingsView: View {
+    @Environment(\.modelContext) private var modelContext
+    @Query private var allItems: [Item]
+    @State private var cache = CachedImageManager()
+
+    private var publishedItems: [Item] { allItems.filter { !$0.isDraft } }
+
+    var body: some View {
+        Group {
+            if publishedItems.isEmpty {
+                VStack(spacing: 16) {
+                    Image(systemName: "checkmark.circle")
+                        .font(.system(size: 60))
+                        .foregroundStyle(.secondary)
+                    Text("No published listings yet")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                List(publishedItems) { item in
+                    PublishedRow(item: item, cache: cache)
+                }
+                .listStyle(.plain)
+            }
+        }
+        .navigationTitle("Published")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - PublishedRow
+
+struct PublishedRow: View {
+    let item: Item
+    let cache: CachedImageManager
+
+    @Environment(\.modelContext) private var modelContext
+    @State private var priceText: String = ""
+
+    private var titleBinding: Binding<String> {
+        Binding(
+            get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? "" },
+            set: { item.userEditedTitle = $0; try? modelContext.save() }
+        )
+    }
+
+    private var descriptionBinding: Binding<String> {
+        Binding(
+            get: { item.userEditedDescription ?? item.aiSuggestedDescription ?? "" },
+            set: { item.userEditedDescription = $0; try? modelContext.save() }
+        )
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            if let assetId = item.sourceAssetIdentifiers.first {
+                PhotoItemView(
+                    asset: PhotoAsset(identifier: assetId),
+                    cache: cache,
+                    imageSize: CGSize(width: 120, height: 120)
+                )
+                .scaledToFill()
+                .frame(width: 60, height: 60)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(.systemGray5))
+                    .frame(width: 60, height: 60)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                TextField("Title…", text: titleBinding)
+                    .font(.headline)
+
+                HStack(spacing: 2) {
+                    Text("$")
+                        .foregroundStyle(.secondary)
+                    TextField("Price", text: $priceText)
+                        .keyboardType(.decimalPad)
+                }
+                .font(.subheadline)
+
+                TextField("Description…", text: descriptionBinding, axis: .vertical)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2...4)
+            }
+        }
+        .padding(.vertical, 4)
+        .onAppear {
+            if let p = item.userEditedPrice ?? item.aiSuggestedPrice {
+                priceText = String(format: "%.2f", p)
+            }
+        }
+        .onChange(of: priceText) { _, newValue in
+            let cleaned = newValue.filter { $0.isNumber || $0 == "." }
+            item.userEditedPrice = cleaned.isEmpty ? nil : Double(cleaned)
+            try? modelContext.save()
+        }
+    }
+}
