@@ -35,6 +35,9 @@ class UploadManager: ObservableObject {
     @Published var draftNames: [UUID: String] = [:]
     @Published var orderedDraftIDs: [UUID] = []
     @Published var uploadStartTime: Date? = nil
+    @Published var uploadErrors: [UUID: String] = [:]
+    @Published var uploadedAssetIDs: [String] = []
+    @Published var showDeletePhotosPrompt = false
 
     // Derived from elapsed time + linear progress — equivalent to bytes_remaining / upload_speed
     // but requires no byte-size measurement.
@@ -65,6 +68,9 @@ class UploadManager: ObservableObject {
         statuses = [:]
         draftNames = [:]
         orderedDraftIDs = []
+        uploadErrors = [:]
+        uploadedAssetIDs = []
+        showDeletePhotosPrompt = false
         uploadStartTime = Date()
 
         for (i, draft) in drafts.enumerated() {
@@ -132,14 +138,17 @@ class UploadManager: ObservableObject {
                     // 5. Persist to Firestore
                     _ = try await ListingRepository.shared.saveDraft(listing)
 
-                    // 6. Mark SwiftData item as uploaded
+                    // 6. Delete SwiftData draft — it now lives in Firestore
                     statuses[draft.id] = .done
-                    draft.isDraft = false
+                    uploadedAssetIDs.append(contentsOf: draft.sourceAssetIdentifiers)
+                    modelContext.delete(draft)
                     try? modelContext.save()
                     overallProgress = Double(index + 1) / Double(totalCount)
 
                 } catch {
+                    uploadErrors[draft.id] = error.localizedDescription
                     statuses[draft.id] = .failed
+                    print("[UploadManager] draft \(draft.id) failed: \(error)")
                 }
             }
 
@@ -147,6 +156,9 @@ class UploadManager: ObservableObject {
                 switch $0 { case .done, .failed: return true; default: return false }
             }
             if allFinished && !Task.isCancelled {
+                if !uploadedAssetIDs.isEmpty {
+                    showDeletePhotosPrompt = true
+                }
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 isPillVisible = false
             }
@@ -159,6 +171,8 @@ class UploadManager: ObservableObject {
         isPillVisible = false
         statuses.removeAll()
         orderedDraftIDs.removeAll()
+        uploadErrors.removeAll()
+        uploadedAssetIDs.removeAll()
         uploadStartTime = nil
     }
 }

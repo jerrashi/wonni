@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Photos
 
 struct MainView: View {
     @EnvironmentObject var uploadManager: UploadManager
@@ -35,6 +36,25 @@ struct MainView: View {
             }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: uploadManager.isPillVisible)
+        .alert("Delete uploaded photos from device?", isPresented: $uploadManager.showDeletePhotosPrompt) {
+            Button("Delete", role: .destructive) {
+                deleteUploadedPhotos(uploadManager.uploadedAssetIDs)
+                uploadManager.uploadedAssetIDs = []
+            }
+            Button("Keep", role: .cancel) {
+                uploadManager.uploadedAssetIDs = []
+            }
+        } message: {
+            Text("\(uploadManager.uploadedAssetIDs.count) photo(s) were uploaded to Wonni. You can remove them from your Photos library to free up space.")
+        }
+    }
+
+    private func deleteUploadedPhotos(_ assetIDs: [String]) {
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: assetIDs, options: nil)
+        guard assets.count > 0 else { return }
+        PHPhotoLibrary.shared().performChanges {
+            PHAssetChangeRequest.deleteAssets(assets)
+        }
     }
 }
 
