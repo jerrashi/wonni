@@ -11,6 +11,7 @@ import Photos
 struct MainView: View {
     @EnvironmentObject var uploadManager: UploadManager
     @EnvironmentObject var authManager: AuthManager
+    @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
 
     var body: some View {
         TabView {
@@ -29,7 +30,7 @@ struct MainView: View {
             NavigationStack { ProfileView() }
                 .tabItem { Label("Profile", systemImage: "person.crop.circle.fill") }
         }
-        .overlay(alignment: .bottom) {
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             if uploadManager.isPillVisible {
                 UploadPillView()
                     .environmentObject(uploadManager)
@@ -43,6 +44,12 @@ struct MainView: View {
         )) {
             SignInView()
                 .environmentObject(authManager)
+        }
+        .fullScreenCover(isPresented: Binding(
+            get: { authManager.currentUser != nil && !hasSeenOnboarding },
+            set: { _ in }
+        )) {
+            OnboardingView()
         }
         .alert("Delete uploaded photos from device?", isPresented: $uploadManager.showDeletePhotosPrompt) {
             Button("Delete", role: .destructive) {

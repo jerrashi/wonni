@@ -4,40 +4,12 @@
 //
 
 import SwiftUI
-import Photos
 
 struct UploadPillView: View {
     @EnvironmentObject var uploadManager: UploadManager
 
     var body: some View {
-        Group {
-            switch uploadManager.pillState {
-            case .pill:
-                pillContent
-                    .transition(.asymmetric(
-                        insertion: .move(edge: .bottom).combined(with: .opacity),
-                        removal: .move(edge: .bottom).combined(with: .opacity)
-                    ))
-            case .minimized:
-                minimizedBar
-                    .transition(.opacity)
-            }
-        }
-        .padding(.bottom, 83)
-        .animation(.spring(response: 0.3), value: uploadManager.pillState)
-        .sheet(isPresented: $uploadManager.showExpandedModal) {
-            NavigationStack {
-                UploadingView()
-            }
-            .environmentObject(uploadManager)
-        }
-    }
-
-    // MARK: - Full pill
-
-    private var pillContent: some View {
         HStack(spacing: 12) {
-            // Circular progress ring
             ZStack {
                 Circle()
                     .stroke(Color.white.opacity(0.25), lineWidth: 2.5)
@@ -59,19 +31,9 @@ struct UploadPillView: View {
             }
 
             Spacer()
-
-            Button {
-                withAnimation(.spring(response: 0.3)) {
-                    uploadManager.pillState = .minimized
-                }
-            } label: {
-                Image(systemName: "minus")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.white.opacity(0.7))
-            }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, 12)
         .background(
             Capsule()
                 .fill(.ultraThinMaterial)
@@ -79,25 +41,17 @@ struct UploadPillView: View {
                 .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
         )
         .padding(.horizontal, 16)
+        .padding(.vertical, 8)
         .contentShape(Capsule())
         .onTapGesture {
             uploadManager.showExpandedModal = true
         }
-    }
-
-    // MARK: - Minimized progress bar
-
-    private var minimizedBar: some View {
-        ProgressView(value: uploadManager.overallProgress)
-            .tint(.blue)
-            .frame(maxWidth: .infinity)
-            .scaleEffect(y: 1.5, anchor: .bottom)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.spring(response: 0.3)) {
-                    uploadManager.pillState = .pill
-                }
+        .sheet(isPresented: $uploadManager.showExpandedModal) {
+            NavigationStack {
+                UploadingView()
             }
+            .environmentObject(uploadManager)
+        }
     }
 }
 
