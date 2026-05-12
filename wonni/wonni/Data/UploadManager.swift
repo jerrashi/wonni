@@ -36,6 +36,7 @@ class UploadManager: ObservableObject {
     @Published var draftFirstAssetID: [UUID: String] = [:]
     @Published var draftListingIDs: [UUID: String] = [:]
     @Published var draftPrices: [UUID: Double?] = [:]
+    @Published var draftDescriptions: [UUID: String?] = [:]
 
     // Derived from elapsed time + linear progress — equivalent to bytes_remaining / upload_speed
     // but requires no byte-size measurement.
@@ -71,6 +72,7 @@ class UploadManager: ObservableObject {
         draftFirstAssetID = [:]
         draftListingIDs = [:]
         draftPrices = [:]
+        draftDescriptions = [:]
         uploadStartTime = Date()
 
         for (i, draft) in drafts.enumerated() {
@@ -160,6 +162,7 @@ class UploadManager: ObservableObject {
                         draftFirstAssetID[draft.id] = firstAsset
                     }
                     draftPrices[draft.id] = listing.price
+                    draftDescriptions[draft.id] = listing.customDescription
 
                     statuses[draft.id] = .done
                     uploadedAssetIDs.append(contentsOf: draft.sourceAssetIdentifiers)
@@ -198,6 +201,7 @@ class UploadManager: ObservableObject {
         draftFirstAssetID.removeAll()
         draftListingIDs.removeAll()
         draftPrices.removeAll()
+        draftDescriptions.removeAll()
         uploadStartTime = nil
     }
 }
