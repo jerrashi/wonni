@@ -9,11 +9,6 @@ import SwiftData
 import FirebaseAuth
 import UIKit
 
-enum UploadPillState {
-    case pill
-    case minimized
-}
-
 enum DraftUploadStatus: Equatable {
     case pending
     case uploading(Double)
@@ -24,7 +19,6 @@ enum DraftUploadStatus: Equatable {
 @MainActor
 class UploadManager: ObservableObject {
     @Published var isPillVisible = false
-    @Published var pillState: UploadPillState = .pill
     @Published var showExpandedModal = false
     @Published var shouldReturnToRoot = false
     @Published var currentIndex = 0
@@ -64,7 +58,6 @@ class UploadManager: ObservableObject {
         currentIndex = 0
         overallProgress = 0
         isPillVisible = true
-        pillState = .pill
         statuses = [:]
         draftNames = [:]
         orderedDraftIDs = []

@@ -691,16 +691,30 @@ struct CustomPhotoPickerView: View {
         private var drafts: [Item] { allItems.filter { $0.isDraft } }
 
         var body: some View {
-            List {
-                ForEach(drafts) { item in
-                    DraftRow(item: item, focusedID: $focusedID, cache: cache)
+            ScrollViewReader { proxy in
+                List {
+                    ForEach(drafts) { item in
+                        DraftRow(item: item, focusedID: $focusedID, cache: cache)
+                    }
+                    .onDelete { offsets in
+                        for i in offsets { modelContext.delete(drafts[i]) }
+                        try? modelContext.save()
+                    }
                 }
-                .onDelete { offsets in
-                    for i in offsets { modelContext.delete(drafts[i]) }
-                    try? modelContext.save()
+                .listStyle(.plain)
+                // Scroll so the bottom of the focused row aligns with the keyboard top,
+                // keeping the thumbnail fully visible above the typing area.
+                .onChange(of: focusedID) { oldID, newID in
+                    if oldID != nil { try? modelContext.save() }
+                    if let id = newID {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo(id, anchor: .bottom)
+                            }
+                        }
+                    }
                 }
             }
-            .listStyle(.plain)
             .navigationTitle("Drafts")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -732,9 +746,6 @@ struct CustomPhotoPickerView: View {
                     item.aiSuggestedTitle = await classifyFirstImage(for: item) ?? "Item"
                     try? modelContext.save()
                 }
-            }
-            .onChange(of: focusedID) { oldID, _ in
-                if oldID != nil { try? modelContext.save() }
             }
             .onAppear {
                 if drafts.isEmpty && !selectedAssets.isEmpty {
@@ -812,6 +823,7 @@ struct CustomPhotoPickerView: View {
         @Environment(\.modelContext) private var modelContext
         @State private var priceText: String = ""
         @State private var showingPriceField = false
+        @State private var photoExpanded = false
 
         private var isUserEdited: Bool { item.userEditedTitle != nil }
 
@@ -823,65 +835,19 @@ struct CustomPhotoPickerView: View {
         }
 
         var body: some View {
-            HStack(spacing: 12) {
-                if let assetId = item.sourceAssetIdentifiers.first {
-                    PhotoItemView(
-                        asset: PhotoAsset(identifier: assetId),
-                        cache: cache,
-                        imageSize: CGSize(width: 120, height: 120)
-                    )
-                    .scaledToFill()
-                    .frame(width: 60, height: 60)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            Group {
+                if photoExpanded {
+                    expandedLayout
                 } else {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color(.systemGray5))
-                        .frame(width: 60, height: 60)
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    // Title row — pencil signals editability
-                    HStack(spacing: 4) {
-                        Image(systemName: "pencil")
-                            .font(.caption2)
-                            .foregroundStyle(.quaternary)
-                        TextField("Add title…", text: titleBinding)
-                            .font(.headline)
-                            .foregroundStyle(isUserEdited ? Color.primary : Color.secondary)
-                            .focused(focusedID, equals: item.id)
-                            // Select all text when this field becomes active so typing
-                            // immediately replaces the AI suggestion
-                            .onReceive(NotificationCenter.default.publisher(
-                                for: UITextField.textDidBeginEditingNotification
-                            )) { notification in
-                                guard let tf = notification.object as? UITextField else { return }
-                                DispatchQueue.main.async { tf.selectAll(nil) }
-                            }
-                    }
-
-                    // Price: tap $ to reveal field; auto-hides when cleared
-                    if showingPriceField || item.userEditedPrice != nil {
-                        HStack(spacing: 4) {
-                            Text("$")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                            TextField("0.00", text: $priceText)
-                                .font(.subheadline)
-                                .keyboardType(.decimalPad)
-                        }
-                    } else {
-                        Button {
-                            showingPriceField = true
-                        } label: {
-                            Image(systemName: "dollarsign.circle")
-                                .font(.subheadline)
-                                .foregroundStyle(.tertiary)
-                        }
-                        .buttonStyle(.plain)
-                    }
+                    compactLayout
                 }
             }
             .padding(.vertical, 4)
+            .onChange(of: focusedID.wrappedValue) { _, newValue in
+                if newValue != item.id && photoExpanded {
+                    withAnimation(.spring(response: 0.3)) { photoExpanded = false }
+                }
+            }
             .onAppear {
                 if let p = item.userEditedPrice {
                     priceText = String(format: "%.2f", p)
@@ -897,6 +863,89 @@ struct CustomPhotoPickerView: View {
                     item.userEditedPrice = Double(cleaned)
                 }
                 try? modelContext.save()
+            }
+        }
+
+        private var expandedLayout: some View {
+            VStack(alignment: .leading, spacing: 12) {
+                if let assetId = item.sourceAssetIdentifiers.first {
+                    PhotoItemView(
+                        asset: PhotoAsset(identifier: assetId),
+                        cache: cache,
+                        imageSize: CGSize(width: 600, height: 600)
+                    )
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 220)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .onTapGesture {
+                        withAnimation(.spring(response: 0.3)) { photoExpanded = false }
+                    }
+                }
+                textFields
+            }
+        }
+
+        private var compactLayout: some View {
+            HStack(spacing: 12) {
+                if let assetId = item.sourceAssetIdentifiers.first {
+                    PhotoItemView(
+                        asset: PhotoAsset(identifier: assetId),
+                        cache: cache,
+                        imageSize: CGSize(width: 120, height: 120)
+                    )
+                    .scaledToFill()
+                    .frame(width: 60, height: 60)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .onTapGesture {
+                        withAnimation(.spring(response: 0.3)) { photoExpanded = true }
+                    }
+                } else {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(.systemGray5))
+                        .frame(width: 60, height: 60)
+                }
+                textFields
+            }
+        }
+
+        private var textFields: some View {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 4) {
+                    Image(systemName: "pencil")
+                        .font(.caption2)
+                        .foregroundStyle(.quaternary)
+                    TextField("Add title…", text: titleBinding)
+                        .font(.headline)
+                        .foregroundStyle(isUserEdited ? Color.primary : Color.secondary)
+                        .focused(focusedID, equals: item.id)
+                        .onReceive(NotificationCenter.default.publisher(
+                            for: UITextField.textDidBeginEditingNotification
+                        )) { notification in
+                            guard let tf = notification.object as? UITextField else { return }
+                            DispatchQueue.main.async { tf.selectAll(nil) }
+                        }
+                }
+
+                if showingPriceField || item.userEditedPrice != nil {
+                    HStack(spacing: 4) {
+                        Text("$")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        TextField("0.00", text: $priceText)
+                            .font(.subheadline)
+                            .keyboardType(.decimalPad)
+                    }
+                } else {
+                    Button {
+                        showingPriceField = true
+                    } label: {
+                        Image(systemName: "dollarsign.circle")
+                            .font(.subheadline)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
     }
@@ -937,11 +986,6 @@ struct UploadingView: View {
                                 .foregroundStyle(.tertiary)
                         }
                     }
-                    if !uploadManager.currentDraftName.isEmpty {
-                        Text(uploadManager.currentDraftName)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
                 }
             }
             .padding(.vertical, 20)
@@ -980,52 +1024,46 @@ struct UploadingView: View {
             }
             .listStyle(.plain)
 
-            Divider()
-
-            // Action buttons
-            VStack(spacing: 12) {
-                if allDone {
-                    NavigationLink {
-                        PublishedListingsView()
+            if allDone {
+                Divider()
+                NavigationLink {
+                    PublishedListingsView()
+                } label: {
+                    Label("View Published Listings", systemImage: "checkmark.circle.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.green)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 16)
+            }
+        }
+        .navigationTitle("Upload")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // "..." hides Cancel — it's a destructive action users shouldn't stumble on
+            ToolbarItem(placement: .navigationBarLeading) {
+                if !allDone {
+                    Menu {
+                        Button("Cancel Upload", systemImage: "xmark.circle", role: .destructive) {
+                            uploadManager.cancel()
+                            dismiss()
+                        }
                     } label: {
-                        Label("View Published Listings", systemImage: "checkmark.circle.fill")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.green)
-                            .foregroundStyle(.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                        Image(systemName: "ellipsis")
                     }
                 }
-
+            }
+            // Chevron dismisses the sheet back to the pill
+            ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
                     dismiss()
                 } label: {
-                    Label(
-                        allDone ? "Done" : "Minimize to pill",
-                        systemImage: allDone ? "checkmark" : "minus.circle.fill"
-                    )
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(allDone ? Color(.systemGray5) : Color.accentColor)
-                    .foregroundStyle(allDone ? Color.primary : .white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 16)
-        }
-        .navigationTitle("Uploading")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                if !allDone {
-                    Button("Cancel") {
-                        uploadManager.cancel()
-                        dismiss()
-                    }
-                    .foregroundStyle(.red)
+                    Image(systemName: "chevron.down")
+                        .font(.body.weight(.semibold))
                 }
             }
         }
