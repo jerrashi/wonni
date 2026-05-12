@@ -34,6 +34,22 @@ class UploadManager: ObservableObject {
     @Published var statuses: [UUID: DraftUploadStatus] = [:]
     @Published var draftNames: [UUID: String] = [:]
     @Published var orderedDraftIDs: [UUID] = []
+    @Published var uploadStartTime: Date? = nil
+
+    // Derived from elapsed time + linear progress — equivalent to bytes_remaining / upload_speed
+    // but requires no byte-size measurement.
+    var etaString: String? {
+        guard let start = uploadStartTime,
+              overallProgress > 0.05
+        else { return nil }
+        let elapsed = Date().timeIntervalSince(start)
+        let remaining = elapsed * (1 - overallProgress) / overallProgress
+        if remaining < 60 {
+            return "~\(max(1, Int(remaining)))s"
+        } else {
+            return "~\(Int((remaining / 60).rounded(.up))) min"
+        }
+    }
 
     private var uploadTask: Task<Void, Never>?
 
@@ -49,6 +65,7 @@ class UploadManager: ObservableObject {
         statuses = [:]
         draftNames = [:]
         orderedDraftIDs = []
+        uploadStartTime = Date()
 
         for (i, draft) in drafts.enumerated() {
             statuses[draft.id] = .pending
@@ -142,5 +159,6 @@ class UploadManager: ObservableObject {
         isPillVisible = false
         statuses.removeAll()
         orderedDraftIDs.removeAll()
+        uploadStartTime = nil
     }
 }
