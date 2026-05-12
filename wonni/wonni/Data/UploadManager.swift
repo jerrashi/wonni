@@ -26,12 +26,14 @@ class UploadManager: ObservableObject {
     @Published var isPillVisible = false
     @Published var pillState: UploadPillState = .pill
     @Published var showExpandedModal = false
+    @Published var shouldReturnToRoot = false
     @Published var currentIndex = 0
     @Published var totalCount = 0
     @Published var overallProgress: Double = 0
     @Published var currentDraftName = ""
     @Published var statuses: [UUID: DraftUploadStatus] = [:]
     @Published var draftNames: [UUID: String] = [:]
+    @Published var orderedDraftIDs: [UUID] = []
 
     private var uploadTask: Task<Void, Never>?
 
@@ -46,10 +48,12 @@ class UploadManager: ObservableObject {
         pillState = .pill
         statuses = [:]
         draftNames = [:]
+        orderedDraftIDs = []
 
         for (i, draft) in drafts.enumerated() {
             statuses[draft.id] = .pending
             draftNames[draft.id] = draft.userEditedTitle ?? draft.aiSuggestedTitle ?? "Draft \(i + 1)"
+            orderedDraftIDs.append(draft.id)
         }
 
         uploadTask = Task {
@@ -97,9 +101,15 @@ class UploadManager: ObservableObject {
                     // 4. Run Gemini identification (first 3 images for speed)
                     if !images.isEmpty,
                        let gemini = try? await GeminiService.shared.identifyItem(images: Array(images.prefix(3))) {
+                        // Write AI results back to SwiftData for PublishedListingsView
+                        draft.aiSuggestedTitle = gemini.name
+                        draft.aiSuggestedPrice = gemini.suggestedPrice
+                        draft.aiSuggestedDescription = gemini.description
+
                         if listing.customTitle == nil { listing.customTitle = gemini.name }
                         listing.customDescription = gemini.description
-                        listing.price = gemini.suggestedPrice
+                        // Respect user-set price — only use Gemini price if user hasn't specified one
+                        listing.price = draft.userEditedPrice ?? gemini.suggestedPrice
                     }
 
                     // 5. Persist to Firestore
@@ -131,5 +141,6 @@ class UploadManager: ObservableObject {
         uploadTask = nil
         isPillVisible = false
         statuses.removeAll()
+        orderedDraftIDs.removeAll()
     }
 }

@@ -183,7 +183,7 @@ struct UploadExpandedModal: View {
 
 // MARK: - Status icon
 
-private struct StatusIconView: View {
+struct StatusIconView: View {
     let status: DraftUploadStatus
 
     var body: some View {
