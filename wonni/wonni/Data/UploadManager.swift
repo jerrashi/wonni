@@ -80,15 +80,9 @@ class UploadManager: ObservableObject {
         }
 
         uploadTask = Task {
-            // Anonymous sign-in starts at app launch and may still be completing.
-            // Poll up to 5s before giving up.
-            for _ in 0..<10 where Auth.auth().currentUser == nil {
-                try? await Task.sleep(nanoseconds: 500_000_000)
-            }
-
             guard let userId = Auth.auth().currentUser?.uid else {
                 for id in orderedDraftIDs {
-                    uploadErrors[id] = "Not signed in. Enable Anonymous Auth in Firebase Console → Authentication → Sign-in method."
+                    uploadErrors[id] = "Not signed in."
                     statuses[id] = .failed
                 }
                 overallProgress = 1.0

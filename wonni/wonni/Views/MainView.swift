@@ -10,6 +10,7 @@ import Photos
 
 struct MainView: View {
     @EnvironmentObject var uploadManager: UploadManager
+    @EnvironmentObject var authManager: AuthManager
 
     var body: some View {
         TabView {
@@ -36,6 +37,13 @@ struct MainView: View {
             }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: uploadManager.isPillVisible)
+        .fullScreenCover(isPresented: Binding(
+            get: { authManager.currentUser == nil },
+            set: { _ in }
+        )) {
+            SignInView()
+                .environmentObject(authManager)
+        }
         .alert("Delete uploaded photos from device?", isPresented: $uploadManager.showDeletePhotosPrompt) {
             Button("Delete", role: .destructive) {
                 deleteUploadedPhotos(uploadManager.uploadedAssetIDs)

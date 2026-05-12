@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2956025A9AE24C1CB28151E8 /* UploadPillView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00EE85F19AD747589FB21EB0 /* UploadPillView.swift */; };
+		58027310287C4A0F94DF7BCF /* UploadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76A8453ED0904B9D853B98E5 /* UploadManager.swift */; };
 		614A039C2E9C48620057A837 /* PhotoStackModalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 614A039B2E9C48620057A837 /* PhotoStackModalView.swift */; };
 		6192AA542D7E194300EC2EFA /* ItemDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6192AA532D7E194300EC2EFA /* ItemDetailView.swift */; };
 		6192AA562D7E31A900EC2EFA /* ShortcutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6192AA552D7E31A900EC2EFA /* ShortcutView.swift */; };
@@ -56,12 +58,13 @@
 		61FAA56E2FAE227F001C28CE /* GeminiService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA5682FAE227F001C28CE /* GeminiService.swift */; };
 		61FAA56F2FAE227F001C28CE /* StorageService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA56B2FAE227F001C28CE /* StorageService.swift */; };
 		61FAA5712FAE2290001C28CE /* IdentificationConfirmationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA5702FAE2290001C28CE /* IdentificationConfirmationView.swift */; };
-		58027310287C4A0F94DF7BCF /* UploadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76A8453ED0904B9D853B98E5 /* UploadManager.swift */; };
-		2956025A9AE24C1CB28151E8 /* UploadPillView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00EE85F19AD747589FB21EB0 /* UploadPillView.swift */; };
+		61FAA5812FAF22A0001C28CE /* AuthManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA5802FAF22A0001C28CE /* AuthManager.swift */; };
+		61FAA5832FAF22A0001C28CE /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA5822FAF22A0001C28CE /* SignInView.swift */; };
 		61FAA5722FAE2290001C28CE /* FirebaseAI in Frameworks */ = {isa = PBXBuildFile; productRef = 61FAA5732FAE2290001C28CE /* FirebaseAI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		00EE85F19AD747589FB21EB0 /* UploadPillView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadPillView.swift; sourceTree = "<group>"; };
 		614A039B2E9C48620057A837 /* PhotoStackModalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoStackModalView.swift; sourceTree = "<group>"; };
 		6192AA532D7E194300EC2EFA /* ItemDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItemDetailView.swift; sourceTree = "<group>"; };
 		6192AA552D7E31A900EC2EFA /* ShortcutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutView.swift; sourceTree = "<group>"; };
@@ -109,9 +112,10 @@
 		61FAA5692FAE227F001C28CE /* ImageCompressor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCompressor.swift; sourceTree = "<group>"; };
 		61FAA56A2FAE227F001C28CE /* ListingRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListingRepository.swift; sourceTree = "<group>"; };
 		61FAA56B2FAE227F001C28CE /* StorageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageService.swift; sourceTree = "<group>"; };
-		76A8453ED0904B9D853B98E5 /* UploadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadManager.swift; sourceTree = "<group>"; };
-		00EE85F19AD747589FB21EB0 /* UploadPillView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadPillView.swift; sourceTree = "<group>"; };
 		61FAA5702FAE2290001C28CE /* IdentificationConfirmationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentificationConfirmationView.swift; sourceTree = "<group>"; };
+		61FAA5802FAF22A0001C28CE /* AuthManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthManager.swift; sourceTree = "<group>"; };
+		61FAA5822FAF22A0001C28CE /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
+		76A8453ED0904B9D853B98E5 /* UploadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -196,6 +200,7 @@
 			isa = PBXGroup;
 			children = (
 				61FAA5702FAE2290001C28CE /* IdentificationConfirmationView.swift */,
+				61FAA5822FAF22A0001C28CE /* SignInView.swift */,
 				6192AA632D7F641100EC2EFA /* CameraView */,
 				61EE00672D765D37006063C3 /* MainView.swift */,
 				00EE85F19AD747589FB21EB0 /* UploadPillView.swift */,
@@ -236,6 +241,7 @@
 				61FAA56A2FAE227F001C28CE /* ListingRepository.swift */,
 				61FAA56B2FAE227F001C28CE /* StorageService.swift */,
 				76A8453ED0904B9D853B98E5 /* UploadManager.swift */,
+				61FAA5802FAF22A0001C28CE /* AuthManager.swift */,
 				61EE00742D778B42006063C3 /* menu.json */,
 			);
 			path = Data;
@@ -348,6 +354,8 @@
 				61EE007D2D778EFA006063C3 /* Listing.swift in Sources */,
 				6192AA7B2D7F65DF00EC2EFA /* PhotoLibrary.swift in Sources */,
 				61FAA5712FAE2290001C28CE /* IdentificationConfirmationView.swift in Sources */,
+				61FAA5812FAF22A0001C28CE /* AuthManager.swift in Sources */,
+				61FAA5832FAF22A0001C28CE /* SignInView.swift in Sources */,
 				58027310287C4A0F94DF7BCF /* UploadManager.swift in Sources */,
 				2956025A9AE24C1CB28151E8 /* UploadPillView.swift in Sources */,
 				6192AA722D7F65DE00EC2EFA /* PhotoAsset.swift in Sources */,
@@ -509,7 +517,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.2;
+				MARKETING_VERSION = 1.0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.jerrashi.wonni;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -546,7 +554,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.2;
+				MARKETING_VERSION = 1.0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.jerrashi.wonni;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -604,15 +612,15 @@
 			package = 61FAA5482FAA8F80001C28CE /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseFirestore;
 		};
-		61FAA5732FAE2290001C28CE /* FirebaseAI */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 61FAA5482FAA8F80001C28CE /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseAI;
-		};
 		61FAA54D2FAA8F80001C28CE /* FirebaseStorage */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 61FAA5482FAA8F80001C28CE /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseStorage;
+		};
+		61FAA5732FAE2290001C28CE /* FirebaseAI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 61FAA5482FAA8F80001C28CE /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
