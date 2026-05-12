@@ -904,11 +904,21 @@ struct UploadingView: View {
                         .foregroundStyle(.green)
                         .font(.subheadline.weight(.semibold))
                 } else {
-                    Text("Uploading \(uploadManager.currentIndex) of \(uploadManager.totalCount): \(uploadManager.currentDraftName)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .padding(.horizontal, 20)
+                    HStack(spacing: 4) {
+                        Text("Uploading \(uploadManager.currentIndex) of \(uploadManager.totalCount)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        if let eta = uploadManager.etaString {
+                            Text("· \(eta)")
+                                .font(.subheadline)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    if !uploadManager.currentDraftName.isEmpty {
+                        Text(uploadManager.currentDraftName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .padding(.vertical, 20)

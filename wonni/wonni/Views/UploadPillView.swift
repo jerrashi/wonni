@@ -47,9 +47,16 @@ struct UploadPillView: View {
             .frame(width: 22, height: 22)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("Uploading \(uploadManager.currentIndex) of \(uploadManager.totalCount)")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white)
+                HStack(spacing: 4) {
+                    Text("Uploading \(uploadManager.currentIndex) of \(uploadManager.totalCount)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                    if let eta = uploadManager.etaString {
+                        Text("· \(eta)")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.65))
+                    }
+                }
                 if !uploadManager.currentDraftName.isEmpty {
                     Text(uploadManager.currentDraftName)
                         .font(.caption2)
