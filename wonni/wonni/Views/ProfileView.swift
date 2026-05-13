@@ -88,7 +88,10 @@ struct ProfileView: View {
                 spacing: 2
             ) {
                 ForEach(listings) { listing in
-                    ListingCard(listing: listing)
+                    NavigationLink(destination: ListingDetailView(listing: listing)) {
+                        ListingCard(listing: listing)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
