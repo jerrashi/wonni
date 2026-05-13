@@ -301,7 +301,7 @@ struct SearchView: View {
             VStack(spacing: 12) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 48)).foregroundStyle(.secondary)
-                Text("No results for "\(searchText)"")
+                Text("No results for \"\(searchText)\"")
                     .font(.headline)
                 Text("Try a different search term.")
                     .font(.subheadline).foregroundStyle(.secondary)
