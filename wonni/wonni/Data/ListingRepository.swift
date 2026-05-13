@@ -91,6 +91,22 @@ class ListingRepository: ObservableObject {
         try await db.collection(listingsCollection).document(id).updateData(data)
     }
 
+    /// Fetches active listings for discovery, excluding the given listing ID.
+    /// Query is intentionally simple (single-field) to avoid composite index requirements.
+    /// When catalog items exist, filter by catalogItemId instead.
+    func fetchSuggestedListings(excluding listingId: String, limit: Int = 8) async throws -> [UserListing] {
+        let snapshot = try await db.collection(listingsCollection)
+            .whereField("status", isEqualTo: ListingStatus.active.rawValue)
+            .limit(to: limit + 1)
+            .getDocuments()
+
+        return snapshot.documents
+            .compactMap { try? $0.data(as: UserListing.self) }
+            .filter { $0.id != listingId }
+            .prefix(limit)
+            .map { $0 }
+    }
+
     /// Deletes a listing from Firestore.
     func deleteListing(id: String) async throws {
         try await db.collection(listingsCollection).document(id).delete()

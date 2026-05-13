@@ -62,6 +62,7 @@
 		61FAA5812FAF22A0001C28CE /* AuthManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA5802FAF22A0001C28CE /* AuthManager.swift */; };
 		61FAA5832FAF22A0001C28CE /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA5822FAF22A0001C28CE /* SignInView.swift */; };
 		61FAA5852FAF22A0001C28CE /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA5842FAF22A0001C28CE /* OnboardingView.swift */; };
+		61FAA5862FB022A0001C28CE /* ListingDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA5872FB022A0001C28CE /* ListingDetailView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -118,6 +119,7 @@
 		61FAA5802FAF22A0001C28CE /* AuthManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthManager.swift; sourceTree = "<group>"; };
 		61FAA5822FAF22A0001C28CE /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
 		61FAA5842FAF22A0001C28CE /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		61FAA5872FB022A0001C28CE /* ListingDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListingDetailView.swift; sourceTree = "<group>"; };
 		76A8453ED0904B9D853B98E5 /* UploadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -203,6 +205,7 @@
 		61EE00792D778B4B006063C3 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				61FAA5872FB022A0001C28CE /* ListingDetailView.swift */,
 				61FAA5702FAE2290001C28CE /* IdentificationConfirmationView.swift */,
 				61FAA5822FAF22A0001C28CE /* SignInView.swift */,
 				61FAA5842FAF22A0001C28CE /* OnboardingView.swift */,
@@ -362,6 +365,7 @@
 				61FAA5812FAF22A0001C28CE /* AuthManager.swift in Sources */,
 				61FAA5832FAF22A0001C28CE /* SignInView.swift in Sources */,
 				61FAA5852FAF22A0001C28CE /* OnboardingView.swift in Sources */,
+				61FAA5862FB022A0001C28CE /* ListingDetailView.swift in Sources */,
 				58027310287C4A0F94DF7BCF /* UploadManager.swift in Sources */,
 				2956025A9AE24C1CB28151E8 /* UploadPillView.swift in Sources */,
 				6192AA722D7F65DE00EC2EFA /* PhotoAsset.swift in Sources */,
