@@ -29,6 +29,24 @@ service cloud.firestore {
                     && request.auth.uid == request.resource.data.userId;
     }
 
+    // ── Conversations ─────────────────────────────────────────────────────────
+    // Participants only. Buyers can create; both parties can update (send messages).
+    match /conversations/{conversationId} {
+      allow read: if request.auth != null
+                  && request.auth.uid in resource.data.participants;
+      allow create: if request.auth != null
+                    && request.auth.uid in request.resource.data.participants;
+      allow update: if request.auth != null
+                    && request.auth.uid in resource.data.participants;
+
+      match /messages/{messageId} {
+        allow read: if request.auth != null
+                    && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+        allow create: if request.auth != null
+                      && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+      }
+    }
+
     // ── User profiles and subcollections ─────────────────────────────────────
     // Profile document: readable by all authenticated users, writable by owner.
     match /users/{userId} {

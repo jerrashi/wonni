@@ -126,7 +126,13 @@ class FavoritesRepository {
 
 struct ListingDetailView: View {
     let listing: UserListing
+    @EnvironmentObject private var authManager: AuthManager
     @State private var suggestedListings: [UserListing] = []
+    @State private var showOfferSheet = false
+    @State private var offerSent = false
+
+    private var currentUserId: String { authManager.currentUser?.uid ?? "" }
+    private var isSeller: Bool { listing.userId == currentUserId }
 
     var body: some View {
         ScrollView {
@@ -145,9 +151,39 @@ struct ListingDetailView: View {
                 HeartButton(listing: listing)
             }
         }
+        .sheet(isPresented: $showOfferSheet) {
+            MakeOfferSheet(currentPrice: listing.price) { amount in
+                Task { await submitOffer(amount: amount) }
+            }
+        }
+        .overlay(alignment: .top) {
+            if offerSent {
+                Text("Offer sent!")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .background(Color.green, in: Capsule())
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
         .task {
             suggestedListings = (try? await ListingRepository.shared
                 .fetchSuggestedListings(excluding: listing.id ?? "", limit: 8)) ?? []
+        }
+    }
+
+    private func submitOffer(amount: Double) async {
+        do {
+            let convId = try await ConversationRepository.shared
+                .getOrCreateConversation(listing: listing, buyerId: currentUserId)
+            try await ConversationRepository.shared
+                .sendOffer(conversationId: convId, amount: amount, senderId: currentUserId)
+            withAnimation { offerSent = true }
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            withAnimation { offerSent = false }
+        } catch {
+            print("[ListingDetailView] Offer failed: \(error)")
         }
     }
 
@@ -201,19 +237,19 @@ struct ListingDetailView: View {
             sellerRow
             Divider()
 
-            // Make an Offer — placeholder until offer flow is built
-            Button {} label: {
-                Text("Make an Offer")
-                    .font(.subheadline.weight(.medium))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(Color.primary.opacity(0.2), lineWidth: 1)
-                    )
+            if !isSeller {
+                Button { showOfferSheet = true } label: {
+                    Text("Make an Offer")
+                        .font(.subheadline.weight(.medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .strokeBorder(Color.primary.opacity(0.2), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-            .disabled(true)
         }
     }
 
