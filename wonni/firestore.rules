@@ -1,0 +1,54 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Catalog items ─────────────────────────────────────────────────────────
+    // Readable by all authenticated users.
+    // Writes are server-side only (Cloud Functions) — clients cannot write directly.
+    match /catalog/{itemId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // ── Inventory units ───────────────────────────────────────────────────────
+    match /inventory/{unitId} {
+      allow read, write: if request.auth != null
+                         && request.auth.uid == resource.data.userId;
+      allow create: if request.auth != null
+                    && request.auth.uid == request.resource.data.userId;
+    }
+
+    // ── Listings ──────────────────────────────────────────────────────────────
+    // Readable by all authenticated users (buyers need to browse).
+    // Only the listing owner can write.
+    match /listings/{listingId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+                   && request.auth.uid == resource.data.userId;
+      allow create: if request.auth != null
+                    && request.auth.uid == request.resource.data.userId;
+    }
+
+    // ── User profiles and subcollections ─────────────────────────────────────
+    // Profile document: readable by all authenticated users, writable by owner.
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+
+      // Saved listings — private to each user
+      match /saved/{listingId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Custom lists (e.g. Wishlist, Gift Ideas) — private to each user
+      match /lists/{listId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Watchlist (existing)
+      match /watchlist/{itemId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+  }
+}
