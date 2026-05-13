@@ -22,6 +22,12 @@ struct SearchHistoryEntry: Identifiable, Codable {
     var searchedAt: Timestamp
 }
 
+struct SavedSearch: Identifiable, Codable {
+    @DocumentID var id: String?
+    var query: String
+    var savedAt: Timestamp
+}
+
 // MARK: - Search Repository
 
 class SearchRepository {
@@ -39,6 +45,38 @@ class SearchRepository {
         return snapshot.documents
             .compactMap { try? $0.data(as: TrendingSearch.self) }
             .sorted { $0.sortOrder < $1.sortOrder }
+    }
+
+    // MARK: - Saved Searches
+
+    private func savedSearchesCollection() throws -> CollectionReference {
+        guard let uid = Auth.auth().currentUser?.uid else {
+            throw NSError(domain: "SearchRepository", code: 401,
+                          userInfo: [NSLocalizedDescriptionKey: "Not authenticated"])
+        }
+        return db.collection("users").document(uid).collection("savedSearches")
+    }
+
+    func fetchSavedSearches() async throws -> [SavedSearch] {
+        let col = try savedSearchesCollection()
+        let snapshot = try await col.order(by: "savedAt", descending: true).getDocuments()
+        return snapshot.documents.compactMap { try? $0.data(as: SavedSearch.self) }
+    }
+
+    /// Saves a query. Uses lowercased query as document ID to prevent duplicates.
+    func saveSearch(query: String) async throws {
+        let col = try savedSearchesCollection()
+        let key = query.lowercased().trimmingCharacters(in: .whitespaces)
+        guard !key.isEmpty else { return }
+        let entry = SavedSearch(query: query.trimmingCharacters(in: .whitespaces),
+                                savedAt: Timestamp(date: Date()))
+        try col.document(key).setData(from: entry)
+    }
+
+    func removeSavedSearch(entry: SavedSearch) async throws {
+        guard let id = entry.id else { return }
+        let col = try savedSearchesCollection()
+        try await col.document(id).delete()
     }
 
     // MARK: - Search History
@@ -69,7 +107,6 @@ class SearchRepository {
                                        searchedAt: Timestamp(date: Date()))
         try col.document(key).setData(from: entry)
 
-        // Trim to maxHistoryCount by deleting oldest entries beyond the cap
         let all = try await col.order(by: "searchedAt", descending: true).getDocuments()
         if all.documents.count > maxHistoryCount {
             let toDelete = all.documents.dropFirst(maxHistoryCount)

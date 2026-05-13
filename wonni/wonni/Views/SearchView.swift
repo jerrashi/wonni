@@ -12,14 +12,17 @@ class SearchViewModel: ObservableObject {
     @Published var results: [UserListing] = []
     @Published var trending: [TrendingSearch] = []
     @Published var history: [SearchHistoryEntry] = []
+    @Published var savedSearches: [SavedSearch] = []
     @Published var isSearching = false
     @Published var hasSearched = false
 
     func loadInitial() async {
-        async let trendFetch = SearchRepository.shared.fetchTrending()
-        async let histFetch = SearchRepository.shared.fetchHistory()
-        trending = (try? await trendFetch) ?? []
-        history = (try? await histFetch) ?? []
+        async let trendFetch  = SearchRepository.shared.fetchTrending()
+        async let histFetch   = SearchRepository.shared.fetchHistory()
+        async let savedFetch  = SearchRepository.shared.fetchSavedSearches()
+        trending      = (try? await trendFetch)  ?? []
+        history       = (try? await histFetch)   ?? []
+        savedSearches = (try? await savedFetch)  ?? []
     }
 
     func search(query: String) async {
@@ -33,7 +36,17 @@ class SearchViewModel: ObservableObject {
         history = (try? await SearchRepository.shared.fetchHistory()) ?? []
     }
 
-    func remove(entry: SearchHistoryEntry) async {
+    func saveSearch(query: String) async {
+        try? await SearchRepository.shared.saveSearch(query: query)
+        savedSearches = (try? await SearchRepository.shared.fetchSavedSearches()) ?? []
+    }
+
+    func removeSaved(entry: SavedSearch) async {
+        try? await SearchRepository.shared.removeSavedSearch(entry: entry)
+        savedSearches = (try? await SearchRepository.shared.fetchSavedSearches()) ?? []
+    }
+
+    func removeHistory(entry: SearchHistoryEntry) async {
         try? await SearchRepository.shared.removeFromHistory(entry: entry)
         history = (try? await SearchRepository.shared.fetchHistory()) ?? []
     }
@@ -83,12 +96,27 @@ struct SearchView: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
+
                 TextField("Search listings...", text: $searchText)
                     .focused($isFocused)
                     .submitLabel(.search)
                     .onSubmit { Task { await submitSearch() } }
+
                 if !searchText.isEmpty {
-                    Button { searchText = "" } label: {
+                    // Bookmark: save the current query before or after submitting
+                    Button {
+                        Task { await vm.saveSearch(query: searchText) }
+                    } label: {
+                        Image(systemName: savedIcon)
+                            .foregroundStyle(.blue)
+                    }
+                    .transition(.opacity)
+
+                    Button {
+                        searchText = ""
+                        vm.hasSearched = false
+                        vm.results = []
+                    } label: {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                     }
                 }
@@ -110,94 +138,157 @@ struct SearchView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .animation(.easeInOut(duration: 0.2), value: isFocused)
+        .animation(.easeInOut(duration: 0.15), value: searchText.isEmpty)
     }
 
-    // MARK: Idle View (trending + history)
+    private var savedIcon: String {
+        let key = searchText.lowercased().trimmingCharacters(in: .whitespaces)
+        let alreadySaved = vm.savedSearches.contains { $0.id == key }
+        return alreadySaved ? "bookmark.fill" : "bookmark"
+    }
+
+    // MARK: Idle View (saved / recent / trending)
 
     private var idleView: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                if !vm.history.isEmpty {
-                    historySection
-                }
-                if !vm.trending.isEmpty {
-                    trendingSection
-                }
-            }
-            .padding(.top, 8)
-        }
-    }
-
-    private var historySection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Recent")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Clear") { Task { await vm.clearHistory() } }
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-
-            ForEach(vm.history) { entry in
-                Button {
-                    searchText = entry.query
-                    Task { await submitSearch() }
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "clock")
-                            .foregroundStyle(.secondary)
-                            .frame(width: 20)
-                        Text(entry.query)
-                            .foregroundStyle(.primary)
-                        Spacer()
-                        Button {
-                            Task { await vm.remove(entry: entry) }
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+        List {
+            // ── Saved searches ────────────────────────────────────────────
+            if !vm.savedSearches.isEmpty {
+                Section("Saved") {
+                    ForEach(vm.savedSearches) { entry in
+                        savedRow(entry)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
                 }
-                Divider().padding(.leading, 48)
             }
-        }
-    }
 
-    private var trendingSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Trending")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-
-            ForEach(vm.trending) { trend in
-                Button {
-                    searchText = trend.query
-                    Task { await submitSearch() }
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "flame")
-                            .foregroundStyle(.orange)
-                            .frame(width: 20)
-                        Text(trend.query)
-                            .foregroundStyle(.primary)
+            // ── Recent searches ───────────────────────────────────────────
+            if !vm.history.isEmpty {
+                Section {
+                    ForEach(vm.history) { entry in
+                        historyRow(entry)
+                    }
+                } header: {
+                    HStack {
+                        Text("Recent")
                         Spacer()
-                        Image(systemName: "arrow.up.left")
+                        Button("Clear All") { Task { await vm.clearHistory() } }
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary)
+                            .textCase(nil)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
                 }
-                Divider().padding(.leading, 48)
+            }
+
+            // ── Trending ──────────────────────────────────────────────────
+            if !vm.trending.isEmpty {
+                Section("Trending") {
+                    ForEach(vm.trending) { trend in
+                        trendingRow(trend)
+                    }
+                }
+            }
+        }
+        .listStyle(.plain)
+    }
+
+    // MARK: Row Builders
+
+    @ViewBuilder
+    private func savedRow(_ entry: SavedSearch) -> some View {
+        Button {
+            searchText = entry.query
+            Task { await submitSearch() }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "bookmark.fill")
+                    .foregroundStyle(.blue)
+                    .frame(width: 20)
+                Text(entry.query)
+                    .foregroundStyle(.primary)
+                Spacer()
+                Image(systemName: "arrow.up.left")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive) {
+                Task { await vm.removeSaved(entry: entry) }
+            } label: {
+                Label("Remove", systemImage: "bookmark.slash")
+            }
+        }
+        .contextMenu {
+            Button(role: .destructive) {
+                Task { await vm.removeSaved(entry: entry) }
+            } label: {
+                Label("Remove from Saved", systemImage: "bookmark.slash")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func historyRow(_ entry: SearchHistoryEntry) -> some View {
+        Button {
+            searchText = entry.query
+            Task { await submitSearch() }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "clock")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20)
+                Text(entry.query)
+                    .foregroundStyle(.primary)
+                Spacer()
+                Image(systemName: "arrow.up.left")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive) {
+                Task { await vm.removeHistory(entry: entry) }
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+        .contextMenu {
+            Button {
+                Task { await vm.saveSearch(query: entry.query) }
+            } label: {
+                Label("Save Search", systemImage: "bookmark")
+            }
+            Divider()
+            Button(role: .destructive) {
+                Task { await vm.removeHistory(entry: entry) }
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func trendingRow(_ trend: TrendingSearch) -> some View {
+        Button {
+            searchText = trend.query
+            Task { await submitSearch() }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "flame")
+                    .foregroundStyle(.orange)
+                    .frame(width: 20)
+                Text(trend.query)
+                    .foregroundStyle(.primary)
+                Spacer()
+                Image(systemName: "arrow.up.left")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .contextMenu {
+            Button {
+                Task { await vm.saveSearch(query: trend.query) }
+            } label: {
+                Label("Save Search", systemImage: "bookmark")
             }
         }
     }
