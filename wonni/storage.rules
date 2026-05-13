@@ -2,24 +2,8 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
 
-    // Temp uploads — owner-only read/write, size limit on writes only
-    match /temp/{userId}/{allPaths=**} {
-      allow read:  if request.auth != null && request.auth.uid == userId;
-      allow write: if request.auth != null
-                   && request.auth.uid == userId
-                   && request.resource.size < 10 * 1024 * 1024;
-    }
-
-    // Permanent listing photos under users/ — owner writes, all authenticated users read
+    // Permanent listing photos — owner writes, all authenticated users read
     match /users/{userId}/{allPaths=**} {
-      allow read:  if request.auth != null;
-      allow write: if request.auth != null
-                   && request.auth.uid == userId
-                   && request.resource.size < 10 * 1024 * 1024;
-    }
-
-    // Legacy listings/ path (kept for any existing references)
-    match /listings/{userId}/{allPaths=**} {
       allow read:  if request.auth != null;
       allow write: if request.auth != null
                    && request.auth.uid == userId
