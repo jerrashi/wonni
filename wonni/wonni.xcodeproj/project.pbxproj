@@ -65,6 +65,7 @@
 		61FAA5862FB022A0001C28CE /* ListingDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA5872FB022A0001C28CE /* ListingDetailView.swift */; };
 		61FAA5882FB022A0001C28CE /* ConversationRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA5892FB022A0001C28CE /* ConversationRepository.swift */; };
 		61FAA58A2FB022A0001C28CE /* ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA58B2FB022A0001C28CE /* ConversationView.swift */; };
+		61FAA58C2FB022A0001C28CE /* SearchRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA58D2FB022A0001C28CE /* SearchRepository.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -124,6 +125,7 @@
 		61FAA5872FB022A0001C28CE /* ListingDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListingDetailView.swift; sourceTree = "<group>"; };
 		61FAA5892FB022A0001C28CE /* ConversationRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationRepository.swift; sourceTree = "<group>"; };
 		61FAA58B2FB022A0001C28CE /* ConversationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationView.swift; sourceTree = "<group>"; };
+		61FAA58D2FB022A0001C28CE /* SearchRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchRepository.swift; sourceTree = "<group>"; };
 		76A8453ED0904B9D853B98E5 /* UploadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -254,6 +256,7 @@
 				61FAA56A2FAE227F001C28CE /* ListingRepository.swift */,
 				61FAA56B2FAE227F001C28CE /* StorageService.swift */,
 				61FAA5892FB022A0001C28CE /* ConversationRepository.swift */,
+				61FAA58D2FB022A0001C28CE /* SearchRepository.swift */,
 				76A8453ED0904B9D853B98E5 /* UploadManager.swift */,
 				61FAA5802FAF22A0001C28CE /* AuthManager.swift */,
 				61EE00742D778B42006063C3 /* menu.json */,
@@ -374,6 +377,7 @@
 				61FAA5862FB022A0001C28CE /* ListingDetailView.swift in Sources */,
 				61FAA5882FB022A0001C28CE /* ConversationRepository.swift in Sources */,
 				61FAA58A2FB022A0001C28CE /* ConversationView.swift in Sources */,
+				61FAA58C2FB022A0001C28CE /* SearchRepository.swift in Sources */,
 				58027310287C4A0F94DF7BCF /* UploadManager.swift in Sources */,
 				2956025A9AE24C1CB28151E8 /* UploadPillView.swift in Sources */,
 				6192AA722D7F65DE00EC2EFA /* PhotoAsset.swift in Sources */,
