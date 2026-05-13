@@ -141,6 +141,12 @@ class ListingRepository: ObservableObject {
             .map { $0 }
     }
 
+    /// Fetches a single listing by its Firestore document ID.
+    func fetchListing(id: String) async throws -> UserListing? {
+        let doc = try await db.collection(listingsCollection).document(id).getDocument()
+        return try? doc.data(as: UserListing.self)
+    }
+
     /// Deletes a listing from Firestore.
     func deleteListing(id: String) async throws {
         try await db.collection(listingsCollection).document(id).delete()

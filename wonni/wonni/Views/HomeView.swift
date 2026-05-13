@@ -6,6 +6,17 @@
 import SwiftUI
 import FirebaseFirestore
 
+// MARK: - Banner Destination
+
+/// All surfaces a promoted banner can navigate to.
+/// Add a new case here + one branch in HomeView.navigationDestination to wire up a new destination.
+enum BannerDestination: Hashable {
+    case listing(id: String)
+    case category(name: String)
+    case search(query: String)
+    case externalURL(urlString: String)
+}
+
 // MARK: - Promoted Banner Model
 
 struct PromotedBanner: Identifiable, Codable {
@@ -13,10 +24,27 @@ struct PromotedBanner: Identifiable, Codable {
     var title: String
     var subtitle: String?
     var imagePath: String?
-    var listingId: String?
     var colorHex: String?
     var isActive: Bool
     var sortOrder: Int
+    var expiresAt: Timestamp?
+
+    /// Firestore-stored destination. Set destinationType to one of:
+    /// "listing", "category", "search", "externalURL"
+    /// and destinationValue to the associated payload (id, name, query, url).
+    var destinationType: String?
+    var destinationValue: String?
+
+    var destination: BannerDestination? {
+        guard let type = destinationType, let value = destinationValue else { return nil }
+        switch type {
+        case "listing":     return .listing(id: value)
+        case "category":    return .category(name: value)
+        case "search":      return .search(query: value)
+        case "externalURL": return .externalURL(urlString: value)
+        default:            return nil
+        }
+    }
 }
 
 // MARK: - Feed View Model
@@ -60,11 +88,16 @@ class FeedViewModel: ObservableObject {
     }
 
     private func fetchBanners() async throws -> [PromotedBanner] {
+        let now = Date()
         let snapshot = try await db.collection("promotions")
             .whereField("isActive", isEqualTo: true)
             .getDocuments()
         return snapshot.documents
             .compactMap { try? $0.data(as: PromotedBanner.self) }
+            .filter { banner in
+                guard let expiresAt = banner.expiresAt else { return true }
+                return expiresAt.dateValue() > now
+            }
             .sorted { $0.sortOrder < $1.sortOrder }
     }
 }
@@ -131,6 +164,26 @@ struct HomeView: View {
             }
             .navigationTitle("wonni")
             .navigationBarTitleDisplayMode(.inline)
+            // ── Banner routing ────────────────────────────────────────────────
+            // Add a new case here whenever you add a BannerDestination case.
+            .navigationDestination(for: BannerDestination.self) { destination in
+                switch destination {
+                case .listing(let id):
+                    ListingLoaderView(listingId: id)
+                case .category(let name):
+                    // TODO: CategoryFeedView(category: name)
+                    placeholderDestination("Category: \(name)")
+                case .search(let query):
+                    // TODO: SearchResultsView(query: query)
+                    placeholderDestination("Search: \(query)")
+                case .externalURL(let urlString):
+                    if let url = URL(string: urlString) {
+                        SafariView(url: url)
+                    } else {
+                        placeholderDestination("Invalid URL")
+                    }
+                }
+            }
         }
         .task { await vm.loadInitial() }
         .onReceive(autoScrollTimer) { _ in
@@ -170,6 +223,18 @@ struct HomeView: View {
         .frame(maxWidth: .infinity)
         .padding(.top, 60)
     }
+
+    @ViewBuilder
+    private func placeholderDestination(_ label: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "hammer")
+                .font(.system(size: 48)).foregroundStyle(.secondary)
+            Text("Coming soon").font(.headline)
+            Text(label).font(.caption).foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationBarTitleDisplayMode(.inline)
+    }
 }
 
 // MARK: - Promoted Banner Card
@@ -183,7 +248,7 @@ private struct PromotedBannerCard: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
+        let card = ZStack(alignment: .bottomLeading) {
             Group {
                 if let path = banner.imagePath {
                     StorageImage(path: path).scaledToFill()
@@ -218,6 +283,13 @@ private struct PromotedBannerCard: View {
         .frame(maxWidth: .infinity)
         .frame(height: 200)
         .clipped()
+
+        if let destination = banner.destination {
+            NavigationLink(value: destination) { card }
+                .buttonStyle(.plain)
+        } else {
+            card
+        }
     }
 }
 
@@ -258,6 +330,37 @@ private struct FeedListingCard: View {
                 .background(Color.secondary.opacity(0.1), in: Capsule())
         }
     }
+}
+
+// MARK: - Listing Loader (banner → listing destination)
+
+private struct ListingLoaderView: View {
+    let listingId: String
+    @State private var listing: UserListing?
+
+    var body: some View {
+        Group {
+            if let listing {
+                ListingDetailView(listing: listing)
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task {
+            listing = try? await ListingRepository.shared.fetchListing(id: listingId)
+        }
+    }
+}
+
+// MARK: - Safari View (external URL destination)
+
+import SafariServices
+
+private struct SafariView: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> SFSafariViewController { SFSafariViewController(url: url) }
+    func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
 }
 
 // MARK: - Hex Color Extension
