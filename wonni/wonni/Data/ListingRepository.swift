@@ -91,6 +91,40 @@ class ListingRepository: ObservableObject {
         try await db.collection(listingsCollection).document(id).updateData(data)
     }
 
+    // MARK: - Feed Pagination
+
+    /// A single page of feed results with a cursor for the next page.
+    struct FeedPage {
+        let listings: [UserListing]
+        let lastDocument: DocumentSnapshot?
+        let hasMore: Bool
+    }
+
+    /// Fetches one page of the public feed (all active listings, newest published first).
+    /// Pass `after` the DocumentSnapshot from the previous page to paginate.
+    /// Requires composite index: status ASC + publishedAt DESC (see firestore.indexes.json).
+    func fetchFeedPage(after lastDoc: DocumentSnapshot? = nil, limit: Int = 20) async throws -> FeedPage {
+        var query: Query = db.collection(listingsCollection)
+            .whereField("status", isEqualTo: ListingStatus.active.rawValue)
+            .order(by: "publishedAt", descending: true)
+            .limit(to: limit + 1)
+
+        if let lastDoc {
+            query = query.start(afterDocument: lastDoc)
+        }
+
+        let snapshot = try await query.getDocuments()
+        let docs = snapshot.documents
+        let hasMore = docs.count > limit
+        let page = Array(docs.prefix(limit))
+
+        return FeedPage(
+            listings: page.compactMap { try? $0.data(as: UserListing.self) },
+            lastDocument: page.last,
+            hasMore: hasMore
+        )
+    }
+
     /// Fetches active listings for discovery, excluding the given listing ID.
     /// Query is intentionally simple (single-field) to avoid composite index requirements.
     /// When catalog items exist, filter by catalogItemId instead.
