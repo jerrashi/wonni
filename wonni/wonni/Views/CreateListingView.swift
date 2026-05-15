@@ -384,16 +384,16 @@ struct CustomPhotoPickerView: View {
 
             let assetsToUpload = selectedAssets
 
-            // 1. Save to SwiftData immediately — picker UI updates are instant.
+            // Pre-generate the listing ID so Storage path is known without a Firestore round-trip.
             let newItem = Item(
                 blurb: "Draft from \(assetsToUpload.count) selected photos",
-                sourceAssetIdentifiers: assetsToUpload.map { $0.id }
+                sourceAssetIdentifiers: assetsToUpload.map { $0.id },
+                firestoreListingId: UUID().uuidString
             )
             modelContext.insert(newItem)
             try? modelContext.save()
             sessionDraftIDs.append(newItem.id)
 
-            // 2. Kick off background upload via UploadManager (tracks progress, shows pill).
             uploadManager.startBackgroundUpload(draft: newItem, modelContext: modelContext)
         }
     }
@@ -1084,7 +1084,6 @@ struct ProcessResultsOverviewView: View {
             // ── Bottom action bar ────────────────────────────────────────
             Divider()
             HStack(spacing: 16) {
-                // Select all / deselect all
                 Button(selectedIDs.count == results.count ? "Deselect All" : "Select All") {
                     if selectedIDs.count == results.count {
                         selectedIDs.removeAll()
@@ -1096,18 +1095,32 @@ struct ProcessResultsOverviewView: View {
 
                 Spacer()
 
-                // Publish selected
                 Button {
                     uploadManager.publishDrafts(drafts: toPublish, modelContext: modelContext)
                 } label: {
-                    Text("Publish \(selectedIDs.isEmpty ? "All" : "\(selectedIDs.count)")")
+                    HStack(spacing: 8) {
+                        let busy = uploadManager.isUploadingPhotos || uploadManager.isPublishing
+                        if busy {
+                            ProgressView()
+                                .tint(.white)
+                                .scaleEffect(0.8)
+                        }
+                        Text(
+                            uploadManager.isPublishing ? "Publishing…" :
+                            uploadManager.isUploadingPhotos ? "Uploading Photos…" :
+                            "Publish \(selectedIDs.isEmpty ? "All" : "\(selectedIDs.count)")"
+                        )
                         .fontWeight(.semibold)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 10)
-                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 10))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 10)
+                    .background(
+                        (uploadManager.isUploadingPhotos || uploadManager.isPublishing) ? Color.secondary : Color.accentColor,
+                        in: RoundedRectangle(cornerRadius: 10)
+                    )
                 }
-                .disabled(results.isEmpty)
+                .disabled(results.isEmpty || uploadManager.isUploadingPhotos || uploadManager.isPublishing)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
@@ -1124,6 +1137,14 @@ struct ProcessResultsOverviewView: View {
                 Spacer()
                 Button("Done") { focusedField = nil }
             }
+        }
+        .alert("Publish Failed", isPresented: Binding(
+            get: { uploadManager.publishError != nil },
+            set: { if !$0 { uploadManager.publishError = nil } }
+        )) {
+            Button("OK", role: .cancel) { uploadManager.publishError = nil }
+        } message: {
+            Text(uploadManager.publishError ?? "")
         }
     }
 
@@ -1160,6 +1181,7 @@ struct ResultDraftRow: View {
     var isGeminiFailed: Bool = false
 
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var uploadManager: UploadManager
     @State private var priceText: String = ""
     @State private var showEditSheet = false
 
@@ -1203,6 +1225,9 @@ struct ResultDraftRow: View {
                 TextField("Title", text: titleBinding)
                     .font(.body.weight(.semibold))
                     .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .title))
+                    .onChange(of: titleBinding.wrappedValue) { _, _ in
+                        uploadManager.syncDraftData(item)
+                    }
 
                 HStack(spacing: 3) {
                     Text("$").font(.subheadline).foregroundStyle(.secondary)
@@ -1214,6 +1239,7 @@ struct ResultDraftRow: View {
                             let cleaned = v.filter { $0.isNumber || $0 == "." }
                             item.userEditedPrice = cleaned.isEmpty ? nil : Double(cleaned)
                             try? modelContext.save()
+                            uploadManager.syncDraftData(item)
                         }
                 }
 
