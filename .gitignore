@@ -65,3 +65,6 @@ Secrets.xcconfig
 # Node / Firebase Functions
 node_modules/
 wonni/functions/node_modules/
+
+# Claude Code local settings
+.claude/settings.local.json
