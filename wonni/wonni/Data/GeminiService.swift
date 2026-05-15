@@ -30,7 +30,7 @@ class GeminiService: ObservableObject {
 
     init() {
         let ai = FirebaseAI.firebaseAI(backend: .googleAI())
-        self.model = ai.generativeModel(modelName: "gemini-3.1-flash-lite")
+        self.model = ai.generativeModel(modelName: "gemini-2.0-flash-lite")
     }
     
     /// Identifies an item from one or more images.
