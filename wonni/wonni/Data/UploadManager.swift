@@ -49,6 +49,8 @@ class UploadManager: ObservableObject {
     @Published var showProcessResults = false
     /// The ordered list of Item IDs that finished processing (for display).
     @Published var processedItemIDs: [UUID] = []
+    /// Item IDs where Gemini failed (e.g. 429 / quota exhausted).
+    @Published var processingFailedIDs: Set<UUID> = []
 
     // ── Legacy / Pill visibility (kept for UploadPillView compatibility) ────
     @Published var isPillVisible = false
@@ -166,6 +168,7 @@ class UploadManager: ObservableObject {
         processTotalCount = drafts.count
         processStatuses = [:]
         processedItemIDs = []
+        processingFailedIDs = []
 
         for draft in drafts { processStatuses[draft.id] = .pending }
 
@@ -184,7 +187,6 @@ class UploadManager: ObservableObject {
                     }
                 }
 
-                if !images.isEmpty {
                     do {
                         let gemini = try await GeminiService.shared.identifyItem(
                             images: Array(images.prefix(3)),
@@ -203,8 +205,8 @@ class UploadManager: ObservableObject {
                         draft.heightIn  = draft.heightIn  ?? gemini.heightIn
                     } catch {
                         print("[UploadManager] Gemini error for \(draft.id): \(error)")
+                        processingFailedIDs.insert(draft.id)
                     }
-                }
 
                 processStatuses[draft.id] = .done
                 processedItemIDs.append(draft.id)
@@ -281,6 +283,7 @@ class UploadManager: ObservableObject {
         isProcessPillVisible = false
         processStatuses.removeAll()
         processedItemIDs.removeAll()
+        processingFailedIDs.removeAll()
     }
 
     func resetAll() {
@@ -296,6 +299,7 @@ class UploadManager: ObservableObject {
         uploadedAssetIDs.removeAll()
         processStatuses.removeAll()
         processedItemIDs.removeAll()
+        processingFailedIDs.removeAll()
         shouldReturnToRoot = false
         uploadStartTime = nil
         activeUploadCount = 0

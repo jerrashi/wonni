@@ -1056,6 +1056,10 @@ struct ProcessResultsOverviewView: View {
         return allItems.filter { $0.isDraft && processedSet.contains($0.id) }
     }
 
+    private var toPublish: [Item] {
+        selectedIDs.isEmpty ? results : results.filter { selectedIDs.contains($0.id) }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             List {
@@ -1065,7 +1069,8 @@ struct ProcessResultsOverviewView: View {
                         cache: cache,
                         isSelected: selectedIDs.contains(item.id),
                         onToggle: { toggleSelection(item) },
-                        focusedField: $focusedField
+                        focusedField: $focusedField,
+                        isGeminiFailed: uploadManager.processingFailedIDs.contains(item.id)
                     )
                 }
                 .onDelete { offsets in
@@ -1074,6 +1079,7 @@ struct ProcessResultsOverviewView: View {
                 }
             }
             .listStyle(.plain)
+            .onAppear { selectedIDs = Set(results.map { $0.id }) }
 
             // ── Bottom action bar ────────────────────────────────────────
             Divider()
@@ -1092,7 +1098,6 @@ struct ProcessResultsOverviewView: View {
 
                 // Publish selected
                 Button {
-                    let toPublish = results.filter { selectedIDs.contains($0.id) }
                     uploadManager.publishDrafts(drafts: toPublish, modelContext: modelContext)
                 } label: {
                     Text("Publish \(selectedIDs.isEmpty ? "All" : "\(selectedIDs.count)")")
@@ -1152,6 +1157,7 @@ struct ResultDraftRow: View {
     let isSelected: Bool
     let onToggle: () -> Void
     var focusedField: FocusState<DraftFocusField?>.Binding
+    var isGeminiFailed: Bool = false
 
     @Environment(\.modelContext) private var modelContext
     @State private var priceText: String = ""
@@ -1211,14 +1217,25 @@ struct ResultDraftRow: View {
                         }
                 }
 
-                // AI confidence label
-                HStack(spacing: 4) {
-                    Image(systemName: "sparkles")
-                        .font(.caption2)
-                        .foregroundStyle(.purple)
-                    Text("AI-identified")
-                        .font(.caption2)
-                        .foregroundStyle(.purple.opacity(0.8))
+                // AI status label
+                if isGeminiFailed {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                        Text("Couldn't identify — enter details manually")
+                            .font(.caption2)
+                            .foregroundStyle(.orange.opacity(0.9))
+                    }
+                } else {
+                    HStack(spacing: 4) {
+                        Image(systemName: "sparkles")
+                            .font(.caption2)
+                            .foregroundStyle(.purple)
+                        Text("AI-identified")
+                            .font(.caption2)
+                            .foregroundStyle(.purple.opacity(0.8))
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
