@@ -17,5 +17,17 @@
         "supportEmail": "jerryshi25@gmail.com"
       }
     }
-  }
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-hosts-debug.log"
+      ]
+    }
+  ]
 }

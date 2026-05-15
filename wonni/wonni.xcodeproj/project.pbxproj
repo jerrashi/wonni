@@ -11,6 +11,7 @@
 		58027310287C4A0F94DF7BCF /* UploadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76A8453ED0904B9D853B98E5 /* UploadManager.swift */; };
 		6134E14E2FB64DBD007C3979 /* BulkEditSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6134E14D2FB64DBD007C3979 /* BulkEditSheet.swift */; };
 		6134E1502FB76C1A007C3979 /* ProcessProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6134E14F2FB76C1A007C3979 /* ProcessProgressView.swift */; };
+		6134E1532FB77702007C3979 /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = 6134E1522FB77702007C3979 /* FirebaseFunctions */; };
 		614A039C2E9C48620057A837 /* PhotoStackModalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 614A039B2E9C48620057A837 /* PhotoStackModalView.swift */; };
 		6192AA542D7E194300EC2EFA /* ItemDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6192AA532D7E194300EC2EFA /* ItemDetailView.swift */; };
 		6192AA562D7E31A900EC2EFA /* ShortcutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6192AA552D7E31A900EC2EFA /* ShortcutView.swift */; };
@@ -140,6 +141,7 @@
 			files = (
 				61FAA54A2FAA8F80001C28CE /* FirebaseAuth in Frameworks */,
 				61FAA54C2FAA8F80001C28CE /* FirebaseFirestore in Frameworks */,
+				6134E1532FB77702007C3979 /* FirebaseFunctions in Frameworks */,
 				61FAA54E2FAA8F80001C28CE /* FirebaseStorage in Frameworks */,
 				61FAA5722FAE2290001C28CE /* FirebaseAI in Frameworks */,
 			);
@@ -148,6 +150,13 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		6134E1512FB77702007C3979 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		6192AA632D7F641100EC2EFA /* CameraView */ = {
 			isa = PBXGroup;
 			children = (
@@ -174,6 +183,7 @@
 			isa = PBXGroup;
 			children = (
 				61EE00562D763713006063C3 /* wonni */,
+				6134E1512FB77702007C3979 /* Frameworks */,
 				61EE00552D763713006063C3 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -634,6 +644,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		6134E1522FB77702007C3979 /* FirebaseFunctions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 61FAA5482FAA8F80001C28CE /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseFunctions;
+		};
 		61FAA5492FAA8F80001C28CE /* FirebaseAuth */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 61FAA5482FAA8F80001C28CE /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;

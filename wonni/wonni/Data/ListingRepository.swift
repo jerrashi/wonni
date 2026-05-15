@@ -19,7 +19,9 @@ class ListingRepository: ObservableObject {
     /// If the listing already has an ID, it updates the existing document.
     /// Otherwise, it creates a new document.
     func saveDraft(_ listing: UserListing) async throws -> String {
+        print("[ListingRepository] saveDraft called for listing \(listing.id ?? "new")")
         guard let userId = Auth.auth().currentUser?.uid else {
+            print("[ListingRepository] ERROR: User not authenticated")
             throw NSError(domain: "ListingRepository", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
         
@@ -31,13 +33,48 @@ class ListingRepository: ObservableObject {
             listingToSave.createdAt = Timestamp(date: Date())
         }
         
-        if let id = listing.id {
-            try db.collection(listingsCollection).document(id).setData(from: listingToSave)
-            return id
-        } else {
-            let docRef = try db.collection(listingsCollection).addDocument(from: listingToSave)
-            return docRef.documentID
+        do {
+            if let id = listing.id {
+                print("[ListingRepository] Updating existing document: \(id)")
+                try await db.collection(listingsCollection).document(id).setData(from: listingToSave)
+                print("[ListingRepository] Update successful for \(id)")
+                return id
+            } else {
+                print("[ListingRepository] Creating new document in collection: \(listingsCollection)")
+                let docRef = db.collection(listingsCollection).document()
+                try await docRef.setData(from: listingToSave)
+                print("[ListingRepository] Creation successful: \(docRef.documentID)")
+                return docRef.documentID
+            }
+        } catch {
+            print("[ListingRepository] Firestore error: \(error)")
+            throw error
         }
+    }
+    
+    /// Partial update for photo paths.
+    func updateListingPaths(listingId: String, paths: [String]) async throws {
+        print("[ListingRepository] Updating photoPaths for \(listingId) with \(paths.count) paths")
+        try await db.collection(listingsCollection).document(listingId).updateData([
+            "photoPaths": paths,
+            "coverPhotoPath": paths.first as Any,
+            "updatedAt": Timestamp(date: Date())
+        ])
+    }
+    
+    /// Updates the status of a listing (e.g. to .active).
+    func updateListingStatus(listingId: String, status: ListingStatus) async throws {
+        print("[ListingRepository] Updating status for \(listingId) to \(status.rawValue)")
+        try await updateListingData(listingId: listingId, data: [
+            "status": status.rawValue,
+            "publishedAt": status == .active ? Timestamp(date: Date()) : FieldValue.delete(),
+            "updatedAt": Timestamp(date: Date())
+        ])
+    }
+    
+    /// Generic update for listing fields.
+    func updateListingData(listingId: String, data: [String: Any]) async throws {
+        try await db.collection(listingsCollection).document(listingId).updateData(data)
     }
     
     /// Fetches all active listings for the current user, sorted by most recently updated.
