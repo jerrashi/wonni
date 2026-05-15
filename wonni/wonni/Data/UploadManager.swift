@@ -10,6 +10,8 @@ import FirebaseAuth
 import FirebaseFirestore
 import UIKit
 
+// MARK: - Status Enum
+
 enum DraftUploadStatus: Equatable {
     case pending
     case uploading(Double)
@@ -17,192 +19,286 @@ enum DraftUploadStatus: Equatable {
     case failed
 }
 
+// MARK: - UploadManager
+
 @MainActor
 class UploadManager: ObservableObject {
-    @Published var isPillVisible = false
-    @Published var showExpandedModal = false
+    static let shared = UploadManager()
+
+    // ── Tab / Navigation ────────────────────────────────────────────────────
+    @Published var selectedTab = 0
     @Published var shouldReturnToRoot = false
-    @Published var currentIndex = 0
-    @Published var totalCount = 0
-    @Published var overallProgress: Double = 0
-    @Published var currentDraftName = ""
-    @Published var statuses: [UUID: DraftUploadStatus] = [:]
-    @Published var draftNames: [UUID: String] = [:]
-    @Published var orderedDraftIDs: [UUID] = []
-    @Published var uploadStartTime: Date? = nil
-    @Published var uploadErrors: [UUID: String] = [:]
+
+    // ── Photo Upload Phase ─────────────────────────────────────────────────
+    /// True while any photos are still uploading to Firebase Storage.
+    @Published var isUploadingPhotos = false
+    /// 0.0 – 1.0 across all queued drafts.
+    @Published var uploadProgress: Double = 0
+    @Published var uploadStatuses: [UUID: DraftUploadStatus] = [:]
     @Published var uploadedAssetIDs: [String] = []
     @Published var showDeletePhotosPrompt = false
-    // Receipt data — populated as each draft completes, survives SwiftData deletion
-    @Published var draftFirstAssetID: [UUID: String] = [:]
-    @Published var draftListingIDs: [UUID: String] = [:]
-    @Published var draftPrices: [UUID: Double?] = [:]
-    @Published var draftDescriptions: [UUID: String?] = [:]
+    @Published var uploadStartTime: Date? = nil
 
-    // Derived from elapsed time + linear progress — equivalent to bytes_remaining / upload_speed
-    // but requires no byte-size measurement.
-    var etaString: String? {
-        guard let start = uploadStartTime,
-              overallProgress > 0.05
-        else { return nil }
+    // ── AI Processing Phase ─────────────────────────────────────────────────
+    @Published var isProcessing = false
+    @Published var processProgress: Double = 0
+    @Published var processStatuses: [UUID: DraftUploadStatus] = [:]
+    @Published var processCurrentIndex = 0
+    @Published var processTotalCount = 0
+    /// Set to true when all items finish processing → triggers navigation to results view.
+    @Published var showProcessResults = false
+    /// The ordered list of Item IDs that finished processing (for display).
+    @Published var processedItemIDs: [UUID] = []
+
+    // ── Legacy / Pill visibility (kept for UploadPillView compatibility) ────
+    @Published var isPillVisible = false
+    @Published var isProcessPillVisible = false
+
+    // ── Internal tracking ───────────────────────────────────────────────────
+    /// Maps draft UUID → its Firebase Storage photo paths (set when upload finishes).
+    private var draftPhotoPaths: [UUID: [String]] = [:]
+    /// Counts how many uploads are in-flight so we know when they're all done.
+    private var activeUploadCount = 0
+    private var processTask: Task<Void, Never>?
+
+    // ── ETA helper ─────────────────────────────────────────────────────────
+    var uploadEtaString: String? {
+        guard let start = uploadStartTime, uploadProgress > 0.05 else { return nil }
         let elapsed = Date().timeIntervalSince(start)
-        let remaining = elapsed * (1 - overallProgress) / overallProgress
-        if remaining < 60 {
-            return "~\(max(1, Int(remaining)))s"
-        } else {
-            return "~\(Int((remaining / 60).rounded(.up))) min"
-        }
+        let remaining = elapsed * (1 - uploadProgress) / uploadProgress
+        if remaining < 60 { return "~\(max(1, Int(remaining)))s" }
+        return "~\(Int((remaining / 60).rounded(.up))) min"
     }
 
-    private var uploadTask: Task<Void, Never>?
+    // MARK: – Phase 1: Background Photo Upload
 
-    func startUpload(drafts: [Item], modelContext: ModelContext) {
-        guard !drafts.isEmpty else { return }
+    /// Call this immediately when the user taps "+" to add a draft.
+    func startBackgroundUpload(draft: Item, modelContext: ModelContext) {
+        guard let userId = Auth.auth().currentUser?.uid else { return }
+        guard !draft.sourceAssetIdentifiers.isEmpty else { return }
 
-        uploadTask?.cancel()
-        totalCount = drafts.count
-        currentIndex = 0
-        overallProgress = 0
-        isPillVisible = true
-        statuses = [:]
-        draftNames = [:]
-        orderedDraftIDs = []
-        uploadErrors = [:]
-        uploadedAssetIDs = []
-        showDeletePhotosPrompt = false
-        draftFirstAssetID = [:]
-        draftListingIDs = [:]
-        draftPrices = [:]
-        draftDescriptions = [:]
-        uploadStartTime = Date()
-
-        for (i, draft) in drafts.enumerated() {
-            statuses[draft.id] = .pending
-            draftNames[draft.id] = draft.userEditedTitle ?? draft.aiSuggestedTitle ?? "Draft \(i + 1)"
-            orderedDraftIDs.append(draft.id)
+        // Mark upload state
+        if !isUploadingPhotos {
+            isUploadingPhotos = true
+            isPillVisible = true
+            uploadStartTime = Date()
+            uploadProgress = 0
         }
+        activeUploadCount += 1
+        uploadStatuses[draft.id] = .pending
 
-        uploadTask = Task {
-            guard let userId = Auth.auth().currentUser?.uid else {
-                for id in orderedDraftIDs {
-                    uploadErrors[id] = "Not signed in."
-                    statuses[id] = .failed
-                }
-                overallProgress = 1.0
-                return
-            }
+        Task {
+            uploadStatuses[draft.id] = .uploading(0)
 
-            for (index, draft) in drafts.enumerated() {
-                guard !Task.isCancelled else { break }
-
-                currentIndex = index + 1
-                currentDraftName = draftNames[draft.id] ?? "Draft \(index + 1)"
-                statuses[draft.id] = .uploading(0)
-
-                do {
-                    // 1. Fetch full-resolution images from Photos library
-                    var images: [UIImage] = []
-                    for assetId in draft.sourceAssetIdentifiers {
-                        if let img = await PhotoAsset(identifier: assetId).fullResolutionImage() {
-                            images.append(img)
-                        }
-                    }
-
-                    // 2. Pre-generate listing ID so photos go straight to the permanent path
-                    let listingId = UUID().uuidString
-                    var photoPaths: [String] = []
-                    for (imgIdx, image) in images.enumerated() {
-                        if let path = try? await StorageService.shared.uploadListingImage(
-                            image: image, index: imgIdx, userId: userId, listingId: listingId
-                        ) {
-                            photoPaths.append(path)
-                        }
-                        let p = Double(imgIdx + 1) / Double(max(images.count, 1))
-                        statuses[draft.id] = .uploading(p * 0.7)
-                        overallProgress = (Double(index) + p * 0.7) / Double(totalCount)
-                    }
-
-                    // 3. Build listing struct with pre-set ID
-                    var listing = UserListing.newDraft(
-                        userId: userId,
-                        sourceAssetIdentifiers: draft.sourceAssetIdentifiers
-                    )
-                    listing.id = listingId
-                    listing.photoPaths = photoPaths
-                    listing.coverPhotoPath = photoPaths.first
-                    listing.customTitle = draft.userEditedTitle ?? draft.aiSuggestedTitle
-
-                    statuses[draft.id] = .uploading(0.8)
-                    overallProgress = (Double(index) + 0.8) / Double(totalCount)
-
-                    // 4. Run Gemini identification (first 3 images for speed)
-                    if !images.isEmpty {
-                        do {
-                            let gemini = try await GeminiService.shared.identifyItem(images: Array(images.prefix(3)))
-                            draft.aiSuggestedTitle = gemini.name
-                            draft.aiSuggestedPrice = gemini.suggestedPrice
-                            draft.aiSuggestedDescription = gemini.description
-
-                            if listing.customTitle == nil { listing.customTitle = gemini.name }
-                            listing.customDescription = gemini.description
-                            listing.price = draft.userEditedPrice ?? gemini.suggestedPrice
-                            listing.geminiIdentificationConfirmed = true
-                        } catch {
-                            print("[UploadManager] Gemini failed for draft \(draft.id): \(error)")
-                        }
-                    }
-
-                    // 5. Persist to Firestore as active (not draft)
-                    listing.status = .active
-                    listing.publishedAt = Timestamp(date: Date())
-                    let docId = try await ListingRepository.shared.saveDraft(listing)
-                    draftListingIDs[draft.id] = docId
-
-                    // 6. Save receipt data before deleting the SwiftData draft
-                    if let firstAsset = draft.sourceAssetIdentifiers.first {
-                        draftFirstAssetID[draft.id] = firstAsset
-                    }
-                    draftPrices[draft.id] = listing.price
-                    draftDescriptions[draft.id] = listing.customDescription
-
-                    statuses[draft.id] = .done
-                    uploadedAssetIDs.append(contentsOf: draft.sourceAssetIdentifiers)
-                    modelContext.delete(draft)
-                    try? modelContext.save()
-                    overallProgress = Double(index + 1) / Double(totalCount)
-
-                } catch {
-                    uploadErrors[draft.id] = error.localizedDescription
-                    statuses[draft.id] = .failed
-                    print("[UploadManager] draft \(draft.id) failed: \(error)")
+            // Fetch full-res images from Photos library
+            var images: [UIImage] = []
+            for assetId in draft.sourceAssetIdentifiers {
+                if let img = await PhotoAsset(identifier: assetId).fullResolutionImage() {
+                    images.append(img)
                 }
             }
 
-            let allFinished = statuses.values.allSatisfy {
-                switch $0 { case .done, .failed: return true; default: return false }
-            }
-            if allFinished && !Task.isCancelled {
-                if !uploadedAssetIDs.isEmpty {
-                    showDeletePhotosPrompt = true
+            // Upload each image; update per-draft progress
+            let listingId = UUID().uuidString
+            var photoPaths: [String] = []
+            for (imgIdx, image) in images.enumerated() {
+                if let path = try? await StorageService.shared.uploadListingImage(
+                    image: image, index: imgIdx, userId: userId, listingId: listingId
+                ) {
+                    photoPaths.append(path)
                 }
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                let p = Double(imgIdx + 1) / Double(max(images.count, 1))
+                uploadStatuses[draft.id] = .uploading(p)
+                recalcUploadProgress()
+            }
+
+            // Store paths on the SwiftData model
+            draft.firebasePhotoPaths = photoPaths
+            draftPhotoPaths[draft.id] = photoPaths
+            uploadStatuses[draft.id] = .done
+            uploadedAssetIDs.append(contentsOf: draft.sourceAssetIdentifiers)
+            try? modelContext.save()
+            recalcUploadProgress()
+
+            activeUploadCount -= 1
+            if activeUploadCount == 0 {
+                isUploadingPhotos = false
+                // Keep pill for 1.5s then hide
+                if !uploadedAssetIDs.isEmpty { showDeletePhotosPrompt = true }
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
                 isPillVisible = false
             }
         }
     }
 
-    func cancel() {
-        uploadTask?.cancel()
-        uploadTask = nil
+    private func recalcUploadProgress() {
+        let statuses = uploadStatuses.values
+        guard !statuses.isEmpty else { uploadProgress = 0; return }
+        var sum: Double = 0
+        for s in statuses {
+            switch s {
+            case .done: sum += 1.0
+            case .uploading(let p): sum += p
+            default: break
+            }
+        }
+        uploadProgress = sum / Double(statuses.count)
+    }
+
+    /// Returns true when all currently registered drafts have finished uploading.
+    func areAllUploadsFinished() -> Bool {
+        guard !uploadStatuses.isEmpty else { return true }
+        return !isUploadingPhotos
+    }
+
+    // MARK: – Phase 2: AI Processing
+
+    /// Runs Gemini on each draft. Called from BulkListingOverviewView "Process" button.
+    func processDrafts(drafts: [Item], modelContext: ModelContext) {
+        guard !drafts.isEmpty else { return }
+
+        processTask?.cancel()
+        isProcessing = true
+        isProcessPillVisible = true
+        showProcessResults = false
+        processProgress = 0
+        processCurrentIndex = 0
+        processTotalCount = drafts.count
+        processStatuses = [:]
+        processedItemIDs = []
+
+        for draft in drafts { processStatuses[draft.id] = .pending }
+
+        processTask = Task {
+            for (index, draft) in drafts.enumerated() {
+                guard !Task.isCancelled else { break }
+
+                processCurrentIndex = index + 1
+                processStatuses[draft.id] = .uploading(0)
+
+                // Load images (from Photos; they're already uploaded to Storage but we need UIImage for Gemini)
+                var images: [UIImage] = []
+                for assetId in draft.sourceAssetIdentifiers {
+                    if let img = await PhotoAsset(identifier: assetId).fullResolutionImage() {
+                        images.append(img)
+                    }
+                }
+
+                if !images.isEmpty {
+                    do {
+                        let gemini = try await GeminiService.shared.identifyItem(
+                            images: Array(images.prefix(3)),
+                            userTitle: draft.userEditedTitle,
+                            userPrice: draft.userEditedPrice,
+                            userDescription: draft.userEditedDescription
+                        )
+                        // Only overwrite fields the user hasn't set
+                        if draft.aiSuggestedTitle == nil { draft.aiSuggestedTitle = gemini.name }
+                        if draft.aiSuggestedPrice == nil { draft.aiSuggestedPrice = gemini.suggestedPrice }
+                        if draft.aiSuggestedDescription == nil { draft.aiSuggestedDescription = gemini.description }
+                        // Always store AI shipping estimates (user hasn't filled these in yet)
+                        draft.weightLbs = draft.weightLbs ?? gemini.weightLbs
+                        draft.lengthIn  = draft.lengthIn  ?? gemini.lengthIn
+                        draft.widthIn   = draft.widthIn   ?? gemini.widthIn
+                        draft.heightIn  = draft.heightIn  ?? gemini.heightIn
+                    } catch {
+                        print("[UploadManager] Gemini error for \(draft.id): \(error)")
+                    }
+                }
+
+                processStatuses[draft.id] = .done
+                processedItemIDs.append(draft.id)
+                processProgress = Double(index + 1) / Double(processTotalCount)
+                try? modelContext.save()
+            }
+
+            isProcessing = false
+
+            // Brief pause, then collapse pill and navigate to results
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            isProcessPillVisible = false
+            showProcessResults = true
+        }
+    }
+
+    // MARK: – Phase 3: Publish to Firestore
+
+    /// Posts finished+reviewed drafts as active listings.
+    func publishDrafts(drafts: [Item], modelContext: ModelContext) {
+        Task {
+            guard let userId = Auth.auth().currentUser?.uid else { return }
+
+            for draft in drafts {
+                guard let photoPaths = draft.firebasePhotoPaths, !photoPaths.isEmpty else { continue }
+
+                var listing = UserListing.newDraft(
+                    userId: userId,
+                    sourceAssetIdentifiers: draft.sourceAssetIdentifiers
+                )
+                listing.status = .active
+                listing.createdAt = Timestamp(date: Date())
+                listing.photoPaths = photoPaths
+                listing.coverPhotoPath = photoPaths.first
+                listing.tags = draft.tags
+                listing.personalNote = draft.personalNote
+                listing.customTitle = draft.userEditedTitle ?? draft.aiSuggestedTitle
+                listing.customDescription = draft.userEditedDescription ?? draft.aiSuggestedDescription
+                listing.price = draft.userEditedPrice ?? draft.aiSuggestedPrice
+                listing.geminiIdentificationConfirmed = true
+
+                var packageDimensions: PackageDimensions? = nil
+                if let l = draft.lengthIn, let w = draft.widthIn, let h = draft.heightIn {
+                    packageDimensions = PackageDimensions(lengthIn: l, widthIn: w, heightIn: h)
+                }
+                listing.shippingInfo = ShippingInfo(
+                    buyerPaysShipping: draft.buyerPaysShipping,
+                    handlingFee: draft.handlingFee,
+                    estimatedShippingDays: draft.estimatedShippingDays,
+                    weightLbs: draft.weightLbs,
+                    packageDimensions: packageDimensions
+                )
+                listing.publishedAt = Timestamp(date: Date())
+
+                do {
+                    _ = try await ListingRepository.shared.saveDraft(listing)
+                    modelContext.delete(draft)
+                } catch {
+                    print("[UploadManager] Publish error for \(draft.id): \(error)")
+                }
+            }
+            try? modelContext.save()
+            showProcessResults = false
+            shouldReturnToRoot = true
+        }
+    }
+
+    // MARK: – Cancel / Reset
+
+    func cancelProcessing() {
+        processTask?.cancel()
+        processTask = nil
+        isProcessing = false
+        isProcessPillVisible = false
+        processStatuses.removeAll()
+        processedItemIDs.removeAll()
+    }
+
+    func resetAll() {
+        processTask?.cancel()
+        processTask = nil
+        isUploadingPhotos = false
         isPillVisible = false
-        statuses.removeAll()
-        orderedDraftIDs.removeAll()
-        uploadErrors.removeAll()
+        isProcessPillVisible = false
+        isProcessing = false
+        showProcessResults = false
+        uploadProgress = 0
+        uploadStatuses.removeAll()
         uploadedAssetIDs.removeAll()
-        draftFirstAssetID.removeAll()
-        draftListingIDs.removeAll()
-        draftPrices.removeAll()
-        draftDescriptions.removeAll()
+        processStatuses.removeAll()
+        processedItemIDs.removeAll()
+        shouldReturnToRoot = false
         uploadStartTime = nil
+        activeUploadCount = 0
+        draftPhotoPaths.removeAll()
     }
 }

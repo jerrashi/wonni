@@ -6,7 +6,7 @@ import AVFoundation
 import SwiftUI
 import os.log
 
-final class DataModel: ObservableObject {
+final class DataModel: ObservableObject, @unchecked Sendable {
     let camera = Camera()
     let photoCollection = PhotoCollection(smartAlbum: .smartAlbumUserLibrary)
     

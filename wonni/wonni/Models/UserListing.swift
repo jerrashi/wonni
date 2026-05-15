@@ -16,21 +16,23 @@ import FirebaseFirestore
 // MARK: - Supporting Types
 
 enum ItemCondition: String, Codable, CaseIterable {
-    case new        = "new"
-    case likeNew    = "likeNew"
-    case good       = "good"
-    case fair       = "fair"
-    case poor       = "poor"
-    case forParts   = "forParts"
+    case new            = "new"
+    case newWithoutTags = "newWithoutTags"
+    case likeNew        = "likeNew"
+    case good           = "good"
+    case fair           = "fair"
+    case poor           = "poor"
+    case forParts       = "forParts"
 
     var displayName: String {
         switch self {
-        case .new:      return "New"
-        case .likeNew:  return "Like New"
-        case .good:     return "Good"
-        case .fair:     return "Fair"
-        case .poor:     return "Poor"
-        case .forParts: return "For Parts"
+        case .new:            return "New"
+        case .newWithoutTags: return "New without tags"
+        case .likeNew:        return "Used - Like New"
+        case .good:           return "Used - Good"
+        case .fair:           return "Used - Fair"
+        case .poor:           return "Used - Poor"
+        case .forParts:       return "For Parts"
         }
     }
 }
@@ -79,6 +81,12 @@ struct UserListing: Identifiable, Codable {
     // ── User-customizable fields (override catalog defaults if set) ────────────
     var customTitle: String?
     var customDescription: String?
+    
+    // ── Platform / Market fields ──────────────────────────────────────────────
+    var brand: String?
+    var category: String?
+    var tags: [String]?
+    var personalNote: String?
 
     // ── Pricing ───────────────────────────────────────────────────────────────
     var price: Double?
@@ -101,6 +109,9 @@ struct UserListing: Identifiable, Codable {
     var updatedAt: Timestamp?
     var publishedAt: Timestamp?
     var soldAt: Timestamp?
+    
+    // ── Engagement ────────────────────────────────────────────────────────────
+    var likesCount: Int?
 
     // ── Source assets (PHAsset identifiers, used during draft flow) ───────────
     // Cleared once photos are uploaded to Storage and photoPaths is populated.

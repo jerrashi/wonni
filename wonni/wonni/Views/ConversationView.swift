@@ -20,6 +20,9 @@ struct ConversationView: View {
     private var currentUserId: String { authManager.currentUser?.uid ?? "" }
     private var isBuyer: Bool { conversation.buyerId == currentUserId }
     private var conversationId: String { conversation.id ?? "" }
+    private var otherUserId: String { isBuyer ? conversation.sellerId : conversation.buyerId }
+    
+    @State private var otherProfile: UserPublicProfile?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,9 +32,28 @@ struct ConversationView: View {
             Divider()
             inputBar
         }
-        .navigationTitle(conversation.snapshotTitle ?? "Conversation")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                HStack {
+                    ZStack {
+                        Circle().fill(Color.blue.opacity(0.12)).frame(width: 28, height: 28)
+                        Text(otherProfile?.displayName?.prefix(1).uppercased() ?? String(otherUserId.prefix(1)).uppercased())
+                            .font(.caption2.bold()).foregroundStyle(.blue)
+                    }
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(otherProfile?.displayName ?? "User")
+                            .font(.subheadline.bold())
+                        Text(conversation.snapshotTitle ?? "Listing")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
         .onAppear { startListening() }
+        .task {
+            otherProfile = try? await UserRepository.shared.fetchProfile(uid: otherUserId)
+        }
         .onDisappear { listener?.remove() }
         .sheet(isPresented: $showOfferSheet) {
             MakeOfferSheet(currentPrice: conversation.snapshotPrice) { amount in
@@ -122,8 +144,8 @@ struct ConversationView: View {
             Button { Task { await sendMessage() } } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.title2)
-                    .foregroundStyle(
-                        messageText.trimmingCharacters(in: .whitespaces).isEmpty ? .secondary : .blue
+                    .foregroundColor(
+                        messageText.trimmingCharacters(in: .whitespaces).isEmpty ? Color.secondary : Color.blue
                     )
             }
             .disabled(messageText.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -286,3 +308,4 @@ struct MakeOfferSheet: View {
         .presentationDetents([.medium])
     }
 }
+

@@ -14,30 +14,44 @@ struct MainView: View {
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
 
     var body: some View {
-        TabView {
+        TabView(selection: $uploadManager.selectedTab) {
             NavigationStack { HomeView() }
                 .tabItem { Label("Home", systemImage: "house.fill") }
+                .tag(0)
 
             NavigationStack { SearchView() }
                 .tabItem { Label("Search", systemImage: "magnifyingglass") }
+                .tag(1)
 
             NavigationStack { CameraViewController() }
                 .tabItem { Label("Sell", systemImage: "plus.circle.fill") }
+                .tag(2)
 
             NavigationStack { InboxView() }
                 .tabItem { Label("Inbox", systemImage: "tray.fill") }
+                .tag(3)
 
             NavigationStack { ProfileView() }
                 .tabItem { Label("Profile", systemImage: "person.crop.circle.fill") }
+                .tag(4)
         }
+        // Overlay pills ABOVE the tab bar using safeAreaInset on the whole TabView
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if uploadManager.isPillVisible {
-                UploadPillView()
-                    .environmentObject(uploadManager)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            VStack(spacing: 4) {
+                if uploadManager.isProcessPillVisible {
+                    ProcessPillView()
+                        .environmentObject(uploadManager)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                if uploadManager.isPillVisible {
+                    UploadPillView()
+                        .environmentObject(uploadManager)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
+            .animation(.spring(response: 0.35, dampingFraction: 0.8),
+                        value: uploadManager.isPillVisible || uploadManager.isProcessPillVisible)
         }
-        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: uploadManager.isPillVisible)
         .fullScreenCover(isPresented: Binding(
             get: { authManager.currentUser == nil },
             set: { _ in }

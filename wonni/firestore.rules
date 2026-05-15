@@ -22,7 +22,10 @@ service cloud.firestore {
     // Readable by all authenticated users (buyers need to browse).
     // Only the listing owner can write.
     match /listings/{listingId} {
-      allow read: if request.auth != null;
+      // Readable by all if not a draft, or if the user is the owner
+      allow read: if request.auth != null && (
+                    resource.data.status != "draft" || request.auth.uid == resource.data.userId
+                  );
       allow write: if request.auth != null
                    && request.auth.uid == resource.data.userId;
       allow create: if request.auth != null
@@ -51,7 +54,13 @@ service cloud.firestore {
     // Profile document: readable by all authenticated users, writable by owner.
     match /users/{userId} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && request.auth.uid == userId
+                   // If they are setting a username, it must either be unchanged or they must own it in the usernames collection.
+                   // Since they create the username doc in the same batch, we check getAfter.
+                   && (!request.resource.data.keys().hasAny(['username']) 
+                       || request.resource.data.username == null
+                       || (resource != null && request.resource.data.username == resource.data.username)
+                       || getAfter(/databases/$(database)/documents/usernames/$(request.resource.data.username)).data.userId == request.auth.uid);
 
       // Saved listings — private to each user
       match /saved/{listingId} {
@@ -84,5 +93,24 @@ service cloud.firestore {
   match /trending/{trendId} {
     allow read: if request.auth != null;
     allow write: if false;
+  }
+
+  // ── Usernames (For Uniqueness Enforcement) ──────────────────────────────
+  // The document ID is the lowercase username. Data must contain { userId: <uid> }.
+  match /usernames/{username} {
+    allow read: if request.auth != null;
+    
+    // Can only claim if the username does not exist (enforces uniqueness)
+    // and the userId in the document matches the authenticated user.
+    allow create: if request.auth != null
+                  && request.resource.data.userId == request.auth.uid
+                  && !exists(/databases/$(database)/documents/usernames/$(username));
+                  
+    // Can delete if the authenticated user owns this username.
+    allow delete: if request.auth != null 
+                  && resource.data.userId == request.auth.uid;
+                  
+    // Cannot update ownership directly. Must delete and recreate.
+    allow update: if false;
   }
 }

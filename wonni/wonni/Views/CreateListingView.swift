@@ -114,7 +114,7 @@ struct CustomPhotoPickerView: View {
         @Environment(\.modelContext) private var modelContext
         @Query private var allItems: [Item]
 
-        @StateObject private var repository = ListingRepository.shared
+        @EnvironmentObject private var uploadManager: UploadManager
 
         @State private var draggedAsset: PhotoAsset?
         @State private var carouselCollapsing = false
@@ -138,12 +138,7 @@ struct CustomPhotoPickerView: View {
             let currentDrafts = allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty }
             let currentUsedAssetIDs = Set(currentDrafts.flatMap { $0.sourceAssetIdentifiers })
             
-            // Invisible navigation link to fix navigation stack pushing issues
-            NavigationLink(destination: BulkListingOverviewView(selectedAssets: selectedAssets), isActive: $navigateToOverview) {
-                EmptyView()
-            }
-            .hidden()
-            
+            // (Navigation logic is handled by .navigationDestination modifier below)
             ScrollView {
                 LazyVGrid(columns: columns, spacing: Self.itemSpacing) {
                     if hidePreviouslySelected {
@@ -172,19 +167,35 @@ struct CustomPhotoPickerView: View {
                 }
             }
             .safeAreaInset(edge: .top) {
-                if !photoCollection.photoAssets.isEmpty {
-                    Toggle(isOn: $hidePreviouslySelected) {
-                        HStack(spacing: 6) {
-                            Image(systemName: hidePreviouslySelected ? "eye.slash" : "eye")
-                            Text("Hide previously selected")
+                VStack(spacing: 0) {
+                    // Thin upload progress bar – always visible while uploading
+                    if uploadManager.isUploadingPhotos {
+                        VStack(spacing: 4) {
+                            ProgressView(value: uploadManager.uploadProgress)
+                                .tint(.blue)
+                                .padding(.horizontal, 16)
+                            Text("Uploading photos…" + (uploadManager.uploadEtaString.map { " \($0)" } ?? ""))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                         }
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
+                        .padding(.vertical, 6)
+                        .background(.bar)
                     }
-                    .disabled(currentUsedAssetIDs.isEmpty)
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(.bar)
+
+                    if !photoCollection.photoAssets.isEmpty {
+                        Toggle(isOn: $hidePreviouslySelected) {
+                            HStack(spacing: 6) {
+                                Image(systemName: hidePreviouslySelected ? "eye.slash" : "eye")
+                                Text("Hide previously selected")
+                            }
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
+                        }
+                        .disabled(currentUsedAssetIDs.isEmpty)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                        .background(.bar)
+                    }
                 }
             }
             .safeAreaInset(edge: .bottom) {
@@ -230,7 +241,7 @@ struct CustomPhotoPickerView: View {
                                     .padding(.vertical, 12)
                                 }
                                 .frame(height: 84)
-                                .onChange(of: selectedAssets.count) { _ in
+                                .onChange(of: selectedAssets.count) {
                                     if let last = selectedAssets.last {
                                         withAnimation {
                                             scrollView.scrollTo(last.id, anchor: .trailing)
@@ -353,6 +364,9 @@ struct CustomPhotoPickerView: View {
             } message: {
                 Text("You have created drafts in this session. Would you like to save or discard them?")
             }
+            .navigationDestination(isPresented: $navigateToOverview) {
+                BulkListingOverviewView(selectedAssets: selectedAssets)
+            }
         }
         
         private func toggleSelection(_ asset: PhotoAsset) {
@@ -369,9 +383,8 @@ struct CustomPhotoPickerView: View {
             guard !selectedAssets.isEmpty else { return }
 
             let assetsToUpload = selectedAssets
-            let userId = Auth.auth().currentUser?.uid ?? "anonymous"
 
-            // Save to SwiftData immediately — picker UI updates are instant.
+            // 1. Save to SwiftData immediately — picker UI updates are instant.
             let newItem = Item(
                 blurb: "Draft from \(assetsToUpload.count) selected photos",
                 sourceAssetIdentifiers: assetsToUpload.map { $0.id }
@@ -380,39 +393,8 @@ struct CustomPhotoPickerView: View {
             try? modelContext.save()
             sessionDraftIDs.append(newItem.id)
 
-            // Upload to Firebase Storage + Firestore in background for AI/publish flow.
-            Task {
-                let listingId = UUID().uuidString
-                var photoPaths: [String] = []
-                var imagesToProcess: [UIImage] = []
-
-                for (idx, asset) in assetsToUpload.enumerated() {
-                    if let image = await asset.fullResolutionImage() {
-                        imagesToProcess.append(image)
-                        if let path = try? await StorageService.shared.uploadListingImage(
-                            image: image, index: idx, userId: userId, listingId: listingId
-                        ) {
-                            photoPaths.append(path)
-                        }
-                    }
-                }
-
-                var listing = UserListing.newDraft(userId: userId, sourceAssetIdentifiers: assetsToUpload.map { $0.id })
-                listing.id = listingId
-                listing.photoPaths = photoPaths
-                listing.coverPhotoPath = photoPaths.first
-
-                do {
-                    let docId = try await repository.saveDraft(listing)
-                    await MainActor.run {
-                        self.lastCreatedListingId = docId
-                        self.lastCreatedImages = imagesToProcess
-                        self.showingIdentification = true
-                    }
-                } catch {
-                    print("Error saving draft to Firestore: \(error.localizedDescription)")
-                }
-            }
+            // 2. Kick off background upload via UploadManager (tracks progress, shows pill).
+            uploadManager.startBackgroundUpload(draft: newItem, modelContext: modelContext)
         }
     }
     
@@ -689,477 +671,576 @@ struct CustomPhotoPickerView: View {
         @Query private var allItems: [Item]
         @EnvironmentObject private var uploadManager: UploadManager
 
-        @FocusState private var focusedID: UUID?
+        @FocusState private var focusedField: DraftFocusField?
         @State private var cache = CachedImageManager()
+        @State private var showUploadWarning = false
+        @State private var navigateToResults = false
 
         private var drafts: [Item] { allItems.filter { $0.isDraft } }
 
         var body: some View {
-            ScrollViewReader { proxy in
-                List {
-                    ForEach(drafts) { item in
-                        DraftRow(item: item, focusedID: $focusedID, cache: cache)
+            VStack(spacing: 0) {
+                // ── Thin upload progress bar at top ────────────────────────
+                if uploadManager.isUploadingPhotos {
+                    VStack(spacing: 4) {
+                        ProgressView(value: uploadManager.uploadProgress)
+                            .tint(.blue)
+                            .padding(.horizontal)
+                        Text("Uploading photos… \(uploadManager.uploadEtaString.map { $0 } ?? "")")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
-                    .onDelete { offsets in
-                        for i in offsets { modelContext.delete(drafts[i]) }
-                        try? modelContext.save()
-                    }
+                    .padding(.vertical, 8)
+                    .background(.bar)
+                    Divider()
                 }
-                .listStyle(.plain)
-                // Scroll so the bottom of the focused row aligns with the keyboard top,
-                // keeping the thumbnail fully visible above the typing area.
-                .onChange(of: focusedID) { oldID, newID in
-                    if oldID != nil { try? modelContext.save() }
-                    if let id = newID {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                proxy.scrollTo(id, anchor: .bottom)
+
+                // ── Draft list ─────────────────────────────────────────────
+                ScrollViewReader { proxy in
+                    List {
+                        ForEach(drafts) { item in
+                            DraftRow(
+                                item: item,
+                                focusedField: $focusedField,
+                                cache: cache
+                            )
+                            .id(item.id)
+                        }
+                        .onDelete { offsets in
+                            for i in offsets { modelContext.delete(drafts[i]) }
+                            try? modelContext.save()
+                        }
+                    }
+                    .listStyle(.plain)
+                    .onChange(of: focusedField) { _, newValue in
+                        try? modelContext.save()
+                        if let fv = newValue {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    proxy.scrollTo(fv.itemID, anchor: .center)
+                                }
                             }
                         }
                     }
                 }
             }
             .navigationTitle("Drafts")
+            .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Upload All") {
-                        uploadManager.startUpload(drafts: drafts, modelContext: modelContext)
-                        uploadManager.shouldReturnToRoot = true
-                    }
-                    .disabled(drafts.isEmpty || uploadManager.isPillVisible)
-                    .fontWeight(.semibold)
+                    processButton
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Button { moveFocus(by: -1) } label: {
                         Image(systemName: "chevron.up")
                     }
-                    .disabled(focusedIndex.map { $0 == 0 } ?? true)
+                    .disabled(focusedIndex == nil || focusedIndex == 0)
 
                     Button { moveFocus(by: 1) } label: {
                         Image(systemName: "chevron.down")
                     }
-                    .disabled(focusedIndex.map { $0 == drafts.count - 1 } ?? true)
+                    .disabled(focusedIndex == nil || focusedIndex == (drafts.count * 2 - 1))
 
                     Spacer()
-
-                    Button("Done") { focusedID = nil }
+                    Button("Done") { focusedField = nil }
                 }
             }
-            .task {
-                for item in drafts where item.aiSuggestedTitle == nil {
-                    item.aiSuggestedTitle = await classifyFirstImage(for: item) ?? "Item"
-                    try? modelContext.save()
+            .navigationDestination(isPresented: $navigateToResults) {
+                ProcessResultsOverviewView()
+            }
+            .onChange(of: uploadManager.showProcessResults) { _, show in
+                if show { navigateToResults = true }
+            }
+            .overlay(alignment: .bottom) {
+                if showUploadWarning {
+                    Text("Photos need to finish uploading first before processing")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 12)
+                        .background(Color.black.opacity(0.82), in: RoundedRectangle(cornerRadius: 14))
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 24)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-            .onAppear {
-                if drafts.isEmpty && !selectedAssets.isEmpty {
-                    let newItem = Item(
-                        blurb: "Draft from selected photos",
-                        sourceAssetIdentifiers: selectedAssets.map { $0.id }
-                    )
-                    modelContext.insert(newItem)
-                    try? modelContext.save()
-                }
-            }
+            .animation(.spring(response: 0.3), value: showUploadWarning)
         }
 
+        // MARK: Process Button
+        @ViewBuilder
+        private var processButton: some View {
+            let uploading = uploadManager.isUploadingPhotos
+            let processing = uploadManager.isProcessing
+            Button {
+                if uploading {
+                    withAnimation { showUploadWarning = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        withAnimation { showUploadWarning = false }
+                    }
+                } else if !processing && !drafts.isEmpty {
+                    uploadManager.processDrafts(drafts: drafts, modelContext: modelContext)
+                }
+            } label: {
+                Text("Process")
+                    .fontWeight(.semibold)
+                    .foregroundStyle(uploading || processing || drafts.isEmpty ? .secondary : Color.accentColor)
+            }
+            .disabled(processing || drafts.isEmpty)
+        }
+
+        // MARK: Keyboard navigation helpers
+        /// Flattened index: row*2 = title field, row*2+1 = price field
         private var focusedIndex: Int? {
-            guard let id = focusedID else { return nil }
-            return drafts.firstIndex { $0.id == id }
+            guard let fv = focusedField else { return nil }
+            guard let row = drafts.firstIndex(where: { $0.id == fv.itemID }) else { return nil }
+            return row * 2 + (fv.field == .title ? 0 : 1)
         }
 
         private func moveFocus(by delta: Int) {
-            guard let idx = focusedIndex else { return }
-            let next = idx + delta
-            guard next >= 0 && next < drafts.count else { return }
-            focusedID = drafts[next].id
-        }
-
-        private func classifyFirstImage(for item: Item) async -> String? {
-            guard let assetId = item.sourceAssetIdentifiers.first else { return nil }
-            guard let image = await PhotoAsset(identifier: assetId).fullResolutionImage(),
-                  let cgImage = image.cgImage else { return nil }
-
-            return await Task.detached(priority: .userInitiated) {
-                let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-
-                // OCR first — brand names / text on the object are most specific
-                let ocrRequest = VNRecognizeTextRequest()
-                ocrRequest.recognitionLevel = .accurate
-                ocrRequest.usesLanguageCorrection = false
-                let classifyRequest = VNClassifyImageRequest()
-                try? handler.perform([ocrRequest, classifyRequest])
-
-                let ocrText = (ocrRequest.results as? [VNRecognizedTextObservation] ?? [])
-                    .compactMap { $0.topCandidates(1).first?.string }
-                    .filter { $0.count > 2 && $0.count < 50 }
-                    .prefix(2)
-                    .joined(separator: " · ")
-                if !ocrText.isEmpty { return ocrText }
-
-                // Classifier fallback — lower threshold catches specific labels before generic ones
-                let skipLabels: Set<String> = [
-                    "people", "person", "adult", "man", "woman", "child", "indoor", "outdoor",
-                    "nature", "object", "item", "thing", "animal", "food", "vehicle", "plant",
-                    "building", "interior", "exterior", "surface", "text", "number", "furniture"
-                ]
-                let top = (classifyRequest.results as? [VNClassificationObservation] ?? [])
-                    .filter { $0.confidence > 0.08 }
-                    .compactMap { obs -> String? in
-                        let raw = (obs.identifier.components(separatedBy: ",").first ?? obs.identifier)
-                            .replacingOccurrences(of: "_", with: " ")
-                            .trimmingCharacters(in: .whitespaces)
-                        let label = raw.split(separator: " ").map { $0.capitalized }.joined(separator: " ")
-                        return skipLabels.contains(label.lowercased()) ? nil : label
-                    }
-                    .prefix(3)
-                return top.isEmpty ? nil : top.joined(separator: " · ")
-            }.value
+            guard let current = focusedIndex else { return }
+            let next = current + delta
+            let maxIndex = drafts.count * 2 - 1
+            guard next >= 0 && next <= maxIndex else { return }
+            let row = next / 2
+            let field: DraftFocusSubfield = (next % 2 == 0) ? .title : .price
+            focusedField = DraftFocusField(itemID: drafts[row].id, field: field)
         }
     }
 
-    // MARK: - DraftRow
-    struct DraftRow: View {
+// MARK: - DraftRow (redesigned)
+struct DraftRow: View {
+
         let item: Item
-        var focusedID: FocusState<UUID?>.Binding
+        var focusedField: FocusState<DraftFocusField?>.Binding
         let cache: CachedImageManager
 
         @Environment(\.modelContext) private var modelContext
         @State private var priceText: String = ""
-        @State private var showingPriceField = false
-        @State private var photoExpanded = false
-
-        private var isUserEdited: Bool { item.userEditedTitle != nil }
+        @State private var showEditSheet = false
 
         private var titleBinding: Binding<String> {
             Binding(
                 get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? "" },
-                set: { item.userEditedTitle = $0 }
+                set: { item.userEditedTitle = $0.isEmpty ? nil : $0 }
             )
         }
 
         var body: some View {
-            Group {
-                if photoExpanded {
-                    expandedLayout
-                } else {
-                    compactLayout
-                }
-            }
-            .padding(.vertical, 4)
-            .onChange(of: focusedID.wrappedValue) { _, newValue in
-                if newValue != item.id && photoExpanded {
-                    withAnimation(.spring(response: 0.3)) { photoExpanded = false }
-                }
-            }
-            .onAppear {
-                if let p = item.userEditedPrice {
-                    priceText = String(format: "%.2f", p)
-                    showingPriceField = true
-                }
-            }
-            .onChange(of: priceText) { _, newValue in
-                let cleaned = newValue.filter { $0.isNumber || $0 == "." }
-                if cleaned.isEmpty {
-                    item.userEditedPrice = nil
-                    showingPriceField = false
-                } else {
-                    item.userEditedPrice = Double(cleaned)
-                }
-                try? modelContext.save()
-            }
-        }
-
-        private var expandedLayout: some View {
-            VStack(alignment: .leading, spacing: 12) {
-                if let assetId = item.sourceAssetIdentifiers.first {
-                    PhotoItemView(
-                        asset: PhotoAsset(identifier: assetId),
-                        cache: cache,
-                        imageSize: CGSize(width: 600, height: 600)
-                    )
-                    .scaledToFill()
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 220)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .onTapGesture {
-                        withAnimation(.spring(response: 0.3)) { photoExpanded = false }
+            HStack(spacing: 14) {
+                // Photo thumbnail
+                Group {
+                    if let assetId = item.sourceAssetIdentifiers.first {
+                        PhotoItemView(
+                            asset: PhotoAsset(identifier: assetId),
+                            cache: cache,
+                            imageSize: CGSize(width: 160, height: 160)
+                        )
+                        .scaledToFill()
+                        .frame(width: 76, height: 76)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    } else {
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color(.systemGray5))
+                            .frame(width: 76, height: 76)
+                            .overlay(
+                                Image(systemName: "photo")
+                                    .foregroundStyle(.tertiary)
+                            )
                     }
                 }
-                textFields
-            }
-        }
 
-        private var compactLayout: some View {
-            HStack(spacing: 12) {
-                if let assetId = item.sourceAssetIdentifiers.first {
-                    PhotoItemView(
-                        asset: PhotoAsset(identifier: assetId),
-                        cache: cache,
-                        imageSize: CGSize(width: 120, height: 120)
-                    )
-                    .scaledToFill()
-                    .frame(width: 60, height: 60)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .onTapGesture {
-                        withAnimation(.spring(response: 0.3)) { photoExpanded = true }
-                    }
-                } else {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color(.systemGray5))
-                        .frame(width: 60, height: 60)
-                }
-                textFields
-            }
-        }
-
-        private var textFields: some View {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 4) {
-                    Image(systemName: "pencil")
-                        .font(.caption2)
-                        .foregroundStyle(.quaternary)
+                // Title & price fields
+                VStack(alignment: .leading, spacing: 8) {
                     TextField("Add title…", text: titleBinding)
-                        .font(.headline)
-                        .foregroundStyle(isUserEdited ? Color.primary : Color.secondary)
-                        .focused(focusedID, equals: item.id)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(item.userEditedTitle != nil ? .primary : .secondary)
+                        .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .title))
                         .onReceive(NotificationCenter.default.publisher(
                             for: UITextField.textDidBeginEditingNotification
                         )) { notification in
                             guard let tf = notification.object as? UITextField else { return }
                             DispatchQueue.main.async { tf.selectAll(nil) }
                         }
-                }
+                        .onChange(of: titleBinding.wrappedValue) { _, _ in
+                            try? modelContext.save()
+                        }
 
-                if showingPriceField || item.userEditedPrice != nil {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 3) {
                         Text("$")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
-                        TextField("0.00", text: $priceText)
+                        TextField("Price", text: $priceText)
                             .font(.subheadline)
                             .keyboardType(.decimalPad)
+                            .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .price))
+                            .onChange(of: priceText) { _, newValue in
+                                let cleaned = newValue.filter { $0.isNumber || $0 == "." }
+                                item.userEditedPrice = cleaned.isEmpty ? nil : Double(cleaned)
+                                try? modelContext.save()
+                            }
                     }
-                } else {
-                    Button {
-                        showingPriceField = true
-                    } label: {
-                        Image(systemName: "dollarsign.circle")
-                            .font(.subheadline)
+                    
+                    // Photo count badge
+                    if item.sourceAssetIdentifiers.count > 1 {
+                        Label("\(item.sourceAssetIdentifiers.count) photos", systemImage: "photo.on.rectangle")
+                            .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
-                    .buttonStyle(.plain)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                // Edit button → full detail sheet
+                Button {
+                    showEditSheet = true
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.vertical, 8)
+            .onAppear {
+                if let p = item.userEditedPrice {
+                    priceText = String(format: "%.2f", p)
+                }
+            }
+            .sheet(isPresented: $showEditSheet) {
+                DraftEditSheet(item: item)
             }
         }
     }
 
-// MARK: - UploadingView
+    // MARK: - DraftEditSheet (full listing editor)
+    struct DraftEditSheet: View {
+        let item: Item
+        @Environment(\.dismiss) private var dismiss
+        @Environment(\.modelContext) private var modelContext
 
-struct UploadingView: View {
-    @EnvironmentObject private var uploadManager: UploadManager
-    @Environment(\.dismiss) private var dismiss
+        @State private var title: String = ""
+        @State private var priceText: String = ""
+        @State private var description: String = ""
+        @State private var personalNote: String = ""
+        @State private var buyerPaysShipping: Bool = true
+        @State private var handlingFee: String = ""
+        @State private var estimatedDays: String = ""
+        @State private var selectedCondition: ItemCondition = .good
+        @State private var tagsText: String = ""
 
-    private var allDone: Bool {
-        !uploadManager.statuses.isEmpty &&
-        uploadManager.statuses.values.allSatisfy {
-            switch $0 { case .done, .failed: return true; default: return false }
+        var body: some View {
+            NavigationStack {
+                Form {
+                    Section("Title & Price") {
+                        TextField("Title", text: $title)
+                            .font(.body.weight(.medium))
+                        HStack {
+                            Text("$")
+                            TextField("0.00", text: $priceText)
+                                .keyboardType(.decimalPad)
+                        }
+                    }
+
+                    Section("Description") {
+                        TextEditor(text: $description)
+                            .frame(minHeight: 80)
+                    }
+
+                    Section("Condition") {
+                        Picker("Condition", selection: $selectedCondition) {
+                            ForEach(ItemCondition.allCases, id: \.self) { c in
+                                Text(c.displayName).tag(c)
+                            }
+                        }
+                    }
+
+                    Section("Shipping") {
+                        Toggle("Buyer pays shipping", isOn: $buyerPaysShipping)
+                        if !buyerPaysShipping {
+                            HStack {
+                                Text("Handling fee $")
+                                TextField("0.00", text: $handlingFee)
+                                    .keyboardType(.decimalPad)
+                                    .multilineTextAlignment(.trailing)
+                            }
+                        }
+                        HStack {
+                            Text("Est. shipping days")
+                            Spacer()
+                            TextField("3", text: $estimatedDays)
+                                .keyboardType(.numberPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 60)
+                        }
+                    }
+
+                    Section("Tags (comma-separated)") {
+                        TextField("e.g. photocard, kpop, sealed", text: $tagsText)
+                    }
+
+                    Section("Personal Note") {
+                        TextField("e.g. stored in basement", text: $personalNote)
+                    }
+                }
+                .navigationTitle("Edit Draft")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("Cancel") { dismiss() }
+                    }
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Save") {
+                            saveToDraft()
+                            dismiss()
+                        }
+                        .fontWeight(.semibold)
+                    }
+                }
+                .onAppear { loadFromDraft() }
+            }
+        }
+
+        private func loadFromDraft() {
+            title = item.userEditedTitle ?? item.aiSuggestedTitle ?? ""
+            if let p = item.userEditedPrice {
+                priceText = String(format: "%.2f", p)
+            }
+            description = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
+            personalNote = item.personalNote ?? ""
+            buyerPaysShipping = item.buyerPaysShipping
+            handlingFee = item.handlingFee > 0 ? String(format: "%.2f", item.handlingFee) : ""
+            estimatedDays = "\(item.estimatedShippingDays)"
+            tagsText = item.tags.joined(separator: ", ")
+        }
+
+        private func saveToDraft() {
+            item.userEditedTitle = title.isEmpty ? nil : title
+            item.userEditedPrice = Double(priceText.filter { $0.isNumber || $0 == "." })
+            item.userEditedDescription = description.isEmpty ? nil : description
+            item.personalNote = personalNote.isEmpty ? nil : personalNote
+            item.buyerPaysShipping = buyerPaysShipping
+            item.handlingFee = Double(handlingFee.filter { $0.isNumber || $0 == "." }) ?? 0
+            item.estimatedShippingDays = Int(estimatedDays) ?? 3
+            item.tags = tagsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            try? modelContext.save()
         }
     }
 
-    private var liveCount: Int {
-        uploadManager.orderedDraftIDs.filter { uploadManager.statuses[$0] == .done }.count
+// MARK: - Draft Focus Types (shared between BulkListingOverviewView & ProcessResultsOverviewView)
+
+struct DraftFocusField: Hashable {
+    let itemID: UUID
+    let field: DraftFocusSubfield
+}
+enum DraftFocusSubfield: Hashable { case title, price }
+
+// MARK: - ProcessResultsOverviewView
+
+
+struct ProcessResultsOverviewView: View {
+    @Environment(\.modelContext) private var modelContext
+    @Query private var allItems: [Item]
+    @EnvironmentObject private var uploadManager: UploadManager
+
+    @State private var cache = CachedImageManager()
+    @State private var selectedIDs: Set<UUID> = []
+    @State private var showingEditSheet: Item? = nil
+    @FocusState private var focusedField: DraftFocusField?
+
+    // Only show the items that went through AI processing
+    private var results: [Item] {
+        let processedSet = Set(uploadManager.processedItemIDs)
+        return allItems.filter { $0.isDraft && processedSet.contains($0.id) }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header: progress bar while uploading → compact receipt summary when done
-            Group {
-                if allDone {
-                    HStack(spacing: 10) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .font(.title3)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("\(liveCount) item\(liveCount == 1 ? "" : "s") live")
-                                .font(.subheadline.weight(.semibold))
-                            Text("Tap a title or price to edit")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }
-                    .padding(.horizontal, 20)
-                } else {
-                    VStack(spacing: 8) {
-                        ProgressView(value: uploadManager.overallProgress)
-                            .tint(.blue)
-                            .padding(.horizontal, 20)
-                        HStack(spacing: 4) {
-                            Text("Uploading \(uploadManager.currentIndex) of \(uploadManager.totalCount)")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                            if let eta = uploadManager.etaString {
-                                Text("· \(eta)")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-                    }
-                }
-            }
-            .padding(.vertical, 16)
-            .animation(.easeInOut(duration: 0.35), value: allDone)
-
-            Divider()
-
-            // List rows transform from status indicators → editable result cards on completion
             List {
-                ForEach(uploadManager.orderedDraftIDs, id: \.self) { id in
-                    let name = uploadManager.draftNames[id] ?? "Draft"
-                    let status = uploadManager.statuses[id] ?? .pending
-                    let errorMsg = uploadManager.uploadErrors[id]
-
-                    if allDone, case .done = status {
-                        ResultCard(draftID: id, initialTitle: name)
-                            .environmentObject(uploadManager)
-                    } else {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 14) {
-                                StatusIconView(status: status)
-                                    .frame(width: 28, height: 28)
-                                Text(name)
-                                    .font(.body)
-                                    .lineLimit(1)
-                                Spacer()
-                                if case .uploading(let p) = status {
-                                    Text("\(Int(p * 100))%")
-                                        .font(.caption)
-                                        .monospacedDigit()
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            if let err = errorMsg {
-                                Text(err)
-                                    .font(.caption2)
-                                    .foregroundStyle(.red)
-                                    .padding(.leading, 42)
-                            }
-                        }
-                    }
+                ForEach(results) { item in
+                    ResultDraftRow(
+                        item: item,
+                        cache: cache,
+                        isSelected: selectedIDs.contains(item.id),
+                        onToggle: { toggleSelection(item) },
+                        focusedField: $focusedField
+                    )
+                }
+                .onDelete { offsets in
+                    for i in offsets { modelContext.delete(results[i]) }
+                    try? modelContext.save()
                 }
             }
             .listStyle(.plain)
-        }
-        .navigationTitle("Upload")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
-                if !allDone {
-                    Menu {
-                        Button("Cancel Upload", systemImage: "xmark.circle", role: .destructive) {
-                            uploadManager.cancel()
-                            dismiss()
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
+
+            // ── Bottom action bar ────────────────────────────────────────
+            Divider()
+            HStack(spacing: 16) {
+                // Select all / deselect all
+                Button(selectedIDs.count == results.count ? "Deselect All" : "Select All") {
+                    if selectedIDs.count == results.count {
+                        selectedIDs.removeAll()
+                    } else {
+                        selectedIDs = Set(results.map { $0.id })
                     }
                 }
-            }
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button { dismiss() } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.body.weight(.semibold))
+                .font(.subheadline)
+
+                Spacer()
+
+                // Publish selected
+                Button {
+                    let toPublish = results.filter { selectedIDs.contains($0.id) }
+                    uploadManager.publishDrafts(drafts: toPublish, modelContext: modelContext)
+                } label: {
+                    Text("Publish \(selectedIDs.isEmpty ? "All" : "\(selectedIDs.count)")")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 10)
+                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 10))
                 }
+                .disabled(results.isEmpty)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(.bar)
+        }
+        .navigationTitle("Review & Publish")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Button { moveFocus(by: -1) } label: { Image(systemName: "chevron.up") }
+                    .disabled(focusedIndex == nil || focusedIndex == 0)
+                Button { moveFocus(by: 1) } label: { Image(systemName: "chevron.down") }
+                    .disabled(focusedIndex == nil || focusedIndex == (results.count * 2 - 1))
+                Spacer()
+                Button("Done") { focusedField = nil }
             }
         }
+    }
+
+    private func toggleSelection(_ item: Item) {
+        if selectedIDs.contains(item.id) { selectedIDs.remove(item.id) }
+        else { selectedIDs.insert(item.id) }
+    }
+
+    private var focusedIndex: Int? {
+        guard let fv = focusedField else { return nil }
+        guard let row = results.firstIndex(where: { $0.id == fv.itemID }) else { return nil }
+        return row * 2 + (fv.field == .title ? 0 : 1)
+    }
+
+    private func moveFocus(by delta: Int) {
+        guard let current = focusedIndex else { return }
+        let next = current + delta
+        let maxIndex = results.count * 2 - 1
+        guard next >= 0 && next <= maxIndex else { return }
+        let row = next / 2
+        let field: DraftFocusSubfield = (next % 2 == 0) ? .title : .price
+        focusedField = DraftFocusField(itemID: results[row].id, field: field)
     }
 }
 
-// MARK: - ResultCard
+// MARK: - ResultDraftRow
 
-struct ResultCard: View {
-    let draftID: UUID
-    let initialTitle: String
+struct ResultDraftRow: View {
+    let item: Item
+    let cache: CachedImageManager
+    let isSelected: Bool
+    let onToggle: () -> Void
+    var focusedField: FocusState<DraftFocusField?>.Binding
 
-    @EnvironmentObject private var uploadManager: UploadManager
-    @State private var cache = CachedImageManager()
-    @State private var titleText = ""
-    @State private var priceText = ""
-    @State private var descriptionText = ""
-    @State private var saveTask: Task<Void, Never>?
+    @Environment(\.modelContext) private var modelContext
+    @State private var priceText: String = ""
+    @State private var showEditSheet = false
 
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            if let assetID = uploadManager.draftFirstAssetID[draftID] {
-                PhotoItemView(
-                    asset: PhotoAsset(identifier: assetID),
-                    cache: cache,
-                    imageSize: CGSize(width: 120, height: 120)
-                )
-                .scaledToFill()
-                .frame(width: 56, height: 56)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            } else {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(.systemGray5))
-                    .frame(width: 56, height: 56)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .top) {
-                    TextField("Title", text: $titleText)
-                        .font(.subheadline.weight(.medium))
-                        .onChange(of: titleText) { _, _ in scheduleSave() }
-
-                    Text("Live")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(Color.green, in: Capsule())
-                }
-
-                HStack(spacing: 2) {
-                    Text("$").font(.caption).foregroundStyle(.secondary)
-                    TextField("Price", text: $priceText)
-                        .font(.caption)
-                        .keyboardType(.decimalPad)
-                        .onChange(of: priceText) { _, _ in scheduleSave() }
-                }
-
-                TextField("Add a description...", text: $descriptionText, axis: .vertical)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2...4)
-                    .onChange(of: descriptionText) { _, _ in scheduleSave() }
-            }
-        }
-        .padding(.vertical, 4)
-        .onAppear {
-            titleText = initialTitle
-            if let outer = uploadManager.draftPrices[draftID], let price = outer {
-                priceText = String(format: "%.2f", price)
-            }
-            if let outer = uploadManager.draftDescriptions[draftID], let desc = outer {
-                descriptionText = desc
-            }
-        }
+    private var titleBinding: Binding<String> {
+        Binding(
+            get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? "" },
+            set: { item.userEditedTitle = $0.isEmpty ? nil : $0; try? modelContext.save() }
+        )
     }
 
-    private func scheduleSave() {
-        saveTask?.cancel()
-        saveTask = Task {
-            try? await Task.sleep(nanoseconds: 800_000_000)
-            guard !Task.isCancelled,
-                  let listingID = uploadManager.draftListingIDs[draftID] else { return }
-            let price = Double(priceText.filter { $0.isNumber || $0 == "." })
-            try? await ListingRepository.shared.updateFields(
-                id: listingID,
-                title: titleText.isEmpty ? nil : titleText,
-                price: price,
-                description: descriptionText.isEmpty ? nil : descriptionText
-            )
+    var body: some View {
+        HStack(spacing: 14) {
+            // Selection circle
+            Button(action: onToggle) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+            }
+            .buttonStyle(.plain)
+
+            // Photo thumbnail
+            Group {
+                if let assetId = item.sourceAssetIdentifiers.first {
+                    PhotoItemView(
+                        asset: PhotoAsset(identifier: assetId),
+                        cache: cache,
+                        imageSize: CGSize(width: 160, height: 160)
+                    )
+                    .scaledToFill()
+                    .frame(width: 76, height: 76)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                } else {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color(.systemGray5))
+                        .frame(width: 76, height: 76)
+                }
+            }
+
+            // AI-populated fields (editable)
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("Title", text: titleBinding)
+                    .font(.body.weight(.semibold))
+                    .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .title))
+
+                HStack(spacing: 3) {
+                    Text("$").font(.subheadline).foregroundStyle(.secondary)
+                    TextField("Price", text: $priceText)
+                        .font(.subheadline)
+                        .keyboardType(.decimalPad)
+                        .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .price))
+                        .onChange(of: priceText) { _, v in
+                            let cleaned = v.filter { $0.isNumber || $0 == "." }
+                            item.userEditedPrice = cleaned.isEmpty ? nil : Double(cleaned)
+                            try? modelContext.save()
+                        }
+                }
+
+                // AI confidence label
+                HStack(spacing: 4) {
+                    Image(systemName: "sparkles")
+                        .font(.caption2)
+                        .foregroundStyle(.purple)
+                    Text("AI-identified")
+                        .font(.caption2)
+                        .foregroundStyle(.purple.opacity(0.8))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Edit button
+            Button { showEditSheet = true } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 8)
+        .onAppear {
+            if let p = item.userEditedPrice ?? item.aiSuggestedPrice {
+                priceText = String(format: "%.2f", p)
+            }
+        }
+        .sheet(isPresented: $showEditSheet) {
+            DraftEditSheet(item: item)
         }
     }
 }
