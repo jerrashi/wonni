@@ -1,5 +1,7 @@
 {
-  "projects": {},
+  "projects": {
+    "wonni": "wonni-app"
+  },
   "targets": {},
   "etags": {}
 }

@@ -138,24 +138,20 @@ struct IdentificationConfirmationView: View {
     }
     
     private func confirmIdentification() {
-        guard let result = result else { return }
+        guard result != nil else { return }
         
         Task {
-            do {
-                // Fetch the current listing
-                // (In a real app, we'd have a method to fetch by ID, but for now we'll assume we update the draft we just created)
-                
-                // TODO: Link to /catalog if match exists
-                
-                // For now, just update the UserListing with the Gemini data
-                // This is a placeholder for the full catalog logic
-                // try await repository.updateListingWithGeminiData(id: listingId, data: result)
-                
-                await MainActor.run {
-                    dismiss()
-                }
-            } catch {
-                print("Error confirming identification: \(error.localizedDescription)")
+            // Fetch the current listing
+            // (In a real app, we'd have a method to fetch by ID, but for now we'll assume we update the draft we just created)
+            
+            // TODO: Link to /catalog if match exists
+            
+            // For now, just update the UserListing with the Gemini data
+            // This is a placeholder for the full catalog logic
+            // try await repository.updateListingWithGeminiData(id: listingId, data: result)
+            
+            await MainActor.run {
+                dismiss()
             }
         }
     }

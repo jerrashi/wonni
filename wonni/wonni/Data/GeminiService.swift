@@ -16,6 +16,10 @@ struct GeminiIdentificationResponse: Codable {
     var attributes: [String: String]?
     var suggestedPrice: Double?
     var description: String?
+    var weightLbs: Double?
+    var lengthIn: Double?
+    var widthIn: Double?
+    var heightIn: Double?
     var confidence: Double?
 }
 
@@ -26,14 +30,20 @@ class GeminiService: ObservableObject {
 
     init() {
         let ai = FirebaseAI.firebaseAI(backend: .googleAI())
-        self.model = ai.generativeModel(modelName: "gemini-1.5-flash")
+        self.model = ai.generativeModel(modelName: "gemini-3.1-flash-lite")
     }
     
     /// Identifies an item from one or more images.
-    func identifyItem(images: [UIImage]) async throws -> GeminiIdentificationResponse {
+    func identifyItem(images: [UIImage], userTitle: String? = nil, userPrice: Double? = nil, userDescription: String? = nil) async throws -> GeminiIdentificationResponse {
+        var hintStr = ""
+        if let t = userTitle, !t.isEmpty { hintStr += "- User suggested title: \"\(t)\"\n" }
+        if let p = userPrice { hintStr += "- User suggested price: $\(p)\n" }
+        if let d = userDescription, !d.isEmpty { hintStr += "- User suggested description: \"\(d)\"\n" }
+        
         // 1. Prepare the prompt
         let prompt = """
         Identify the item in these photos. Provide a detailed identification in JSON format.
+        \(hintStr.isEmpty ? "" : "\nHere is some user-provided context to help you:\n\(hintStr)")
         Include:
         - name: A concise, searchable product name.
         - brand: The brand or manufacturer.
@@ -41,6 +51,10 @@ class GeminiService: ObservableObject {
         - attributes: Key product details (e.g., {"Color": "Black", "Model": "WH-1000XM4"}).
         - suggestedPrice: An estimated current market price in USD (numeric).
         - description: A 2-3 sentence professional product description.
+        - weightLbs: Best guess for the item's shipping weight in pounds (numeric).
+        - lengthIn: Best guess for the item's shipping length in inches (numeric).
+        - widthIn: Best guess for the item's shipping width in inches (numeric).
+        - heightIn: Best guess for the item's shipping height in inches (numeric).
         - confidence: Your confidence score from 0.0 to 1.0.
         
         Return ONLY the JSON object.

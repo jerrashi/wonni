@@ -21,10 +21,17 @@ class Item {
     var buyerPaysShipping: Bool
     var handlingFee: Double
     var estimatedShippingDays: Int
+    var weightLbs: Double?
+    var lengthIn: Double?
+    var widthIn: Double?
+    var heightIn: Double?
     var isDraft: Bool
     var sourceAssetIdentifiers: [String]
+    var tags: [String]
+    var personalNote: String?
+    var firebasePhotoPaths: [String]?
     
-    init(id: UUID = UUID(), createdAt: Date = Date(), photosData: [Data] = [], blurb: String = "", buyerPaysShipping: Bool = true, handlingFee: Double = 0.0, estimatedShippingDays: Int = 3, isDraft: Bool = true, sourceAssetIdentifiers: [String] = []) {
+    init(id: UUID = UUID(), createdAt: Date = Date(), photosData: [Data] = [], blurb: String = "", buyerPaysShipping: Bool = true, handlingFee: Double = 0.0, estimatedShippingDays: Int = 3, weightLbs: Double? = nil, lengthIn: Double? = nil, widthIn: Double? = nil, heightIn: Double? = nil, isDraft: Bool = true, sourceAssetIdentifiers: [String] = [], tags: [String] = [], personalNote: String? = nil, firebasePhotoPaths: [String]? = nil) {
         self.id = id
         self.createdAt = createdAt
         self.photosData = photosData
@@ -32,8 +39,15 @@ class Item {
         self.buyerPaysShipping = buyerPaysShipping
         self.handlingFee = handlingFee
         self.estimatedShippingDays = estimatedShippingDays
+        self.weightLbs = weightLbs
+        self.lengthIn = lengthIn
+        self.widthIn = widthIn
+        self.heightIn = heightIn
         self.isDraft = isDraft
         self.sourceAssetIdentifiers = sourceAssetIdentifiers
+        self.tags = tags
+        self.personalNote = personalNote
+        self.firebasePhotoPaths = firebasePhotoPaths
     }
 }
 

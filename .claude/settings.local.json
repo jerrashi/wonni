@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(claude-api)",
+      "Bash(xargs cat *)",
+      "WebFetch(domain:github.com)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(uuidgen)",
+      "Bash(python3 *)",
+      "Bash(xargs ls *)",
+      "Bash(xargs '-I{}' python3 -c ' *)",
+      "Bash(git *)",
+      "mcp__plugin_firebase_firebase__firestore_query_collection",
+      "mcp__plugin_firebase_firebase__firestore_update_document",
+      "mcp__plugin_firebase_firebase__firebase_get_security_rules",
+      "mcp__plugin_firebase_firebase__firebase_validate_security_rules",
+      "mcp__plugin_firebase_firebase__firebase_deploy",
+      "mcp__plugin_firebase_firebase__firebase_deploy_status"
+    ]
+  }
+}

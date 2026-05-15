@@ -130,6 +130,7 @@ struct ListingDetailView: View {
     @State private var suggestedListings: [UserListing] = []
     @State private var showOfferSheet = false
     @State private var offerSent = false
+    @State private var sellerProfile: UserPublicProfile?
 
     private var currentUserId: String { authManager.currentUser?.uid ?? "" }
     private var isSeller: Bool { listing.userId == currentUserId }
@@ -146,11 +147,6 @@ struct ListingDetailView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                HeartButton(listing: listing)
-            }
-        }
         .sheet(isPresented: $showOfferSheet) {
             MakeOfferSheet(currentPrice: listing.price) { amount in
                 Task { await submitOffer(amount: amount) }
@@ -170,6 +166,7 @@ struct ListingDetailView: View {
         .task {
             suggestedListings = (try? await ListingRepository.shared
                 .fetchSuggestedListings(excluding: listing.id ?? "", limit: 8)) ?? []
+            sellerProfile = try? await UserRepository.shared.fetchProfile(uid: listing.userId)
         }
     }
 
@@ -206,6 +203,12 @@ struct ListingDetailView: View {
                 .tabViewStyle(.page(indexDisplayMode: .automatic))
                 .frame(height: 360)
             }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            HeartButton(listing: listing)
+                .padding(16)
+                .background(Circle().fill(.thinMaterial))
+                .padding()
         }
     }
 
@@ -257,12 +260,12 @@ struct ListingDetailView: View {
         HStack(spacing: 10) {
             ZStack {
                 Circle().fill(Color.blue.opacity(0.12)).frame(width: 36, height: 36)
-                Text(String(listing.userId.prefix(1)).uppercased())
+                Text(sellerProfile?.displayName?.prefix(1).uppercased() ?? String(listing.userId.prefix(1)).uppercased())
                     .font(.caption.bold()).foregroundStyle(.blue)
             }
             VStack(alignment: .leading, spacing: 1) {
                 Text("Seller").font(.caption).foregroundStyle(.secondary)
-                Text(String(listing.userId.prefix(8)) + "...")
+                Text(sellerProfile?.displayName ?? (String(listing.userId.prefix(8)) + "..."))
                     .font(.subheadline.weight(.medium))
             }
             Spacer()

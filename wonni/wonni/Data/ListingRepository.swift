@@ -82,12 +82,40 @@ class ListingRepository: ObservableObject {
         ])
     }
     
-    /// Patches title, price, and/or description after upload. Used by the receipt view for inline edits.
-    func updateFields(id: String, title: String?, price: Double?, description: String? = nil) async throws {
+    func updateFields(
+        id: String,
+        title: String?,
+        price: Double?,
+        description: String? = nil,
+        condition: ItemCondition? = nil,
+        brand: String? = nil,
+        category: String? = nil,
+        weightLbs: Double? = nil,
+        packageDimensions: PackageDimensions? = nil,
+        buyerPaysShipping: Bool? = nil
+    ) async throws {
         var data: [String: Any] = ["updatedAt": Timestamp(date: Date())]
         if let title { data["customTitle"] = title }
         if let price { data["price"] = price }
         if let description { data["customDescription"] = description }
+        if let condition { data["condition"] = condition.rawValue }
+        if let brand { data["brand"] = brand }
+        if let category { data["category"] = category }
+        
+        if buyerPaysShipping != nil || weightLbs != nil || packageDimensions != nil {
+            let doc = try await db.collection(listingsCollection).document(id).getDocument()
+            let listing = try? doc.data(as: UserListing.self)
+            var shipping = listing?.shippingInfo ?? ShippingInfo(buyerPaysShipping: true, handlingFee: 0, estimatedShippingDays: 3, weightLbs: nil, packageDimensions: nil)
+            
+            if let bp = buyerPaysShipping { shipping.buyerPaysShipping = bp }
+            if let w = weightLbs { shipping.weightLbs = w }
+            if let pd = packageDimensions { shipping.packageDimensions = pd }
+            
+            if let encoded = try? Firestore.Encoder().encode(shipping) {
+                data["shippingInfo"] = encoded
+            }
+        }
+        
         try await db.collection(listingsCollection).document(id).updateData(data)
     }
 
@@ -186,5 +214,105 @@ class ListingRepository: ObservableObject {
                 
                 completion(.success(drafts))
             }
+    }
+    
+
+    // MARK: - Bulk Operations
+    
+    /// Bulk deletes multiple listings in a batch.
+    func bulkDelete(listingIds: [String]) async throws {
+        let batch = db.batch()
+        for id in listingIds {
+            let ref = db.collection(listingsCollection).document(id)
+            batch.deleteDocument(ref)
+        }
+        try await batch.commit()
+    }
+    
+    /// Bulk updates listings with relative/appended values.
+    func bulkUpdate(
+        listingIds: [String],
+        priceAdjustment: Double? = nil,
+        isPercentage: Bool = false,
+        isPriceSet: Bool = false,
+        minimumPrice: Double = 0.01,
+        maximumPrice: Double? = nil,
+        titlePrepend: String? = nil,
+        titleAppend: String? = nil,
+        descriptionPrepend: String? = nil,
+        descriptionAppend: String? = nil,
+        condition: ItemCondition? = nil,
+        buyerPaysShipping: Bool? = nil
+    ) async throws {
+        var updates: [String: [String: Any]] = [:]
+        
+        // Fetch current states to compute new values
+        for id in listingIds {
+            let doc = try await db.collection(listingsCollection).document(id).getDocument()
+            guard let listing = try? doc.data(as: UserListing.self) else { continue }
+            
+            var data: [String: Any] = [:]
+            
+            if let adj = priceAdjustment {
+                var newPrice = listing.price ?? minimumPrice
+                
+                if isPriceSet {
+                    newPrice = adj
+                } else if isPercentage {
+                    newPrice = newPrice * (1.0 + (adj / 100.0))
+                } else {
+                    newPrice = newPrice + adj
+                }
+                
+                newPrice = max(newPrice, minimumPrice)
+                if let maxP = maximumPrice {
+                    newPrice = min(newPrice, maxP)
+                }
+                data["price"] = newPrice
+            }
+            
+            let currentTitle = listing.customTitle ?? ""
+            var newTitle = currentTitle
+            if let pre = titlePrepend, !pre.isEmpty { newTitle = "\(pre) \(newTitle)".trimmingCharacters(in: .whitespaces) }
+            if let app = titleAppend, !app.isEmpty { newTitle = "\(newTitle) \(app)".trimmingCharacters(in: .whitespaces) }
+            if newTitle != currentTitle { data["customTitle"] = newTitle }
+            
+            let currentDesc = listing.customDescription ?? ""
+            var newDesc = currentDesc
+            if let pre = descriptionPrepend, !pre.isEmpty { newDesc = "\(pre)\n\n\(newDesc)".trimmingCharacters(in: .whitespaces) }
+            if let app = descriptionAppend, !app.isEmpty { newDesc = "\(newDesc)\n\n\(app)".trimmingCharacters(in: .whitespaces) }
+            if newDesc != currentDesc { data["customDescription"] = newDesc }
+            
+            if let newCondition = condition {
+                data["condition"] = newCondition.rawValue
+            }
+            
+            if let buyerPays = buyerPaysShipping {
+                // If they already have shipping info, we just update the field.
+                // Otherwise we build a default struct.
+                if var existingInfo = listing.shippingInfo {
+                    existingInfo.buyerPaysShipping = buyerPays
+                    data["shippingInfo"] = try? Firestore.Encoder().encode(existingInfo)
+                } else {
+                    let newInfo = ShippingInfo(buyerPaysShipping: buyerPays, handlingFee: 0, estimatedShippingDays: 3)
+                    data["shippingInfo"] = try? Firestore.Encoder().encode(newInfo)
+                }
+            }
+            
+            if !data.isEmpty {
+                data["updatedAt"] = FieldValue.serverTimestamp()
+                updates[id] = data
+            }
+        }
+        
+        guard !updates.isEmpty else { return }
+        
+        // Apply computed updates in a batch
+        let batch = db.batch()
+        for (id, data) in updates {
+            let ref = db.collection(listingsCollection).document(id)
+            batch.updateData(data, forDocument: ref)
+        }
+        try await batch.commit()
     }
 }

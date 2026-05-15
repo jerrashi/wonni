@@ -42,4 +42,23 @@ class StorageService: ObservableObject {
             try await item.delete()
         }
     }
+    
+    /// Uploads a user's profile photo and returns the download URL string.
+    func uploadProfilePhoto(image: UIImage, userId: String) async throws -> String {
+        let resized = ImageCompressor.resize(image: image, maxDimension: 500)
+        guard let data = ImageCompressor.compress(image: resized, targetSizeInBytes: 100 * 1024) else {
+            throw NSError(domain: "StorageService", code: 500, userInfo: [NSLocalizedDescriptionKey: "Failed to compress profile image"])
+        }
+
+        let path = "users/\(userId)/profile.jpg"
+        let ref = storage.child(path)
+
+        let metadata = StorageMetadata()
+        metadata.contentType = "image/jpeg"
+        metadata.customMetadata = ["userId": userId]
+
+        _ = try await ref.putDataAsync(data, metadata: metadata)
+        let downloadURL = try await ref.downloadURL()
+        return downloadURL.absoluteString
+    }
 }

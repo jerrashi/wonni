@@ -85,6 +85,11 @@ struct CameraView: View {
                     stackIndex: selectedStackIndex
                 )
             }
+            .navigationDestination(isPresented: $showingPicker) {
+                CustomPhotoPickerView()
+                    .onAppear { model.camera.isPreviewPaused = true }
+                    .onDisappear { model.camera.isPreviewPaused = false }
+            }
         }
     }
     
@@ -93,10 +98,8 @@ struct CameraView: View {
             
             Spacer()
             
-            NavigationLink(isActive: $showingPicker) {
-                CustomPhotoPickerView()
-                    .onAppear { model.camera.isPreviewPaused = true }
-                    .onDisappear { model.camera.isPreviewPaused = false }
+            Button {
+                showingPicker = true
             } label: {
                 Label {
                     Text("Gallery")
@@ -108,6 +111,7 @@ struct CameraView: View {
                 if should {
                     showingPicker = false
                     uploadManager.shouldReturnToRoot = false
+                    uploadManager.selectedTab = 4 // Go to Profile to view drafts
                 }
             }
             
