@@ -10,6 +10,12 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // ── Promotions (Banners) ──────────────────────────────────────────────────
+    match /promotions/{promotionId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
     // ── Inventory units ───────────────────────────────────────────────────────
     match /inventory/{unitId} {
       allow read, write: if request.auth != null

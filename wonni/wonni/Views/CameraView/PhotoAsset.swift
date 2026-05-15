@@ -65,7 +65,10 @@ struct PhotoAsset: Identifiable {
     }
     
     func fullResolutionImage() async -> UIImage? {
-        guard let phAsset = phAsset else { return nil }
+        guard let phAsset = phAsset else { 
+            print("[PhotoAsset] Error: phAsset is nil for identifier \(identifier)")
+            return nil 
+        }
         
         let options = PHImageRequestOptions()
         options.isNetworkAccessAllowed = true
@@ -73,8 +76,16 @@ struct PhotoAsset: Identifiable {
         options.isSynchronous = false
         
         return await withCheckedContinuation { continuation in
-            PHImageManager.default().requestImage(for: phAsset, targetSize: PHImageManagerMaximumSize, contentMode: .aspectFit, options: options) { image, _ in
-                continuation.resume(returning: image)
+            var isResumed = false
+            PHImageManager.default().requestImage(for: phAsset, targetSize: PHImageManagerMaximumSize, contentMode: .aspectFit, options: options) { image, info in
+                let isDegraded = info?[PHImageResultIsDegradedKey] as? Bool ?? false
+                if !isDegraded && !isResumed {
+                    isResumed = true
+                    if image == nil {
+                        print("[PhotoAsset] Failed to fetch full-res image for \(identifier)")
+                    }
+                    continuation.resume(returning: image)
+                }
             }
         }
     }

@@ -2,11 +2,12 @@
 //  GeminiService.swift
 //  wonni
 //
-//  Created by Antigravity on 5/7/25.
+//  Production-ready Gemini service using Firebase Cloud Functions to proxy
+//  requests and keep the API key secure on the server.
 //
 
 import Foundation
-import FirebaseAI
+import FirebaseFunctions
 import UIKit
 
 struct GeminiIdentificationResponse: Codable {
@@ -25,68 +26,54 @@ struct GeminiIdentificationResponse: Codable {
 
 class GeminiService: ObservableObject {
     static let shared = GeminiService()
-
-    private let model: GenerativeModel
-
-    init() {
-        let ai = FirebaseAI.firebaseAI(backend: .googleAI())
-        self.model = ai.generativeModel(modelName: "gemini-3.1-flash-lite")
-    }
     
-    /// Identifies an item from one or more images.
+    private lazy var functions = Functions.functions()
+
+    private init() {}
+
+    /// Identifies an item from one or more images using a secure Firebase Cloud Function.
     func identifyItem(images: [UIImage], userTitle: String? = nil, userPrice: Double? = nil, userDescription: String? = nil) async throws -> GeminiIdentificationResponse {
-        var hintStr = ""
-        if let t = userTitle, !t.isEmpty { hintStr += "- User suggested title: \"\(t)\"\n" }
-        if let p = userPrice { hintStr += "- User suggested price: $\(p)\n" }
-        if let d = userDescription, !d.isEmpty { hintStr += "- User suggested description: \"\(d)\"\n" }
         
-        // 1. Prepare the prompt
-        let prompt = """
-        Identify the item in these photos. Provide a detailed identification in JSON format.
-        \(hintStr.isEmpty ? "" : "\nHere is some user-provided context to help you:\n\(hintStr)")
-        Include:
-        - name: A concise, searchable product name.
-        - brand: The brand or manufacturer.
-        - category: A hierarchical category string (e.g., "Electronics > Audio > Headphones").
-        - attributes: Key product details (e.g., {"Color": "Black", "Model": "WH-1000XM4"}).
-        - suggestedPrice: An estimated current market price in USD (numeric).
-        - description: A 2-3 sentence professional product description.
-        - weightLbs: Best guess for the item's shipping weight in pounds (numeric).
-        - lengthIn: Best guess for the item's shipping length in inches (numeric).
-        - widthIn: Best guess for the item's shipping width in inches (numeric).
-        - heightIn: Best guess for the item's shipping height in inches (numeric).
-        - confidence: Your confidence score from 0.0 to 1.0.
-        
-        Return ONLY the JSON object.
-        """
-        
-        // 2. Build parts: inline JPEG data for each image, then the text prompt
-        var parts: [any Part] = []
+        // 1. Prepare images as base64 strings
+        var base64Images: [String] = []
         for image in images {
+            // SAFETY: Skip images that are zero-sized to prevent "Invalid frame dimension" crashes
+            guard image.size.width > 0 && image.size.height > 0 else { continue }
+            
+            // Resize to keep payload size reasonable
             let resized = ImageCompressor.resize(image: image, maxDimension: 1024)
-            if let jpegData = resized.jpegData(compressionQuality: 0.8) {
-                parts.append(InlineDataPart(data: jpegData, mimeType: "image/jpeg"))
+            if let data = resized.jpegData(compressionQuality: 0.7) {
+                base64Images.append(data.base64EncodedString())
             }
         }
-        parts.append(TextPart(prompt))
-
-        // 3. Generate content
-        let content = ModelContent(role: "user", parts: parts)
-        let response = try await model.generateContent([content])
-
-        guard let text = response.text else {
-            throw NSError(domain: "GeminiService", code: 500, userInfo: [NSLocalizedDescriptionKey: "Empty response from Gemini"])
+        
+        if base64Images.isEmpty {
+            throw NSError(domain: "GeminiService", code: 400, userInfo: [NSLocalizedDescriptionKey: "No valid images to process."])
         }
-
-        // 4. Parse JSON (strip markdown fences if present)
-        let cleanedJson = text.replacingOccurrences(of: "```json", with: "")
-                             .replacingOccurrences(of: "```", with: "")
-                             .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-
-        guard let jsonData = cleanedJson.data(using: String.Encoding.utf8) else {
-            throw NSError(domain: "GeminiService", code: 500, userInfo: [NSLocalizedDescriptionKey: "Failed to encode response string"])
+        
+        // 2. Prepare parameters
+        let parameters: [String: Any] = [
+            "images": base64Images,
+            "userTitle": userTitle ?? "",
+            "userPrice": userPrice ?? 0.0,
+            "userDescription": userDescription ?? ""
+        ]
+        
+        // 3. Call the Firebase Cloud Function
+        do {
+            let result = try await functions.httpsCallable("identifyItem").call(parameters)
+            
+            // 4. Parse the result
+            guard let data = try? JSONSerialization.data(withJSONObject: result.data),
+                  let response = try? JSONDecoder().decode(GeminiIdentificationResponse.self, from: data) else {
+                throw NSError(domain: "GeminiService", code: 500, userInfo: [NSLocalizedDescriptionKey: "Failed to parse AI response"])
+            }
+            return response
+        } catch let error as NSError {
+            // Extract the actual error message from the Cloud Function
+            let message = error.userInfo["NSLocalizedDescription"] as? String ?? error.localizedDescription
+            print("--- CLOUD FUNCTION ERROR: \(message)")
+            throw NSError(domain: "GeminiService", code: error.code, userInfo: [NSLocalizedDescriptionKey: message])
         }
-
-        return try JSONDecoder().decode(GeminiIdentificationResponse.self, from: jsonData)
     }
 }
