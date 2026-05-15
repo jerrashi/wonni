@@ -1,0 +1,77 @@
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { defineSecret } = require("firebase-functions/params");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+
+const geminiApiKey = defineSecret("GEMINI_API_KEY");
+
+exports.identifyItem = onCall({ 
+  secrets: [geminiApiKey],
+  cors: true,
+  memory: "512MiB",
+  timeoutSeconds: 60
+}, async (request) => {
+  
+  console.log("Processing identification request with Gemini 3.1...");
+  
+  const { images, userTitle, userPrice, userDescription } = request.data;
+
+  if (!images || !Array.isArray(images) || images.length === 0) {
+    throw new HttpsError("invalid-argument", "At least one image is required.");
+  }
+
+  try {
+    const genAI = new GoogleGenerativeAI(geminiApiKey.value());
+    
+    // Updated to the latest stable model
+    const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
+
+    let hintStr = "";
+    if (userTitle) hintStr += `- User suggested title: "${userTitle}"\n`;
+    if (userPrice) hintStr += `- User suggested price: $${userPrice}\n`;
+    if (userDescription) hintStr += `- User suggested description: "${userDescription}"\n`;
+
+    const prompt = `
+      Identify the item in these photos. Provide a detailed identification in JSON format.
+      ${hintStr ? `\nHere is some user-provided context to help you:\n${hintStr}` : ""}
+      Include:
+      - name: A concise, searchable product name.
+      - brand: The brand or manufacturer.
+      - category: A hierarchical category string (e.g., "Electronics > Audio > Headphones").
+      - attributes: Key product details (e.g., {"Color": "Black", "Model": "WH-1000XM4"}).
+      - suggestedPrice: An estimated current market price in USD (numeric).
+      - description: A 2-3 sentence professional product description.
+      - weightLbs: Best guess for the item's shipping weight in pounds (numeric).
+      - lengthIn: Best guess for the item's shipping length in inches (numeric).
+      - widthIn: Best guess for the item's shipping width in inches (numeric).
+      - heightIn: Best guess for the item's shipping height in inches (numeric).
+      - confidence: Your confidence score from 0.0 to 1.0.
+
+      Return ONLY the JSON object.
+    `;
+
+    const imageParts = images.map((base64) => ({
+      inlineData: {
+        data: base64,
+        mimeType: "image/jpeg",
+      },
+    }));
+
+    console.log(`Calling gemini-3.1-flash-lite with ${images.length} images...`);
+    
+    const result = await model.generateContent([prompt, ...imageParts]);
+    const response = await result.response;
+    const text = response.text();
+
+    console.log("Gemini 3.1 responded successfully.");
+
+    const cleanedJson = text
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
+
+    return JSON.parse(cleanedJson);
+  } catch (error) {
+    console.error("FULL ERROR DETAIL:", error);
+    throw new HttpsError("internal", `Gemini Error: ${error.message}`);
+  }
+});
