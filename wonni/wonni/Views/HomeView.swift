@@ -300,16 +300,16 @@ private struct FeedListingCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Group {
-                if let path = listing.coverPhotoPath {
-                    StorageImage(path: path).scaledToFill()
-                } else {
-                    Rectangle().fill(Color.secondary.opacity(0.12))
+            Color.clear
+                .aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    if let path = listing.coverPhotoPath {
+                        StorageImage(path: path).scaledToFill()
+                    } else {
+                        Rectangle().fill(Color.secondary.opacity(0.12))
+                    }
                 }
-            }
-            .aspectRatio(1, contentMode: .fill)
-            .clipped()
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             if let price = listing.price {
                 Text(String(format: "$%.0f", price))

@@ -2,90 +2,65 @@
 //  SearchBarView.swift
 //  wonni
 //
-//  Created by Jerry Shi on 3/7/25.
-//
 
 import SwiftUI
 
 struct SearchBarView: View {
-    @State private var searchText: String = ""
-    @FocusState private var isTextFieldFocused: Bool // Tracks whether the TextField is focused
+    @State private var searchText = ""
+    @FocusState private var isFocused: Bool
 
     var body: some View {
-        // TODO: figure out whether it makes sense to put subviews in separate file
-        ZStack {
-            // Background for the search bar
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(.systemGray6))
-            
-            HStack {
-                /// We display camera button when not editing, back button when editing
-                if isTextFieldFocused {
-                    //MARK: Back Button
-                    Button(action: {
-                        isTextFieldFocused = false  // Dismiss keyboard
-                    }) {
-                        Image(systemName: "arrow.backward")
-                            .padding(10)
-                            .foregroundColor(.gray)
+        HStack(spacing: 10) {
+            // ── Rounded pill ──────────────────────────────────────────────
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                    .font(.system(size: 15, weight: .medium))
+
+                TextField("Search", text: $searchText)
+                    .focused($isFocused)
+                    .submitLabel(.search)
+                    .onSubmit { isFocused = false }
+
+                if !searchText.isEmpty {
+                    Button { searchText = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
                     }
-                    .frame(width: 40, height: 40)
-                } else {
-                    //MARK: Camera Button
-                    Button(action: {
-                        //TODO: Handle camera action
-                    }) {
-                        Image(systemName: "camera")
-                            .padding(10)
-                            .foregroundColor(.gray)
-                    }
-                    .frame(width: 40, height: 40)
-                }
-                
-                /// Search text field
-                TextField("Search...", text: $searchText)
-                    .padding(10)
-                    .foregroundColor(.black)
-                    .background(Color.clear)  // Transparent background for text field
-                    .cornerRadius(8)
-                    // When user is inputting to search text field
-                    .focused($isTextFieldFocused)
-                    
-                    // When user submits
-                    .onSubmit {
-                        //TODO: Handle search logic
-                        isTextFieldFocused = false
-                    }
-                     
-                /// We display search Icon when not editing, clear button if editing and there is text present
-                if isTextFieldFocused {
-                    if !searchText.isEmpty{
-                        // MARK: Clear button
-                        Button(action: {
-                            searchText = ""  // Clear text
-                        }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .padding(10)
-                                .foregroundColor(.gray)
-                        }
-                        .frame(width: 40, height: 40)
-                    }
-                }
-                else {
-                    //MARK: Search Icon
-                    Image(systemName: "magnifyingglass")
-                        .padding(10)
-                        .foregroundColor(.gray)
-                        .frame(width: 40, height: 40)
+                    .transition(.opacity)
                 }
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial, in: Capsule())
+
+            // ── Right-side button: camera (idle) or Cancel (active) ───────
+            if isFocused || !searchText.isEmpty {
+                Button("Cancel") {
+                    searchText = ""
+                    isFocused = false
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else {
+                Button {
+                    // TODO: reverse image search
+                } label: {
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 36, height: 36)
+                        .background(.ultraThinMaterial, in: Circle())
+                }
+                .transition(.opacity)
+            }
         }
-        .padding(.horizontal)
-        .frame(height: 40)  // Set a fixed height for the search bar
+        .padding(.horizontal, 16)
+        .animation(.easeInOut(duration: 0.2), value: isFocused)
+        .animation(.easeInOut(duration: 0.15), value: searchText.isEmpty)
     }
 }
 
 #Preview {
     SearchBarView()
+        .padding(.vertical)
 }

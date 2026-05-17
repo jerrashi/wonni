@@ -142,11 +142,12 @@ expiresAt: <Timestamp>   (optional, omit for permanent)
 - Draft persistence and session restore
 
 **Feed (Home Tab)**
-- Live Firestore feed of active listings, 2-column grid
+- Live Firestore feed of active listings, 2-column grid with fixed square thumbnails (no overflow)
 - Cursor-based infinite scroll (20 per page, `startAfter` cursor)
 - Promoted banner carousel: auto-scrolls every 4s, `BannerDestination` routing, `expiresAt` scheduling
 
 **Search Tab**
+- Liquid glass search bar: capsule shape + `.ultraThinMaterial` frosted background, camera circle button outside pill, Cancel replaces camera when focused
 - Saved searches (Firestore, bookmarked queries, fill bookmark icon when saved)
 - Recent searches (Firestore, capped at 10, deduped by query key)
 - Trending searches (Firestore `trending` collection, manually curated)
@@ -192,7 +193,7 @@ expiresAt: <Timestamp>   (optional, omit for permanent)
 | Search banner destination | `BannerDestination.search` navigates to placeholder |
 | Deploy Firestore rules + indexes | Run `firebase deploy --only firestore:rules,firestore:indexes` |
 | Flash animation tab bar fix | `isFlashing` is local to `CameraView`; move overlay to `MainView` or adjust z-index |
-| Extract shared `FeedListingCard` | Currently duplicated in `HomeView.swift` and `SearchView.swift` |
+| Extract shared `FeedListingCard` | Currently duplicated in `HomeView.swift` and `SearchView.swift` — both now use the same square-thumbnail pattern |
 | Full-text search — Algolia | Replace `SearchRepository.search(query:)` body; interface stays identical (see backlog) |
 
 ---

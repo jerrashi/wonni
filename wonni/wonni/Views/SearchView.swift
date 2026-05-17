@@ -84,7 +84,7 @@ struct SearchView: View {
                 }
             }
             .navigationTitle("Search")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.large)
         }
         .task { await vm.loadInitial() }
     }
@@ -93,17 +93,18 @@ struct SearchView: View {
 
     private var searchBar: some View {
         HStack(spacing: 10) {
-            HStack(spacing: 8) {
+            // ── Rounded pill ──────────────────────────────────────────────
+            HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
+                    .font(.system(size: 15, weight: .medium))
 
-                TextField("Search listings...", text: $searchText)
+                TextField("Search", text: $searchText)
                     .focused($isFocused)
                     .submitLabel(.search)
                     .onSubmit { Task { await submitSearch() } }
 
                 if !searchText.isEmpty {
-                    // Bookmark: save the current query before or after submitting
                     Button {
                         Task { await vm.saveSearch(query: searchText) }
                     } label: {
@@ -117,14 +118,17 @@ struct SearchView: View {
                         vm.hasSearched = false
                         vm.results = []
                     } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
                     }
+                    .transition(.opacity)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial, in: Capsule())
 
+            // ── Right-side button: camera (idle) or Cancel (active) ───────
             if isFocused || !searchText.isEmpty {
                 Button("Cancel") {
                     searchText = ""
@@ -133,10 +137,22 @@ struct SearchView: View {
                     vm.results = []
                 }
                 .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else {
+                Button {
+                    // TODO: reverse image search
+                } label: {
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 36, height: 36)
+                        .background(.ultraThinMaterial, in: Circle())
+                }
+                .transition(.opacity)
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
         .animation(.easeInOut(duration: 0.2), value: isFocused)
         .animation(.easeInOut(duration: 0.15), value: searchText.isEmpty)
     }
