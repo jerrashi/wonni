@@ -5,6 +5,7 @@ See the License.txt file for this sample’s licensing information.
 import AVFoundation
 import SwiftUI
 import os.log
+import SwiftData
 
 final class DataModel: ObservableObject, @unchecked Sendable {
     let camera = Camera()
@@ -12,9 +13,10 @@ final class DataModel: ObservableObject, @unchecked Sendable {
     
     @Published var viewfinderImage: Image?
     @Published var thumbnailImage: Image?
-    
+
     //@Published var to hold data for photos taken during session
     @Published var sessionPhotos: [[UIImage]] = []
+    @Published var sessionPhotoAssetIDs: [[String]] = []
     
     var isPhotosLoaded = false
     
@@ -42,23 +44,26 @@ final class DataModel: ObservableObject, @unchecked Sendable {
     func handleCameraPhotos() async {
         let unpackedPhotoStream = camera.photoStream
             .compactMap { self.unpackPhoto($0) }
-        
+
         for await photoData in unpackedPhotoStream {
+            let assetId = await savePhoto(imageData: photoData.imageData)
+
             Task { @MainActor in
                 // MARK: does it make more sense to change thumbnailImage to static image?
                 thumbnailImage = photoData.thumbnailImage
-                
+
                 // Convert the captured photo data to UIImage and add it to the sessionPhotos array
                 if let uiImage = UIImage(data: photoData.imageData) {
                     // If sessionPhotos is empty or the last stack is empty (user created new stack)
                     if sessionPhotos.isEmpty || sessionPhotos[sessionPhotos.count - 1].isEmpty {
                         sessionPhotos.append([uiImage]) // Create a new stack
+                        sessionPhotoAssetIDs.append([assetId])
                     } else {
                         sessionPhotos[sessionPhotos.count - 1].append(uiImage) // Add to the last stack
+                        sessionPhotoAssetIDs[sessionPhotoAssetIDs.count - 1].append(assetId)
                     }
                 }
             }
-            savePhoto(imageData: photoData.imageData)
         }
     }
     
@@ -66,6 +71,7 @@ final class DataModel: ObservableObject, @unchecked Sendable {
     func addNewStack() {
         if sessionPhotos.isEmpty || !sessionPhotos[sessionPhotos.count - 1].isEmpty {
             sessionPhotos.append([]) // Append an empty array to create a new stack
+            sessionPhotoAssetIDs.append([])
         }
     }
     
@@ -76,9 +82,12 @@ final class DataModel: ObservableObject, @unchecked Sendable {
         guard stackIndex < sessionPhotos.count,
               from < sessionPhotos[stackIndex].count,
               to < sessionPhotos[stackIndex].count else { return }
-        
+
         let photo = sessionPhotos[stackIndex].remove(at: from)
         sessionPhotos[stackIndex].insert(photo, at: to)
+
+        let assetId = sessionPhotoAssetIDs[stackIndex].remove(at: from)
+        sessionPhotoAssetIDs[stackIndex].insert(assetId, at: to)
     }
     
     // Move photo between different stacks
@@ -89,9 +98,12 @@ final class DataModel: ObservableObject, @unchecked Sendable {
               toStack < sessionPhotos.count,
               fromIndex < sessionPhotos[fromStack].count,
               toIndex <= sessionPhotos[toStack].count else { return }
-        
+
         let photo = sessionPhotos[fromStack].remove(at: fromIndex)
         sessionPhotos[toStack].insert(photo, at: toIndex)
+
+        let assetId = sessionPhotoAssetIDs[fromStack].remove(at: fromIndex)
+        sessionPhotoAssetIDs[toStack].insert(assetId, at: toIndex)
     }
     
     // Remove photo from stack
@@ -100,11 +112,13 @@ final class DataModel: ObservableObject, @unchecked Sendable {
         // safe guard that photo is within bounds of the stack selected
         guard stackIndex < sessionPhotos.count,
               photoIndex < sessionPhotos[stackIndex].count else { return }
-        
+
         sessionPhotos[stackIndex].remove(at: photoIndex)
-        
+        sessionPhotoAssetIDs[stackIndex].remove(at: photoIndex)
+
         // Remove empty stacks
         sessionPhotos.removeAll { $0.isEmpty }
+        sessionPhotoAssetIDs.removeAll { $0.isEmpty }
     }
     
     private func unpackPhoto(_ photo: AVCapturePhoto) -> PhotoData? {
@@ -124,14 +138,14 @@ final class DataModel: ObservableObject, @unchecked Sendable {
         return PhotoData(thumbnailImage: thumbnailImage, thumbnailSize: thumbnailSize, imageData: imageData, imageSize: imageSize)
     }
     
-    func savePhoto(imageData: Data) {
-        Task {
-            do {
-                try await photoCollection.addImage(imageData)
-                logger.debug("Added image data to photo collection.")
-            } catch let error {
-                logger.error("Failed to add image to photo collection: \(error.localizedDescription)")
-            }
+    func savePhoto(imageData: Data) async -> String {
+        do {
+            let assetId = try await photoCollection.addImage(imageData)
+            logger.debug("Added image data to photo collection with asset ID: \(assetId)")
+            return assetId
+        } catch let error {
+            logger.error("Failed to add image to photo collection: \(error.localizedDescription)")
+            return ""
         }
     }
     
@@ -164,6 +178,32 @@ final class DataModel: ObservableObject, @unchecked Sendable {
                 }
             }
         }
+    }
+
+    func commitStacksAsDrafts(modelContext: ModelContext, uploadManager: UploadManager) async -> [UUID] {
+        var newDraftIds: [UUID] = []
+
+        for stackIndex in 0..<sessionPhotoAssetIDs.count {
+            let assetIds = sessionPhotoAssetIDs[stackIndex]
+            guard !assetIds.isEmpty else { continue }
+
+            let newItem = Item(
+                blurb: "Draft from \(assetIds.count) camera photos",
+                sourceAssetIdentifiers: assetIds,
+                firestoreListingId: UUID().uuidString
+            )
+            modelContext.insert(newItem)
+            newDraftIds.append(newItem.id)
+
+            uploadManager.startBackgroundUpload(draft: newItem, modelContext: modelContext)
+            uploadManager.runLocalRecognition(draft: newItem, modelContext: modelContext)
+        }
+
+        try? modelContext.save()
+        sessionPhotos = [[]]
+        sessionPhotoAssetIDs = [[]]
+
+        return newDraftIds
     }
 }
 

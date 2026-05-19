@@ -3,15 +3,20 @@ See the License.txt file for this sample’s licensing information.
 */
 
 import SwiftUI
+import SwiftData
 
 struct CameraView: View {
     @StateObject private var model = DataModel()
     @EnvironmentObject private var uploadManager: UploadManager
+    @Environment(\.modelContext) private var modelContext
+
     @State private var isFlashing = false
     @State private var capturedImage: UIImage?
     @State private var showingModal = false
     @State private var selectedStackIndex = 0
     @State private var showingPicker = false
+    @State private var navigatingToDrafts = false
+    @State private var sessionDraftIDs: [UUID] = []
     
     private static let barHeightFactor = 0.15
     
@@ -23,10 +28,9 @@ struct CameraView: View {
                 GeometryReader { geometry in
                     ViewfinderView(image:  $model.viewfinderImage )
                         .overlay(alignment: .top) {
-                            // TODO: add back & publish button to top of view
-                            Color.black
-                                .opacity(0.75)
+                            topBarView()
                                 .frame(height: geometry.size.height * Self.barHeightFactor)
+                                .background(.black.opacity(0.75))
                         }
                         .overlay(alignment: .bottom) {
                             cameraButtonsView()
@@ -90,6 +94,38 @@ struct CameraView: View {
                     .onAppear { model.camera.isPreviewPaused = true }
                     .onDisappear { model.camera.isPreviewPaused = false }
             }
+            .navigationDestination(isPresented: $navigatingToDrafts) {
+                BulkListingOverviewView(sessionDraftIDs: sessionDraftIDs)
+                    .onAppear { model.camera.isPreviewPaused = true }
+                    .onDisappear { model.camera.isPreviewPaused = false }
+            }
+            .onChange(of: uploadManager.shouldReturnToRoot) { _, should in
+                if should {
+                    navigatingToDrafts = false
+                    uploadManager.shouldReturnToRoot = false
+                    uploadManager.selectedTab = 4 // Go to Profile to view drafts
+                }
+            }
+        }
+    }
+
+    private func topBarView() -> some View {
+        HStack {
+            Spacer()
+            if !model.sessionPhotos.flatMap({ $0 }).isEmpty {
+                Button {
+                    Task {
+                        let ids = await model.commitStacksAsDrafts(modelContext: modelContext, uploadManager: uploadManager)
+                        sessionDraftIDs = ids
+                        navigatingToDrafts = true
+                    }
+                } label: {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 28))
+                        .foregroundColor(.white)
+                }
+            }
+            Spacer()
         }
     }
     

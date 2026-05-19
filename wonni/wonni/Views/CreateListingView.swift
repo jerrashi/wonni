@@ -356,7 +356,7 @@ struct CustomPhotoPickerView: View {
                 Text("You have created drafts in this session. Would you like to save or discard them?")
             }
             .navigationDestination(isPresented: $navigateToOverview) {
-                BulkListingOverviewView(selectedAssets: selectedAssets)
+                BulkListingOverviewView(sessionDraftIDs: sessionDraftIDs)
             }
         }
         
@@ -798,152 +798,6 @@ struct CustomPhotoPickerView: View {
         }
     }
 
-    // MARK: - BulkListingOverviewView (Drafts)
-    struct BulkListingOverviewView: View {
-        var selectedAssets: [PhotoAsset]
-
-        @Environment(\.modelContext) private var modelContext
-        @Query private var allItems: [Item]
-        @EnvironmentObject private var uploadManager: UploadManager
-
-        @FocusState private var focusedField: DraftFocusField?
-        @State private var cache = CachedImageManager()
-        @State private var showUploadWarning = false
-        @State private var navigateToResults = false
-
-        private var drafts: [Item] { allItems.filter { $0.isDraft } }
-
-        var body: some View {
-            VStack(spacing: 0) {
-                // ── Thin upload progress bar at top ────────────────────────
-                if uploadManager.isUploadingPhotos {
-                    VStack(spacing: 4) {
-                        ProgressView(value: uploadManager.uploadProgress)
-                            .tint(.blue)
-                            .padding(.horizontal)
-                        Text("Uploading photos… \(uploadManager.uploadEtaString.map { $0 } ?? "")")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 8)
-                    .background(.bar)
-                    Divider()
-                }
-
-                // ── Draft list ─────────────────────────────────────────────
-                ScrollViewReader { proxy in
-                    List {
-                        ForEach(drafts) { item in
-                            DraftRow(
-                                item: item,
-                                focusedField: $focusedField,
-                                cache: cache
-                            )
-                            .id(item.id)
-                        }
-                        .onDelete { offsets in
-                            for i in offsets { modelContext.delete(drafts[i]) }
-                            try? modelContext.save()
-                        }
-                    }
-                    .listStyle(.plain)
-                    .onChange(of: focusedField) { _, newValue in
-                        try? modelContext.save()
-                        if let fv = newValue {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                withAnimation(.easeOut(duration: 0.2)) {
-                                    proxy.scrollTo(fv.itemID, anchor: .center)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Drafts")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    processButton
-                }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Button { moveFocus(by: -1) } label: {
-                        Image(systemName: "chevron.up")
-                    }
-                    .disabled(focusedIndex == nil || focusedIndex == 0)
-
-                    Button { moveFocus(by: 1) } label: {
-                        Image(systemName: "chevron.down")
-                    }
-                    .disabled(focusedIndex == nil || focusedIndex == (drafts.count * 2 - 1))
-
-                    Spacer()
-                    Button("Done") { focusedField = nil }
-                }
-            }
-            .navigationDestination(isPresented: $navigateToResults) {
-                ProcessResultsOverviewView()
-            }
-            .onChange(of: uploadManager.showProcessResults) { _, show in
-                if show { navigateToResults = true }
-            }
-            .overlay(alignment: .bottom) {
-                if showUploadWarning {
-                    Text("Photos need to finish uploading first before processing")
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 12)
-                        .background(Color.black.opacity(0.82), in: RoundedRectangle(cornerRadius: 14))
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 24)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
-            .animation(.spring(response: 0.3), value: showUploadWarning)
-        }
-
-        // MARK: Process Button
-        @ViewBuilder
-        private var processButton: some View {
-            let uploading = uploadManager.isUploadingPhotos
-            let processing = uploadManager.isProcessing
-            Button {
-                if uploading {
-                    withAnimation { showUploadWarning = true }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                        withAnimation { showUploadWarning = false }
-                    }
-                } else if !processing && !drafts.isEmpty {
-                    uploadManager.processDrafts(drafts: drafts, modelContext: modelContext)
-                }
-            } label: {
-                Text("Process")
-                    .fontWeight(.semibold)
-                    .foregroundStyle(uploading || processing || drafts.isEmpty ? .secondary : Color.accentColor)
-            }
-            .disabled(processing || drafts.isEmpty)
-        }
-
-        // MARK: Keyboard navigation helpers
-        /// Flattened index: row*2 = title field, row*2+1 = price field
-        private var focusedIndex: Int? {
-            guard let fv = focusedField else { return nil }
-            guard let row = drafts.firstIndex(where: { $0.id == fv.itemID }) else { return nil }
-            return row * 2 + (fv.field == .title ? 0 : 1)
-        }
-
-        private func moveFocus(by delta: Int) {
-            guard let current = focusedIndex else { return }
-            let next = current + delta
-            let maxIndex = drafts.count * 2 - 1
-            guard next >= 0 && next <= maxIndex else { return }
-            let row = next / 2
-            let field: DraftFocusSubfield = (next % 2 == 0) ? .title : .price
-            focusedField = DraftFocusField(itemID: drafts[row].id, field: field)
-        }
-    }
-
 // MARK: - DraftRow (redesigned)
 struct DraftRow: View {
 
@@ -1163,6 +1017,154 @@ struct DraftRow: View {
             try? modelContext.save()
         }
     }
+
+// MARK: - BulkListingOverviewView (Drafts)
+struct BulkListingOverviewView: View {
+    var sessionDraftIDs: [UUID] = []
+
+    @Environment(\.modelContext) private var modelContext
+    @Query private var allItems: [Item]
+    @EnvironmentObject private var uploadManager: UploadManager
+
+    @FocusState private var focusedField: DraftFocusField?
+    @State private var cache = CachedImageManager()
+    @State private var showUploadWarning = false
+    @State private var navigateToResults = false
+
+    private var drafts: [Item] {
+        allItems.filter { $0.isDraft && sessionDraftIDs.contains($0.id) }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // ── Thin upload progress bar at top ────────────────────────
+            if uploadManager.isUploadingPhotos {
+                VStack(spacing: 4) {
+                    ProgressView(value: uploadManager.uploadProgress)
+                        .tint(.blue)
+                        .padding(.horizontal)
+                    Text("Uploading photos… \(uploadManager.uploadEtaString.map { $0 } ?? "")")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 8)
+                .background(.bar)
+                Divider()
+            }
+
+            // ── Draft list ─────────────────────────────────────────────
+            ScrollViewReader { proxy in
+                List {
+                    ForEach(drafts) { item in
+                        DraftRow(
+                            item: item,
+                            focusedField: $focusedField,
+                            cache: cache
+                        )
+                        .id(item.id)
+                    }
+                    .onDelete { offsets in
+                        for i in offsets { modelContext.delete(drafts[i]) }
+                        try? modelContext.save()
+                    }
+                }
+                .listStyle(.plain)
+                .onChange(of: focusedField) { _, newValue in
+                    try? modelContext.save()
+                    if let fv = newValue {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo(fv.itemID, anchor: .center)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Drafts")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                processButton
+            }
+            ToolbarItemGroup(placement: .keyboard) {
+                Button { moveFocus(by: -1) } label: {
+                    Image(systemName: "chevron.up")
+                }
+                .disabled(focusedIndex == nil || focusedIndex == 0)
+
+                Button { moveFocus(by: 1) } label: {
+                    Image(systemName: "chevron.down")
+                }
+                .disabled(focusedIndex == nil || focusedIndex == (drafts.count * 2 - 1))
+
+                Spacer()
+                Button("Done") { focusedField = nil }
+            }
+        }
+        .navigationDestination(isPresented: $navigateToResults) {
+            ProcessResultsOverviewView()
+        }
+        .onChange(of: uploadManager.showProcessResults) { _, show in
+            if show { navigateToResults = true }
+        }
+        .overlay(alignment: .bottom) {
+            if showUploadWarning {
+                Text("Photos need to finish uploading first before processing")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(Color.black.opacity(0.82), in: RoundedRectangle(cornerRadius: 14))
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 24)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.3), value: showUploadWarning)
+    }
+
+    // MARK: Process Button
+    @ViewBuilder
+    private var processButton: some View {
+        let uploading = uploadManager.isUploadingPhotos
+        let processing = uploadManager.isProcessing
+        Button {
+            if uploading {
+                withAnimation { showUploadWarning = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    withAnimation { showUploadWarning = false }
+                }
+            } else if !processing && !drafts.isEmpty {
+                uploadManager.processDrafts(drafts: drafts, modelContext: modelContext)
+            }
+        } label: {
+            Text("Process")
+                .fontWeight(.semibold)
+                .foregroundStyle(uploading || processing || drafts.isEmpty ? .secondary : Color.accentColor)
+        }
+        .disabled(processing || drafts.isEmpty)
+    }
+
+    // MARK: Keyboard navigation helpers
+    /// Flattened index: row*2 = title field, row*2+1 = price field
+    private var focusedIndex: Int? {
+        guard let fv = focusedField else { return nil }
+        guard let row = drafts.firstIndex(where: { $0.id == fv.itemID }) else { return nil }
+        return row * 2 + (fv.field == .title ? 0 : 1)
+    }
+
+    private func moveFocus(by delta: Int) {
+        guard let current = focusedIndex else { return }
+        let next = current + delta
+        let maxIndex = drafts.count * 2 - 1
+        guard next >= 0 && next <= maxIndex else { return }
+        let row = next / 2
+        let field: DraftFocusSubfield = (next % 2 == 0) ? .title : .price
+        focusedField = DraftFocusField(itemID: drafts[row].id, field: field)
+    }
+}
 
 // MARK: - Draft Focus Types (shared between BulkListingOverviewView & ProcessResultsOverviewView)
 
