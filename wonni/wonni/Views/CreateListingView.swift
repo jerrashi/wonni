@@ -195,21 +195,7 @@ struct CustomPhotoPickerView: View {
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     HStack(spacing: 16) {
                                         ForEach(Array(selectedAssets.enumerated()), id: \.element.id) { index, asset in
-                                            let totalCount = selectedAssets.count
-                                            let centerIndex = Double(totalCount - 1) / 2.0
-                                            let direction = Double(index) - centerIndex
-                                            PhotoItemView(asset: asset, cache: photoCollection.cache, imageSize: imageSize)
-                                                .frame(width: 60, height: 60)
-                                                .cornerRadius(8)
-                                                .id(asset.id)
-                                                .scaleEffect(carouselCollapsing ? 0.05 : 1.0)
-                                                .offset(x: carouselCollapsing ? -direction * 28 : 0)
-                                                .opacity(carouselCollapsing ? 0 : 1)
-                                                .onDrag {
-                                                    self.draggedAsset = asset
-                                                    return NSItemProvider(object: asset.id as NSString)
-                                                }
-                                                .onDrop(of: [.text], delegate: PhotoAssetDropDelegate(item: asset, items: $selectedAssets, draggedItem: $draggedAsset))
+                                            carouselPhotoItem(asset: asset, index: index, selectedAssets: selectedAssets)
                                         }
                                     }
                                     .padding(.horizontal, 24)
@@ -369,7 +355,27 @@ struct CustomPhotoPickerView: View {
                 }
             }
         }
-        
+
+        @ViewBuilder
+        private func carouselPhotoItem(asset: PhotoAsset, index: Int, selectedAssets: [PhotoAsset]) -> some View {
+            let totalCount = selectedAssets.count
+            let centerIndex = Double(totalCount - 1) / 2.0
+            let direction = Double(index) - centerIndex
+
+            PhotoItemView(asset: asset, cache: photoCollection.cache, imageSize: CGSize(width: 60, height: 60))
+                .frame(width: 60, height: 60)
+                .cornerRadius(8)
+                .id(asset.id)
+                .scaleEffect(carouselCollapsing ? 0.05 : 1.0)
+                .offset(x: carouselCollapsing ? -direction * 28 : 0)
+                .opacity(carouselCollapsing ? 0 : 1)
+                .onDrag {
+                    self.draggedAsset = asset
+                    return NSItemProvider(object: asset.id as NSString)
+                }
+                .onDrop(of: [.text], delegate: PhotoAssetDropDelegate(item: asset, items: $selectedAssets, draggedItem: $draggedAsset))
+        }
+
         private func saveSelectionToDraft() {
             guard !selectedAssets.isEmpty else { return }
 
