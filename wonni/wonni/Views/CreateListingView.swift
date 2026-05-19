@@ -234,7 +234,7 @@ struct CustomPhotoPickerView: View {
                             if !selectedAssets.isEmpty && !carouselCollapsing {
                                 Image(systemName: isCarouselTrashTargeted ? "trash.circle.fill" : "trash.circle")
                                     .font(.system(size: 34))
-                                    .foregroundStyle(isCarouselTrashTargeted ? .red : .tertiary)
+                                    .foregroundStyle(isCarouselTrashTargeted ? .red : .secondary)
                                     .scaleEffect(isCarouselTrashTargeted ? 1.15 : 1.0)
                                     .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isCarouselTrashTargeted)
                                     .onDrop(of: [.text], isTargeted: $isCarouselTrashTargeted) { _ in
