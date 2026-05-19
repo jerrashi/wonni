@@ -180,6 +180,7 @@ final class DataModel: ObservableObject, @unchecked Sendable {
         }
     }
 
+    @MainActor
     func commitStacksAsDrafts(modelContext: ModelContext, uploadManager: UploadManager) async -> [UUID] {
         var newDraftIds: [UUID] = []
 
