@@ -32,8 +32,9 @@ class Item {
     var firebasePhotoPaths: [String]?
     var firestoreListingId: String?
     var processedAt: Date?
-    
-    init(id: UUID = UUID(), createdAt: Date = Date(), photosData: [Data] = [], blurb: String = "", buyerPaysShipping: Bool = true, handlingFee: Double = 0.0, estimatedShippingDays: Int = 3, weightLbs: Double? = nil, lengthIn: Double? = nil, widthIn: Double? = nil, heightIn: Double? = nil, isDraft: Bool = true, sourceAssetIdentifiers: [String] = [], tags: [String] = [], personalNote: String? = nil, firebasePhotoPaths: [String]? = nil, firestoreListingId: String? = nil, processedAt: Date? = nil) {
+    var visionTitle: String?
+
+    init(id: UUID = UUID(), createdAt: Date = Date(), photosData: [Data] = [], blurb: String = "", buyerPaysShipping: Bool = true, handlingFee: Double = 0.0, estimatedShippingDays: Int = 3, weightLbs: Double? = nil, lengthIn: Double? = nil, widthIn: Double? = nil, heightIn: Double? = nil, isDraft: Bool = true, sourceAssetIdentifiers: [String] = [], tags: [String] = [], personalNote: String? = nil, firebasePhotoPaths: [String]? = nil, firestoreListingId: String? = nil, processedAt: Date? = nil, visionTitle: String? = nil) {
         self.id = id
         self.createdAt = createdAt
         self.photosData = photosData
@@ -52,6 +53,7 @@ class Item {
         self.firebasePhotoPaths = firebasePhotoPaths
         self.firestoreListingId = firestoreListingId
         self.processedAt = processedAt
+        self.visionTitle = visionTitle
     }
 }
 

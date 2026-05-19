@@ -16,7 +16,10 @@
       "mcp__plugin_firebase_firebase__firebase_get_security_rules",
       "mcp__plugin_firebase_firebase__firebase_validate_security_rules",
       "mcp__plugin_firebase_firebase__firebase_deploy",
-      "mcp__plugin_firebase_firebase__firebase_deploy_status"
+      "mcp__plugin_firebase_firebase__firebase_deploy_status",
+      "mcp__plugin_firebase_firebase__firebase_get_environment",
+      "mcp__plugin_firebase_firebase__firebase_update_environment",
+      "Skill(commit-commands:commit)"
     ]
   }
 }
