@@ -8,9 +8,10 @@ struct PhotoStackModalView: View {
     @ObservedObject var dataModel: DataModel
     @Binding var isPresented: Bool
     let stackIndex: Int
-    
+
     @State private var draggedPhoto: (stackIndex: Int, photoIndex: Int)?
     @State private var showingAllStacks = false
+    @State private var isTrashTargeted = false
     
     private let columns = [
         GridItem(.flexible()),
@@ -29,7 +30,7 @@ struct PhotoStackModalView: View {
                 if dataModel.sessionPhotos.count > 1 {
                     stackSelectorView()
                 }
-                
+
                 // Photo grid
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 16) {
@@ -39,9 +40,16 @@ struct PhotoStackModalView: View {
                     }
                     .padding()
                 }
-                
+
                 Spacer()
             }
+            .overlay(alignment: .bottom) {
+                if draggedPhoto != nil {
+                    stackTrashZone
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(response: 0.25, dampingFraction: 0.8), value: draggedPhoto != nil)
             .navigationTitle("Edit Stack \(stackIndex + 1)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -126,19 +134,37 @@ struct PhotoStackModalView: View {
                 dataModel: dataModel,
                 draggedPhoto: $draggedPhoto
             ))
-            .contextMenu {
-                Button("Delete", role: .destructive) {
-                    dataModel.removePhoto(stackIndex: stackIndex, photoIndex: photoIndex)
-                }
-            }
+    }
+
+    @ViewBuilder
+    private var stackTrashZone: some View {
+        HStack {
+            Spacer()
+            Image(systemName: isTrashTargeted ? "trash.circle.fill" : "trash.circle")
+                .font(.system(size: 52))
+                .foregroundStyle(isTrashTargeted ? .red : .secondary)
+                .scaleEffect(isTrashTargeted ? 1.15 : 1.0)
+                .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isTrashTargeted)
+                .padding(.bottom, 16)
+            Spacer()
+        }
+        .padding(.vertical, 12)
+        .background(.regularMaterial)
+        .onDrop(of: [.text], isTargeted: $isTrashTargeted) { _ in
+            guard let dragged = draggedPhoto else { return false }
+            dataModel.removePhoto(stackIndex: dragged.stackIndex, photoIndex: dragged.photoIndex)
+            draggedPhoto = nil
+            return true
+        }
     }
 }
 
 struct AllStacksView: View {
     @ObservedObject var dataModel: DataModel
     @Binding var isPresented: Bool
-    
+
     @State private var draggedPhoto: (stackIndex: Int, photoIndex: Int)?
+    @State private var isTrashTargeted = false
     
     private let columns = [
         GridItem(.flexible()),
@@ -160,7 +186,7 @@ struct AllStacksView: View {
                                     .foregroundColor(.secondary)
                             }
                             .padding(.horizontal)
-                            
+
                             LazyVGrid(columns: columns, spacing: 12) {
                                 ForEach(0..<dataModel.sessionPhotos[stackIndex].count, id: \.self) { photoIndex in
                                     allStacksPhotoView(stackIndex: stackIndex, photoIndex: photoIndex)
@@ -172,6 +198,13 @@ struct AllStacksView: View {
                 }
                 .padding(.vertical)
             }
+            .overlay(alignment: .bottom) {
+                if draggedPhoto != nil {
+                    allStacksTrashZone
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(response: 0.25, dampingFraction: 0.8), value: draggedPhoto != nil)
             .navigationTitle("All Stacks")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -206,19 +239,28 @@ struct AllStacksView: View {
                 dataModel: dataModel,
                 draggedPhoto: $draggedPhoto
             ))
-            .contextMenu {
-                Button("Move to New Stack") {
-                    dataModel.movePhotoBetweenStacks(
-                        fromStack: stackIndex,
-                        fromIndex: photoIndex,
-                        toStack: dataModel.sessionPhotos.count,
-                        toIndex: 0
-                    )
-                }
-                Button("Delete", role: .destructive) {
-                    dataModel.removePhoto(stackIndex: stackIndex, photoIndex: photoIndex)
-                }
-            }
+    }
+
+    @ViewBuilder
+    private var allStacksTrashZone: some View {
+        HStack {
+            Spacer()
+            Image(systemName: isTrashTargeted ? "trash.circle.fill" : "trash.circle")
+                .font(.system(size: 52))
+                .foregroundStyle(isTrashTargeted ? .red : .secondary)
+                .scaleEffect(isTrashTargeted ? 1.15 : 1.0)
+                .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isTrashTargeted)
+                .padding(.bottom, 16)
+            Spacer()
+        }
+        .padding(.vertical, 12)
+        .background(.regularMaterial)
+        .onDrop(of: [.text], isTargeted: $isTrashTargeted) { _ in
+            guard let dragged = draggedPhoto else { return false }
+            dataModel.removePhoto(stackIndex: dragged.stackIndex, photoIndex: dragged.photoIndex)
+            draggedPhoto = nil
+            return true
+        }
     }
 }
 

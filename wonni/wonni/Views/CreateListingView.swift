@@ -117,6 +117,7 @@ struct CustomPhotoPickerView: View {
         @EnvironmentObject private var uploadManager: UploadManager
 
         @State private var draggedAsset: PhotoAsset?
+        @State private var isCarouselTrashTargeted = false
         @State private var carouselCollapsing = false
         @State private var stackBouncing = false
 
@@ -168,20 +169,6 @@ struct CustomPhotoPickerView: View {
             }
             .safeAreaInset(edge: .top) {
                 VStack(spacing: 0) {
-                    // Thin upload progress bar – always visible while uploading
-                    if uploadManager.isUploadingPhotos {
-                        VStack(spacing: 4) {
-                            ProgressView(value: uploadManager.uploadProgress)
-                                .tint(.blue)
-                                .padding(.horizontal, 16)
-                            Text("Uploading photos…" + (uploadManager.uploadEtaString.map { " \($0)" } ?? ""))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 6)
-                        .background(.bar)
-                    }
-
                     if !photoCollection.photoAssets.isEmpty {
                         Toggle(isOn: $hidePreviouslySelected) {
                             HStack(spacing: 6) {
@@ -215,18 +202,6 @@ struct CustomPhotoPickerView: View {
                                                 .frame(width: 60, height: 60)
                                                 .cornerRadius(8)
                                                 .id(asset.id)
-                                                .overlay(alignment: .topTrailing) {
-                                                    if !carouselCollapsing {
-                                                        Button {
-                                                            toggleSelection(asset)
-                                                        } label: {
-                                                            Image(systemName: "xmark.circle.fill")
-                                                                .foregroundColor(.red)
-                                                                .background(Circle().fill(Color.white))
-                                                        }
-                                                        .offset(x: 5, y: -5)
-                                                    }
-                                                }
                                                 .scaleEffect(carouselCollapsing ? 0.05 : 1.0)
                                                 .offset(x: carouselCollapsing ? -direction * 28 : 0)
                                                 .opacity(carouselCollapsing ? 0 : 1)
@@ -265,16 +240,32 @@ struct CustomPhotoPickerView: View {
                             } else {
                                 Spacer().frame(width: 60)
                             }
-                            
+
                             Spacer()
-                            
+
+                            // Trash zone — always visible while photos are selected so
+                            // the user has a stable target; highlights on hover.
+                            if !selectedAssets.isEmpty && !carouselCollapsing {
+                                Image(systemName: isCarouselTrashTargeted ? "trash.circle.fill" : "trash.circle")
+                                    .font(.system(size: 34))
+                                    .foregroundStyle(isCarouselTrashTargeted ? .red : .tertiary)
+                                    .scaleEffect(isCarouselTrashTargeted ? 1.15 : 1.0)
+                                    .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isCarouselTrashTargeted)
+                                    .onDrop(of: [.text], isTargeted: $isCarouselTrashTargeted) { _ in
+                                        guard let dragged = draggedAsset else { return false }
+                                        withAnimation { selectedAssets.removeAll(where: { $0 == dragged }) }
+                                        draggedAsset = nil
+                                        return true
+                                    }
+
+                                Spacer()
+                            }
+
                             if !selectedAssets.isEmpty {
                                 Button {
-                                    // Phase 1: collapse the carousel thumbnails inward
                                     withAnimation(.easeIn(duration: 0.28)) {
                                         carouselCollapsing = true
                                     }
-                                    // Phase 2: save draft + bounce the stack icon
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
                                         saveSelectionToDraft()
                                         selectedAssets.removeAll()
@@ -395,6 +386,7 @@ struct CustomPhotoPickerView: View {
             sessionDraftIDs.append(newItem.id)
 
             uploadManager.startBackgroundUpload(draft: newItem, modelContext: modelContext)
+            uploadManager.runLocalRecognition(draft: newItem, modelContext: modelContext)
         }
     }
     
@@ -488,18 +480,54 @@ struct CustomPhotoPickerView: View {
             return true
         }
     }
-    
+
+    // MARK: - DraftSectionDropDelegate
+    struct DraftSectionDropDelegate: DropDelegate {
+        let draft: Item
+        @Binding var draggedCompositeId: String?
+        let modelContext: ModelContext
+        let allDrafts: [Item]
+
+        func dropUpdated(info: DropInfo) -> DropProposal? {
+            guard let dragged = draggedCompositeId else { return DropProposal(operation: .cancel) }
+            let parts = dragged.components(separatedBy: "|")
+            guard parts.count == 2 else { return DropProposal(operation: .cancel) }
+            return parts[0] != draft.id.uuidString
+                ? DropProposal(operation: .move)
+                : DropProposal(operation: .cancel)
+        }
+
+        func performDrop(info: DropInfo) -> Bool {
+            guard let dragged = draggedCompositeId else { return false }
+            let parts = dragged.components(separatedBy: "|")
+            guard parts.count == 2 else { return false }
+            let sourceDraftId = parts[0], assetId = parts[1]
+            guard sourceDraftId != draft.id.uuidString else { return false }
+            if let sourceDraft = allDrafts.first(where: { $0.id.uuidString == sourceDraftId }) {
+                sourceDraft.sourceAssetIdentifiers.removeAll(where: { $0 == assetId })
+                if sourceDraft.sourceAssetIdentifiers.isEmpty { modelContext.delete(sourceDraft) }
+                draft.sourceAssetIdentifiers.append(assetId)
+                try? modelContext.save()
+            }
+            draggedCompositeId = nil
+            return true
+        }
+    }
+
     // MARK: - DraftHistoryModal
     struct DraftHistoryModal: View {
         @Environment(\.dismiss) private var dismiss
         @Query private var allItems: [Item]
         @ObservedObject var photoCollection: PhotoCollection
         @Environment(\.modelContext) private var modelContext
+        @EnvironmentObject private var uploadManager: UploadManager
 
         @State private var isSelectionMode = false
         @State private var selectedPhotos = Set<String>()
         @State private var showingDeleteConfirm = false
         @State private var draggedCompositeId: String?
+        @State private var isTrashTargeted = false
+        @FocusState private var focusedDraftID: UUID?
 
         var drafts: [Item] {
             allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty }
@@ -545,6 +573,19 @@ struct CustomPhotoPickerView: View {
                                             Spacer()
                                         }
                                         .padding(.horizontal)
+
+                                        let hasUserTitle = draft.userEditedTitle != nil
+                                        TextField("Add title…", text: draftTitleBinding(for: draft))
+                                            .font(.subheadline.weight(.medium))
+                                            .foregroundStyle(hasUserTitle ? .primary : .secondary)
+                                            .focused($focusedDraftID, equals: draft.id)
+                                            .onReceive(NotificationCenter.default.publisher(
+                                                for: UITextField.textDidBeginEditingNotification
+                                            )) { notification in
+                                                guard let tf = notification.object as? UITextField else { return }
+                                                DispatchQueue.main.async { tf.selectAll(nil) }
+                                            }
+                                            .padding(.horizontal)
 
                                         ScrollView(.horizontal, showsIndicators: false) {
                                             HStack(spacing: 12) {
@@ -595,15 +636,47 @@ struct CustomPhotoPickerView: View {
                                         Divider()
                                             .padding(.horizontal)
                                     }
+                                    .onDrop(of: [.text], delegate: DraftSectionDropDelegate(
+                                        draft: draft,
+                                        draggedCompositeId: $draggedCompositeId,
+                                        modelContext: modelContext,
+                                        allDrafts: drafts
+                                    ))
                                 }
                             }
                             .padding(.top)
                         }
                     }
                 }
-                .navigationTitle("Drafts")
+                .overlay(alignment: .bottom) {
+                    if draggedCompositeId != nil {
+                        trashZone
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+                .animation(.spring(response: 0.25, dampingFraction: 0.8), value: draggedCompositeId != nil)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
+                    ToolbarItem(placement: .principal) {
+                        HStack(spacing: 6) {
+                            Text("Drafts")
+                                .font(.headline)
+                            if uploadManager.isUploadingPhotos {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "icloud.and.arrow.up")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    ProgressView()
+                                        .scaleEffect(0.65)
+                                        .frame(width: 14, height: 14)
+                                }
+                            } else if !drafts.isEmpty {
+                                Image(systemName: "checkmark.icloud.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.green)
+                            }
+                        }
+                    }
                     ToolbarItem(placement: .navigationBarLeading) {
                         if isSelectionMode {
                             Button("Cancel") {
@@ -611,7 +684,9 @@ struct CustomPhotoPickerView: View {
                                 selectedPhotos.removeAll()
                             }
                         } else {
-                            Button("Done") { dismiss() }
+                            Button("Select") {
+                                isSelectionMode = true
+                            }
                         }
                     }
                     ToolbarItem(placement: .navigationBarTrailing) {
@@ -622,10 +697,18 @@ struct CustomPhotoPickerView: View {
                             .foregroundColor(.red)
                             .disabled(selectedPhotos.isEmpty)
                         } else {
-                            Button("Select") {
-                                isSelectionMode = true
-                            }
+                            Button("Done") { dismiss() }
                         }
+                    }
+                }
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Button { moveFocusByDraft(-1) } label: { Image(systemName: "chevron.up") }
+                            .disabled(focusedDraftID == nil || drafts.first?.id == focusedDraftID)
+                        Button { moveFocusByDraft(1) } label: { Image(systemName: "chevron.down") }
+                            .disabled(focusedDraftID == nil || drafts.last?.id == focusedDraftID)
+                        Spacer()
+                        Button("Done") { focusedDraftID = nil }
                     }
                 }
                 .alert("Delete Selected?", isPresented: $showingDeleteConfirm) {
@@ -637,6 +720,24 @@ struct CustomPhotoPickerView: View {
                     Text("Are you sure you want to delete the selected items?")
                 }
             }
+        }
+
+        private func draftTitleBinding(for draft: Item) -> Binding<String> {
+            Binding(
+                get: { draft.userEditedTitle ?? draft.visionTitle ?? draft.aiSuggestedTitle ?? "" },
+                set: {
+                    draft.userEditedTitle = $0.isEmpty ? nil : $0
+                    try? modelContext.save()
+                }
+            )
+        }
+
+        private func moveFocusByDraft(_ delta: Int) {
+            guard let current = focusedDraftID,
+                  let idx = drafts.firstIndex(where: { $0.id == current }) else { return }
+            let next = idx + delta
+            guard next >= 0 && next < drafts.count else { return }
+            focusedDraftID = drafts[next].id
         }
 
         private func deleteSelectedItems() {
@@ -661,8 +762,42 @@ struct CustomPhotoPickerView: View {
             isSelectionMode = false
             selectedPhotos.removeAll()
         }
+
+        @ViewBuilder
+        private var trashZone: some View {
+            HStack {
+                Spacer()
+                Image(systemName: isTrashTargeted ? "trash.circle.fill" : "trash.circle")
+                    .font(.system(size: 52))
+                    .foregroundStyle(isTrashTargeted ? .red : .secondary)
+                    .scaleEffect(isTrashTargeted ? 1.15 : 1.0)
+                    .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isTrashTargeted)
+                    .padding(.bottom, 16)
+                Spacer()
+            }
+            .padding(.vertical, 12)
+            .background(.regularMaterial)
+            .onDrop(of: [.text], isTargeted: $isTrashTargeted) { _ in
+                deletePhoto(compositeId: draggedCompositeId)
+            }
+        }
+
+        @discardableResult
+        private func deletePhoto(compositeId: String?) -> Bool {
+            guard let dragged = compositeId else { return false }
+            let parts = dragged.components(separatedBy: "|")
+            guard parts.count == 2 else { return false }
+            let sourceDraftId = parts[0], assetId = parts[1]
+            if let sourceDraft = allItems.first(where: { $0.id.uuidString == sourceDraftId }) {
+                sourceDraft.sourceAssetIdentifiers.removeAll(where: { $0 == assetId })
+                if sourceDraft.sourceAssetIdentifiers.isEmpty { modelContext.delete(sourceDraft) }
+                try? modelContext.save()
+            }
+            draggedCompositeId = nil
+            return true
+        }
     }
-    
+
     // MARK: - BulkListingOverviewView (Drafts)
     struct BulkListingOverviewView: View {
         var selectedAssets: [PhotoAsset]
@@ -822,7 +957,7 @@ struct DraftRow: View {
 
         private var titleBinding: Binding<String> {
             Binding(
-                get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? "" },
+                get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? "" },
                 set: { item.userEditedTitle = $0.isEmpty ? nil : $0 }
             )
         }

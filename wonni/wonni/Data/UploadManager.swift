@@ -9,6 +9,7 @@ import SwiftData
 import FirebaseAuth
 import FirebaseFirestore
 import UIKit
+import Vision
 
 // MARK: - Status Enum
 
@@ -436,5 +437,52 @@ class UploadManager: ObservableObject {
         shouldReturnToRoot = false
         uploadStartTime = nil
         activeUploadCount = 0
+    }
+
+    // MARK: – On-device Vision Recognition
+
+    func runLocalRecognition(draft: Item, modelContext: ModelContext) {
+        guard let assetId = draft.sourceAssetIdentifiers.first else { return }
+        let draftRef = draft
+        Task {
+            let asset = PhotoAsset(identifier: assetId)
+            guard let image = await asset.fullResolutionImage(),
+                  let cgImage = image.cgImage else { return }
+            let title = await Task.detached(priority: .userInitiated) {
+                UploadManager.generateVisionTitle(cgImage: cgImage)
+            }.value
+            draftRef.visionTitle = title
+            try? modelContext.save()
+        }
+    }
+
+    private nonisolated static func generateVisionTitle(cgImage: CGImage) -> String? {
+        let textReq = VNRecognizeTextRequest()
+        textReq.recognitionLevel = .fast
+        textReq.usesLanguageCorrection = false
+
+        let classifyReq = VNClassifyImageRequest()
+
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        try? handler.perform([textReq, classifyReq])
+
+        // Prefer OCR text (brand names, model numbers)
+        let topText = textReq.results?
+            .compactMap { $0.topCandidates(1).first }
+            .filter { $0.confidence > 0.7 && $0.string.count > 2 }
+            .first?.string
+
+        // Fall back to classification category
+        let topCategory = classifyReq.results?
+            .filter { $0.confidence > 0.4 }
+            .prefix(2)
+            .map { $0.identifier }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+
+        var parts: [String] = []
+        if let t = topText, !t.isEmpty { parts.append(t) }
+        if let c = topCategory, !c.isEmpty, topText == nil { parts.append(c) }
+        return parts.isEmpty ? nil : parts.joined(separator: " ").capitalized
     }
 }
