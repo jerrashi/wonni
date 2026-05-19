@@ -238,10 +238,7 @@ struct CustomPhotoPickerView: View {
                                     .scaleEffect(isCarouselTrashTargeted ? 1.15 : 1.0)
                                     .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isCarouselTrashTargeted)
                                     .onDrop(of: [.text], isTargeted: $isCarouselTrashTargeted) { _ in
-                                        guard let dragged = draggedAsset else { return false }
-                                        withAnimation { selectedAssets.removeAll(where: { $0 == dragged }) }
-                                        draggedAsset = nil
-                                        return true
+                                        dropOnCarouselTrash()
                                     }
 
                                 Spacer()
@@ -354,6 +351,13 @@ struct CustomPhotoPickerView: View {
                     selectedAssets.append(asset)
                 }
             }
+        }
+
+        private func dropOnCarouselTrash() -> Bool {
+            guard let dragged = draggedAsset else { return false }
+            withAnimation { selectedAssets.removeAll(where: { $0 == dragged }) }
+            draggedAsset = nil
+            return true
         }
 
         @ViewBuilder
