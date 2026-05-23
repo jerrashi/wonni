@@ -2,7 +2,7 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
 
-    // Profile photos — owner writes, all authenticated users read
+    // Profile photos — owner writes, authenticated users read (personal data)
     match /users/{userId}/profile.jpg {
       allow read:  if request.auth != null;
       allow write: if request.auth != null
@@ -10,13 +10,11 @@ service firebase.storage {
                    && request.resource.size < 10 * 1024 * 1024;
     }
 
-    // Listing photos — owner writes, any authenticated user can read.
-    // Note: we intentionally do NOT do a Firestore cross-service read here
-    // because it adds latency and can deny access when the listing document
-    // hasn't been written yet (e.g. during the upload pipeline). Draft photo
-    // paths are never exposed to other users via the client app, so this is safe.
+    // Listing photos — publicly readable so Google Shopping ads, shared links,
+    // and unauthenticated web/app traffic can all load images.
+    // Owner writes only; size-capped at 10 MB.
     match /users/{userId}/{listingId}/{imageId} {
-      allow read:  if request.auth != null;
+      allow read:  if true;
       allow write: if request.auth != null
                    && request.auth.uid == userId
                    && request.resource.size < 10 * 1024 * 1024;
