@@ -1,5 +1,5 @@
 /*
-See the License.txt file for this sample’s licensing information.
+See the License.txt file for this sample's licensing information.
 */
 
 import SwiftUI
@@ -9,79 +9,84 @@ struct CameraView: View {
     @StateObject private var model = DataModel()
     @EnvironmentObject private var uploadManager: UploadManager
     @Environment(\.modelContext) private var modelContext
+    @Query private var allItems: [Item]
 
     @State private var isFlashing = false
-    @State private var capturedImage: UIImage?
     @State private var showingModal = false
     @State private var selectedStackIndex = 0
     @State private var showingPicker = false
     @State private var navigatingToDrafts = false
-    @State private var sessionDraftIDs: [UUID] = []
-    
-    private static let barHeightFactor = 0.15
-    
-    
-    var body: some View {
-        
-        NavigationStack {
-            ZStack{
-                GeometryReader { geometry in
-                    ViewfinderView(image:  $model.viewfinderImage )
-                        .overlay(alignment: .top) {
-                            topBarView()
-                                .frame(height: geometry.size.height * Self.barHeightFactor)
-                                .background(.black.opacity(0.75))
-                        }
-                        .overlay(alignment: .bottom) {
-                            cameraButtonsView()
-                                .frame(height: geometry.size.height * Self.barHeightFactor)
-                                .background(.black.opacity(0.75))
-                        }
-                        .overlay(alignment: .bottom) {
-                            if let firstStack = model.sessionPhotos.first, !firstStack.isEmpty{
-                                photoStacksScrollView()
-                                    .offset(y: -(geometry.size.height * Self.barHeightFactor) - 10) // Moves it up by the height of cameraButtonsView plus a small gap
-                                }
-                            }
-                    
-                        .overlay(alignment: .center)  {
-                            Color.clear
-                                .frame(height: geometry.size.height * (1 - (Self.barHeightFactor * 2)))
-                                .accessibilityElement()
-                                .accessibilityLabel("View Finder")
-                                .accessibilityAddTraits([.isImage])
-                        }
-                        .background(.black)
-                }
-                //TODO: White flash does not cover tab bar items
-                // Possible fix: Move view to mainView of app. Move isFlashing to @Environment level variable.
-                // White flash overlay
-                if isFlashing {
-                    Color.white
-                        .ignoresSafeArea()
-                        .transition(.opacity)
-                        .animation(.easeInOut(duration: 0.2), value: isFlashing)
-                        .onAppear() {
-                            // After 0.2 seconds, make view disappear
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    isFlashing = false
-                                }
-                            }
-                        }
-                }
-            }
+    @AppStorage("showCameraGrid") private var showGrid: Bool = false
 
+
+    // All SwiftData drafts — shared with picker, no session filter
+    private var allDrafts: [Item] {
+        allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty }
+    }
+
+    var body: some View {
+        NavigationStack {
+            GeometryReader { geo in
+                let screenW = geo.size.width
+                let screenH = geo.size.height
+
+                // The viewfinder fills the full width but only the 4:3 photo region.
+                // Black bars fill remaining space (native iOS camera look).
+                let viewfinderH = screenW * (4.0 / 3.0)
+                let topBarH: CGFloat = 90
+                let bottomBarH: CGFloat = 140
+
+                ZStack(alignment: .top) {
+                    // 1. Full black background
+                    Color.black.ignoresSafeArea()
+
+                    // 2. Viewfinder in the center
+                    ViewfinderView(image: $model.viewfinderImage)
+                        .frame(width: screenW, height: viewfinderH)
+                        .clipped()
+                        .overlay {
+                            if showGrid { CameraGridOverlay() }
+                        }
+                        .overlay {
+                            if isFlashing {
+                                Color.white.opacity(0.8)
+                                    .onAppear {
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                            withAnimation(.easeOut(duration: 0.15)) { isFlashing = false }
+                                        }
+                                    }
+                            }
+                        }
+                        // Center the viewfinder between the top and bottom bars
+                        .offset(y: topBarH)
+
+                    // 3. Top bar floated over the black area
+                    topBarView()
+                        .frame(height: topBarH)
+                        .frame(maxWidth: .infinity)
+
+                    // 4. Bottom bar at the bottom
+                    VStack(spacing: 8) {
+                        // Draft stacks row (all drafts: camera + picker, shared)
+                        if !model.sessionPhotos.flatMap({ $0 }).isEmpty || !allDrafts.isEmpty {
+                            pickerAndCameraStacksRow()
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
+                        cameraButtonsView()
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, geo.safeAreaInsets.bottom + 12)
+                    .offset(y: screenH - bottomBarH - geo.safeAreaInsets.bottom)
+                }
+                .ignoresSafeArea()
+            }
+            .toolbar(.hidden, for: .tabBar)
+            .toolbar(.hidden, for: .navigationBar)
             .task {
                 await model.camera.start()
                 await model.loadPhotos()
                 await model.loadThumbnail()
             }
-            //.navigationTitle("Camera")
-            //.navigationBarTitleDisplayMode(.inline)
-            //.navigationBarHidden(true)
-            //.ignoresSafeArea()
-            //.statusBar(hidden: true)
             .sheet(isPresented: $showingModal) {
                 PhotoStackModalView(
                     dataModel: model,
@@ -95,7 +100,7 @@ struct CameraView: View {
                     .onDisappear { model.camera.isPreviewPaused = false }
             }
             .navigationDestination(isPresented: $navigatingToDrafts) {
-                BulkListingOverviewView(sessionDraftIDs: sessionDraftIDs)
+                BulkListingOverviewView(sessionDraftIDs: uploadManager.sessionDraftIDs)
                     .onAppear { model.camera.isPreviewPaused = true }
                     .onDisappear { model.camera.isPreviewPaused = false }
             }
@@ -103,153 +108,191 @@ struct CameraView: View {
                 if should {
                     navigatingToDrafts = false
                     uploadManager.shouldReturnToRoot = false
-                    uploadManager.selectedTab = 4 // Go to Profile to view drafts
+                    uploadManager.selectedTab = 4
                 }
             }
         }
     }
 
+    // MARK: - Top bar
+
     private func topBarView() -> some View {
-        HStack {
+        HStack(alignment: .center) {
+            Button {
+                uploadManager.selectedTab = 0
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .semibold))
+                    Text("Back")
+                        .font(.body.weight(.medium))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.black.opacity(0.45))
+                .clipShape(Capsule())
+            }
+
             Spacer()
-            if !model.sessionPhotos.flatMap({ $0 }).isEmpty {
+
+            let hasPhotos = !model.sessionPhotos.flatMap({ $0 }).isEmpty || !allDrafts.isEmpty
+            if hasPhotos {
                 Button {
                     Task {
-                        let ids = await model.commitStacksAsDrafts(modelContext: modelContext, uploadManager: uploadManager)
-                        sessionDraftIDs = ids
+                        _ = await model.commitStacksAsDrafts(modelContext: modelContext, uploadManager: uploadManager)
                         navigatingToDrafts = true
                     }
                 } label: {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 28))
-                        .foregroundColor(.white)
+                    HStack(spacing: 6) {
+                        Text("Proceed")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white)
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundColor(.green)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.black.opacity(0.5))
+                    .clipShape(Capsule())
                 }
             }
-            Spacer()
         }
+        .padding(.horizontal, 20)
+        .padding(.top, 10)
     }
-    
-    private func cameraButtonsView() -> some View {
-        HStack(spacing: 60) {
-            
-            Spacer()
-            
-            Button {
-                showingPicker = true
-            } label: {
-                Label {
-                    Text("Gallery")
-                } icon: {
-                    ThumbnailView(image: model.thumbnailImage)
+
+    // MARK: - Unified draft + camera stacks row
+
+    @ViewBuilder
+    private func pickerAndCameraStacksRow() -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                // Camera-session stacks (in-memory UIImage stacks)
+                ForEach(0..<model.sessionPhotos.count, id: \.self) { stackIndex in
+                    let photos = model.sessionPhotos[stackIndex]
+                    if !photos.isEmpty {
+                        CameraSessionStackView(photos: photos)
+                            .onTapGesture {
+                                selectedStackIndex = stackIndex
+                                showingModal = true
+                            }
+                    }
                 }
+
+                // All SwiftData drafts (camera-committed + picker)
+                ForEach(allDrafts) { draft in
+                    DraftStackThumbnailView(draft: draft, cache: model.photoCollection.cache)
+                }
+            }
+            .padding(.horizontal, 4)
+        }
+        .frame(height: 82)
+    }
+
+    // MARK: - Bottom camera buttons
+
+    private func cameraButtonsView() -> some View {
+        HStack(spacing: 0) {
+            // Gallery / picker button — commit any in-progress camera stacks first
+            Button {
+                Task {
+                    if !model.sessionPhotos.flatMap({ $0 }).isEmpty {
+                        _ = await model.commitStacksAsDrafts(modelContext: modelContext, uploadManager: uploadManager)
+                    }
+                    showingPicker = true
+                }
+            } label: {
+                ThumbnailView(image: model.thumbnailImage)
+                    .frame(width: 46, height: 46)
+                    .cornerRadius(8)
             }
             .onChange(of: uploadManager.shouldReturnToRoot) { _, should in
                 if should {
                     showingPicker = false
                     uploadManager.shouldReturnToRoot = false
-                    uploadManager.selectedTab = 4 // Go to Profile to view drafts
+                    uploadManager.selectedTab = 4
                 }
             }
-            
+
+            Spacer()
+
+            // Shutter button
             Button {
                 model.camera.takePhoto()
-                //MARK: Is this best way to trigger flashing animation?
                 isFlashing = true
             } label: {
-                Label {
-                    Text("Take Photo")
-                } icon: {
-                    ZStack {
-                        Circle()
-                            .strokeBorder(.white, lineWidth: 3)
-                            .frame(width: 62, height: 62)
-                        Circle()
-                            .fill(.white)
-                            .frame(width: 50, height: 50)
-                    }
+                ZStack {
+                    Circle()
+                        .strokeBorder(.white, lineWidth: 3)
+                        .frame(width: 66, height: 66)
+                    Circle()
+                        .fill(.white)
+                        .frame(width: 54, height: 54)
                 }
             }
-            
-            Button {
-                model.camera.switchCaptureDevice()
-            } label: {
-                Label("Switch Camera", systemImage: "arrow.triangle.2.circlepath")
-                    .font(.system(size: 36, weight: .bold))
-                    .foregroundColor(.white)
-            }
-            
+
             Spacer()
-        
+
+            // Add new stack button  (same as + in picker)
+            Button {
+                model.addNewStack()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 44, height: 44)
+                    .background(Color.blue)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            .opacity(model.sessionPhotos.flatMap({ $0 }).isEmpty ? 0 : 1)
         }
         .buttonStyle(.plain)
-        .labelStyle(.iconOnly)
-        .padding()
     }
 
-    private func photoStacksScrollView() -> some View {
-        HStack {
-            PhotoStackView(
-                sessionPhotos: model.sessionPhotos,
-                onStackTapped: { stackIndex in
-                    selectedStackIndex = stackIndex
-                    showingModal = true
-                }
-            )
-                .frame(height: 100)
-            
-            Button(action: {
-                model.addNewStack()
-            }) {
-                Image(systemName: "plus")
-                    .font(.system(size: 24, weight: .bold))
-                    .foregroundColor(.white)
-                    .padding()
-                    .background(Color.blue)
-                    .cornerRadius(10)
-            }
-        }
-    }
+    // MARK: - Nested subviews
 
-    private struct PhotoStackView: View {
-        let sessionPhotos: [[UIImage]]
-        let onStackTapped: (Int) -> Void
-        
-        var body: some View {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack{
-                    ForEach(0..<sessionPhotos.count, id: \.self) { stackIndex in
-                        SinglePhotoStackView(photos: sessionPhotos[stackIndex])
-                            .padding(.top, 20)   // Adds 20 points of padding to the top
-                            .padding(.leading, stackIndex == 0 ? 15 : 0) // Only first stack gets leading padding
-                            .padding(.trailing, 20)
-                            .onTapGesture {
-                                onStackTapped(stackIndex)
-                            }
-                    }
-                }
-            }
-        }
-    }
-
-    private struct SinglePhotoStackView: View {
+    private struct CameraSessionStackView: View {
         let photos: [UIImage]
-        
         var body: some View {
-            ZStack(alignment: .topLeading) {
-                ForEach(0..<photos.count, id: \.self) { photoIndex in
-                    Image(uiImage: photos[photoIndex])
+            let count = photos.count
+            ZStack {
+                ForEach(0..<min(3, count), id: \.self) { index in
+                    let offset = CGFloat(index) * 5
+                    Image(uiImage: photos[index])
                         .resizable()
                         .scaledToFill()
-                        .frame(width: 80, height: 80)
+                        .frame(width: 60, height: 60)
                         .cornerRadius(10)
-                        .offset(
-                            x: photoIndex < 3 ? CGFloat(photoIndex) * 10 : 0, // Stagger horizontally for first 3 photos
-                            y: photoIndex < 3 ? CGFloat(photoIndex) * -10 : 0 // Stagger vertically for first 3 photos
-                        )
-                        .zIndex(photoIndex < 3 ? CGFloat(3 - photoIndex) : 0) // Subsequent photos appear behind top photo
+                        .clipped()
+                        .overlay(RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.white.opacity(0.8), lineWidth: 1.5))
+                        .shadow(color: .black.opacity(0.3), radius: 3, x: 2, y: 2)
+                        .offset(x: offset, y: -offset)
+                        .zIndex(Double(3 - index))
                 }
             }
-            .frame(height: 100) // Ensure the stack has enough space
+            .frame(width: 76, height: 76)
+        }
+    }
+}
+
+struct CameraGridOverlay: View {
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width, h = geo.size.height
+            ZStack {
+                Path { p in
+                    p.move(to: CGPoint(x: w/3, y: 0)); p.addLine(to: CGPoint(x: w/3, y: h))
+                    p.move(to: CGPoint(x: 2*w/3, y: 0)); p.addLine(to: CGPoint(x: 2*w/3, y: h))
+                }.stroke(Color.white.opacity(0.3), lineWidth: 0.8)
+
+                Path { p in
+                    p.move(to: CGPoint(x: 0, y: h/3)); p.addLine(to: CGPoint(x: w, y: h/3))
+                    p.move(to: CGPoint(x: 0, y: 2*h/3)); p.addLine(to: CGPoint(x: w, y: 2*h/3))
+                }.stroke(Color.white.opacity(0.3), lineWidth: 0.8)
+            }
         }
     }
 }

@@ -29,6 +29,7 @@ class UploadManager: ObservableObject {
     // ── Tab / Navigation ────────────────────────────────────────────────────
     @Published var selectedTab = 0
     @Published var shouldReturnToRoot = false
+    @Published var sessionDraftIDs: [UUID] = []
 
     // ── Photo Upload Phase ─────────────────────────────────────────────────
     @Published var isUploadingPhotos = false
@@ -107,7 +108,9 @@ class UploadManager: ObservableObject {
             print("[UploadManager] Fetching \(draft.sourceAssetIdentifiers.count) images for \(draft.id)...")
             var images: [UIImage] = []
             for assetId in draft.sourceAssetIdentifiers {
-                if let img = await PhotoAsset(identifier: assetId).fullResolutionImage() {
+                if let img = draft.image(for: assetId) {
+                    images.append(img)
+                } else if let img = await PhotoAsset(identifier: assetId).fullResolutionImage() {
                     images.append(img)
                 } else {
                     print("[UploadManager] WARNING: Could not fetch image for asset \(assetId)")
@@ -203,7 +206,9 @@ class UploadManager: ObservableObject {
 
                 var images: [UIImage] = []
                 for assetId in draft.sourceAssetIdentifiers {
-                    if let img = await PhotoAsset(identifier: assetId).fullResolutionImage() {
+                    if let img = draft.image(for: assetId) {
+                        images.append(img)
+                    } else if let img = await PhotoAsset(identifier: assetId).fullResolutionImage() {
                         images.append(img)
                     }
                 }
@@ -292,7 +297,12 @@ class UploadManager: ObservableObject {
 
         var paths: [String] = []
         for (idx, assetId) in draft.sourceAssetIdentifiers.enumerated() {
-            guard let img = await PhotoAsset(identifier: assetId).fullResolutionImage() else {
+            let img: UIImage
+            if let localImg = draft.image(for: assetId) {
+                img = localImg
+            } else if let phImg = await PhotoAsset(identifier: assetId).fullResolutionImage() {
+                img = phImg
+            } else {
                 print("[UploadManager] Could not load photo \(idx) for \(draft.id)")
                 continue
             }
@@ -437,6 +447,7 @@ class UploadManager: ObservableObject {
         shouldReturnToRoot = false
         uploadStartTime = nil
         activeUploadCount = 0
+        sessionDraftIDs.removeAll()
     }
 
     // MARK: – On-device Vision Recognition
@@ -445,9 +456,15 @@ class UploadManager: ObservableObject {
         guard let assetId = draft.sourceAssetIdentifiers.first else { return }
         let draftRef = draft
         Task {
-            let asset = PhotoAsset(identifier: assetId)
-            guard let image = await asset.fullResolutionImage(),
-                  let cgImage = image.cgImage else { return }
+            let image: UIImage
+            if let localImg = draftRef.image(for: assetId) {
+                image = localImg
+            } else if let phImg = await PhotoAsset(identifier: assetId).fullResolutionImage() {
+                image = phImg
+            } else {
+                return
+            }
+            guard let cgImage = image.cgImage else { return }
             let title = await Task.detached(priority: .userInitiated) {
                 UploadManager.generateVisionTitle(cgImage: cgImage)
             }.value

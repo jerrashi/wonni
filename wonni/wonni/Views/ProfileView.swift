@@ -21,7 +21,7 @@ struct ProfileView: View {
     @EnvironmentObject private var authManager: AuthManager
     @State private var listings: [UserListing] = []
     @State private var isLoading = true
-    @State private var showSignOutAlert = false
+    @State private var showSettings = false
     @State private var showEditProfile = false
     @State private var listingToEdit: UserListing?
     
@@ -116,7 +116,7 @@ struct ProfileView: View {
                 
                 ToolbarItem(placement: .topBarTrailing) {
                     if editMode == .inactive {
-                        Button { showSignOutAlert = true } label: {
+                        Button { showSettings = true } label: {
                             Image(systemName: "gearshape")
                         }
                     }
@@ -149,9 +149,8 @@ struct ProfileView: View {
                     }
                 }
             }
-            .alert("Sign Out", isPresented: $showSignOutAlert) {
-                Button("Sign Out", role: .destructive) { try? authManager.signOut() }
-                Button("Cancel", role: .cancel) {}
+            .sheet(isPresented: $showSettings) {
+                SettingsSheet()
             }
             .alert("Delete \(selectedListings.count) Listings?", isPresented: $isBulkDeleting) {
                 Button("Delete", role: .destructive) {
@@ -714,4 +713,70 @@ struct StorageImage: View {
         }
     }
 }
+
+struct SettingsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authManager: AuthManager
+    
+    @AppStorage("saveToCameraRoll") private var saveToCameraRoll: Bool = true
+    @AppStorage("showCameraGrid") private var showCameraGrid: Bool = false
+    @State private var showSignOutConfirm = false
+    
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(header: Text("Camera Preferences")) {
+                    Toggle(isOn: $saveToCameraRoll) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Save to Camera Roll")
+                                .font(.body)
+                            Text("Automatically save captured photos to your device library.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    
+                    Toggle(isOn: $showCameraGrid) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Show Camera Grid")
+                                .font(.body)
+                            Text("Display a 3x3 grid overlay to align photos.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                
+                Section(header: Text("Account")) {
+                    Button(role: .destructive) {
+                        showSignOutConfirm = true
+                    } label: {
+                        HStack {
+                            Text("Sign Out")
+                                .foregroundColor(.red)
+                            Spacer()
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+            .alert("Sign Out", isPresented: $showSignOutConfirm) {
+                Button("Sign Out", role: .destructive) {
+                    try? authManager.signOut()
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) {}
+            }
+        }
+    }
+}
+
 

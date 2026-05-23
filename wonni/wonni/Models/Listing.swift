@@ -5,6 +5,7 @@
 
 import Foundation
 import SwiftData
+import UIKit
 
 @Model
 class Item {
@@ -33,8 +34,9 @@ class Item {
     var firestoreListingId: String?
     var processedAt: Date?
     var visionTitle: String?
+    var isLocalPhotoOnly: Bool
 
-    init(id: UUID = UUID(), createdAt: Date = Date(), photosData: [Data] = [], blurb: String = "", buyerPaysShipping: Bool = true, handlingFee: Double = 0.0, estimatedShippingDays: Int = 3, weightLbs: Double? = nil, lengthIn: Double? = nil, widthIn: Double? = nil, heightIn: Double? = nil, isDraft: Bool = true, sourceAssetIdentifiers: [String] = [], tags: [String] = [], personalNote: String? = nil, firebasePhotoPaths: [String]? = nil, firestoreListingId: String? = nil, processedAt: Date? = nil, visionTitle: String? = nil) {
+    init(id: UUID = UUID(), createdAt: Date = Date(), photosData: [Data] = [], blurb: String = "", buyerPaysShipping: Bool = true, handlingFee: Double = 0.0, estimatedShippingDays: Int = 3, weightLbs: Double? = nil, lengthIn: Double? = nil, widthIn: Double? = nil, heightIn: Double? = nil, isDraft: Bool = true, sourceAssetIdentifiers: [String] = [], tags: [String] = [], personalNote: String? = nil, firebasePhotoPaths: [String]? = nil, firestoreListingId: String? = nil, processedAt: Date? = nil, visionTitle: String? = nil, isLocalPhotoOnly: Bool = false) {
         self.id = id
         self.createdAt = createdAt
         self.photosData = photosData
@@ -54,6 +56,52 @@ class Item {
         self.firestoreListingId = firestoreListingId
         self.processedAt = processedAt
         self.visionTitle = visionTitle
+        self.isLocalPhotoOnly = isLocalPhotoOnly
+    }
+
+    func image(for assetId: String) -> UIImage? {
+        if let idx = sourceAssetIdentifiers.firstIndex(of: assetId) {
+            if idx < photosData.count {
+                return UIImage(data: photosData[idx])
+            }
+        }
+        return nil
+    }
+
+    func movePhoto(from: Int, to: Int) {
+        var ids = sourceAssetIdentifiers
+        ids.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        sourceAssetIdentifiers = ids
+        
+        if isLocalPhotoOnly && from < photosData.count && to < photosData.count {
+            var data = photosData
+            data.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+            photosData = data
+        }
+    }
+
+    func removePhoto(assetId: String) -> Data? {
+        guard let idx = sourceAssetIdentifiers.firstIndex(of: assetId) else { return nil }
+        sourceAssetIdentifiers.remove(at: idx)
+        
+        if isLocalPhotoOnly && idx < photosData.count {
+            return photosData.remove(at: idx)
+        }
+        return nil
+    }
+
+    func insertPhoto(assetId: String, data: Data?, at index: Int) {
+        if index >= sourceAssetIdentifiers.count {
+            sourceAssetIdentifiers.append(assetId)
+            if let data = data {
+                photosData.append(data)
+            }
+        } else {
+            sourceAssetIdentifiers.insert(assetId, at: index)
+            if let data = data {
+                photosData.insert(data, at: index)
+            }
+        }
     }
 }
 
