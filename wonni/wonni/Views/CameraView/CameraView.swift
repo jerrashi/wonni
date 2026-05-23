@@ -23,24 +23,24 @@ struct CameraView: View {
     private var allDrafts: [Item] {
         allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty }
     }
-
+    
     var body: some View {
         NavigationStack {
             GeometryReader { geo in
                 let screenW = geo.size.width
-                let screenH = geo.size.height
+                let safeTop = geo.safeAreaInsets.top
+                let safeBottom = geo.safeAreaInsets.bottom
 
-                // The viewfinder fills the full width but only the 4:3 photo region.
-                // Black bars fill remaining space (native iOS camera look).
+                // Viewfinder fills the full width at a 4:3 aspect ratio
                 let viewfinderH = screenW * (4.0 / 3.0)
-                let topBarH: CGFloat = 90
-                let bottomBarH: CGFloat = 140
+                // Top bar height: real safe area inset + button row height
+                let topBarH: CGFloat = safeTop + 56
 
                 ZStack(alignment: .top) {
                     // 1. Full black background
                     Color.black.ignoresSafeArea()
 
-                    // 2. Viewfinder in the center
+                    // 2. Viewfinder placed directly below the top bar
                     ViewfinderView(image: $model.viewfinderImage)
                         .frame(width: screenW, height: viewfinderH)
                         .clipped()
@@ -57,15 +57,18 @@ struct CameraView: View {
                                     }
                             }
                         }
-                        // Center the viewfinder between the top and bottom bars
                         .offset(y: topBarH)
 
-                    // 3. Top bar floated over the black area
-                    topBarView()
+                    // 3. Top bar — safe-area-aware so it clears Dynamic Island /
+                    //    notch / iOS 26 status bar on every screen size
+                    topBarView(safeTop: safeTop)
                         .frame(height: topBarH)
                         .frame(maxWidth: .infinity)
 
-                    // 4. Bottom bar at the bottom
+                    // 4. Bottom controls pinned to the screen bottom.
+                    //    The blank space between the viewfinder bottom and these
+                    //    controls is intentional — the draft scroll view will
+                    //    eventually live there.
                     VStack(spacing: 8) {
                         // Draft stacks row (all drafts: camera + picker, shared)
                         if !model.sessionPhotos.flatMap({ $0 }).isEmpty || !allDrafts.isEmpty {
@@ -75,8 +78,9 @@ struct CameraView: View {
                         cameraButtonsView()
                     }
                     .padding(.horizontal, 20)
-                    .padding(.bottom, geo.safeAreaInsets.bottom + 12)
-                    .offset(y: screenH - bottomBarH - geo.safeAreaInsets.bottom)
+                    .padding(.bottom, safeBottom + 12)
+                    .frame(maxWidth: .infinity)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
                 }
                 .ignoresSafeArea()
             }
@@ -116,7 +120,7 @@ struct CameraView: View {
 
     // MARK: - Top bar
 
-    private func topBarView() -> some View {
+    private func topBarView(safeTop: CGFloat) -> some View {
         HStack(alignment: .center) {
             Button {
                 uploadManager.selectedTab = 0
@@ -160,7 +164,7 @@ struct CameraView: View {
             }
         }
         .padding(.horizontal, 20)
-        .padding(.top, 10)
+        .padding(.top, safeTop + 8)
     }
 
     // MARK: - Unified draft + camera stacks row

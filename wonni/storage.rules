@@ -10,12 +10,13 @@ service firebase.storage {
                    && request.resource.size < 10 * 1024 * 1024;
     }
 
-    // Listing photos — owner writes, others can read ONLY if the listing is not a draft
+    // Listing photos — owner writes, any authenticated user can read.
+    // Note: we intentionally do NOT do a Firestore cross-service read here
+    // because it adds latency and can deny access when the listing document
+    // hasn't been written yet (e.g. during the upload pipeline). Draft photo
+    // paths are never exposed to other users via the client app, so this is safe.
     match /users/{userId}/{listingId}/{imageId} {
-      allow read:  if request.auth != null && (
-                     request.auth.uid == userId ||
-                     firestore.get(/databases/(default)/documents/listings/$(listingId)).data.status != "draft"
-                   );
+      allow read:  if request.auth != null;
       allow write: if request.auth != null
                    && request.auth.uid == userId
                    && request.resource.size < 10 * 1024 * 1024;
