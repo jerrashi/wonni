@@ -7,6 +7,44 @@
 
 ---
 
+## Product Vision
+
+> **This section documents strategic decisions that are intentionally deferred to post-1.0 but must not be designed around or away from.**
+
+### The Item Catalog (post-1.0)
+
+The long-term data model for Wonni is **organized by item, not by listing** — closer to Amazon than eBay. A `CatalogItem` is a shared, platform-managed product record (think: "2024 Starbucks Popcorn Bucket, Red Edition"). Multiple sellers can each have a `UserListing` that references the same `CatalogItem`.
+
+This is deferred from 1.0 due to implementation complexity (catalog seeding, matching heuristics, moderation) — but the FK scaffolding is already in place so no migration is needed.
+
+**Why this is the core strategic bet — four compounding benefits:**
+
+**1. Out-of-stock conversion (buyer side)**  
+On eBay, a sold-out listing is a dead end — the buyer sees "similar items" that may be irrelevant. On Wonni, a sold-out `CatalogItem` page can surface:
+- A "Notify me when back in stock" watchlist button that actually works (we know exactly which item they want)
+- An auto-purchase option (first seller who relists at ≤ $X automatically fulfills it)
+- A real-time count of other sellers currently listing this item
+
+**2. Cancelled order salvage (seller + buyer side)**  
+When Seller A cancels a transaction, Wonni can silently route the order to Seller B who has the same `CatalogItem` in stock — Seller B makes a sale they never would have seen, and the buyer's experience is seamless. This is only possible when you know that two separate `UserListings` represent the same physical item.
+
+**3. Better pricing data (seller side)**  
+Pricing on eBay requires searching "sold listings" manually. A `CatalogItem` accumulates real transaction history across all sellers — median sale price, 30-day trend, seasonal patterns. Wonni can pre-fill a suggested price at listing time with actual confidence. This lowers seller friction and anchors prices to reality.
+
+**4. Demand aggregation for seller acquisition**  
+This is the flywheel nobody sees: when 50 buyers are watching a sold-out `CatalogItem`, that demand signal is invisible to potential sellers today. With the catalog, Wonni can message sellers: *"47 people are actively watching this item and there are 0 in stock — list yours now."* This turns latent buyer demand into direct seller acquisition, without any paid marketing.
+
+**Existing scaffold (already built):**
+- `CatalogItem.swift` — model file exists in `Models/`
+- `UserListing.catalogItemId: String` — FK field present on every listing
+- `SavedItem.catalogItemId: String?` — nil now, ready for catalog migration
+- `InventoryUnit.swift` — per-unit tracking model exists
+- Firestore `favorites` subcollection already stores `catalogItemId` for future watchlist use
+
+**What 1.0 avoids:** Wonni 1.0 ships with `catalogItemId = ""` on all listings (no catalog matching). The UI and data layer treat listings independently. The catalog is introduced post-1.0 via a background matching pass (Gemini identifies item → matches to existing `CatalogItem` or creates a new one) without requiring a client update.
+
+---
+
 ## Building and Running
 
 ```bash
@@ -205,11 +243,15 @@ expiresAt: <Timestamp>   (optional, omit for permanent)
 - [ ] Live search suggestions as user types (debounced Firestore queries or Algolia)
 - [ ] Browse by category
 
-**Listings & Catalog**
-- [ ] `CatalogItem` model integration — shared product data across listings (price history, shared title/description). `UserListing.catalogItemId` is already a FK placeholder.
+**Listings & Catalog** *(see [Product Vision](#the-item-catalog-post-10) for full rationale)*
+- [ ] Background catalog matching pass — Gemini identifies listing item → match to existing `CatalogItem` or create new one (no client update needed)
+- [ ] `CatalogItem` page UI — aggregated photo, price history chart, all active seller listings, out-of-stock watchlist CTA
+- [ ] Watchlist / "Notify me" on `CatalogItem` — push notification when any seller lists a matching item
+- [ ] Auto-purchase option on `CatalogItem` — buyer sets max price, first matching relist auto-fulfills
+- [ ] Cancelled order salvage — when Seller A cancels, route to next available `CatalogItem` seller
+- [ ] Seller demand nudges — "47 people watching, 0 in stock — list yours now"
 - [ ] Category tagging on listings
-- [ ] "Listing playlists" — seller-organized folders (e.g. "K-pop merch > Jungkook")
-- [ ] Price history chart on listing detail
+- [ ] Price history chart on listing detail (catalog-backed)
 
 **Buying**
 - [ ] Checkout flow
