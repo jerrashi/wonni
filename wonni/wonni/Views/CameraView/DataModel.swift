@@ -19,6 +19,7 @@ final class DataModel: ObservableObject, @unchecked Sendable {
     @Published var sessionPhotoAssetIDs: [[String]] = []
     
     var isPhotosLoaded = false
+    var temporaryPhotosData: [String: Data] = [:]
     
     init() {
         Task {
@@ -139,13 +140,22 @@ final class DataModel: ObservableObject, @unchecked Sendable {
     }
     
     func savePhoto(imageData: Data) async -> String {
-        do {
-            let assetId = try await photoCollection.addImage(imageData)
-            logger.debug("Added image data to photo collection with asset ID: \(assetId)")
-            return assetId
-        } catch let error {
-            logger.error("Failed to add image to photo collection: \(error.localizedDescription)")
-            return ""
+        let saveToCameraRoll = UserDefaults.standard.object(forKey: "saveToCameraRoll") as? Bool ?? true
+        if saveToCameraRoll {
+            do {
+                let assetId = try await photoCollection.addImage(imageData)
+                logger.debug("Added image data to photo collection with asset ID: \(assetId)")
+                return assetId
+            } catch let error {
+                logger.error("Failed to add image to photo collection: \(error.localizedDescription)")
+                return ""
+            }
+        } else {
+            let localId = "local_temp_" + UUID().uuidString
+            await MainActor.run {
+                self.temporaryPhotosData[localId] = imageData
+            }
+            return localId
         }
     }
     
@@ -188,16 +198,35 @@ final class DataModel: ObservableObject, @unchecked Sendable {
             let assetIds = sessionPhotoAssetIDs[stackIndex]
             guard !assetIds.isEmpty else { continue }
 
+            var photosDataForDraft: [Data] = []
+            var isLocalPhotoOnly = false
+            for assetId in assetIds {
+                if let data = temporaryPhotosData[assetId] {
+                    photosDataForDraft.append(data)
+                    isLocalPhotoOnly = true
+                }
+            }
+
             let newItem = Item(
+                photosData: photosDataForDraft,
                 blurb: "Draft from \(assetIds.count) camera photos",
                 sourceAssetIdentifiers: assetIds,
-                firestoreListingId: UUID().uuidString
+                firestoreListingId: UUID().uuidString,
+                isLocalPhotoOnly: isLocalPhotoOnly
             )
             modelContext.insert(newItem)
             newDraftIds.append(newItem.id)
 
+            // Add to uploadManager's sessionDraftIDs
+            uploadManager.sessionDraftIDs.append(newItem.id)
+
             uploadManager.startBackgroundUpload(draft: newItem, modelContext: modelContext)
             uploadManager.runLocalRecognition(draft: newItem, modelContext: modelContext)
+            
+            // Clean up temporary photo data that has been committed
+            for assetId in assetIds {
+                temporaryPhotosData.removeValue(forKey: assetId)
+            }
         }
 
         try? modelContext.save()

@@ -107,7 +107,6 @@ struct CustomPhotoPickerView: View {
         @State private var navigateToOverview = false
         @State private var showingDraftHistory = false
         @State private var hidePreviouslySelected = false
-        @State private var sessionDraftIDs: [UUID] = []
         @State private var showingExitAlert = false
         @Environment(\.dismiss) private var dismiss
 
@@ -116,15 +115,8 @@ struct CustomPhotoPickerView: View {
 
         @EnvironmentObject private var uploadManager: UploadManager
 
-        @State private var draggedAsset: PhotoAsset?
-        @State private var isCarouselTrashTargeted = false
-        @State private var carouselCollapsing = false
         @State private var stackBouncing = false
 
-        @State private var showingIdentification = false
-        @State private var lastCreatedListingId: String?
-        @State private var lastCreatedImages: [UIImage] = []
-        
         @Environment(\.displayScale) private var displayScale
         private static let itemSpacing = 2.0
         private var imageSize: CGSize {
@@ -135,11 +127,15 @@ struct CustomPhotoPickerView: View {
             GridItem(.adaptive(minimum: 100, maximum: 150), spacing: 2)
         ]
         
+        /// All SwiftData drafts — shared with camera, no session filter
+        private var allDrafts: [Item] {
+            allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty }
+        }
+        
         var body: some View {
             let currentDrafts = allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty }
             let currentUsedAssetIDs = Set(currentDrafts.flatMap { $0.sourceAssetIdentifiers })
             
-            // (Navigation logic is handled by .navigationDestination modifier below)
             ScrollView {
                 LazyVGrid(columns: columns, spacing: Self.itemSpacing) {
                     if hidePreviouslySelected {
@@ -186,89 +182,59 @@ struct CustomPhotoPickerView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                if !selectedAssets.isEmpty || !currentDrafts.isEmpty {
+                // Bottom bar: unified draft stack row (same look as camera view)
+                if !selectedAssets.isEmpty || !allDrafts.isEmpty {
                     VStack(spacing: 0) {
                         Divider()
-                        
-                        if !selectedAssets.isEmpty {
-                            ScrollViewReader { scrollView in
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 16) {
-                                        ForEach(Array(selectedAssets.enumerated()), id: \.element.id) { index, asset in
-                                            carouselPhotoItem(asset: asset, index: index, selectedAssets: selectedAssets)
-                                        }
+                        HStack(spacing: 12) {
+                            // Draft stacks scroll
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 12) {
+                                    ForEach(allDrafts) { draft in
+                                        DraftStackThumbnailView(draft: draft, cache: photoCollection.cache)
+                                            .scaleEffect(stackBouncing ? 1.08 : 1.0)
+                                            .animation(.spring(response: 0.35, dampingFraction: 0.45), value: stackBouncing)
+                                            .onTapGesture { showingDraftHistory = true }
                                     }
-                                    .padding(.horizontal, 24)
-                                    .padding(.vertical, 12)
-                                }
-                                .frame(height: 84)
-                                .onChange(of: selectedAssets.count) {
-                                    if let last = selectedAssets.last {
-                                        withAnimation {
-                                            scrollView.scrollTo(last.id, anchor: .trailing)
-                                        }
+                                    
+                                    // Currently-selected (not-yet-committed) photos as a preview stack
+                                    if !selectedAssets.isEmpty {
+                                        PendingSelectionStackView(
+                                            assets: selectedAssets,
+                                            cache: photoCollection.cache
+                                        )
                                     }
                                 }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
                             }
-                        }
-                        
-                        HStack {
-                            if !currentDrafts.isEmpty {
-                                Button {
-                                    showingDraftHistory = true
-                                } label: {
-                                    DraftsStackIcon(
-                                        drafts: currentDrafts,
-                                        cache: photoCollection.cache,
-                                        bouncing: stackBouncing
-                                    )
-                                }
-                            } else {
-                                Spacer().frame(width: 60)
-                            }
-
+                            .frame(height: 90)
+                            
                             Spacer()
-
-                            // Trash zone — always visible while photos are selected so
-                            // the user has a stable target; highlights on hover.
-                            if !selectedAssets.isEmpty && !carouselCollapsing {
-                                Image(systemName: isCarouselTrashTargeted ? "trash.circle.fill" : "trash.circle")
-                                    .font(.system(size: 34))
-                                    .foregroundStyle(isCarouselTrashTargeted ? .red : .secondary)
-                                    .scaleEffect(isCarouselTrashTargeted ? 1.15 : 1.0)
-                                    .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isCarouselTrashTargeted)
-                                    .onDrop(of: [.text], isTargeted: $isCarouselTrashTargeted) { _ in
-                                        dropOnCarouselTrash()
+                            
+                            // + button: save current selection as new draft
+                            Button {
+                                guard !selectedAssets.isEmpty else { return }
+                                withAnimation(.easeIn(duration: 0.22)) {
+                                    saveSelectionToDraft()
+                                    selectedAssets.removeAll()
+                                    stackBouncing = true
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                        stackBouncing = false
                                     }
-
-                                Spacer()
-                            }
-
-                            if !selectedAssets.isEmpty {
-                                Button {
-                                    withAnimation(.easeIn(duration: 0.28)) {
-                                        carouselCollapsing = true
-                                    }
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-                                        saveSelectionToDraft()
-                                        selectedAssets.removeAll()
-                                        stackBouncing = true
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                            stackBouncing = false
-                                            carouselCollapsing = false
-                                        }
-                                    }
-                                } label: {
-                                    Image(systemName: "plus.circle.fill")
-                                        .font(.system(size: 40))
                                 }
-                                .disabled(carouselCollapsing)
-                            } else {
-                                Spacer().frame(width: 40)
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 18, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .frame(width: 44, height: 44)
+                                    .background(selectedAssets.isEmpty ? Color.gray.opacity(0.5) : Color.blue)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
                             }
+                            .disabled(selectedAssets.isEmpty)
+                            .padding(.trailing, 16)
                         }
-                        .padding(.horizontal)
-                        .padding(.bottom, 8)
+                        .padding(.bottom, 4)
                     }
                     .background(Color(.systemBackground))
                     .transition(.move(edge: .bottom))
@@ -281,7 +247,7 @@ struct CustomPhotoPickerView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button {
-                        if sessionDraftIDs.isEmpty {
+                        if uploadManager.sessionDraftIDs.isEmpty {
                             dismiss()
                         } else {
                             showingExitAlert = true
@@ -294,10 +260,11 @@ struct CustomPhotoPickerView: View {
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    let canProceed = !selectedAssets.isEmpty || !currentDrafts.isEmpty
+                    let canProceed = !selectedAssets.isEmpty || !allDrafts.isEmpty
                     Button {
                         if !selectedAssets.isEmpty {
                             saveSelectionToDraft()
+                            selectedAssets.removeAll()
                         }
                         navigateToOverview = true
                     } label: {
@@ -315,17 +282,12 @@ struct CustomPhotoPickerView: View {
                     print("Failed to load photos: \(error)")
                 }
             }
-            .sheet(isPresented: $showingIdentification) {
-                if let id = lastCreatedListingId {
-                    IdentificationConfirmationView(listingId: id, images: lastCreatedImages)
-                }
-            }
             .sheet(isPresented: $showingDraftHistory) {
                 DraftHistoryModal(photoCollection: photoCollection)
             }
             .alert("Save Drafts?", isPresented: $showingExitAlert) {
                 Button("Discard", role: .destructive) {
-                    for draft in allItems where sessionDraftIDs.contains(draft.id) {
+                    for draft in allItems where uploadManager.sessionDraftIDs.contains(draft.id) {
                         modelContext.delete(draft)
                     }
                     try? modelContext.save()
@@ -339,7 +301,7 @@ struct CustomPhotoPickerView: View {
                 Text("You have created drafts in this session. Would you like to save or discard them?")
             }
             .navigationDestination(isPresented: $navigateToOverview) {
-                BulkListingOverviewView(sessionDraftIDs: sessionDraftIDs)
+                BulkListingOverviewView(sessionDraftIDs: uploadManager.sessionDraftIDs)
             }
         }
         
@@ -353,52 +315,47 @@ struct CustomPhotoPickerView: View {
             }
         }
 
-        private func dropOnCarouselTrash() -> Bool {
-            guard let dragged = draggedAsset else { return false }
-            withAnimation { selectedAssets.removeAll(where: { $0 == dragged }) }
-            draggedAsset = nil
-            return true
-        }
-
-        @ViewBuilder
-        private func carouselPhotoItem(asset: PhotoAsset, index: Int, selectedAssets: [PhotoAsset]) -> some View {
-            let totalCount = selectedAssets.count
-            let centerIndex = Double(totalCount - 1) / 2.0
-            let direction = Double(index) - centerIndex
-
-            PhotoItemView(asset: asset, cache: photoCollection.cache, imageSize: CGSize(width: 60, height: 60))
-                .frame(width: 60, height: 60)
-                .cornerRadius(8)
-                .id(asset.id)
-                .scaleEffect(carouselCollapsing ? 0.05 : 1.0)
-                .offset(x: carouselCollapsing ? -direction * 28 : 0)
-                .opacity(carouselCollapsing ? 0 : 1)
-                .onDrag {
-                    self.draggedAsset = asset
-                    return NSItemProvider(object: asset.id as NSString)
-                }
-                .onDrop(of: [.text], delegate: PhotoAssetDropDelegate(item: asset, items: $selectedAssets, draggedItem: $draggedAsset))
-        }
-
         private func saveSelectionToDraft() {
             guard !selectedAssets.isEmpty else { return }
-
             let assetsToUpload = selectedAssets
-
-            // Pre-generate the listing ID so Storage path is known without a Firestore round-trip.
             let newItem = Item(
+                photosData: [],
                 blurb: "Draft from \(assetsToUpload.count) selected photos",
                 sourceAssetIdentifiers: assetsToUpload.map { $0.id },
                 firestoreListingId: UUID().uuidString
             )
             modelContext.insert(newItem)
             try? modelContext.save()
-            sessionDraftIDs.append(newItem.id)
-
+            uploadManager.sessionDraftIDs.append(newItem.id)
             uploadManager.startBackgroundUpload(draft: newItem, modelContext: modelContext)
             uploadManager.runLocalRecognition(draft: newItem, modelContext: modelContext)
         }
     }
+
+    // MARK: - Pending selection preview stack (photos not yet committed)
+    struct PendingSelectionStackView: View {
+        let assets: [PhotoAsset]
+        let cache: CachedImageManager
+        var body: some View {
+            ZStack {
+                ForEach(0..<min(3, assets.count), id: \.self) { index in
+                    let offset = CGFloat(index) * 5
+                    PhotoItemView(asset: assets[index], cache: cache, imageSize: CGSize(width: 120, height: 120))
+                        .frame(width: 60, height: 60)
+                        .cornerRadius(10)
+                        .clipped()
+                        .overlay(RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.white.opacity(0.8), lineWidth: 1.5))
+                        .shadow(color: .black.opacity(0.2), radius: 3, x: 2, y: 2)
+                        .offset(x: offset, y: -offset)
+                        .zIndex(Double(3 - index))
+                }
+            }
+            .frame(width: 76, height: 76)
+            .opacity(0.7) // slightly dimmed to indicate uncommitted
+        }
+    }
+    
     
     // MARK: - DropDelegate
     struct PhotoAssetDropDelegate: DropDelegate {
@@ -447,9 +404,7 @@ struct CustomPhotoPickerView: View {
                     if let from = draft.sourceAssetIdentifiers.firstIndex(of: assetId),
                        let to = draft.sourceAssetIdentifiers.firstIndex(of: targetAssetId) {
                         withAnimation {
-                            var ids = draft.sourceAssetIdentifiers
-                            ids.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
-                            draft.sourceAssetIdentifiers = ids
+                            draft.movePhoto(from: from, to: to)
                         }
                     }
                 }
@@ -469,17 +424,9 @@ struct CustomPhotoPickerView: View {
 
             if sourceDraftId != draft.id.uuidString {
                 if let sourceDraft = drafts.first(where: { $0.id.uuidString == sourceDraftId }) {
-                    var sourceIds = sourceDraft.sourceAssetIdentifiers
-                    sourceIds.removeAll(where: { $0 == assetId })
-                    sourceDraft.sourceAssetIdentifiers = sourceIds
-
-                    var destIds = draft.sourceAssetIdentifiers
-                    if let to = draft.sourceAssetIdentifiers.firstIndex(of: targetAssetId) {
-                        destIds.insert(assetId, at: to)
-                    } else {
-                        destIds.append(assetId)
-                    }
-                    draft.sourceAssetIdentifiers = destIds
+                    let data = sourceDraft.removePhoto(assetId: assetId)
+                    let toIdx = draft.sourceAssetIdentifiers.firstIndex(of: targetAssetId) ?? draft.sourceAssetIdentifiers.count
+                    draft.insertPhoto(assetId: assetId, data: data, at: toIdx)
                     try? modelContext.save()
                 }
             } else {
@@ -514,9 +461,9 @@ struct CustomPhotoPickerView: View {
             let sourceDraftId = parts[0], assetId = parts[1]
             guard sourceDraftId != draft.id.uuidString else { return false }
             if let sourceDraft = allDrafts.first(where: { $0.id.uuidString == sourceDraftId }) {
-                sourceDraft.sourceAssetIdentifiers.removeAll(where: { $0 == assetId })
+                let data = sourceDraft.removePhoto(assetId: assetId)
                 if sourceDraft.sourceAssetIdentifiers.isEmpty { modelContext.delete(sourceDraft) }
-                draft.sourceAssetIdentifiers.append(assetId)
+                draft.insertPhoto(assetId: assetId, data: data, at: draft.sourceAssetIdentifiers.count)
                 try? modelContext.save()
             }
             draggedCompositeId = nil
@@ -604,23 +551,32 @@ struct CustomPhotoPickerView: View {
                                                     let asset = PhotoAsset(identifier: assetId)
 
                                                     ZStack(alignment: .topTrailing) {
-                                                        PhotoItemView(asset: asset, cache: photoCollection.cache, imageSize: CGSize(width: 80, height: 80))
-                                                            .frame(width: 80, height: 80)
-                                                            .cornerRadius(8)
-                                                            .onDrag {
-                                                                if !isSelectionMode {
-                                                                    draggedCompositeId = compositeId
-                                                                    return NSItemProvider(object: compositeId as NSString)
-                                                                }
-                                                                return NSItemProvider()
+                                                        Group {
+                                                            if let uiImage = draft.image(for: assetId) {
+                                                                Image(uiImage: uiImage)
+                                                                    .resizable()
+                                                                    .scaledToFill()
+                                                            } else {
+                                                                PhotoItemView(asset: asset, cache: photoCollection.cache, imageSize: CGSize(width: 80, height: 80))
                                                             }
-                                                            .onDrop(of: [.text], delegate: DraftPhotoDropDelegate(
-                                                                targetAssetId: assetId,
-                                                                draft: draft,
-                                                                draggedCompositeId: $draggedCompositeId,
-                                                                modelContext: modelContext,
-                                                                drafts: drafts
-                                                            ))
+                                                        }
+                                                        .frame(width: 80, height: 80)
+                                                        .cornerRadius(8)
+                                                        .clipped()
+                                                        .onDrag {
+                                                            if !isSelectionMode {
+                                                                draggedCompositeId = compositeId
+                                                                return NSItemProvider(object: compositeId as NSString)
+                                                            }
+                                                            return NSItemProvider()
+                                                        }
+                                                        .onDrop(of: [.text], delegate: DraftPhotoDropDelegate(
+                                                            targetAssetId: assetId,
+                                                            draft: draft,
+                                                            draggedCompositeId: $draggedCompositeId,
+                                                            modelContext: modelContext,
+                                                            drafts: drafts
+                                                        ))
 
                                                         if isSelectionMode {
                                                             Image(systemName: selectedPhotos.contains(compositeId) ? "checkmark.circle.fill" : "circle")
@@ -759,11 +715,15 @@ struct CustomPhotoPickerView: View {
                     if selectedCount == draftCompositeIDs.count {
                         modelContext.delete(draft)
                     } else {
-                        var updatedPhotos = draft.sourceAssetIdentifiers
-                        updatedPhotos.removeAll { assetId in
-                            selectedPhotos.contains("\(draft.id.uuidString)|\(assetId)")
+                        var toRemove: [String] = []
+                        for assetId in draft.sourceAssetIdentifiers {
+                            if selectedPhotos.contains("\(draft.id.uuidString)|\(assetId)") {
+                                toRemove.append(assetId)
+                            }
                         }
-                        draft.sourceAssetIdentifiers = updatedPhotos
+                        for assetId in toRemove {
+                            _ = draft.removePhoto(assetId: assetId)
+                        }
                     }
                 }
             }
@@ -799,7 +759,7 @@ struct CustomPhotoPickerView: View {
             guard parts.count == 2 else { return false }
             let sourceDraftId = parts[0], assetId = parts[1]
             if let sourceDraft = allItems.first(where: { $0.id.uuidString == sourceDraftId }) {
-                sourceDraft.sourceAssetIdentifiers.removeAll(where: { $0 == assetId })
+                _ = sourceDraft.removePhoto(assetId: assetId)
                 if sourceDraft.sourceAssetIdentifiers.isEmpty { modelContext.delete(sourceDraft) }
                 try? modelContext.save()
             }
@@ -831,14 +791,22 @@ struct DraftRow: View {
                 // Photo thumbnail
                 Group {
                     if let assetId = item.sourceAssetIdentifiers.first {
-                        PhotoItemView(
-                            asset: PhotoAsset(identifier: assetId),
-                            cache: cache,
-                            imageSize: CGSize(width: 160, height: 160)
-                        )
-                        .scaledToFill()
+                        Group {
+                            if let uiImage = item.image(for: assetId) {
+                                Image(uiImage: uiImage)
+                                    .resizable()
+                                    .scaledToFill()
+                            } else {
+                                PhotoItemView(
+                                    asset: PhotoAsset(identifier: assetId),
+                                    cache: cache,
+                                    imageSize: CGSize(width: 160, height: 160)
+                                )
+                            }
+                        }
                         .frame(width: 76, height: 76)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .clipped()
                     } else {
                         RoundedRectangle(cornerRadius: 10)
                             .fill(Color(.systemGray5))
