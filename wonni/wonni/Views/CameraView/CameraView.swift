@@ -1,5 +1,5 @@
 /*
-See the License.txt file for this sample's licensing information.
+CameraView.swift
 */
 
 import SwiftUI
@@ -12,18 +12,23 @@ struct CameraView: View {
     @Query private var allItems: [Item]
 
     @State private var isFlashing = false
-    @State private var showingModal = false
-    @State private var selectedStackIndex = 0
+    @State private var showingDraftHistory = false   // replaces PhotoStackModalView
     @State private var showingPicker = false
     @State private var navigatingToDrafts = false
+    @State private var stackBouncing = false
+    @State private var draggedSessionPhoto: SessionPhotoID? = nil  // for carousel D&D
     @AppStorage("showCameraGrid") private var showGrid: Bool = false
-
 
     // All SwiftData drafts — shared with picker, no session filter
     private var allDrafts: [Item] {
         allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty }
     }
-    
+
+    // True when the session has at least one captured photo
+    private var hasSessionPhotos: Bool {
+        model.sessionPhotos.contains { !$0.isEmpty }
+    }
+
     var body: some View {
         NavigationStack {
             GeometryReader { geo in
@@ -59,22 +64,18 @@ struct CameraView: View {
                         }
                         .offset(y: topBarH)
 
-                    // 3. Top bar — safe-area-aware so it clears Dynamic Island /
-                    //    notch / iOS 26 status bar on every screen size
+                    // 3. Top bar — safe-area-aware
                     topBarView(safeTop: safeTop)
                         .frame(height: topBarH)
                         .frame(maxWidth: .infinity)
 
                     // 4. Bottom controls pinned to the screen bottom.
-                    //    The blank space between the viewfinder bottom and these
-                    //    controls is intentional — the draft scroll view will
-                    //    eventually live there.
+                    //    Space above this (between viewfinder bottom and controls)
+                    //    is reserved for the future drafts scroll view.
                     VStack(spacing: 8) {
-                        // Draft stacks row (all drafts: camera + picker, shared)
-                        if !model.sessionPhotos.flatMap({ $0 }).isEmpty || !allDrafts.isEmpty {
-                            pickerAndCameraStacksRow()
-                                .transition(.move(edge: .bottom).combined(with: .opacity))
-                        }
+                        // Session carousel OR draft thumbnails row
+                        bottomPanelContent()
+                        // Shutter bar
                         cameraButtonsView()
                     }
                     .padding(.horizontal, 20)
@@ -91,12 +92,9 @@ struct CameraView: View {
                 await model.loadPhotos()
                 await model.loadThumbnail()
             }
-            .sheet(isPresented: $showingModal) {
-                PhotoStackModalView(
-                    dataModel: model,
-                    isPresented: $showingModal,
-                    stackIndex: selectedStackIndex
-                )
+            // DraftHistoryModal — same sheet used by photo picker view
+            .sheet(isPresented: $showingDraftHistory) {
+                CustomPhotoPickerView.DraftHistoryModal(photoCollection: model.photoCollection)
             }
             .navigationDestination(isPresented: $showingPicker) {
                 CustomPhotoPickerView()
@@ -140,11 +138,13 @@ struct CameraView: View {
 
             Spacer()
 
-            let hasPhotos = !model.sessionPhotos.flatMap({ $0 }).isEmpty || !allDrafts.isEmpty
+            let hasPhotos = hasSessionPhotos || !allDrafts.isEmpty
             if hasPhotos {
                 Button {
                     Task {
-                        _ = await model.commitStacksAsDrafts(modelContext: modelContext, uploadManager: uploadManager)
+                        if hasSessionPhotos {
+                            _ = await model.commitStacksAsDrafts(modelContext: modelContext, uploadManager: uploadManager)
+                        }
                         navigatingToDrafts = true
                     }
                 } label: {
@@ -167,42 +167,120 @@ struct CameraView: View {
         .padding(.top, safeTop + 8)
     }
 
-    // MARK: - Unified draft + camera stacks row
+    // MARK: - Bottom panel content
 
     @ViewBuilder
-    private func pickerAndCameraStacksRow() -> some View {
+    private func bottomPanelContent() -> some View {
+        if hasSessionPhotos {
+            // Active session: flat drag-to-reorder carousel (same as photo picker)
+            sessionPhotoCarousel()
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        } else if !allDrafts.isEmpty {
+            // No active session: show committed draft thumbnails
+            draftThumbnailsRow()
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    // MARK: - Session photo carousel (flat, all stacks, draggable)
+
+    @ViewBuilder
+    private func sessionPhotoCarousel() -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
-                // Camera-session stacks (in-memory UIImage stacks)
-                ForEach(0..<model.sessionPhotos.count, id: \.self) { stackIndex in
-                    let photos = model.sessionPhotos[stackIndex]
+            HStack(spacing: 0) {
+                ForEach(model.sessionPhotos.indices, id: \.self) { stackIdx in
+                    let photos = model.sessionPhotos[stackIdx]
                     if !photos.isEmpty {
-                        CameraSessionStackView(photos: photos)
-                            .onTapGesture {
-                                selectedStackIndex = stackIndex
-                                showingModal = true
+                        // Stack divider (not before first stack)
+                        if stackIdx > 0 {
+                            Rectangle()
+                                .fill(Color.white.opacity(0.3))
+                                .frame(width: 1, height: 64)
+                                .padding(.horizontal, 6)
+                        }
+
+                        HStack(spacing: 8) {
+                            ForEach(photos.indices, id: \.self) { photoIdx in
+                                let pid = SessionPhotoID(stackIdx: stackIdx, photoIdx: photoIdx)
+                                sessionPhotoCell(image: photos[photoIdx], id: pid)
                             }
+                        }
                     }
                 }
 
-                // All SwiftData drafts (camera-committed + picker)
+                // Committed draft thumbnails shown at the end of the carousel
+                if !allDrafts.isEmpty {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.2))
+                        .frame(width: 1, height: 64)
+                        .padding(.horizontal, 8)
+
+                    ForEach(allDrafts) { draft in
+                        DraftStackThumbnailView(draft: draft, cache: model.photoCollection.cache)
+                            .scaleEffect(stackBouncing ? 1.08 : 1.0)
+                            .animation(.spring(response: 0.35, dampingFraction: 0.45), value: stackBouncing)
+                            .onTapGesture { showingDraftHistory = true }
+                            .padding(.leading, 4)
+                    }
+                }
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 6)
+        }
+        .frame(height: 94)
+    }
+
+    @ViewBuilder
+    private func sessionPhotoCell(image: UIImage, id: SessionPhotoID) -> some View {
+        let isDragged = draggedSessionPhoto == id
+
+        Image(uiImage: image)
+            .resizable()
+            .scaledToFill()
+            .frame(width: 72, height: 72)
+            .cornerRadius(10)
+            .clipped()
+            .overlay(RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.white.opacity(0.8), lineWidth: 1.5))
+            .shadow(color: .black.opacity(0.3), radius: 3, x: 2, y: 2)
+            .opacity(isDragged ? 0.4 : 1.0)
+            .scaleEffect(isDragged ? 0.92 : 1.0)
+            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isDragged)
+            .onDrag {
+                draggedSessionPhoto = id
+                return NSItemProvider(object: "\(id.stackIdx)|\(id.photoIdx)" as NSString)
+            }
+            .onDrop(of: [.text], delegate: SessionPhotoDropDelegate(
+                target: id,
+                model: model,
+                draggedPhoto: $draggedSessionPhoto
+            ))
+    }
+
+    // MARK: - Draft-only thumbnails row (no active session)
+
+    @ViewBuilder
+    private func draftThumbnailsRow() -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
                 ForEach(allDrafts) { draft in
                     DraftStackThumbnailView(draft: draft, cache: model.photoCollection.cache)
+                        .onTapGesture { showingDraftHistory = true }
                 }
             }
             .padding(.horizontal, 4)
         }
-        .frame(height: 82)
+        .frame(height: 88)
     }
 
     // MARK: - Bottom camera buttons
 
     private func cameraButtonsView() -> some View {
         HStack(spacing: 0) {
-            // Gallery / picker button — commit any in-progress camera stacks first
+            // Gallery / picker button
             Button {
                 Task {
-                    if !model.sessionPhotos.flatMap({ $0 }).isEmpty {
+                    if hasSessionPhotos {
                         _ = await model.commitStacksAsDrafts(modelContext: modelContext, uploadManager: uploadManager)
                     }
                     showingPicker = true
@@ -239,48 +317,79 @@ struct CameraView: View {
 
             Spacer()
 
-            // Add new stack button  (same as + in picker)
+            // "+" — commit current session stacks immediately → starts upload
             Button {
-                model.addNewStack()
+                guard hasSessionPhotos else { return }
+                withAnimation(.easeIn(duration: 0.22)) {
+                    Task {
+                        _ = await model.commitStacksAsDrafts(modelContext: modelContext, uploadManager: uploadManager)
+                        stackBouncing = true
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                        stackBouncing = false
+                    }
+                }
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundColor(.white)
                     .frame(width: 44, height: 44)
-                    .background(Color.blue)
+                    .background(hasSessionPhotos ? Color.blue : Color.gray.opacity(0.4))
                     .clipShape(RoundedRectangle(cornerRadius: 10))
             }
-            .opacity(model.sessionPhotos.flatMap({ $0 }).isEmpty ? 0 : 1)
+            .disabled(!hasSessionPhotos)
         }
         .buttonStyle(.plain)
     }
+}
 
-    // MARK: - Nested subviews
+// MARK: - Session Photo Identity (for drag & drop)
 
-    private struct CameraSessionStackView: View {
-        let photos: [UIImage]
-        var body: some View {
-            let count = photos.count
-            ZStack {
-                ForEach(0..<min(3, count), id: \.self) { index in
-                    let offset = CGFloat(index) * 5
-                    Image(uiImage: photos[index])
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 60, height: 60)
-                        .cornerRadius(10)
-                        .clipped()
-                        .overlay(RoundedRectangle(cornerRadius: 10)
-                            .stroke(Color.white.opacity(0.8), lineWidth: 1.5))
-                        .shadow(color: .black.opacity(0.3), radius: 3, x: 2, y: 2)
-                        .offset(x: offset, y: -offset)
-                        .zIndex(Double(3 - index))
-                }
-            }
-            .frame(width: 76, height: 76)
+struct SessionPhotoID: Equatable {
+    let stackIdx: Int
+    let photoIdx: Int
+}
+
+// MARK: - Session Photo Drop Delegate
+
+struct SessionPhotoDropDelegate: DropDelegate {
+    let target: SessionPhotoID
+    let model: DataModel
+    @Binding var draggedPhoto: SessionPhotoID?
+
+    func dropEntered(info: DropInfo) {
+        guard let dragged = draggedPhoto, dragged != target else { return }
+
+        if dragged.stackIdx == target.stackIdx {
+            // Reorder within same stack
+            model.movePhotoWithinStack(
+                stackIndex: dragged.stackIdx,
+                from: dragged.photoIdx,
+                to: target.photoIdx
+            )
+            draggedPhoto = SessionPhotoID(stackIdx: target.stackIdx, photoIdx: target.photoIdx)
+        } else {
+            // Move between stacks
+            model.movePhotoBetweenStacks(
+                fromStack: dragged.stackIdx,
+                fromIndex: dragged.photoIdx,
+                toStack: target.stackIdx,
+                toIndex: target.photoIdx
+            )
+            draggedPhoto = SessionPhotoID(stackIdx: target.stackIdx, photoIdx: target.photoIdx)
         }
     }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        return DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggedPhoto = nil
+        return true
+    }
 }
+
+// MARK: - Camera Grid Overlay
 
 struct CameraGridOverlay: View {
     var body: some View {
