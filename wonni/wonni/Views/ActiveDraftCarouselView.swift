@@ -98,7 +98,7 @@ struct ActiveDraftCarouselView: View {
                 .animation(.easeInOut(duration: 0.15), value: hasActive)
             }
             .sheet(isPresented: $showingDraftHistory) {
-                CustomPhotoPickerView.DraftHistoryModal(photoCollection: PhotoCollection(smartAlbum: .smartAlbumUserLibrary))
+                DraftHistoryModal(photoCollection: PhotoCollection(smartAlbum: .smartAlbumUserLibrary))
             }
         }
     }
