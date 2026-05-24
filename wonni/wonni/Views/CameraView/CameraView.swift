@@ -191,21 +191,17 @@ struct CameraView: View {
 
             Spacer()
 
-            // "+" — commit active draft, start new one
-            // (mirrors the + in ActiveDraftCarouselView but lives in the shutter row)
+            // Switch camera button
             Button {
-                guard hasActiveDraft else { return }
-                uploadManager.commitActiveDraft(modelContext: modelContext)
+                model.camera.switchCaptureDevice()
             } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 18, weight: .bold))
+                Image(systemName: "camera.rotate")
+                    .font(.system(size: 20, weight: .semibold))
                     .foregroundColor(.white)
-                    .frame(width: 44, height: 44)
-                    .background(hasActiveDraft ? Color.blue : Color.gray.opacity(0.4))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .frame(width: 46, height: 46)
+                    .background(Color.white.opacity(0.18))
+                    .clipShape(Circle())
             }
-            .disabled(!hasActiveDraft)
-            .animation(.easeInOut(duration: 0.15), value: hasActiveDraft)
         }
         .padding(.horizontal, 20)
         .buttonStyle(.plain)
