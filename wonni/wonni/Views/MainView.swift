@@ -43,14 +43,9 @@ struct MainView: View {
                         .environmentObject(uploadManager)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-                if uploadManager.isPillVisible {
-                    UploadPillView()
-                        .environmentObject(uploadManager)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
             }
             .animation(.spring(response: 0.35, dampingFraction: 0.8),
-                        value: uploadManager.isPillVisible || uploadManager.isProcessPillVisible)
+                        value: uploadManager.isProcessPillVisible)
         }
         .fullScreenCover(isPresented: Binding(
             get: { authManager.currentUser == nil },

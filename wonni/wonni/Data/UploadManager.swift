@@ -176,16 +176,30 @@ class UploadManager: ObservableObject {
 
             var photoPaths: [String] = []
             for (imgIdx, image) in images.enumerated() {
-                do {
-                    print("[UploadManager] Uploading image \(imgIdx+1)/\(images.count) for \(draft.id)...")
-                    let path = try await StorageService.shared.uploadListingImage(
-                        image: image, index: imgIdx, userId: userId, listingId: listingId
-                    )
-                    photoPaths.append(path)
-                    uploadStatuses[draft.id] = .uploading(Double(imgIdx + 1) / Double(images.count))
-                    recalcUploadProgress()
-                } catch {
-                    print("[UploadManager] Upload error for \(draft.id) index \(imgIdx): \(error)")
+                var success = false
+                var attempts = 0
+                let maxAttempts = 5
+                var delaySeconds = 2.0
+                
+                while !success && attempts < maxAttempts && !Task.isCancelled {
+                    attempts += 1
+                    do {
+                        print("[UploadManager] Uploading image \(imgIdx+1)/\(images.count) for \(draft.id) (attempt \(attempts))...")
+                        let path = try await StorageService.shared.uploadListingImage(
+                            image: image, index: imgIdx, userId: userId, listingId: listingId
+                        )
+                        photoPaths.append(path)
+                        uploadStatuses[draft.id] = .uploading(Double(imgIdx + 1) / Double(images.count))
+                        recalcUploadProgress()
+                        success = true
+                    } catch {
+                        print("[UploadManager] Upload error for \(draft.id) index \(imgIdx) (attempt \(attempts)): \(error)")
+                        if attempts < maxAttempts {
+                            print("[UploadManager] Retrying in \(delaySeconds) seconds...")
+                            try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
+                            delaySeconds *= 2.0 // Exponential backoff
+                        }
+                    }
                 }
             }
 
@@ -193,18 +207,11 @@ class UploadManager: ObservableObject {
             try? modelContext.save()
             print("[UploadManager] Upload complete for \(draft.id): \(photoPaths.count) paths saved")
 
-            let failed = photoPaths.isEmpty || photoPaths.count < images.count
+            let failed = photoPaths.count < images.count
             uploadStatuses[draft.id] = failed ? .failed : .done
-            if failed {
-                isPillVisible = true
-            }
             activeUploadCount -= 1
             if activeUploadCount <= 0 {
                 isUploadingPhotos = false
-                if !uploadStatuses.values.contains(.failed) {
-                    try? await Task.sleep(nanoseconds: 1_500_000_000)
-                    isPillVisible = false
-                }
             }
         }
     }
@@ -409,10 +416,10 @@ class UploadManager: ObservableObject {
             for draft in drafts {
                 print("[UploadManager] Publishing draft \(draft.id)")
 
-                // Upload photos if background upload didn't complete
+                // Upload photos if background upload didn't complete fully
                 var photoPaths = draft.firebasePhotoPaths ?? []
-                if photoPaths.isEmpty {
-                    print("[UploadManager] No photo paths for \(draft.id) — uploading now")
+                if photoPaths.count < draft.sourceAssetIdentifiers.count {
+                    print("[UploadManager] Incomplete photo paths (\(photoPaths.count)/\(draft.sourceAssetIdentifiers.count)) for \(draft.id) — uploading now")
                     photoPaths = await uploadPhotosForDraft(draft, userId: userId, modelContext: modelContext)
                 }
 
