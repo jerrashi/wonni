@@ -31,6 +31,12 @@ class UploadManager: ObservableObject {
     @Published var shouldReturnToRoot = false
     @Published var sessionDraftIDs: [UUID] = []
 
+    // ── Active Draft (shared between camera and picker) ──────────────────────
+    /// The UUID of the Item currently being built by the user.
+    /// Both camera (photo capture) and picker (photo selection) write to this
+    /// same Item. Persists across navigation and app restarts.
+    @Published var activeDraftID: UUID? = nil
+
     // ── Photo Upload Phase ─────────────────────────────────────────────────
     @Published var isUploadingPhotos = false
     @Published var uploadProgress: Double = 0
@@ -68,6 +74,57 @@ class UploadManager: ObservableObject {
         let remaining = elapsed * (1 - uploadProgress) / uploadProgress
         if remaining < 60 { return "~\(max(1, Int(remaining)))s" }
         return "~\(Int((remaining / 60).rounded(.up))) min"
+    }
+
+    // MARK: – Active Draft Management
+
+    /// Adds a photo to the current active draft, creating one if needed.
+    /// Called by camera (after capture) and picker (on photo tap).
+    func addPhotoToActiveDraft(assetId: String, imageData: Data?, modelContext: ModelContext) {
+        let draft: Item
+        if let existingID = activeDraftID,
+           let existing = (try? modelContext.fetch(FetchDescriptor<Item>()))?.first(where: { $0.id == existingID }) {
+            draft = existing
+        } else {
+            draft = Item(firestoreListingId: UUID().uuidString)
+            modelContext.insert(draft)
+            activeDraftID = draft.id
+        }
+
+        draft.sourceAssetIdentifiers.append(assetId)
+        if let data = imageData {
+            draft.photosData.append(data)
+            draft.isLocalPhotoOnly = true
+        }
+        try? modelContext.save()
+    }
+
+    /// Removes a photo from the active draft (deselect in picker, or delete in carousel).
+    func removePhotoFromActiveDraft(assetId: String, modelContext: ModelContext) {
+        guard let id = activeDraftID,
+              let draft = (try? modelContext.fetch(FetchDescriptor<Item>()))?.first(where: { $0.id == id }) else { return }
+        _ = draft.removePhoto(assetId: assetId)
+        if draft.sourceAssetIdentifiers.isEmpty {
+            modelContext.delete(draft)
+            activeDraftID = nil
+        }
+        try? modelContext.save()
+    }
+
+    /// Commits the active draft: starts background upload, resets activeDraftID.
+    /// "Starting a new stack" in either view calls this.
+    func commitActiveDraft(modelContext: ModelContext) {
+        guard let id = activeDraftID,
+              let draft = (try? modelContext.fetch(FetchDescriptor<Item>()))?.first(where: { $0.id == id }),
+              !draft.sourceAssetIdentifiers.isEmpty else {
+            activeDraftID = nil
+            return
+        }
+        sessionDraftIDs.append(draft.id)
+        startBackgroundUpload(draft: draft, modelContext: modelContext)
+        runLocalRecognition(draft: draft, modelContext: modelContext)
+        activeDraftID = nil
+        try? modelContext.save()
     }
 
     // MARK: – Phase 1: Background Photo Upload
@@ -448,6 +505,7 @@ class UploadManager: ObservableObject {
         uploadStartTime = nil
         activeUploadCount = 0
         sessionDraftIDs.removeAll()
+        activeDraftID = nil
     }
 
     // MARK: – On-device Vision Recognition

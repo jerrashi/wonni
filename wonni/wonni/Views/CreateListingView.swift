@@ -52,16 +52,17 @@ struct DraftsStackIcon: View {
 
 struct SelectablePhotoGridItem: View {
     let asset: PhotoAsset
-    let selectedAssets: [PhotoAsset]
-    let usedAssetIDs: Set<String>
+    let activeAssetIDs: Set<String>       // IDs in the current active draft
+    let activeAssetOrder: [String]         // Ordered IDs for badge numbering
+    let usedAssetIDs: Set<String>          // All used IDs (active + committed)
     let cache: CachedImageManager
     let imageSize: CGSize
     let toggleAction: () -> Void
-    
-    var isSelected: Bool { selectedAssets.contains(asset) }
-    var isDrafted: Bool { usedAssetIDs.contains(asset.id) }
-    var selectionIndex: Int? { selectedAssets.firstIndex(of: asset) }
-    
+
+    var isSelected: Bool { activeAssetIDs.contains(asset.id) }
+    var isDrafted: Bool { !isSelected && usedAssetIDs.contains(asset.id) }
+    var selectionIndex: Int? { activeAssetOrder.firstIndex(of: asset.id) }
+
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.clear
@@ -78,7 +79,7 @@ struct SelectablePhotoGridItem: View {
                 .onAppear {
                     Task { await cache.startCaching(for: [asset], targetSize: imageSize) }
                 }
-            
+
             if let index = selectionIndex {
                 Circle()
                     .fill(Color.blue)
@@ -103,7 +104,6 @@ struct SelectablePhotoGridItem: View {
 
 struct CustomPhotoPickerView: View {
         @StateObject var photoCollection = PhotoCollection(smartAlbum: .smartAlbumUserLibrary)
-        @State private var selectedAssets: [PhotoAsset] = []
         @State private var navigateToOverview = false
         @State private var showingDraftHistory = false
         @State private var hidePreviouslySelected = false
@@ -115,49 +115,66 @@ struct CustomPhotoPickerView: View {
 
         @EnvironmentObject private var uploadManager: UploadManager
 
-        @State private var stackBouncing = false
-
         @Environment(\.displayScale) private var displayScale
         private static let itemSpacing = 2.0
         private var imageSize: CGSize {
             return CGSize(width: 100 * min(displayScale, 2), height: 100 * min(displayScale, 2))
         }
-        
+
         let columns = [
             GridItem(.adaptive(minimum: 100, maximum: 150), spacing: 2)
         ]
-        
-        /// All SwiftData drafts — shared with camera, no session filter
-        private var allDrafts: [Item] {
-            allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty }
+
+        /// Active draft being built right now
+        private var activeDraft: Item? {
+            guard let id = uploadManager.activeDraftID else { return nil }
+            return allItems.first { $0.id == id }
+        }
+
+        /// Asset IDs in the active draft — used for grid badges
+        private var activeDraftAssetIDs: Set<String> {
+            Set(activeDraft?.sourceAssetIdentifiers ?? [])
+        }
+
+        /// Committed drafts (not the active one)
+        private var committedDrafts: [Item] {
+            let activeID = uploadManager.activeDraftID
+            return allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && $0.id != activeID }
+        }
+
+        /// All used asset IDs (active + committed) — for the "Hide previously selected" toggle
+        private var allUsedAssetIDs: Set<String> {
+            let committed = committedDrafts.flatMap { $0.sourceAssetIdentifiers }
+            return activeDraftAssetIDs.union(committed)
         }
         
         var body: some View {
-            let currentDrafts = allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty }
-            let currentUsedAssetIDs = Set(currentDrafts.flatMap { $0.sourceAssetIdentifiers })
-            
+            let currentUsedAssetIDs = allUsedAssetIDs
+
             ScrollView {
                 LazyVGrid(columns: columns, spacing: Self.itemSpacing) {
                     if hidePreviouslySelected {
                         ForEach(photoCollection.photoAssets.filter { !currentUsedAssetIDs.contains($0.id) }) { asset in
                             SelectablePhotoGridItem(
                                 asset: asset,
-                                selectedAssets: selectedAssets,
+                                activeAssetIDs: activeDraftAssetIDs,
+                                activeAssetOrder: activeDraft?.sourceAssetIdentifiers ?? [],
                                 usedAssetIDs: currentUsedAssetIDs,
                                 cache: photoCollection.cache,
                                 imageSize: imageSize,
-                                toggleAction: { toggleSelection(asset) }
+                                toggleAction: { togglePhoto(asset) }
                             )
                         }
                     } else {
                         ForEach(photoCollection.photoAssets) { asset in
                             SelectablePhotoGridItem(
                                 asset: asset,
-                                selectedAssets: selectedAssets,
+                                activeAssetIDs: activeDraftAssetIDs,
+                                activeAssetOrder: activeDraft?.sourceAssetIdentifiers ?? [],
                                 usedAssetIDs: currentUsedAssetIDs,
                                 cache: photoCollection.cache,
                                 imageSize: imageSize,
-                                toggleAction: { toggleSelection(asset) }
+                                toggleAction: { togglePhoto(asset) }
                             )
                         }
                     }
@@ -182,59 +199,14 @@ struct CustomPhotoPickerView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                // Bottom bar: unified draft stack row (same look as camera view)
-                if !selectedAssets.isEmpty || !allDrafts.isEmpty {
+                // Unified carousel — identical to camera view bottom panel
+                let hasContent = activeDraft?.sourceAssetIdentifiers.isEmpty == false
+                    || !committedDrafts.isEmpty
+                if hasContent {
                     VStack(spacing: 0) {
                         Divider()
-                        HStack(spacing: 12) {
-                            // Draft stacks scroll
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 12) {
-                                    ForEach(allDrafts) { draft in
-                                        DraftStackThumbnailView(draft: draft, cache: photoCollection.cache)
-                                            .scaleEffect(stackBouncing ? 1.08 : 1.0)
-                                            .animation(.spring(response: 0.35, dampingFraction: 0.45), value: stackBouncing)
-                                            .onTapGesture { showingDraftHistory = true }
-                                    }
-                                    
-                                    // Currently-selected (not-yet-committed) photos as a preview stack
-                                    if !selectedAssets.isEmpty {
-                                        PendingSelectionStackView(
-                                            assets: selectedAssets,
-                                            cache: photoCollection.cache
-                                        )
-                                    }
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 10)
-                            }
-                            .frame(height: 90)
-                            
-                            Spacer()
-                            
-                            // + button: save current selection as new draft
-                            Button {
-                                guard !selectedAssets.isEmpty else { return }
-                                withAnimation(.easeIn(duration: 0.22)) {
-                                    saveSelectionToDraft()
-                                    selectedAssets.removeAll()
-                                    stackBouncing = true
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                        stackBouncing = false
-                                    }
-                                }
-                            } label: {
-                                Image(systemName: "plus")
-                                    .font(.system(size: 18, weight: .bold))
-                                    .foregroundColor(.white)
-                                    .frame(width: 44, height: 44)
-                                    .background(selectedAssets.isEmpty ? Color.gray.opacity(0.5) : Color.blue)
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                            }
-                            .disabled(selectedAssets.isEmpty)
-                            .padding(.trailing, 16)
-                        }
-                        .padding(.bottom, 4)
+                        ActiveDraftCarouselView(cache: photoCollection.cache)
+                            .padding(.bottom, 4)
                     }
                     .background(Color(.systemBackground))
                     .transition(.move(edge: .bottom))
@@ -247,7 +219,7 @@ struct CustomPhotoPickerView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button {
-                        if uploadManager.sessionDraftIDs.isEmpty {
+                        if uploadManager.sessionDraftIDs.isEmpty && uploadManager.activeDraftID == nil {
                             dismiss()
                         } else {
                             showingExitAlert = true
@@ -260,11 +232,12 @@ struct CustomPhotoPickerView: View {
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    let canProceed = !selectedAssets.isEmpty || !allDrafts.isEmpty
+                    let hasActiveDraft = uploadManager.activeDraftID != nil
+                        && !(activeDraft?.sourceAssetIdentifiers.isEmpty ?? true)
+                    let canProceed = hasActiveDraft || !committedDrafts.isEmpty
                     Button {
-                        if !selectedAssets.isEmpty {
-                            saveSelectionToDraft()
-                            selectedAssets.removeAll()
+                        if hasActiveDraft {
+                            uploadManager.commitActiveDraft(modelContext: modelContext)
                         }
                         navigateToOverview = true
                     } label: {
@@ -287,15 +260,21 @@ struct CustomPhotoPickerView: View {
             }
             .alert("Save Drafts?", isPresented: $showingExitAlert) {
                 Button("Discard", role: .destructive) {
+                    // Discard active draft
+                    if let activeID = uploadManager.activeDraftID,
+                       let draft = allItems.first(where: { $0.id == activeID }) {
+                        modelContext.delete(draft)
+                        uploadManager.activeDraftID = nil
+                    }
+                    // Discard session committed drafts
                     for draft in allItems where uploadManager.sessionDraftIDs.contains(draft.id) {
                         modelContext.delete(draft)
                     }
                     try? modelContext.save()
+                    uploadManager.sessionDraftIDs.removeAll()
                     dismiss()
                 }
-                Button("Save") {
-                    dismiss()
-                }
+                Button("Save") { dismiss() }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("You have created drafts in this session. Would you like to save or discard them?")
@@ -305,30 +284,19 @@ struct CustomPhotoPickerView: View {
             }
         }
         
-        private func toggleSelection(_ asset: PhotoAsset) {
-            withAnimation {
-                if let index = selectedAssets.firstIndex(of: asset) {
-                    selectedAssets.remove(at: index)
-                } else {
-                    selectedAssets.append(asset)
+        /// Toggle a photo in/out of the active draft.
+        private func togglePhoto(_ asset: PhotoAsset) {
+            if activeDraftAssetIDs.contains(asset.id) {
+                // Deselect: remove from active draft
+                withAnimation {
+                    uploadManager.removePhotoFromActiveDraft(assetId: asset.id, modelContext: modelContext)
+                }
+            } else {
+                // Select: add to active draft
+                withAnimation {
+                    uploadManager.addPhotoToActiveDraft(assetId: asset.id, imageData: nil, modelContext: modelContext)
                 }
             }
-        }
-
-        private func saveSelectionToDraft() {
-            guard !selectedAssets.isEmpty else { return }
-            let assetsToUpload = selectedAssets
-            let newItem = Item(
-                photosData: [],
-                blurb: "Draft from \(assetsToUpload.count) selected photos",
-                sourceAssetIdentifiers: assetsToUpload.map { $0.id },
-                firestoreListingId: UUID().uuidString
-            )
-            modelContext.insert(newItem)
-            try? modelContext.save()
-            uploadManager.sessionDraftIDs.append(newItem.id)
-            uploadManager.startBackgroundUpload(draft: newItem, modelContext: modelContext)
-            uploadManager.runLocalRecognition(draft: newItem, modelContext: modelContext)
         }
     }
 
