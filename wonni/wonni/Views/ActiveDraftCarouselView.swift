@@ -1,0 +1,171 @@
+//
+//  ActiveDraftCarouselView.swift
+//  wonni
+//
+//  Shared bottom carousel used identically in CameraView and CustomPhotoPickerView.
+//  Shows the active draft's photos as a flat, drag-to-reorder row, followed by
+//  committed draft fanned-card thumbnails. Tapping a committed draft opens
+//  DraftHistoryModal. Tapping "+" commits the active draft and starts upload.
+//
+
+import SwiftUI
+import SwiftData
+
+struct ActiveDraftCarouselView: View {
+    @EnvironmentObject private var uploadManager: UploadManager
+    @Environment(\.modelContext) private var modelContext
+    @Query private var allItems: [Item]
+
+    var cache: CachedImageManager
+    /// Extra action to run alongside commitActiveDraft (e.g. camera does nothing extra)
+    var onCommit: (() -> Void)? = nil
+
+    @State private var showingDraftHistory = false
+    @State private var draggedAssetId: String? = nil
+    @State private var stackBouncing = false
+
+    // Active draft — the Item currently being built
+    private var activeDraft: Item? {
+        guard let id = uploadManager.activeDraftID else { return nil }
+        return allItems.first { $0.id == id }
+    }
+
+    // Committed drafts — exclude the active draft
+    private var committedDrafts: [Item] {
+        let activeID = uploadManager.activeDraftID
+        return allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && $0.id != activeID }
+    }
+
+    private var hasContent: Bool {
+        activeDraft?.sourceAssetIdentifiers.isEmpty == false || !committedDrafts.isEmpty
+    }
+
+    var body: some View {
+        if hasContent {
+            HStack(spacing: 0) {
+                // ── Scrollable photo row ────────────────────────────────
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        // Active draft photos — flat, draggable
+                        if let draft = activeDraft, !draft.sourceAssetIdentifiers.isEmpty {
+                            ForEach(draft.sourceAssetIdentifiers, id: \.self) { assetId in
+                                activePhotoCell(draft: draft, assetId: assetId)
+                            }
+                        }
+
+                        // Divider between active and committed (if both exist)
+                        if activeDraft?.sourceAssetIdentifiers.isEmpty == false && !committedDrafts.isEmpty {
+                            Rectangle()
+                                .fill(Color.secondary.opacity(0.3))
+                                .frame(width: 1, height: 54)
+                                .padding(.horizontal, 4)
+                        }
+
+                        // Committed draft thumbnails — fanned cards
+                        ForEach(committedDrafts) { draft in
+                            DraftStackThumbnailView(draft: draft, cache: cache)
+                                .scaleEffect(stackBouncing ? 1.08 : 1.0)
+                                .animation(.spring(response: 0.35, dampingFraction: 0.45), value: stackBouncing)
+                                .onTapGesture { showingDraftHistory = true }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                }
+
+                // ── "+" commit button ───────────────────────────────────
+                let hasActive = activeDraft?.sourceAssetIdentifiers.isEmpty == false
+                Button {
+                    guard hasActive else { return }
+                    withAnimation(.easeIn(duration: 0.18)) {
+                        uploadManager.commitActiveDraft(modelContext: modelContext)
+                        onCommit?()
+                        stackBouncing = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                            stackBouncing = false
+                        }
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(.white)
+                        .frame(width: 44, height: 44)
+                        .background(hasActive ? Color.blue : Color.gray.opacity(0.35))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .disabled(!hasActive)
+                .padding(.trailing, 12)
+                .animation(.easeInOut(duration: 0.15), value: hasActive)
+            }
+            .sheet(isPresented: $showingDraftHistory) {
+                CustomPhotoPickerView.DraftHistoryModal(photoCollection: PhotoCollection(smartAlbum: .smartAlbumUserLibrary))
+            }
+        }
+    }
+
+    // MARK: - Active photo cell
+
+    @ViewBuilder
+    private func activePhotoCell(draft: Item, assetId: String) -> some View {
+        let isDragged = draggedAssetId == assetId
+
+        Group {
+            if let uiImage = draft.image(for: assetId) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                PhotoItemView(
+                    asset: PhotoAsset(identifier: assetId),
+                    cache: cache,
+                    imageSize: CGSize(width: 144, height: 144)
+                )
+            }
+        }
+        .frame(width: 72, height: 72)
+        .cornerRadius(10)
+        .clipped()
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .stroke(Color.accentColor.opacity(0.6), lineWidth: 1.5))
+        .shadow(color: .black.opacity(0.12), radius: 3, x: 0, y: 1)
+        .opacity(isDragged ? 0.4 : 1.0)
+        .scaleEffect(isDragged ? 0.9 : 1.0)
+        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isDragged)
+        .onDrag {
+            draggedAssetId = assetId
+            return NSItemProvider(object: assetId as NSString)
+        }
+        .onDrop(of: [.text], delegate: ActiveDraftPhotoDropDelegate(
+            targetAssetId: assetId,
+            draft: draft,
+            draggedAssetId: $draggedAssetId,
+            modelContext: modelContext
+        ))
+    }
+}
+
+// MARK: - Drop delegate for active draft reorder
+
+struct ActiveDraftPhotoDropDelegate: DropDelegate {
+    let targetAssetId: String
+    let draft: Item
+    @Binding var draggedAssetId: String?
+    let modelContext: ModelContext
+
+    func dropEntered(info: DropInfo) {
+        guard let dragged = draggedAssetId, dragged != targetAssetId else { return }
+        guard let from = draft.sourceAssetIdentifiers.firstIndex(of: dragged),
+              let to   = draft.sourceAssetIdentifiers.firstIndex(of: targetAssetId) else { return }
+        withAnimation { draft.movePhoto(from: from, to: to) }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        try? modelContext.save()
+        draggedAssetId = nil
+        return true
+    }
+}
