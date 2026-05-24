@@ -152,7 +152,6 @@ class UploadManager: ObservableObject {
 
         if !isUploadingPhotos {
             isUploadingPhotos = true
-            isPillVisible = true
             uploadStartTime = Date()
             uploadProgress = 0
         }
@@ -194,12 +193,18 @@ class UploadManager: ObservableObject {
             try? modelContext.save()
             print("[UploadManager] Upload complete for \(draft.id): \(photoPaths.count) paths saved")
 
-            uploadStatuses[draft.id] = photoPaths.isEmpty ? .failed : .done
+            let failed = photoPaths.isEmpty || photoPaths.count < images.count
+            uploadStatuses[draft.id] = failed ? .failed : .done
+            if failed {
+                isPillVisible = true
+            }
             activeUploadCount -= 1
             if activeUploadCount <= 0 {
                 isUploadingPhotos = false
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                isPillVisible = false
+                if !uploadStatuses.values.contains(.failed) {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    isPillVisible = false
+                }
             }
         }
     }
