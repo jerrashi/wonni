@@ -11,46 +11,49 @@ struct UploadPillView: View {
     @EnvironmentObject var uploadManager: UploadManager
 
     var body: some View {
-        HStack(spacing: 12) {
-            // Circular progress ring
-            ZStack {
-                Circle()
-                    .stroke(Color.white.opacity(0.25), lineWidth: 2.5)
-                Circle()
-                    .trim(from: 0, to: uploadManager.uploadProgress)
-                    .stroke(Color.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                    .animation(.linear(duration: 0.3), value: uploadManager.uploadProgress)
-            }
-            .frame(width: 20, height: 20)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Uploading photos…")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white)
-                if let eta = uploadManager.uploadEtaString {
-                    Text("\(eta) remaining")
+        let hasFailed = uploadManager.uploadStatuses.values.contains(.failed)
+        
+        if hasFailed {
+            HStack(spacing: 12) {
+                Image(systemName: "exclamationmark.icloud.fill")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.red)
+                
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Upload failed")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text("Check drafts to retry")
                         .font(.caption2)
                         .foregroundStyle(.white.opacity(0.65))
                 }
+                
+                Spacer()
+                
+                Button {
+                    withAnimation {
+                        uploadManager.isPillVisible = false
+                    }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.6))
+                        .padding(4)
+                }
             }
-
-            Spacer()
-
-            Image(systemName: "icloud.and.arrow.up")
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.7))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(
+                Capsule()
+                    .fill(.ultraThinMaterial)
+                    .overlay(Capsule().fill(Color(red: 0.25, green: 0.05, blue: 0.05).opacity(0.85)))
+                    .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
+            )
+            .padding(.horizontal, 20)
+            .padding(.bottom, 4)
+        } else {
+            EmptyView()
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(
-            Capsule()
-                .fill(.ultraThinMaterial)
-                .overlay(Capsule().fill(Color(red: 0.05, green: 0.05, blue: 0.3).opacity(0.85)))
-                .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
-        )
-        .padding(.horizontal, 20)
-        .padding(.bottom, 4)
     }
 }
 
