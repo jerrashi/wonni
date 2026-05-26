@@ -1048,7 +1048,9 @@ struct BulkListingOverviewView: View {
     @State private var navigateToResults = false
 
     private var drafts: [Item] {
-        allItems.filter { $0.isDraft && sessionDraftIDs.contains($0.id) }
+        allItems
+            .filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty }
+            .sorted { $0.createdAt > $1.createdAt }
     }
 
     var body: some View {
