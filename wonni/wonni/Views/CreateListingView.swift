@@ -376,6 +376,15 @@ struct CustomPhotoPickerView: View {
                         }
                     }
                 }
+            } else {
+                if let sourceDraft = drafts.first(where: { $0.id.uuidString == sourceDraftId }) {
+                    let toIdx = draft.sourceAssetIdentifiers.firstIndex(of: targetAssetId) ?? draft.sourceAssetIdentifiers.count
+                    withAnimation {
+                        let data = sourceDraft.removePhoto(assetId: assetId)
+                        draft.insertPhoto(assetId: assetId, data: data, at: toIdx)
+                        draggedCompositeId = "\(draft.id.uuidString)|\(assetId)"
+                    }
+                }
             }
         }
 
@@ -384,23 +393,12 @@ struct CustomPhotoPickerView: View {
         }
 
         func performDrop(info: DropInfo) -> Bool {
-            guard let dragged = draggedCompositeId else { return false }
-            let parts = dragged.components(separatedBy: "|")
-            guard parts.count == 2 else { return false }
-            let sourceDraftId = parts[0]
-            let assetId = parts[1]
-
-            if sourceDraftId != draft.id.uuidString {
-                if let sourceDraft = drafts.first(where: { $0.id.uuidString == sourceDraftId }) {
-                    let data = sourceDraft.removePhoto(assetId: assetId)
-                    let toIdx = draft.sourceAssetIdentifiers.firstIndex(of: targetAssetId) ?? draft.sourceAssetIdentifiers.count
-                    draft.insertPhoto(assetId: assetId, data: data, at: toIdx)
-                    try? modelContext.save()
+            for d in drafts {
+                if d.sourceAssetIdentifiers.isEmpty {
+                    modelContext.delete(d)
                 }
-            } else {
-                try? modelContext.save()
             }
-
+            try? modelContext.save()
             draggedCompositeId = nil
             return true
         }
@@ -413,6 +411,23 @@ struct CustomPhotoPickerView: View {
         let modelContext: ModelContext
         let allDrafts: [Item]
 
+        func dropEntered(info: DropInfo) {
+            guard let dragged = draggedCompositeId else { return }
+            let parts = dragged.components(separatedBy: "|")
+            guard parts.count == 2 else { return }
+            let sourceDraftId = parts[0], assetId = parts[1]
+            
+            if sourceDraftId != draft.id.uuidString {
+                if let sourceDraft = allDrafts.first(where: { $0.id.uuidString == sourceDraftId }) {
+                    withAnimation {
+                        let data = sourceDraft.removePhoto(assetId: assetId)
+                        draft.insertPhoto(assetId: assetId, data: data, at: draft.sourceAssetIdentifiers.count)
+                        draggedCompositeId = "\(draft.id.uuidString)|\(assetId)"
+                    }
+                }
+            }
+        }
+
         func dropUpdated(info: DropInfo) -> DropProposal? {
             guard let dragged = draggedCompositeId else { return DropProposal(operation: .cancel) }
             let parts = dragged.components(separatedBy: "|")
@@ -423,17 +438,52 @@ struct CustomPhotoPickerView: View {
         }
 
         func performDrop(info: DropInfo) -> Bool {
+            for d in allDrafts {
+                if d.sourceAssetIdentifiers.isEmpty {
+                    modelContext.delete(d)
+                }
+            }
+            try? modelContext.save()
+            draggedCompositeId = nil
+            return true
+        }
+    }
+
+    // MARK: - CancelDropDelegate
+    struct CancelDropDelegate: DropDelegate {
+        @Binding var draggedCompositeId: String?
+        let modelContext: ModelContext
+        let drafts: [Item]
+        
+        let originalDraftID: UUID?
+        let originalAssetID: String?
+        let originalIndex: Int?
+        let originalPhotoData: Data?
+
+        func dropUpdated(info: DropInfo) -> DropProposal? {
+            return DropProposal(operation: .move)
+        }
+
+        func performDrop(info: DropInfo) -> Bool {
             guard let dragged = draggedCompositeId else { return false }
             let parts = dragged.components(separatedBy: "|")
             guard parts.count == 2 else { return false }
-            let sourceDraftId = parts[0], assetId = parts[1]
-            guard sourceDraftId != draft.id.uuidString else { return false }
-            if let sourceDraft = allDrafts.first(where: { $0.id.uuidString == sourceDraftId }) {
-                let data = sourceDraft.removePhoto(assetId: assetId)
-                if sourceDraft.sourceAssetIdentifiers.isEmpty { modelContext.delete(sourceDraft) }
-                draft.insertPhoto(assetId: assetId, data: data, at: draft.sourceAssetIdentifiers.count)
-                try? modelContext.save()
+            let currentDraftId = parts[0], assetId = parts[1]
+            
+            if let origID = originalDraftID, let origAsset = originalAssetID, let origIdx = originalIndex {
+                if currentDraftId != origID.uuidString || drafts.first(where: { $0.id == origID })?.sourceAssetIdentifiers.firstIndex(of: assetId) != origIdx {
+                    withAnimation {
+                        if let currentDraft = drafts.first(where: { $0.id.uuidString == currentDraftId }) {
+                            let data = currentDraft.removePhoto(assetId: assetId)
+                            if let origDraft = drafts.first(where: { $0.id == origID }) {
+                                origDraft.insertPhoto(assetId: origAsset, data: data ?? originalPhotoData, at: origIdx)
+                            }
+                        }
+                    }
+                    try? modelContext.save()
+                }
             }
+            
             draggedCompositeId = nil
             return true
         }
@@ -453,6 +503,12 @@ struct CustomPhotoPickerView: View {
         @State private var draggedCompositeId: String?
         @State private var isTrashTargeted = false
         @FocusState private var focusedDraftID: UUID?
+
+        // Track drag original state for cancel/restoration
+        @State private var originalDraftID: UUID?
+        @State private var originalAssetID: String?
+        @State private var originalIndex: Int?
+        @State private var originalPhotoData: Data?
 
         var drafts: [Item] {
             allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty }
@@ -480,11 +536,11 @@ struct CustomPhotoPickerView: View {
                                         let isFullySelected = selectedCount > 0 && selectedCount == draftCompositeIDs.count
                                         let isPartiallySelected = selectedCount > 0 && selectedCount < draftCompositeIDs.count
 
-                                        HStack {
+                                        HStack(spacing: 8) {
                                             if isSelectionMode {
                                                 Image(systemName: isFullySelected ? "checkmark.circle.fill" : (isPartiallySelected ? "minus.circle.fill" : "circle"))
                                                     .foregroundColor(selectedCount > 0 ? .blue : .gray)
-                                                    .font(.title2)
+                                                    .font(.title3)
                                                     .onTapGesture {
                                                         if isFullySelected {
                                                             for id in draftCompositeIDs { selectedPhotos.remove(id) }
@@ -493,24 +549,20 @@ struct CustomPhotoPickerView: View {
                                                         }
                                                     }
                                             }
-                                            Text("\(draft.sourceAssetIdentifiers.count) Photos")
-                                                .font(.headline)
-                                            Spacer()
+                                            
+                                            let hasUserTitle = draft.userEditedTitle != nil
+                                            TextField("Add title…", text: draftTitleBinding(for: draft))
+                                                .font(.subheadline.weight(.semibold))
+                                                .foregroundStyle(hasUserTitle ? .primary : .secondary)
+                                                .focused($focusedDraftID, equals: draft.id)
+                                                .onReceive(NotificationCenter.default.publisher(
+                                                    for: UITextField.textDidBeginEditingNotification
+                                                )) { notification in
+                                                    guard let tf = notification.object as? UITextField else { return }
+                                                    DispatchQueue.main.async { tf.selectAll(nil) }
+                                                }
                                         }
                                         .padding(.horizontal)
-
-                                        let hasUserTitle = draft.userEditedTitle != nil
-                                        TextField("Add title…", text: draftTitleBinding(for: draft))
-                                            .font(.subheadline.weight(.medium))
-                                            .foregroundStyle(hasUserTitle ? .primary : .secondary)
-                                            .focused($focusedDraftID, equals: draft.id)
-                                            .onReceive(NotificationCenter.default.publisher(
-                                                for: UITextField.textDidBeginEditingNotification
-                                            )) { notification in
-                                                guard let tf = notification.object as? UITextField else { return }
-                                                DispatchQueue.main.async { tf.selectAll(nil) }
-                                            }
-                                            .padding(.horizontal)
 
                                         ScrollView(.horizontal, showsIndicators: false) {
                                             HStack(spacing: 12) {
@@ -534,6 +586,14 @@ struct CustomPhotoPickerView: View {
                                                         .onDrag {
                                                             if !isSelectionMode {
                                                                 draggedCompositeId = compositeId
+                                                                originalDraftID = draft.id
+                                                                originalAssetID = assetId
+                                                                originalIndex = draft.sourceAssetIdentifiers.firstIndex(of: assetId)
+                                                                if let idx = originalIndex, idx < draft.photosData.count {
+                                                                    originalPhotoData = draft.photosData[idx]
+                                                                } else {
+                                                                    originalPhotoData = nil
+                                                                }
                                                                 return NSItemProvider(object: compositeId as NSString)
                                                             }
                                                             return NSItemProvider()
@@ -579,7 +639,17 @@ struct CustomPhotoPickerView: View {
                                 }
                             }
                             .padding(.top)
+                            Spacer(minLength: 150) // Drag to cancel zone
                         }
+                        .onDrop(of: [.text], delegate: CancelDropDelegate(
+                            draggedCompositeId: $draggedCompositeId,
+                            modelContext: modelContext,
+                            drafts: drafts,
+                            originalDraftID: originalDraftID,
+                            originalAssetID: originalAssetID,
+                            originalIndex: originalIndex,
+                            originalPhotoData: originalPhotoData
+                        ))
                     }
                 }
                 .overlay(alignment: .bottom) {
@@ -707,7 +777,7 @@ struct CustomPhotoPickerView: View {
                 Spacer()
                 Image(systemName: isTrashTargeted ? "trash.circle.fill" : "trash.circle")
                     .font(.system(size: 52))
-                    .foregroundStyle(isTrashTargeted ? .red : .secondary)
+                    .foregroundStyle(.red)
                     .scaleEffect(isTrashTargeted ? 1.15 : 1.0)
                     .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isTrashTargeted)
                     .padding(.bottom, 16)

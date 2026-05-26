@@ -162,7 +162,7 @@ struct HomeView: View {
                     }
                 }
             }
-            .navigationTitle("wonni")
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             // ── Banner routing ────────────────────────────────────────────────
             // Add a new case here whenever you add a BannerDestination case.
