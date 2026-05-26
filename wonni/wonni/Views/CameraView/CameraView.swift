@@ -28,83 +28,81 @@ struct CameraView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            GeometryReader { geo in
-                let screenW     = geo.size.width
-                let safeTop     = geo.safeAreaInsets.top
-                let safeBottom  = geo.safeAreaInsets.bottom
-                let viewfinderH = screenW * (4.0 / 3.0)
-                let topBarH: CGFloat = safeTop + 56
+        GeometryReader { geo in
+            let screenW     = geo.size.width
+            let safeTop     = geo.safeAreaInsets.top
+            let safeBottom  = geo.safeAreaInsets.bottom
+            let viewfinderH = screenW * (4.0 / 3.0)
+            let topBarH: CGFloat = safeTop + 56
 
-                ZStack(alignment: .top) {
-                    // 1. Full black background
-                    Color.black.ignoresSafeArea()
+            ZStack(alignment: .top) {
+                // 1. Full black background
+                Color.black.ignoresSafeArea()
 
-                    // 2. Viewfinder directly below the top bar
-                    ViewfinderView(image: $model.viewfinderImage)
-                        .frame(width: screenW, height: viewfinderH)
-                        .clipped()
-                        .overlay { if showGrid { CameraGridOverlay() } }
-                        .overlay {
-                            if isFlashing {
-                                Color.white.opacity(0.8)
-                                    .onAppear {
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                                            withAnimation(.easeOut(duration: 0.15)) { isFlashing = false }
-                                        }
+                // 2. Viewfinder directly below the top bar
+                ViewfinderView(image: $model.viewfinderImage)
+                    .frame(width: screenW, height: viewfinderH)
+                    .clipped()
+                    .overlay { if showGrid { CameraGridOverlay() } }
+                    .overlay {
+                        if isFlashing {
+                            Color.white.opacity(0.8)
+                                .onAppear {
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                        withAnimation(.easeOut(duration: 0.15)) { isFlashing = false }
                                     }
-                            }
+                                }
                         }
-                        .offset(y: topBarH)
-
-                    // 3. Top bar — safe-area-aware
-                    topBarView(safeTop: safeTop)
-                        .frame(height: topBarH)
-                        .frame(maxWidth: .infinity)
-
-                    // 4. Bottom controls pinned to screen bottom
-                    VStack(spacing: 8) {
-                        // Shared carousel (identical to picker bottom bar)
-                        if hasAnyContent {
-                            ActiveDraftCarouselView(cache: model.photoCollection.cache)
-                                .transition(.move(edge: .bottom).combined(with: .opacity))
-                        }
-                        cameraButtonsView()
                     }
-                    .padding(.bottom, safeBottom + 12)
+                    .offset(y: topBarH)
+
+                // 3. Top bar — safe-area-aware
+                topBarView(safeTop: safeTop)
+                    .frame(height: topBarH)
                     .frame(maxWidth: .infinity)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
+
+                // 4. Bottom controls pinned to screen bottom
+                VStack(spacing: 8) {
+                    // Shared carousel (identical to picker bottom bar)
+                    if hasAnyContent {
+                        ActiveDraftCarouselView(cache: model.photoCollection.cache)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                    cameraButtonsView()
                 }
-                .ignoresSafeArea()
+                .padding(.bottom, safeBottom + 12)
+                .frame(maxWidth: .infinity)
+                .frame(maxHeight: .infinity, alignment: .bottom)
             }
-            .toolbar(.hidden, for: .tabBar)
-            .toolbar(.hidden, for: .navigationBar)
-            .task {
-                // Wire camera photo callback BEFORE starting the camera
-                model.onPhotoAdded = { [weak uploadManager] assetId, imageData in
-                    guard let um = uploadManager else { return }
-                    um.addPhotoToActiveDraft(assetId: assetId, imageData: imageData, modelContext: modelContext)
-                }
-                await model.camera.start()
-                await model.loadPhotos()
-                await model.loadThumbnail()
+            .ignoresSafeArea()
+        }
+        .toolbar(.hidden, for: .tabBar)
+        .toolbar(.hidden, for: .navigationBar)
+        .task {
+            // Wire camera photo callback BEFORE starting the camera
+            model.onPhotoAdded = { [weak uploadManager] assetId, imageData in
+                guard let um = uploadManager else { return }
+                um.addPhotoToActiveDraft(assetId: assetId, imageData: imageData, modelContext: modelContext)
             }
-            .navigationDestination(isPresented: $showingPicker) {
-                CustomPhotoPickerView()
-                    .onAppear  { model.camera.isPreviewPaused = true }
-                    .onDisappear { model.camera.isPreviewPaused = false }
-            }
-            .navigationDestination(isPresented: $navigatingToDrafts) {
-                BulkListingOverviewView(sessionDraftIDs: uploadManager.sessionDraftIDs)
-                    .onAppear  { model.camera.isPreviewPaused = true }
-                    .onDisappear { model.camera.isPreviewPaused = false }
-            }
-            .onChange(of: uploadManager.shouldReturnToRoot) { _, should in
-                if should {
-                    navigatingToDrafts = false
-                    uploadManager.shouldReturnToRoot = false
-                    uploadManager.selectedTab = 4
-                }
+            await model.camera.start()
+            await model.loadPhotos()
+            await model.loadThumbnail()
+        }
+        .navigationDestination(isPresented: $showingPicker) {
+            CustomPhotoPickerView()
+                .onAppear  { model.camera.isPreviewPaused = true }
+                .onDisappear { model.camera.isPreviewPaused = false }
+        }
+        .navigationDestination(isPresented: $navigatingToDrafts) {
+            BulkListingOverviewView(sessionDraftIDs: uploadManager.sessionDraftIDs)
+                .onAppear  { model.camera.isPreviewPaused = true }
+                .onDisappear { model.camera.isPreviewPaused = false }
+        }
+        .onChange(of: uploadManager.shouldReturnToRoot) { _, should in
+            if should {
+                navigatingToDrafts = false
+                uploadManager.shouldReturnToRoot = false
+                uploadManager.selectedTab = 4
             }
         }
     }
