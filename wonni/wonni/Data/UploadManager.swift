@@ -283,6 +283,16 @@ class UploadManager: ObservableObject {
                 }
 
                 do {
+                    let hasUserTitle = draft.userEditedTitle != nil && !draft.userEditedTitle!.isEmpty && draft.userEditedTitle != draft.visionTitle
+                    let hasUserDesc = draft.userEditedDescription != nil && !draft.userEditedDescription!.isEmpty
+
+                    if hasUserTitle {
+                        draft.originalUserTitleBeforeAI = draft.userEditedTitle
+                    }
+                    if hasUserDesc {
+                        draft.originalUserDescriptionBeforeAI = draft.userEditedDescription
+                    }
+
                     print("[UploadManager] Running Gemini for draft \(draft.id)...")
                     let gemini = try await GeminiService.shared.identifyItem(
                         images: Array(images.prefix(3)),
@@ -291,9 +301,53 @@ class UploadManager: ObservableObject {
                         userDescription: draft.userEditedDescription
                     )
                     print("[UploadManager] Gemini success for \(draft.id): \(gemini.name ?? "Untitled")")
-                    if draft.aiSuggestedTitle == nil { draft.aiSuggestedTitle = gemini.name }
+                    
+                    // Title merging
+                    if hasUserTitle, let userTitle = draft.userEditedTitle, !userTitle.isEmpty, let geminiTitle = gemini.name, !geminiTitle.isEmpty {
+                        let userWords = userTitle.components(separatedBy: .whitespacesAndNewlines)
+                        let geminiWordsCleaned = geminiTitle.lowercased()
+                            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                            .filter { !$0.isEmpty }
+                        
+                        var extraWords: [String] = []
+                        for word in userWords {
+                            let cleanedWord = word.lowercased().filter { $0.isLetter || $0.isNumber }
+                            if cleanedWord.isEmpty { continue }
+                            if !geminiWordsCleaned.contains(cleanedWord) {
+                                extraWords.append(word)
+                            }
+                        }
+                        
+                        if extraWords.isEmpty {
+                            draft.userEditedTitle = geminiTitle
+                        } else {
+                            let extraText = extraWords.joined(separator: " ")
+                            draft.userEditedTitle = "\(geminiTitle) - \(extraText)"
+                        }
+                    } else {
+                        draft.aiSuggestedTitle = gemini.name
+                        draft.userEditedTitle = nil
+                    }
+
                     if draft.aiSuggestedPrice == nil { draft.aiSuggestedPrice = gemini.suggestedPrice }
-                    if draft.aiSuggestedDescription == nil { draft.aiSuggestedDescription = gemini.description }
+
+                    // Description merging
+                    if hasUserDesc, let userDesc = draft.userEditedDescription, !userDesc.isEmpty, let geminiDesc = gemini.description, !geminiDesc.isEmpty {
+                        let cleanString: (String) -> String = { s in
+                            s.lowercased().filter { $0.isLetter || $0.isNumber }
+                        }
+                        let cu = cleanString(userDesc)
+                        let cg = cleanString(geminiDesc)
+                        if cg.contains(cu) {
+                            draft.userEditedDescription = geminiDesc
+                        } else {
+                            draft.userEditedDescription = "\(userDesc)\n\n\(geminiDesc)"
+                        }
+                    } else {
+                        draft.aiSuggestedDescription = gemini.description
+                        draft.userEditedDescription = nil
+                    }
+
                     draft.weightLbs = draft.weightLbs ?? gemini.weightLbs
                     draft.lengthIn  = draft.lengthIn  ?? gemini.lengthIn
                     draft.widthIn   = draft.widthIn   ?? gemini.widthIn

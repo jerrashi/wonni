@@ -33,6 +33,7 @@ struct ConversationView: View {
             inputBar
         }
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 HStack {

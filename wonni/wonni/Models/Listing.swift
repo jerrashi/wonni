@@ -19,6 +19,8 @@ class Item {
     var userEditedTitle: String?
     var userEditedPrice: Double?
     var userEditedDescription: String?
+    var originalUserTitleBeforeAI: String?
+    var originalUserDescriptionBeforeAI: String?
     var buyerPaysShipping: Bool
     var handlingFee: Double
     var estimatedShippingDays: Int
@@ -36,7 +38,7 @@ class Item {
     var visionTitle: String?
     var isLocalPhotoOnly: Bool
 
-    init(id: UUID = UUID(), createdAt: Date = Date(), photosData: [Data] = [], blurb: String = "", buyerPaysShipping: Bool = true, handlingFee: Double = 0.0, estimatedShippingDays: Int = 3, weightLbs: Double? = nil, lengthIn: Double? = nil, widthIn: Double? = nil, heightIn: Double? = nil, isDraft: Bool = true, sourceAssetIdentifiers: [String] = [], tags: [String] = [], personalNote: String? = nil, firebasePhotoPaths: [String]? = nil, firestoreListingId: String? = nil, processedAt: Date? = nil, visionTitle: String? = nil, isLocalPhotoOnly: Bool = false) {
+    init(id: UUID = UUID(), createdAt: Date = Date(), photosData: [Data] = [], blurb: String = "", buyerPaysShipping: Bool = true, handlingFee: Double = 0.0, estimatedShippingDays: Int = 3, weightLbs: Double? = nil, lengthIn: Double? = nil, widthIn: Double? = nil, heightIn: Double? = nil, isDraft: Bool = true, sourceAssetIdentifiers: [String] = [], tags: [String] = [], personalNote: String? = nil, firebasePhotoPaths: [String]? = nil, firestoreListingId: String? = nil, processedAt: Date? = nil, visionTitle: String? = nil, isLocalPhotoOnly: Bool = false, originalUserTitleBeforeAI: String? = nil, originalUserDescriptionBeforeAI: String? = nil) {
         self.id = id
         self.createdAt = createdAt
         self.photosData = photosData
@@ -57,6 +59,8 @@ class Item {
         self.processedAt = processedAt
         self.visionTitle = visionTitle
         self.isLocalPhotoOnly = isLocalPhotoOnly
+        self.originalUserTitleBeforeAI = originalUserTitleBeforeAI
+        self.originalUserDescriptionBeforeAI = originalUserDescriptionBeforeAI
     }
 
     func image(for assetId: String) -> UIImage? {

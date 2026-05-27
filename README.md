@@ -221,59 +221,136 @@ expiresAt: <Timestamp>   (optional, omit for permanent)
 
 ---
 
-### 🔄 In Progress / Near-term Backlog
+### 🔄 Product Roadmap (Integrated Backlog)
 
-| Item | Notes |
-|---|---|
-| Offer accept / decline | `OfferCard` UI exists in `ConversationView`; Accept/Decline actions are stubs |
-| Seller display name | `ListingDetailView` shows truncated `userId`; needs `users` collection with display names |
-| Category feed view | `BannerDestination.category` navigates to placeholder; `CategoryFeedView` not built |
-| Search banner destination | `BannerDestination.search` navigates to placeholder |
-| Deploy Firestore rules + indexes | Run `firebase deploy --only firestore:rules,firestore:indexes` |
-| Flash animation tab bar fix | `isFlashing` is local to `CameraView`; move overlay to `MainView` or adjust z-index |
-| Extract shared `FeedListingCard` | Currently duplicated in `HomeView.swift` and `SearchView.swift` — both now use the same square-thumbnail pattern |
-| Full-text search — Algolia | Replace `SearchRepository.search(query:)` body; interface stays identical (see backlog) |
+This roadmap outlines the plan for executing all remaining backlog features, shifting Wonni from an independent listings prototype to a production-ready, AI-driven resale marketplace centered around the **Item Catalog** model.
+
+```mermaid
+graph TD
+    %% Phase 1: Core Polish
+    subgraph P1 [Phase 1: Core Polish & RC-1.0]
+        A[Offer Accept/Decline] --> B[Seller Profile Pages]
+        B --> C[Category/Search Destinations]
+        C --> D[UX, Camera & Asset Polish]
+    end
+
+    %% Phase 2: Transactions & Search
+    subgraph P2 [Phase 2: Transactions & Search]
+        E[Algolia Full-Text Search] --> F[Checkout Flow]
+        F --> G[Shippo Shipping API]
+        G --> H[Order Tracking]
+    end
+
+    %% Phase 3: The Item Catalog Flywheel
+    subgraph P3 [Phase 3: The Catalog Flywheel]
+        I[Gemini Auto-Catalog Matcher] --> J[CatalogItem Detail Views]
+        J --> K[Price History Charts]
+        K --> L[Watchlist & Auto-Buy]
+        L --> M[Order Salvage Routing]
+    end
+
+    %% Phase 4: Scale & Wishlist
+    subgraph P4 [Phase 4: Scale & Expansion]
+        N[Seller Trends & Demand Nudges] --> O[Multi-Platform Auto-Listing]
+        O --> P[Arbitrage Scanner]
+    end
+
+    P1 --> P2
+    P2 --> P3
+    P3 --> P4
+
+    classDef phase1 fill:#F3E8FF,stroke:#C084FC,stroke-width:2px;
+    classDef phase2 fill:#DBEAFE,stroke:#60A5FA,stroke-width:2px;
+    classDef phase3 fill:#D1FAE5,stroke:#34D399,stroke-width:2px;
+    classDef phase4 fill:#FEF3C7,stroke:#F59E0B,stroke-width:2px;
+
+    class A,B,C,D phase1;
+    class E,F,G,H phase2;
+    class I,J,K,L,M phase3;
+    class N,O,P phase4;
+```
 
 ---
 
-### 📋 Backlog
+#### 🟣 Phase 1: Core Polish & Release Candidate 1.0
+*Focus: Close all existing feature stubs, complete basic authentication flows, clean up UI layouts, and deploy backend configurations.*
 
-**Search**
-- [ ] Algolia full-text search (Firebase Extension, one-click setup). Replace `SearchRepository.search(query:)` — no other files change. Adds typo tolerance and mid-word matching.
-- [ ] Live search suggestions as user types (debounced Firestore queries or Algolia)
-- [ ] Browse by category
+- [ ] **Offer Accept / Decline Logic**  
+  Implement Firestore transaction logic in `ConversationRepository.swift` to handle `OfferCard` action triggers (decline updates status to `declined`; accept updates status to `accepted`, creates an `Order` document, and moves listing status from `active` to `sold`).
+- [ ] **Seller Profile Integration**  
+  Resolve truncated `userId` labels in `ListingDetailView` by setting up a `/users` Firestore collection storing display names, custom profile avatars, and review ratings, then wire them up to the Profile views.
+- [ ] **Category & Search Routing**  
+  Build the `CategoryFeedView` to filter active listings by category, and wire up category/search navigation targets for `BannerDestination` routing from `MainView.swift`.
+- [ ] **Deploy Firestore Rules + Indexes**  
+  Run `firebase deploy --only firestore:rules,firestore:indexes` to activate feed sorting indexes and query rules.
+- [ ] **Camera UX & Polish**  
+  - Fix the local camera flash overlay in `CameraView` to cover the global Tab Bar container (either by moving it to `MainView` or boosting its z-index).
+  - Add a scale-down animation that shrinks captured photos from the main viewport down to the bottom-left carousel stack.
+- [ ] **App Polish & Reusability**  
+  - Extract the duplicated listing grid cards from `HomeView.swift` and `SearchView.swift` into a unified, reusable `FeedListingCard.swift`.
+  - Design and integrate the app icon assets and launch screens.
 
-**Listings & Catalog** *(see [Product Vision](#the-item-catalog-post-10) for full rationale)*
-- [ ] Background catalog matching pass — Gemini identifies listing item → match to existing `CatalogItem` or create new one (no client update needed)
-- [ ] `CatalogItem` page UI — aggregated photo, price history chart, all active seller listings, out-of-stock watchlist CTA
-- [ ] Watchlist / "Notify me" on `CatalogItem` — push notification when any seller lists a matching item
-- [ ] Auto-purchase option on `CatalogItem` — buyer sets max price, first matching relist auto-fulfills
-- [ ] Cancelled order salvage — when Seller A cancels, route to next available `CatalogItem` seller
-- [ ] Seller demand nudges — "47 people watching, 0 in stock — list yours now"
-- [ ] Category tagging on listings
-- [ ] Price history chart on listing detail (catalog-backed)
+---
 
-**Buying**
-- [ ] Checkout flow
-- [ ] Shipping integration (Shippo API for label generation + QR drop-off)
-- [ ] Order tracking (USPS/UPS API)
-- [ ] Offer alerts for saved searches ("new Sony headphones under $50")
-- [ ] "X sold recently" badge
+#### 🔵 Phase 2: Checkout, Logistics & Search Discovery
+*Focus: Equip the app with payment processing, shipping label generation, order tracking, and high-performance search.*
 
-**Selling**
-- [ ] Trending items feed for sellers ("This popcorn bucket has high demand — list now?")
-- [ ] Multi-platform auto-listing (eBay, Etsy, TikTok Shop APIs)
+- [ ] **Algolia Full-Text Search Integration**  
+  Install the Algolia Firebase Extension and replace the prefix-matching logic inside `SearchRepository.search(query:)` with an Algolia search client call to enable typo-tolerance and mid-word matches.
+- [ ] **Live Search Suggestions**  
+  Implement a typing listener on the capsule search bar that triggers debounced search term completions.
+- [ ] **Browse by Category**  
+  Introduce category hierarchies and subcategory browsing filters in the Search tab.
+- [ ] **Checkout Flow**  
+  Develop the buying flow, integrating a payment details sheet (via Stripe/Apple Pay) to complete orders.
+- [ ] **Shipping Integration (Shippo API)**  
+  Integrate the **Shippo API** to auto-calculate shipping fees using weight and dimensions from the seller's edit sheet, generate carrier labels, and display return QR codes.
+- [ ] **Order Tracking**  
+  Embed an order tracking visualizer inside user details drawing carrier status updates directly from USPS/UPS API webhooks.
+- [ ] **Category Tagging on Listings**  
+  Add category classification options to the seller's draft edit flow, feeding into search taxonomy.
 
-**Profile & Trust**
-- [ ] Seller display name + avatar from `users` collection
-- [ ] Seller stats: on-time shipment rate, defect rate, review score
-- [ ] Community moderation system for disputes
+---
 
-**App Polish**
-- [ ] Photo-shrink animation after capture (photo fills screen → shrinks to stack)
-- [ ] Dark mode + iPad adaptive layout
-- [ ] App icon + launch screen
-- [ ] Widgets for watched items
+#### 🟢 Phase 3: The Catalog Flywheel (Strategic Core)
+*Focus: Move database architecture from listing-based to catalog-based by implementing the shared CatalogItem.*
+
+- [ ] **Gemini Auto-Catalog Matcher**  
+  Construct an asynchronous background matching pass (via Firebase Cloud Functions or client triggers) that uses Gemini to identify listing parameters and link the listing to a `CatalogItemId`.
+- [ ] **CatalogItem Product Pages**  
+  Build detail views for specific catalog products showing aggregated description details, active listings sorted by condition/price, and a price history chart (using SwiftUI Charts) drawn from historical sales.
+- [ ] **Price History Charts**  
+  Develop price history trends on the listing detail sheet showing median prices and sales velocities.
+- [ ] **Watchlist / "Notify me" Alerts**  
+  Let buyers bookmark a sold-out `CatalogItem` and receive immediate APNS push notifications the instant any seller posts a matching item.
+- [ ] **Offer Alerts for Saved Searches**  
+  Notify buyers when new listings match their saved query parameters (e.g. "iPhone 12 under $200").
+- [ ] **"X Sold Recently" Badge**  
+  Display real-time sales volume counts on listings to increase buying urgency.
+- [ ] **Seller Performance Metrics**  
+  Display shipping speeds, defect rates, and user reviews on profile cards.
+
+---
+
+#### 🟡 Phase 4: Sourcing, Advanced Automation & Polish
+*Focus: Automate pricing, cross-posting, order recovery, and scale supply acquisition.*
+
+- [ ] **Auto-Purchase Options**  
+  Allow buyers to set a maximum bid for a sold-out `CatalogItem` and automatically purchase the first matching listing that comes online at or below that price.
+- [ ] **Cancelled Order Salvage**  
+  If a seller cancels a transaction, automatically reroute the order to the next available seller holding the same `CatalogItem` at a similar price.
+- [ ] **Seller Demand Nudges**  
+  Acquire inventory by alerting sellers with relevant notifications: *"47 buyers are watching this item with 0 in stock. List yours now."*
+- [ ] **Trending Items Feed for Sellers**  
+  Create an analytics feed for sellers showing catalog items with high demand and low inventory.
+- [ ] **Multi-Platform Auto-Listing**  
+  Integrate eBay, Etsy, and TikTok Shop APIs to allow sellers to cross-list items, showing a true take-home price calculator after accounting for platform fees.
+- [ ] **Community Moderation System**  
+  Build dispute resolution and item catalog editing tools for community moderators.
+- [ ] **Dark Mode & iPad Optimization**  
+  Add dark mode styling and responsive iPad grid layouts.
+- [ ] **Widgets for Watched Items**  
+  Create iOS Home Screen widgets tracking price trends of items on a user's watchlist.
 
 ---
 
