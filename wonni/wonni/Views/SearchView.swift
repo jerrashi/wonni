@@ -67,25 +67,22 @@ struct SearchView: View {
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                searchBar
-                Divider()
+        VStack(spacing: 0) {
+            searchBar
+            Divider()
 
-                Group {
-                    if vm.isSearching {
-                        ProgressView()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if vm.hasSearched {
-                        resultsView
-                    } else {
-                        idleView
-                    }
+            Group {
+                if vm.isSearching {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if vm.hasSearched {
+                    resultsView
+                } else {
+                    idleView
                 }
             }
-            .navigationTitle("Search")
-            .navigationBarTitleDisplayMode(.large)
         }
+        .toolbar(.hidden, for: .navigationBar)
         .task { await vm.loadInitial() }
     }
 

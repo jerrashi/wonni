@@ -33,19 +33,16 @@ struct InboxView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                filterBar
-                Divider()
-                if filtered.isEmpty {
-                    emptyState
-                } else {
-                    conversationList
-                }
+        VStack(spacing: 0) {
+            filterBar
+            Divider()
+            if filtered.isEmpty {
+                emptyState
+            } else {
+                conversationList
             }
-            .navigationTitle("Inbox")
-            .navigationBarTitleDisplayMode(.inline)
         }
+        .toolbar(.hidden, for: .navigationBar)
         .onAppear { startListening() }
         .onDisappear { listener?.remove() }
     }

@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import PhotosUI
 import SwiftData
 import Photos
 import UniformTypeIdentifiers
@@ -808,124 +809,180 @@ struct CustomPhotoPickerView: View {
 
 // MARK: - DraftRow (redesigned)
 struct DraftRow: View {
+    let item: Item
+    var focusedField: FocusState<DraftFocusField?>.Binding
+    let cache: CachedImageManager
 
-        let item: Item
-        var focusedField: FocusState<DraftFocusField?>.Binding
-        let cache: CachedImageManager
+    @Environment(\.modelContext) private var modelContext
+    @State private var priceText: String = ""
+    @State private var showEditSheet = false
 
-        @Environment(\.modelContext) private var modelContext
-        @State private var priceText: String = ""
-        @State private var showEditSheet = false
-
-        private var titleBinding: Binding<String> {
-            Binding(
-                get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? "" },
-                set: { item.userEditedTitle = $0.isEmpty ? nil : $0 }
-            )
-        }
-
-        var body: some View {
-            HStack(spacing: 14) {
-                // Photo thumbnail
-                Group {
-                    if let assetId = item.sourceAssetIdentifiers.first {
-                        Group {
-                            if let uiImage = item.image(for: assetId) {
-                                Image(uiImage: uiImage)
-                                    .resizable()
-                                    .scaledToFill()
-                            } else {
-                                PhotoItemView(
-                                    asset: PhotoAsset(identifier: assetId),
-                                    cache: cache,
-                                    imageSize: CGSize(width: 160, height: 160)
-                                )
-                            }
-                        }
-                        .frame(width: 76, height: 76)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .clipped()
-                    } else {
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Color(.systemGray5))
-                            .frame(width: 76, height: 76)
-                            .overlay(
-                                Image(systemName: "photo")
-                                    .foregroundStyle(.tertiary)
-                            )
-                    }
-                }
-
-                // Title & price fields
-                VStack(alignment: .leading, spacing: 8) {
-                    TextField("Add title…", text: titleBinding)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(item.userEditedTitle != nil ? .primary : .secondary)
-                        .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .title))
-                        .onReceive(NotificationCenter.default.publisher(
-                            for: UITextField.textDidBeginEditingNotification
-                        )) { notification in
-                            guard let tf = notification.object as? UITextField else { return }
-                            DispatchQueue.main.async { tf.selectAll(nil) }
-                        }
-                        .onChange(of: titleBinding.wrappedValue) { _, _ in
-                            try? modelContext.save()
-                        }
-
-                    HStack(spacing: 3) {
-                        Text("$")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        TextField("Price", text: $priceText)
-                            .font(.subheadline)
-                            .keyboardType(.decimalPad)
-                            .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .price))
-                            .onChange(of: priceText) { _, newValue in
-                                let cleaned = newValue.filter { $0.isNumber || $0 == "." }
-                                item.userEditedPrice = cleaned.isEmpty ? nil : Double(cleaned)
-                                try? modelContext.save()
-                            }
-                    }
-                    
-                    // Photo count badge
-                    if item.sourceAssetIdentifiers.count > 1 {
-                        Label("\(item.sourceAssetIdentifiers.count) photos", systemImage: "photo.on.rectangle")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                // Edit button → full detail sheet
-                Button {
-                    showEditSheet = true
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.vertical, 8)
-            .onAppear {
-                if let p = item.userEditedPrice {
-                    priceText = String(format: "%.2f", p)
-                }
-            }
-            .sheet(isPresented: $showEditSheet) {
-                DraftEditSheet(item: item)
-            }
-        }
+    private var titleBinding: Binding<String> {
+        Binding(
+            get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? "" },
+            set: { item.userEditedTitle = $0.isEmpty ? nil : $0; try? modelContext.save() }
+        )
     }
 
-    // MARK: - DraftEditSheet (full listing editor)
-    struct DraftEditSheet: View {
+    private var descriptionBinding: Binding<String> {
+        Binding(
+            get: { item.userEditedDescription ?? item.aiSuggestedDescription ?? "" },
+            set: { item.userEditedDescription = $0.isEmpty ? nil : $0; try? modelContext.save() }
+        )
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Group {
+                if let assetId = item.sourceAssetIdentifiers.first {
+                    Group {
+                        if let uiImage = item.image(for: assetId) {
+                            Image(uiImage: uiImage)
+                                .resizable()
+                                .scaledToFill()
+                        } else {
+                            PhotoItemView(
+                                asset: PhotoAsset(identifier: assetId),
+                                cache: cache,
+                                imageSize: CGSize(width: 160, height: 160)
+                            )
+                        }
+                    }
+                    .frame(width: 76, height: 76)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .clipped()
+                } else {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color(.systemGray5))
+                        .frame(width: 76, height: 76)
+                        .overlay(
+                            Image(systemName: "photo")
+                                .foregroundStyle(.tertiary)
+                        )
+                }
+            }
+            .padding(.top, 4)
+
+            VStack(alignment: .leading, spacing: 6) {
+                TextField("Add title…", text: titleBinding)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(item.userEditedTitle != nil ? .primary : .secondary)
+                    .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .title))
+                    .padding(item.originalUserTitleBeforeAI != nil ? 6 : 0)
+                    .background(item.originalUserTitleBeforeAI != nil ? Color.purple.opacity(0.08) : Color.clear)
+                    .cornerRadius(6)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(item.originalUserTitleBeforeAI != nil ? Color.purple.opacity(0.2) : Color.clear, lineWidth: 1)
+                    )
+                    .onReceive(NotificationCenter.default.publisher(
+                        for: UITextField.textDidBeginEditingNotification
+                    )) { notification in
+                        guard let tf = notification.object as? UITextField else { return }
+                        DispatchQueue.main.async { tf.selectAll(nil) }
+                    }
+
+                HStack(spacing: 3) {
+                    Text("$")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    TextField("Price", text: $priceText)
+                        .font(.subheadline)
+                        .keyboardType(.decimalPad)
+                        .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .price))
+                        .onChange(of: priceText) { _, newValue in
+                            let cleaned = newValue.filter { $0.isNumber || $0 == "." }
+                            item.userEditedPrice = cleaned.isEmpty ? nil : Double(cleaned)
+                            try? modelContext.save()
+                        }
+                }
+
+                TextField("Add description…", text: descriptionBinding, axis: .vertical)
+                    .lineLimit(2)
+                    .font(.caption)
+                    .foregroundStyle(item.userEditedDescription != nil ? .primary : .secondary)
+                    .padding(6)
+                    .background(item.originalUserDescriptionBeforeAI != nil ? Color.purple.opacity(0.08) : Color(.systemGray6))
+                    .cornerRadius(6)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(item.originalUserDescriptionBeforeAI != nil ? Color.purple.opacity(0.2) : Color.clear, lineWidth: 1)
+                    )
+
+                if item.originalUserTitleBeforeAI != nil || item.originalUserDescriptionBeforeAI != nil {
+                    Button {
+                        withAnimation {
+                            if let origTitle = item.originalUserTitleBeforeAI {
+                                item.userEditedTitle = origTitle
+                                item.originalUserTitleBeforeAI = nil
+                            }
+                            if let origDesc = item.originalUserDescriptionBeforeAI {
+                                item.userEditedDescription = origDesc
+                                item.originalUserDescriptionBeforeAI = nil
+                            }
+                            try? modelContext.save()
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.uturn.backward")
+                            Text("Undo AI edits")
+                        }
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 2)
+                }
+
+                if item.processedAt != nil {
+                    HStack(spacing: 4) {
+                        Image(systemName: "sparkles")
+                            .font(.caption2)
+                            .foregroundStyle(.purple)
+                        Text(item.originalUserTitleBeforeAI != nil || item.originalUserDescriptionBeforeAI != nil ? "AI-enhanced" : "AI-identified")
+                            .font(.caption2)
+                            .foregroundStyle(.purple.opacity(0.8))
+                    }
+                    .padding(.top, 2)
+                } else if item.sourceAssetIdentifiers.count > 1 {
+                    Label("\(item.sourceAssetIdentifiers.count) photos", systemImage: "photo.on.rectangle")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button {
+                showEditSheet = true
+            } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 4)
+        }
+        .padding(.vertical, 8)
+        .onAppear {
+            if let p = item.userEditedPrice {
+                priceText = String(format: "%.2f", p)
+            }
+        }
+        .sheet(isPresented: $showEditSheet) {
+            DraftEditSheet(item: item)
+        }
+    }
+}
+
+// MARK: - DraftEditSheet (full listing editor)
+struct DraftEditSheet: View {
         let item: Item
         @Environment(\.dismiss) private var dismiss
         @Environment(\.modelContext) private var modelContext
 
+        @State private var cache = CachedImageManager()
         @State private var title: String = ""
         @State private var priceText: String = ""
         @State private var description: String = ""
@@ -936,9 +993,135 @@ struct DraftRow: View {
         @State private var selectedCondition: ItemCondition = .good
         @State private var tagsText: String = ""
 
+        // Photos state
+        @State private var isSelectionMode = false
+        @State private var selectedPhotos = Set<String>()
+        @State private var selectedItems: [PhotosPickerItem] = []
+        @State private var draggedAssetId: String? = nil
+
+        // Shipping & Dimensions state
+        @State private var weightText: String = ""
+        @State private var lengthText: String = ""
+        @State private var widthText: String = ""
+        @State private var heightText: String = ""
+
         var body: some View {
             NavigationStack {
                 Form {
+                    Section {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text("Photos")
+                                    .font(.headline)
+                                Spacer()
+                                if !item.sourceAssetIdentifiers.isEmpty {
+                                    if isSelectionMode {
+                                        HStack(spacing: 12) {
+                                            Button("Delete") {
+                                                deleteSelectedPhotos()
+                                            }
+                                            .foregroundColor(.red)
+                                            .disabled(selectedPhotos.isEmpty)
+                                            
+                                            Button("Cancel") {
+                                                isSelectionMode = false
+                                                selectedPhotos.removeAll()
+                                            }
+                                        }
+                                    } else {
+                                        Button("Select") {
+                                            isSelectionMode = true
+                                            selectedPhotos.removeAll()
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 12) {
+                                    ForEach(item.sourceAssetIdentifiers, id: \.self) { assetId in
+                                        ZStack(alignment: .topTrailing) {
+                                            Group {
+                                                if let uiImage = item.image(for: assetId) {
+                                                    Image(uiImage: uiImage)
+                                                        .resizable()
+                                                        .scaledToFill()
+                                                } else {
+                                                    PhotoItemView(
+                                                        asset: PhotoAsset(identifier: assetId),
+                                                        cache: cache,
+                                                        imageSize: CGSize(width: 160, height: 160)
+                                                    )
+                                                }
+                                            }
+                                            .frame(width: 80, height: 80)
+                                            .cornerRadius(8)
+                                            .clipped()
+                                            .opacity(selectedPhotos.contains(assetId) ? 0.6 : 1.0)
+                                            .onDrag {
+                                                if !isSelectionMode {
+                                                    draggedAssetId = assetId
+                                                    return NSItemProvider(object: assetId as NSString)
+                                                }
+                                                return NSItemProvider()
+                                            }
+                                            .onDrop(of: [.text], delegate: SheetPhotoDropDelegate(
+                                                item: item,
+                                                assetId: assetId,
+                                                draggedAssetId: $draggedAssetId,
+                                                modelContext: modelContext
+                                            ))
+                                            
+                                            if isSelectionMode {
+                                                Image(systemName: selectedPhotos.contains(assetId) ? "checkmark.circle.fill" : "circle")
+                                                    .foregroundColor(selectedPhotos.contains(assetId) ? .blue : .white)
+                                                    .background(Circle().fill(Color.black.opacity(0.4)))
+                                                    .padding(4)
+                                            }
+                                        }
+                                        .onTapGesture {
+                                            if isSelectionMode {
+                                                if selectedPhotos.contains(assetId) {
+                                                    selectedPhotos.remove(assetId)
+                                                } else {
+                                                    selectedPhotos.insert(assetId)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    if !isSelectionMode {
+                                        PhotosPicker(selection: $selectedItems, matching: .images) {
+                                            VStack {
+                                                Image(systemName: "plus.circle")
+                                                    .font(.title2)
+                                                Text("Add Photo")
+                                                    .font(.caption2)
+                                            }
+                                            .foregroundColor(.accentColor)
+                                            .frame(width: 80, height: 80)
+                                            .background(Color(.systemGray6))
+                                            .cornerRadius(8)
+                                        }
+                                        .onChange(of: selectedItems) { _, newItems in
+                                            Task {
+                                                for phItem in newItems {
+                                                    if let data = try? await phItem.loadTransferable(type: Data.self) {
+                                                        let assetId = UUID().uuidString
+                                                        item.insertPhoto(assetId: assetId, data: data, at: item.sourceAssetIdentifiers.count)
+                                                    }
+                                                }
+                                                selectedItems = []
+                                                try? modelContext.save()
+                                            }
+                                        }
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
+                    }
+
                     Section("Title & Price") {
                         TextField("Title", text: $title)
                             .font(.body.weight(.medium))
@@ -962,14 +1145,25 @@ struct DraftRow: View {
                         }
                     }
 
-                    Section("Shipping") {
+                    Section("Tags") {
+                        TextField("e.g. photocard, kpop, sealed", text: $tagsText)
+                    }
+
+                    Section("Note (hidden from buyer)") {
+                        TextField("e.g. stored in basement", text: $personalNote)
+                    }
+
+                    Section("Shipping & Dimensions") {
                         Toggle("Buyer pays shipping", isOn: $buyerPaysShipping)
                         if !buyerPaysShipping {
                             HStack {
-                                Text("Handling fee $")
+                                Text("Handling fee")
+                                Spacer()
+                                Text("$")
                                 TextField("0.00", text: $handlingFee)
                                     .keyboardType(.decimalPad)
                                     .multilineTextAlignment(.trailing)
+                                    .frame(width: 80)
                             }
                         }
                         HStack {
@@ -980,14 +1174,46 @@ struct DraftRow: View {
                                 .multilineTextAlignment(.trailing)
                                 .frame(width: 60)
                         }
-                    }
-
-                    Section("Tags (comma-separated)") {
-                        TextField("e.g. photocard, kpop, sealed", text: $tagsText)
-                    }
-
-                    Section("Personal Note") {
-                        TextField("e.g. stored in basement", text: $personalNote)
+                        
+                        HStack {
+                            Text("Weight (lbs)")
+                            Spacer()
+                            TextField("lbs", text: $weightText)
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 80)
+                        }
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Dimensions (inches)")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            
+                            HStack(spacing: 12) {
+                                HStack {
+                                    Text("L:")
+                                    TextField("Length", text: $lengthText)
+                                        .keyboardType(.decimalPad)
+                                        .textFieldStyle(.roundedBorder)
+                                        .multilineTextAlignment(.center)
+                                }
+                                HStack {
+                                    Text("W:")
+                                    TextField("Width", text: $widthText)
+                                        .keyboardType(.decimalPad)
+                                        .textFieldStyle(.roundedBorder)
+                                        .multilineTextAlignment(.center)
+                                }
+                                HStack {
+                                    Text("H:")
+                                    TextField("Height", text: $heightText)
+                                        .keyboardType(.decimalPad)
+                                        .textFieldStyle(.roundedBorder)
+                                        .multilineTextAlignment(.center)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
                     }
                 }
                 .navigationTitle("Edit Draft")
@@ -1008,6 +1234,15 @@ struct DraftRow: View {
             }
         }
 
+        private func deleteSelectedPhotos() {
+            for assetId in selectedPhotos {
+                _ = item.removePhoto(assetId: assetId)
+            }
+            selectedPhotos.removeAll()
+            isSelectionMode = false
+            try? modelContext.save()
+        }
+
         private func loadFromDraft() {
             title = item.userEditedTitle ?? item.aiSuggestedTitle ?? ""
             if let p = item.userEditedPrice {
@@ -1019,6 +1254,12 @@ struct DraftRow: View {
             handlingFee = item.handlingFee > 0 ? String(format: "%.2f", item.handlingFee) : ""
             estimatedDays = "\(item.estimatedShippingDays)"
             tagsText = item.tags.joined(separator: ", ")
+            
+            // Dimensions & Weight
+            if let w = item.weightLbs { weightText = String(format: "%.2f", w) } else { weightText = "" }
+            if let l = item.lengthIn { lengthText = String(format: "%.2f", l) } else { lengthText = "" }
+            if let w = item.widthIn { widthText = String(format: "%.2f", w) } else { widthText = "" }
+            if let h = item.heightIn { heightText = String(format: "%.2f", h) } else { heightText = "" }
         }
 
         private func saveToDraft() {
@@ -1030,7 +1271,41 @@ struct DraftRow: View {
             item.handlingFee = Double(handlingFee.filter { $0.isNumber || $0 == "." }) ?? 0
             item.estimatedShippingDays = Int(estimatedDays) ?? 3
             item.tags = tagsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            
+            // Dimensions & Weight
+            item.weightLbs = Double(weightText.filter { $0.isNumber || $0 == "." })
+            item.lengthIn = Double(lengthText.filter { $0.isNumber || $0 == "." })
+            item.widthIn = Double(widthText.filter { $0.isNumber || $0 == "." })
+            item.heightIn = Double(heightText.filter { $0.isNumber || $0 == "." })
+            
             try? modelContext.save()
+        }
+    }
+
+    struct SheetPhotoDropDelegate: DropDelegate {
+        let item: Item
+        let assetId: String
+        @Binding var draggedAssetId: String?
+        let modelContext: ModelContext
+
+        func dropEntered(info: DropInfo) {
+            guard let dragged = draggedAssetId, dragged != assetId else { return }
+            if let from = item.sourceAssetIdentifiers.firstIndex(of: dragged),
+               let to = item.sourceAssetIdentifiers.firstIndex(of: assetId) {
+                withAnimation {
+                    item.movePhoto(from: from, to: to)
+                }
+            }
+        }
+
+        func dropUpdated(info: DropInfo) -> DropProposal? {
+            return DropProposal(operation: .move)
+        }
+
+        func performDrop(info: DropInfo) -> Bool {
+            draggedAssetId = nil
+            try? modelContext.save()
+            return true
         }
     }
 
@@ -1099,8 +1374,7 @@ struct BulkListingOverviewView: View {
                 }
             }
         }
-        .navigationTitle("Drafts")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 processButton
@@ -1347,17 +1621,27 @@ struct ResultDraftRow: View {
         )
     }
 
+    private var descriptionBinding: Binding<String> {
+        Binding(
+            get: { item.userEditedDescription ?? item.aiSuggestedDescription ?? "" },
+            set: {
+                item.userEditedDescription = $0.isEmpty ? nil : $0
+                try? modelContext.save()
+                uploadManager.syncDraftData(item)
+            }
+        )
+    }
+
     var body: some View {
-        HStack(spacing: 14) {
-            // Selection circle
+        HStack(alignment: .top, spacing: 14) {
             Button(action: onToggle) {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.title3)
                     .foregroundStyle(isSelected ? Color.accentColor : .secondary)
             }
             .buttonStyle(.plain)
+            .padding(.top, 4)
 
-            // Photo thumbnail
             Group {
                 if let assetId = item.sourceAssetIdentifiers.first {
                     PhotoItemView(
@@ -1374,12 +1658,19 @@ struct ResultDraftRow: View {
                         .frame(width: 76, height: 76)
                 }
             }
+            .padding(.top, 4)
 
-            // AI-populated fields (editable)
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 TextField("Title", text: titleBinding)
                     .font(.body.weight(.semibold))
                     .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .title))
+                    .padding(item.originalUserTitleBeforeAI != nil ? 6 : 0)
+                    .background(item.originalUserTitleBeforeAI != nil ? Color.purple.opacity(0.08) : Color.clear)
+                    .cornerRadius(6)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(item.originalUserTitleBeforeAI != nil ? Color.purple.opacity(0.2) : Color.clear, lineWidth: 1)
+                    )
                     .onChange(of: titleBinding.wrappedValue) { _, _ in
                         uploadManager.syncDraftData(item)
                     }
@@ -1398,7 +1689,44 @@ struct ResultDraftRow: View {
                         }
                 }
 
-                // AI status label
+                TextField("Description", text: descriptionBinding, axis: .vertical)
+                    .lineLimit(2)
+                    .font(.caption)
+                    .foregroundStyle(item.userEditedDescription != nil ? .primary : .secondary)
+                    .padding(6)
+                    .background(item.originalUserDescriptionBeforeAI != nil ? Color.purple.opacity(0.08) : Color(.systemGray6))
+                    .cornerRadius(6)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(item.originalUserDescriptionBeforeAI != nil ? Color.purple.opacity(0.2) : Color.clear, lineWidth: 1)
+                    )
+
+                if item.originalUserTitleBeforeAI != nil || item.originalUserDescriptionBeforeAI != nil {
+                    Button {
+                        withAnimation {
+                            if let origTitle = item.originalUserTitleBeforeAI {
+                                item.userEditedTitle = origTitle
+                                item.originalUserTitleBeforeAI = nil
+                            }
+                            if let origDesc = item.originalUserDescriptionBeforeAI {
+                                item.userEditedDescription = origDesc
+                                item.originalUserDescriptionBeforeAI = nil
+                            }
+                            try? modelContext.save()
+                            uploadManager.syncDraftData(item)
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.uturn.backward")
+                            Text("Undo AI edits")
+                        }
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 2)
+                }
+
                 if isGeminiFailed {
                     HStack(spacing: 4) {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -1408,20 +1736,21 @@ struct ResultDraftRow: View {
                             .font(.caption2)
                             .foregroundStyle(.orange.opacity(0.9))
                     }
+                    .padding(.top, 2)
                 } else {
                     HStack(spacing: 4) {
                         Image(systemName: "sparkles")
                             .font(.caption2)
                             .foregroundStyle(.purple)
-                        Text("AI-identified")
+                        Text(item.originalUserTitleBeforeAI != nil || item.originalUserDescriptionBeforeAI != nil ? "AI-enhanced" : "AI-identified")
                             .font(.caption2)
                             .foregroundStyle(.purple.opacity(0.8))
                     }
+                    .padding(.top, 2)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            // Edit button
             Button { showEditSheet = true } label: {
                 Image(systemName: "square.and.pencil")
                     .font(.title3)
@@ -1430,6 +1759,7 @@ struct ResultDraftRow: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .padding(.top, 4)
         }
         .padding(.vertical, 8)
         .onAppear {

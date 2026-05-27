@@ -147,6 +147,7 @@ struct ListingDetailView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .sheet(isPresented: $showOfferSheet) {
             MakeOfferSheet(currentPrice: listing.price) { amount in
                 Task { await submitOffer(amount: amount) }
