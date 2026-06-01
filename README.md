@@ -43,6 +43,14 @@ This is the flywheel nobody sees: when 50 buyers are watching a sold-out `Catalo
 
 **What 1.0 avoids:** Wonni 1.0 ships with `catalogItemId = ""` on all listings (no catalog matching). The UI and data layer treat listings independently. The catalog is introduced post-1.0 via a background matching pass (Gemini identifies item → matches to existing `CatalogItem` or creates a new one) without requiring a client update.
 
+### Multi-Platform Business Policy Architecture (Post-1.0)
+
+To avoid polluting sellers' connected accounts (e.g., eBay) with hundreds of duplicated policies and to simplify cross-platform syncing, Wonni adopts the following architecture:
+
+1. **Sync & Name:** Fetch existing fulfillment, return, and payment policies from the seller's connected accounts. Map these directly in the UI so the seller can pick from native policies they already established, maintaining their naming conventions.
+2. **Immediate Payment Enforcement:** Always enforce "Require Immediate Payment" for eBay listings. This aligns with modern platforms (Etsy, Shopify) and removes unnecessary payment-policy UI clutter for the seller.
+3. **Rules Engine (Stretch Goal):** Instead of a static "Default Policy", settings will evolve into a Rules Engine (e.g., `IF Weight > 10 lbs THEN use 'Heavy Freight Policy' and 'No Returns'`). This automates cross-platform policy selection based on listing properties.
+
 ---
 
 ## Building and Running
@@ -223,36 +231,30 @@ expiresAt: <Timestamp>   (optional, omit for permanent)
 
 ### 🔄 Product Roadmap (Integrated Backlog)
 
-This roadmap outlines the plan for executing all remaining backlog features, shifting Wonni from an independent listings prototype to a production-ready, AI-driven resale marketplace centered around the **Item Catalog** model.
+This roadmap outlines the plan for executing all remaining features, shifting Wonni from a fast "camera app that lists" to a full-scale AI dropshipping and white-labeling empire.
 
 ```mermaid
 graph TD
-    %% Phase 1: Core Polish
-    subgraph P1 [Phase 1: Core Polish & RC-1.0]
-        A[Offer Accept/Decline] --> B[Seller Profile Pages]
-        B --> C[Category/Search Destinations]
-        C --> D[UX, Camera & Asset Polish]
+    %% Phase 1
+    subgraph P1 [Phase 1: The Camera App That Lists]
+        A[Instant AI Identification] --> B[Asynchronous Pipeline]
+        B --> C[eBay/Cross-Platform APIs]
     end
 
-    %% Phase 2: Transactions & Search
-    subgraph P2 [Phase 2: Transactions & Search]
-        E[Algolia Full-Text Search] --> F[Checkout Flow]
-        F --> G[Shippo Shipping API]
-        G --> H[Order Tracking]
+    %% Phase 2
+    subgraph P2 [Phase 2: The Catalog Feature]
+        D[Item-based DB Architecture] --> E[Auto-salvage Cancelled Orders]
     end
 
-    %% Phase 3: The Item Catalog Flywheel
-    subgraph P3 [Phase 3: The Catalog Flywheel]
-        I[Gemini Auto-Catalog Matcher] --> J[CatalogItem Detail Views]
-        J --> K[Price History Charts]
-        K --> L[Watchlist & Auto-Buy]
-        L --> M[Order Salvage Routing]
+    %% Phase 3
+    subgraph P3 [Phase 3: Dropshipping Pipeline]
+        F[Web Extension Scraper] --> G[API Ingestion]
+        G --> H[Automated Bot Fulfillment]
     end
 
-    %% Phase 4: Scale & Wishlist
-    subgraph P4 [Phase 4: Scale & Expansion]
-        N[Seller Trends & Demand Nudges] --> O[Multi-Platform Auto-Listing]
-        O --> P[Arbitrage Scanner]
+    %% Phase 4
+    subgraph P4 [Phase 4: White Labeling]
+        I[Identify Market Gaps] --> J[Create Owned Brands]
     end
 
     P1 --> P2
@@ -264,111 +266,59 @@ graph TD
     classDef phase3 fill:#D1FAE5,stroke:#34D399,stroke-width:2px;
     classDef phase4 fill:#FEF3C7,stroke:#F59E0B,stroke-width:2px;
 
-    class A,B,C,D phase1;
-    class E,F,G,H phase2;
-    class I,J,K,L,M phase3;
-    class N,O,P phase4;
+    class A,B,C phase1;
+    class D,E phase2;
+    class F,G,H phase3;
+    class I,J phase4;
 ```
 
 ---
 
-#### 🟣 Phase 1: Core Polish & Release Candidate 1.0
-*Focus: Close all existing feature stubs, complete basic authentication flows, clean up UI layouts, and deploy backend configurations.*
+#### 🟣 Phase 1: The "Camera App That Happens to List" (Current Focus)
+*Core Problem: Fast asynchronous drafting. Snap photos → AI identifies → posted to platforms instantly without waiting.*
 
-- [ ] **Offer Accept / Decline Logic**  
-  Implement Firestore transaction logic in `ConversationRepository.swift` to handle `OfferCard` action triggers (decline updates status to `declined`; accept updates status to `accepted`, creates an `Order` document, and moves listing status from `active` to `sold`).
-- [ ] **Seller Profile Integration**  
-  Resolve truncated `userId` labels in `ListingDetailView` by setting up a `/users` Firestore collection storing display names, custom profile avatars, and review ratings, then wire them up to the Profile views.
-- [ ] **Category & Search Routing**  
-  Build the `CategoryFeedView` to filter active listings by category, and wire up category/search navigation targets for `BannerDestination` routing from `MainView.swift`.
-- [ ] **Deploy Firestore Rules + Indexes**  
-  Run `firebase deploy --only firestore:rules,firestore:indexes` to activate feed sorting indexes and query rules.
-- [ ] **Camera UX & Polish**  
-  - Fix the local camera flash overlay in `CameraView` to cover the global Tab Bar container (either by moving it to `MainView` or boosting its z-index).
-  - Add a scale-down animation that shrinks captured photos from the main viewport down to the bottom-left carousel stack.
-- [ ] **App Polish & Reusability**  
-  - Extract the duplicated listing grid cards from `HomeView.swift` and `SearchView.swift` into a unified, reusable `FeedListingCard.swift`.
-  - Design and integrate the app icon assets and launch screens.
+- [x] **AI-driven Identification (Gemini 1.5 Flash)**  
+  Analyze photos to auto-generate item titles, suggested prices, category taxonomy, and key specifications.
+- [x] **Live eBay API Integration**  
+  Publish listings directly to eBay using their v1 Inventory API and handle multi-step offers gracefully.
+- [ ] **Camera UX & Asynchronous Pipeline**  
+  Refine the core loop: user takes photos while drafts process and list in the background (`WKWebView` queued uploads for closed platforms like Mercari/FB, or API uploads for open ones).
+- [ ] **Etsy API Integration**  
+  Integrate Etsy's v3 API with PKCE OAuth to expand the seamless API cross-posting footprint.
 
 ---
 
-#### 🔵 Phase 2: Checkout, Logistics & Search Discovery
-*Focus: Equip the app with payment processing, shipping label generation, order tracking, and high-performance search.*
+#### 🔵 Phase 2: The Catalog Feature
+*Core Goal: Transition from independent listings to an item-centric database (like Amazon) to enable intelligent matching.*
 
-- [ ] **Algolia Full-Text Search Integration**  
-  Install the Algolia Firebase Extension and replace the prefix-matching logic inside `SearchRepository.search(query:)` with an Algolia search client call to enable typo-tolerance and mid-word matches.
-- [ ] **Live Search Suggestions**  
-  Implement a typing listener on the capsule search bar that triggers debounced search term completions.
-- [ ] **Browse by Category**  
-  Introduce category hierarchies and subcategory browsing filters in the Search tab.
-- [ ] **Checkout Flow**  
-  Develop the buying flow, integrating a payment details sheet (via Stripe/Apple Pay) to complete orders.
-- [ ] **Shipping Integration (Shippo API)**  
-  Integrate the **Shippo API** to auto-calculate shipping fees using weight and dimensions from the seller's edit sheet, generate carrier labels, and display return QR codes.
-- [ ] **Order Tracking**  
-  Embed an order tracking visualizer inside user details drawing carrier status updates directly from USPS/UPS API webhooks.
-- [ ] **Category Tagging on Listings**  
-  Add category classification options to the seller's draft edit flow, feeding into search taxonomy.
+- [ ] **Catalog Deduplication**  
+  Use Gemini to identify if a new listing matches an existing global `CatalogItem`.
+- [ ] **Salvaging Cancelled Orders**  
+  If Seller A cancels an order, route the buyer seamlessly to Seller B's identical catalog item.
+- [ ] **Demand Aggregation**  
+  Capture waitlist demand on sold-out catalog items to actively recruit sellers to list those specific items.
 
 ---
 
-#### 🟢 Phase 3: The Catalog Flywheel (Strategic Core)
-*Focus: Move database architecture from listing-based to catalog-based by implementing the shared CatalogItem.*
+#### 🟢 Phase 3: Dropshipping Pipeline
+*Core Goal: Ingest massive amounts of inventory directly from wholesale APIs and retail websites, automating the fulfillment loop.*
 
-- [ ] **Gemini Auto-Catalog Matcher**  
-  Construct an asynchronous background matching pass (via Firebase Cloud Functions or client triggers) that uses Gemini to identify listing parameters and link the listing to a `CatalogItemId`.
-- [ ] **CatalogItem Product Pages**  
-  Build detail views for specific catalog products showing aggregated description details, active listings sorted by condition/price, and a price history chart (using SwiftUI Charts) drawn from historical sales.
-- [ ] **Price History Charts**  
-  Develop price history trends on the listing detail sheet showing median prices and sales velocities.
-- [ ] **Watchlist / "Notify me" Alerts**  
-  Let buyers bookmark a sold-out `CatalogItem` and receive immediate APNS push notifications the instant any seller posts a matching item.
-- [ ] **Offer Alerts for Saved Searches**  
-  Notify buyers when new listings match their saved query parameters (e.g. "iPhone 12 under $200").
-- [ ] **"X Sold Recently" Badge**  
-  Display real-time sales volume counts on listings to increase buying urgency.
-- [ ] **Seller Performance Metrics**  
-  Display shipping speeds, defect rates, and user reviews on profile cards.
+- [ ] **Web Extension Scraper**  
+  Ingest products from retail websites (JD.com, Barnes & Noble, Shopify stores) using automated one-click web scraping.
+- [ ] **Wholesale API Ingestion**  
+  Directly plug into APIs (AliExpress, Taobao) to pull items. Use Phase 2's Catalog Feature to deduplicate the massive influx of identical overseas products.
+- [ ] **Automated Bot Fulfillment**  
+  When an item sells on a Wonni-connected storefront, automate the purchasing/dropship order on the source website using bot automation.
 
 ---
 
-#### 🟡 Phase 4: Sourcing, Advanced Automation & Polish
-*Focus: Automate pricing, cross-posting, order recovery, and scale supply acquisition.*
+#### 🟡 Phase 4: White Labeling & Product Gaps
+*Core Goal: Use the data engine to transition from moving other people's products to creating our own.*
 
-- [ ] **Auto-Purchase Options**  
-  Allow buyers to set a maximum bid for a sold-out `CatalogItem` and automatically purchase the first matching listing that comes online at or below that price.
-- [ ] **Cancelled Order Salvage**  
-  If a seller cancels a transaction, automatically reroute the order to the next available seller holding the same `CatalogItem` at a similar price.
-- [ ] **Seller Demand Nudges**  
-  Acquire inventory by alerting sellers with relevant notifications: *"47 buyers are watching this item with 0 in stock. List yours now."*
-- [ ] **Trending Items Feed for Sellers**  
-  Create an analytics feed for sellers showing catalog items with high demand and low inventory.
-- [ ] **Multi-Platform Auto-Listing**  
-  Integrate eBay, Etsy, and TikTok Shop APIs to allow sellers to cross-list items, showing a true take-home price calculator after accounting for platform fees.
-- [ ] **Community Moderation System**  
-  Build dispute resolution and item catalog editing tools for community moderators.
-- [ ] **Dark Mode & iPad Optimization**  
-  Add dark mode styling and responsive iPad grid layouts.
-- [ ] **Widgets for Watched Items**  
-  Create iOS Home Screen widgets tracking price trends of items on a user's watchlist.
-
----
-
-### 💡 Long-term Wishlist
-
-- Multi-platform posting: auto-list on eBay/Etsy/TikTok Shop/Amazon with seller's take-home price + fees
-- AliExpress API integration for trending item discovery and bulk purchasing
-- Email integration: auto-populate drafts from purchase confirmation emails
-- Arbitrage scanner: scrape eBay/Etsy/Mercari for margin opportunities
-- Location-based seller alerts (concert merch, movie theater exclusives)
-- Live selling + short video selling with affiliate commission model
-- Doordash-style door pickup / packaging service
-- SMS 2FA + urgent alerts via Twilio
-- Cancelled order salvage: route to alternate in-stock sellers
-- Local pickup / local sales
-- "#1 in Concert Tees" category rank badges (Amazon-style)
-- Damaged shipment insurance claim processing
-- Community-balanced marketplace policies (7-day buyer return window, auto-5-star if no review within shipping SLA, etc.)
+- [ ] **Market Gap Analysis**  
+  Identify high-demand, low-supply items in the catalog (e.g., items that sell instantly or have massive waitlists).
+- [ ] **White-Label Production**  
+  Spin up specialized storefronts around specific niches (e.g., a dedicated eBay collectibles store, a daily-use items store) using owned or direct-manufactured white-label goods.
 
 ---
 
