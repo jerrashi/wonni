@@ -4,5 +4,22 @@
 <dict>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>io.github.jerrashi.wonni</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>wonni</string>
+			</array>
+		</dict>
+	</array>
+	<key>EbayClientId</key>
+	<string>$(EBAY_CLIENT_ID)</string>
+	<key>EbayRuName</key>
+	<string>$(EBAY_RUNAME)</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Wonni needs your location to automatically pre-fill your shipping settings address.</string>
 </dict>
 </plist>

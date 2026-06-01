@@ -264,14 +264,13 @@ struct CustomPhotoPickerView: View {
                     // Discard active draft
                     if let activeID = uploadManager.activeDraftID,
                        let draft = allItems.first(where: { $0.id == activeID }) {
-                        modelContext.delete(draft)
+                        uploadManager.deleteDraftLocallyAndCloud(draft: draft, modelContext: modelContext)
                         uploadManager.activeDraftID = nil
                     }
                     // Discard session committed drafts
                     for draft in allItems where uploadManager.sessionDraftIDs.contains(draft.id) {
-                        modelContext.delete(draft)
+                        uploadManager.deleteDraftLocallyAndCloud(draft: draft, modelContext: modelContext)
                     }
-                    try? modelContext.save()
                     uploadManager.sessionDraftIDs.removeAll()
                     dismiss()
                 }
@@ -360,6 +359,7 @@ struct CustomPhotoPickerView: View {
         @Binding var draggedCompositeId: String?
         let modelContext: ModelContext
         let drafts: [Item]
+        let uploadManager: UploadManager
 
         func dropEntered(info: DropInfo) {
             guard let dragged = draggedCompositeId else { return }
@@ -396,10 +396,9 @@ struct CustomPhotoPickerView: View {
         func performDrop(info: DropInfo) -> Bool {
             for d in drafts {
                 if d.sourceAssetIdentifiers.isEmpty {
-                    modelContext.delete(d)
+                    uploadManager.deleteDraftLocallyAndCloud(draft: d, modelContext: modelContext)
                 }
             }
-            try? modelContext.save()
             draggedCompositeId = nil
             return true
         }
@@ -411,6 +410,7 @@ struct CustomPhotoPickerView: View {
         @Binding var draggedCompositeId: String?
         let modelContext: ModelContext
         let allDrafts: [Item]
+        let uploadManager: UploadManager
 
         func dropEntered(info: DropInfo) {
             guard let dragged = draggedCompositeId else { return }
@@ -441,10 +441,9 @@ struct CustomPhotoPickerView: View {
         func performDrop(info: DropInfo) -> Bool {
             for d in allDrafts {
                 if d.sourceAssetIdentifiers.isEmpty {
-                    modelContext.delete(d)
+                    uploadManager.deleteDraftLocallyAndCloud(draft: d, modelContext: modelContext)
                 }
             }
-            try? modelContext.save()
             draggedCompositeId = nil
             return true
         }
@@ -604,7 +603,8 @@ struct CustomPhotoPickerView: View {
                                                             draft: draft,
                                                             draggedCompositeId: $draggedCompositeId,
                                                             modelContext: modelContext,
-                                                            drafts: drafts
+                                                            drafts: drafts,
+                                                            uploadManager: uploadManager
                                                         ))
 
                                                         if isSelectionMode {
@@ -635,7 +635,8 @@ struct CustomPhotoPickerView: View {
                                         draft: draft,
                                         draggedCompositeId: $draggedCompositeId,
                                         modelContext: modelContext,
-                                        allDrafts: drafts
+                                        allDrafts: drafts,
+                                        uploadManager: uploadManager
                                     ))
                                 }
                             }
@@ -752,7 +753,7 @@ struct CustomPhotoPickerView: View {
 
                 if selectedCount > 0 {
                     if selectedCount == draftCompositeIDs.count {
-                        modelContext.delete(draft)
+                        uploadManager.deleteDraftLocallyAndCloud(draft: draft, modelContext: modelContext)
                     } else {
                         var toRemove: [String] = []
                         for assetId in draft.sourceAssetIdentifiers {
@@ -799,7 +800,9 @@ struct CustomPhotoPickerView: View {
             let sourceDraftId = parts[0], assetId = parts[1]
             if let sourceDraft = allItems.first(where: { $0.id.uuidString == sourceDraftId }) {
                 _ = sourceDraft.removePhoto(assetId: assetId)
-                if sourceDraft.sourceAssetIdentifiers.isEmpty { modelContext.delete(sourceDraft) }
+                if sourceDraft.sourceAssetIdentifiers.isEmpty {
+                    uploadManager.deleteDraftLocallyAndCloud(draft: sourceDraft, modelContext: modelContext)
+                }
                 try? modelContext.save()
             }
             draggedCompositeId = nil
@@ -1357,8 +1360,9 @@ struct BulkListingOverviewView: View {
                         .id(item.id)
                     }
                     .onDelete { offsets in
-                        for i in offsets { modelContext.delete(drafts[i]) }
-                        try? modelContext.save()
+                        for i in offsets {
+                            uploadManager.deleteDraftLocallyAndCloud(draft: drafts[i], modelContext: modelContext)
+                        }
                     }
                 }
                 .listStyle(.plain)
@@ -1479,6 +1483,10 @@ struct ProcessResultsOverviewView: View {
     @State private var showingEditSheet: Item? = nil
     @FocusState private var focusedField: DraftFocusField?
 
+    @State private var showPublishConfirmation = false
+    @State private var webAutofillQueue: [CrossPostJob] = []
+    @State private var activeAutofillJob: CrossPostJob? = nil
+
     // Only show the items that went through AI processing
     private var results: [Item] {
         let processedSet = Set(uploadManager.processedItemIDs)
@@ -1503,8 +1511,9 @@ struct ProcessResultsOverviewView: View {
                     )
                 }
                 .onDelete { offsets in
-                    for i in offsets { modelContext.delete(results[i]) }
-                    try? modelContext.save()
+                    for i in offsets {
+                        uploadManager.deleteDraftLocallyAndCloud(draft: results[i], modelContext: modelContext)
+                    }
                 }
             }
             .listStyle(.plain)
@@ -1525,7 +1534,7 @@ struct ProcessResultsOverviewView: View {
                 Spacer()
 
                 Button {
-                    uploadManager.publishDrafts(drafts: toPublish, modelContext: modelContext)
+                    showPublishConfirmation = true
                 } label: {
                     HStack(spacing: 8) {
                         let busy = uploadManager.isUploadingPhotos || uploadManager.isPublishing
@@ -1574,6 +1583,81 @@ struct ProcessResultsOverviewView: View {
             Button("OK", role: .cancel) { uploadManager.publishError = nil }
         } message: {
             Text(uploadManager.publishError ?? "")
+        }
+        .sheet(isPresented: $showPublishConfirmation) {
+            PublishConfirmationSheet(itemsToPublish: toPublish) { selectedPlatforms in
+                // 1. Enqueue web-based autofill jobs
+                var jobs: [CrossPostJob] = []
+                for item in toPublish {
+                    for platform in selectedPlatforms {
+                        if platform == "mercari" || platform == "facebook" {
+                            jobs.append(CrossPostJob(
+                                platform: platform,
+                                title: item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled",
+                                description: item.userEditedDescription ?? item.aiSuggestedDescription ?? "",
+                                price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0
+                            ))
+                        }
+                    }
+                }
+                
+                self.webAutofillQueue = jobs
+                uploadManager.pendingAutofillJobsCount = jobs.count
+                
+                // 2. Perform Wonni publishing
+                uploadManager.publishDrafts(drafts: toPublish, modelContext: modelContext)
+                
+                // 3. Trigger API cross-posts on the backend if any connected
+                let apiPlatforms = selectedPlatforms.filter { $0 == "ebay" || $0 == "etsy" }
+                if !apiPlatforms.isEmpty {
+                    Task {
+                        for item in toPublish {
+                            if let listingId = item.firestoreListingId {
+                                try? await IntegrationRepository.shared.triggerCrossPost(
+                                    listingId: listingId,
+                                    platforms: Array(apiPlatforms)
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                // If there are only web jobs (and no publishing needed or publishing succeeded immediately), start immediately
+                if !jobs.isEmpty && !uploadManager.isPublishing {
+                    checkAndStartNextWebJob()
+                }
+            }
+            .presentationDetents([.fraction(0.75), .large])
+        }
+        .sheet(item: $activeAutofillJob, onDismiss: {
+            checkAndStartNextWebJob()
+        }) { job in
+            CrossPostContainerView(
+                platformName: job.platform == "mercari" ? "Mercari" : "Facebook Marketplace",
+                listingTitle: job.title,
+                listingDescription: job.description,
+                listingPrice: job.price
+            )
+        }
+        .onChange(of: uploadManager.isPublishing) { _, isPublishing in
+            // When publishing finishes, check if we have web autofill jobs enqueued
+            if !isPublishing && !webAutofillQueue.isEmpty {
+                checkAndStartNextWebJob()
+            }
+        }
+    }
+    
+    private func checkAndStartNextWebJob() {
+        if !webAutofillQueue.isEmpty {
+            let nextJob = webAutofillQueue.removeFirst()
+            uploadManager.pendingAutofillJobsCount = webAutofillQueue.count + 1
+            activeAutofillJob = nextJob
+        } else {
+            uploadManager.pendingAutofillJobsCount = 0
+            if uploadManager.shouldReturnToRoot == false {
+                // If we paused the return-to-root, trigger it now!
+                uploadManager.shouldReturnToRoot = true
+            }
         }
     }
 
@@ -1875,3 +1959,134 @@ struct PublishedRow: View {
         }
     }
 }
+
+// MARK: - Supporting Cross-Posting Types
+
+struct CrossPostJob: Identifiable {
+    var id = UUID()
+    let platform: String
+    let title: String
+    let description: String
+    let price: Double
+}
+
+struct PublishConfirmationSheet: View {
+    let itemsToPublish: [Item]
+    let onConfirm: (Set<String>) -> Void
+    
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var integrationRepo = IntegrationRepository.shared
+    @State private var selectedPlatforms: Set<String> = []
+    @State private var showAddressSetupSheet = false
+    @State private var platformToEnableAfterAddressSetup = ""
+    
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(header: Text("Publishing \(itemsToPublish.count) Listing(s) to Wonni")) {
+                    ForEach(itemsToPublish) { item in
+                        HStack {
+                            Text(item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled")
+                                .font(.subheadline)
+                                .lineLimit(1)
+                            Spacer()
+                            Text(String(format: "$%.2f", item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0))
+                                .font(.subheadline.weight(.semibold))
+                        }
+                    }
+                }
+                
+                Section(header: Text("Cross-Post Options")) {
+                    if integrationRepo.integrations.isEmpty {
+                        Text("No integrations available. Set them up in Profile Settings.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(integrationRepo.integrations) { integration in
+                            let isAPI = integration.platform == "ebay" || integration.platform == "etsy"
+                            Toggle(isOn: Binding(
+                                get: { selectedPlatforms.contains(integration.platform) },
+                                set: { isSelected in
+                                    if isSelected {
+                                        if isAPI && SellingSettingsRepository.shared.settings?.defaultLocation.postalCode.isEmpty != false {
+                                            platformToEnableAfterAddressSetup = integration.platform
+                                            showAddressSetupSheet = true
+                                        } else {
+                                            selectedPlatforms.insert(integration.platform)
+                                        }
+                                    } else {
+                                        selectedPlatforms.remove(integration.platform)
+                                    }
+                                }
+                            )) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Text(platformDisplayName(integration.platform))
+                                        if !isAPI {
+                                            Text("Autofill")
+                                                .font(.system(size: 10, weight: .bold))
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Color.purple.opacity(0.12))
+                                                .foregroundStyle(.purple)
+                                                .clipShape(Capsule())
+                                        }
+                                    }
+                                    if isAPI {
+                                        Text(integration.isConnected ? "Connected as: \(integration.connectedUsername ?? "Unknown")" : "Not connected (Link in settings)")
+                                            .font(.caption)
+                                            .foregroundStyle(integration.isConnected ? .green : .secondary)
+                                    } else {
+                                        Text("Launches browser autofill post-publish")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            .disabled(isAPI && !integration.isConnected)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Publish Listings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Publish") {
+                        onConfirm(selectedPlatforms)
+                        dismiss()
+                    }
+                    .fontWeight(.bold)
+                }
+            }
+            .task {
+                await integrationRepo.loadIntegrations()
+                await SellingSettingsRepository.shared.loadSettings()
+                // Default toggle connected API platforms
+                selectedPlatforms = Set(integrationRepo.integrations.filter { $0.isConnected }.map { $0.platform })
+            }
+            .sheet(isPresented: $showAddressSetupSheet) {
+                AddressSetupSheet {
+                    if !platformToEnableAfterAddressSetup.isEmpty {
+                        selectedPlatforms.insert(platformToEnableAfterAddressSetup)
+                        platformToEnableAfterAddressSetup = ""
+                    }
+                }
+            }
+        }
+    }
+    
+    private func platformDisplayName(_ platform: String) -> String {
+        switch platform {
+        case "ebay": return "eBay"
+        case "etsy": return "Etsy"
+        case "mercari": return "Mercari"
+        case "facebook": return "Facebook Marketplace"
+        default: return platform.capitalized
+        }
+    }
+}
+

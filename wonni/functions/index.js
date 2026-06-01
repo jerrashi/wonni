@@ -1,4 +1,4 @@
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall, HttpsError, onRequest } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
@@ -73,5 +73,30 @@ exports.identifyItem = onCall({
   } catch (error) {
     console.error("FULL ERROR DETAIL:", error);
     throw new HttpsError("internal", `Gemini Error: ${error.message}`);
+  }
+});
+
+// eBay Webhook Integration
+const { ebayWebhook } = require("./ebay_webhook");
+exports.ebayWebhook = ebayWebhook;
+
+// eBay Token Exchange
+const { ebayExchangeToken } = require("./ebay_auth");
+exports.ebayExchangeToken = ebayExchangeToken;
+
+// eBay Listing Management
+const { ebayCreateListing, ebayDeleteListing } = require("./ebay_listing");
+exports.ebayCreateListing = ebayCreateListing;
+exports.ebayDeleteListing = ebayDeleteListing;
+
+// eBay OAuth Redirect Intermediary (legacy — kept for fallback)
+exports.ebayRedirect = onRequest({ cors: true }, (req, res) => {
+  const code = req.query.code;
+  if (code) {
+    console.log(`[eBay Redirect] Code received: ${code}. Redirecting to wonni://oauth/ebay`);
+    res.redirect(`wonni://oauth/ebay?code=${code}`);
+  } else {
+    console.error("[eBay Redirect] Error: missing code parameter");
+    res.status(400).send("Missing code parameter");
   }
 });

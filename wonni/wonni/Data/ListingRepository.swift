@@ -212,9 +212,13 @@ class ListingRepository: ObservableObject {
         return try? doc.data(as: UserListing.self)
     }
 
-    /// Deletes a listing from Firestore.
+    /// Deletes a listing from Firestore and its photos from Storage.
     func deleteListing(id: String) async throws {
+        let userId = Auth.auth().currentUser?.uid
         try await db.collection(listingsCollection).document(id).delete()
+        if let uid = userId {
+            try? await StorageService.shared.deleteListingImages(userId: uid, listingId: id)
+        }
     }
     
     /// Updates a listing with data received from Gemini identification.
@@ -256,14 +260,21 @@ class ListingRepository: ObservableObject {
 
     // MARK: - Bulk Operations
     
-    /// Bulk deletes multiple listings in a batch.
+    /// Bulk deletes multiple listings in a batch and deletes their photos from Storage.
     func bulkDelete(listingIds: [String]) async throws {
+        let userId = Auth.auth().currentUser?.uid
         let batch = db.batch()
         for id in listingIds {
             let ref = db.collection(listingsCollection).document(id)
             batch.deleteDocument(ref)
         }
         try await batch.commit()
+        
+        if let uid = userId {
+            for id in listingIds {
+                try? await StorageService.shared.deleteListingImages(userId: uid, listingId: id)
+            }
+        }
     }
     
     /// Bulk updates listings with relative/appended values.

@@ -29,6 +29,7 @@ class UploadManager: ObservableObject {
     // ── Tab / Navigation ────────────────────────────────────────────────────
     @Published var selectedTab = 0
     @Published var shouldReturnToRoot = false
+    @Published var pendingAutofillJobsCount = 0
     @Published var sessionDraftIDs: [UUID] = []
 
     // ── Active Draft (shared between camera and picker) ──────────────────────
@@ -105,10 +106,35 @@ class UploadManager: ObservableObject {
               let draft = (try? modelContext.fetch(FetchDescriptor<Item>()))?.first(where: { $0.id == id }) else { return }
         _ = draft.removePhoto(assetId: assetId)
         if draft.sourceAssetIdentifiers.isEmpty {
-            modelContext.delete(draft)
+            deleteDraftLocallyAndCloud(draft: draft, modelContext: modelContext)
             activeDraftID = nil
         }
         try? modelContext.save()
+    }
+    
+    /// Deletes a draft from the local database, Firestore, and deletes uploaded images from Storage.
+    func deleteDraftLocallyAndCloud(draft: Item, modelContext: ModelContext) {
+        let listingId = draft.firestoreListingId
+        guard let userId = Auth.auth().currentUser?.uid else {
+            modelContext.delete(draft)
+            try? modelContext.save()
+            return
+        }
+        
+        // 1. Delete from SwiftData context
+        modelContext.delete(draft)
+        try? modelContext.save()
+        
+        // 2. Perform background cleanups if uploaded
+        if let listingId = listingId {
+            Task {
+                print("[UploadManager] Cleaning up Cloud files for discarded draft \(listingId)")
+                // Delete photos from Storage
+                try? await StorageService.shared.deleteListingImages(userId: userId, listingId: listingId)
+                // Delete document from Firestore
+                try? await ListingRepository.shared.deleteListing(id: listingId)
+            }
+        }
     }
 
     /// Commits the active draft: starts background upload, resets activeDraftID.
@@ -532,7 +558,9 @@ class UploadManager: ObservableObject {
 
             if publishedCount > 0 {
                 showProcessResults = false
-                shouldReturnToRoot = true
+                if pendingAutofillJobsCount == 0 {
+                    shouldReturnToRoot = true
+                }
             } else {
                 publishError = "Could not publish listings. Check your connection and try again."
             }

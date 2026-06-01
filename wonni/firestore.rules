@@ -73,6 +73,11 @@ service cloud.firestore {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
 
+      // Selling settings — private to each user
+      match /sellingSettings/{settingId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
       // Custom lists (e.g. Wishlist, Gift Ideas) — private to each user
       match /lists/{listId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
@@ -90,6 +95,11 @@ service cloud.firestore {
 
       // Saved searches — private, user-bookmarked queries
       match /savedSearches/{searchId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Integrations — private, user-specific connection states
+      match /integrations/{platformId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
     }
