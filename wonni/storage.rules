@@ -5,9 +5,11 @@ service firebase.storage {
     // Profile photos — owner writes, authenticated users read (personal data)
     match /users/{userId}/profile.jpg {
       allow read:  if request.auth != null;
-      allow write: if request.auth != null
-                   && request.auth.uid == userId
-                   && request.resource.size < 10 * 1024 * 1024;
+      allow create, update: if request.auth != null
+                            && request.auth.uid == userId
+                            && request.resource.size < 10 * 1024 * 1024;
+      allow delete: if request.auth != null
+                    && request.auth.uid == userId;
     }
 
     // Listing photos — publicly readable so Google Shopping ads, shared links,
@@ -15,9 +17,11 @@ service firebase.storage {
     // Owner writes only; size-capped at 10 MB.
     match /users/{userId}/{listingId}/{imageId} {
       allow read:  if true;
-      allow write: if request.auth != null
-                   && request.auth.uid == userId
-                   && request.resource.size < 10 * 1024 * 1024;
+      allow create, update: if request.auth != null
+                            && request.auth.uid == userId
+                            && request.resource.size < 10 * 1024 * 1024;
+      allow delete: if request.auth != null
+                    && request.auth.uid == userId;
     }
 
     // Catalog reference photos — read-only for clients, written server-side only

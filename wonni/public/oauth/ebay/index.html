@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Completing eBay Sign-In…</title>
+  <style>
+    body {
+      font-family: -apple-system, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      background: #f5f5f7;
+      color: #1d1d1f;
+    }
+    p { font-size: 17px; }
+  </style>
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      var code = params.get('code');
+      var error = params.get('error');
+
+      if (code) {
+        // Forward the code to the iOS app via its custom URL scheme.
+        // ASWebAuthenticationSession will intercept this redirect.
+        window.location.href = 'wonni://oauth/ebay?code=' + encodeURIComponent(code);
+      } else if (error) {
+        window.location.href = 'wonni://oauth/ebay?error=' + encodeURIComponent(error);
+      }
+      // If neither, just show the "completing" message and do nothing.
+    })();
+  </script>
+</head>
+<body>
+  <p>Completing eBay sign-in…</p>
+</body>
+</html>

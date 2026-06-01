@@ -121,6 +121,11 @@ struct UserListing: Identifiable, Codable {
     var geminiIdentificationConfirmed: Bool
     var geminiRawResponse: String?   // Raw JSON from Gemini for debugging
 
+    // ── Cross-Posting ─────────────────────────────────────────────────────────
+    var sellingProfileId: String?
+    var crossPostStatus: [String: String]?          // e.g. ["ebay": "posted", "mercari": "pending"]
+    var crossPostListingIds: [String: String]?       // e.g. ["ebay": "123456789"]
+
     // MARK: - Convenience
 
     var isDraft: Bool { status == .draft }
@@ -172,7 +177,10 @@ struct UserListing: Identifiable, Codable {
         soldAt: Timestamp? = nil,
         sourceAssetIdentifiers: [String] = [],
         geminiIdentificationConfirmed: Bool = false,
-        geminiRawResponse: String? = nil
+        geminiRawResponse: String? = nil,
+        sellingProfileId: String? = nil,
+        crossPostStatus: [String: String]? = nil,
+        crossPostListingIds: [String: String]? = nil
     ) {
         self.id = id
         self.userId = userId
@@ -197,5 +205,8 @@ struct UserListing: Identifiable, Codable {
         self.sourceAssetIdentifiers = sourceAssetIdentifiers
         self.geminiIdentificationConfirmed = geminiIdentificationConfirmed
         self.geminiRawResponse = geminiRawResponse
+        self.sellingProfileId = sellingProfileId
+        self.crossPostStatus = crossPostStatus
+        self.crossPostListingIds = crossPostListingIds
     }
 }

@@ -1,0 +1,201 @@
+//
+//  IntegrationRepository.swift
+//  wonni
+//
+//  Manages API integration states (Etsy, eBay, etc.) in Firestore.
+//
+
+import Foundation
+import FirebaseFirestore
+import FirebaseAuth
+import FirebaseFunctions
+
+public struct PlatformIntegration: Codable, Identifiable {
+    public var id: String { platform }
+    public var platform: String          // "ebay", "etsy", "mercari", "facebook"
+    public var isConnected: Bool
+    public var connectedUsername: String?
+    public var connectedAt: Date?
+    public var oauthCode: String?
+    
+    public init(platform: String, isConnected: Bool, connectedUsername: String? = nil, connectedAt: Date? = nil, oauthCode: String? = nil) {
+        self.platform = platform
+        self.isConnected = isConnected
+        self.connectedUsername = connectedUsername
+        self.connectedAt = connectedAt
+        self.oauthCode = oauthCode
+    }
+}
+
+@MainActor
+public class IntegrationRepository: ObservableObject {
+    public static let shared = IntegrationRepository()
+    private let db = Firestore.firestore()
+    private let usersCollection = "users"
+    private let integrationsSubcollection = "integrations"
+    
+    @Published public var integrations: [PlatformIntegration] = []
+    @Published public var isLoading = false
+    
+    private init() {}
+    
+    private var userId: String? {
+        Auth.auth().currentUser?.uid
+    }
+    
+    /// Loads all integrations for the current user from Firestore.
+    /// If documents don't exist, returns default disconnected states.
+    public func loadIntegrations() async {
+        guard let uid = userId else {
+            let platforms = ["ebay", "etsy", "mercari", "facebook"]
+            self.integrations = platforms.map { PlatformIntegration(platform: $0, isConnected: false) }
+            return
+        }
+        
+        self.isLoading = true
+        
+        do {
+            let snapshot = try await db.collection(usersCollection)
+                .document(uid)
+                .collection(integrationsSubcollection)
+                .getDocuments()
+            
+            var loaded: [String: PlatformIntegration] = [:]
+            for doc in snapshot.documents {
+                if let platform = doc.data()["platform"] as? String {
+                    let isConnected = doc.data()["isConnected"] as? Bool ?? false
+                    let username = doc.data()["connectedUsername"] as? String
+                    let date = (doc.data()["connectedAt"] as? Timestamp)?.dateValue()
+                    let oauthCode = doc.data()["oauthCode"] as? String
+                    
+                    loaded[platform] = PlatformIntegration(
+                        platform: platform,
+                        isConnected: isConnected,
+                        connectedUsername: username,
+                        connectedAt: date,
+                        oauthCode: oauthCode
+                    )
+                }
+            }
+            
+            // Build full list with defaults for missing integrations
+            let platforms = ["ebay", "etsy", "mercari", "facebook"]
+            let finalIntegrations = platforms.map { p in
+                loaded[p] ?? PlatformIntegration(platform: p, isConnected: false)
+            }
+            
+            self.integrations = finalIntegrations
+            self.isLoading = false
+        } catch {
+            print("[IntegrationRepository] Error loading integrations: \(error)")
+            let platforms = ["ebay", "etsy", "mercari", "facebook"]
+            self.integrations = platforms.map { PlatformIntegration(platform: $0, isConnected: false) }
+            self.isLoading = false
+        }
+    }
+    
+    /// Unlinks an active platform connection.
+    public func unlinkPlatform(platform: String) async throws {
+        guard let uid = userId else { return }
+        
+        try await db.collection(usersCollection)
+            .document(uid)
+            .collection(integrationsSubcollection)
+            .document(platform)
+            .delete()
+        
+        await loadIntegrations()
+    }
+    
+    /// Stub function to link a platform by writing a connection state document directly to Firestore.
+    /// In production, this would call your Firebase Cloud Function backend to perform OAuth exchange.
+    public func linkPlatformWithMock(platform: String, username: String, oauthCode: String? = nil) async throws {
+        print("[IntegrationRepository] linkPlatformWithMock platform: \(platform), username: \(username)")
+        guard let uid = userId else {
+            print("[IntegrationRepository] linkPlatformWithMock failed: userId is nil")
+            return
+        }
+        
+        var data: [String: Any] = [
+            "platform": platform,
+            "isConnected": true,
+            "connectedUsername": username,
+            "connectedAt": FieldValue.serverTimestamp()
+        ]
+        
+        if let code = oauthCode {
+            data["oauthCode"] = code
+        }
+        
+        do {
+            try await db.collection(usersCollection)
+                .document(uid)
+                .collection(integrationsSubcollection)
+                .document(platform)
+                .setData(data, merge: true)
+            print("[IntegrationRepository] linkPlatformWithMock successfully wrote to Firestore")
+        } catch {
+            print("[IntegrationRepository] linkPlatformWithMock write error: \(error)")
+            throw error
+        }
+        
+        await loadIntegrations()
+    }
+    
+    /// Exchanges the OAuth authorization code for a real eBay access token
+    /// via the `ebayExchangeToken` Cloud Function, then reloads integrations.
+    public func linkPlatformWithCode(platform: String, code: String) async throws {
+        print("[IntegrationRepository] linkPlatformWithCode platform: \(platform), code: \(code.prefix(12))...")
+        guard userId != nil else {
+            print("[IntegrationRepository] linkPlatformWithCode failed: userId is nil")
+            return
+        }
+
+        self.isLoading = true
+        defer { self.isLoading = false }
+
+        guard platform == "ebay",
+              let ruName = Bundle.main.object(forInfoDictionaryKey: "EbayRuName") as? String,
+              !ruName.isEmpty else {
+            // Non-eBay platforms fall back to mock linking
+            let mockUsername = "\(platform.capitalized)User_\(code.prefix(6))"
+            try await linkPlatformWithMock(platform: platform, username: mockUsername, oauthCode: code)
+            return
+        }
+
+        let isSandbox = ruName.lowercased().contains("sbx") || ruName.lowercased().contains("sandbox")
+
+        let functions = Functions.functions()
+        let result = try await functions.httpsCallable("ebayExchangeToken").call([
+            "code":      code,
+            "ruName":    ruName,
+            "isSandbox": isSandbox,
+        ])
+
+        if let data = result.data as? [String: Any] {
+            print("[IntegrationRepository] ebayExchangeToken succeeded: \(data)")
+        }
+
+        await loadIntegrations()
+    }
+    
+    /// Submits a cross-post event to the backend.
+    public func triggerCrossPost(listingId: String, platforms: [String]) async throws {
+        print("[IntegrationRepository] Triggering cross-post for listing \(listingId) to \(platforms)")
+        
+        let functions = Functions.functions()
+        for platform in platforms {
+            if platform == "ebay" {
+                do {
+                    let result = try await functions.httpsCallable("ebayCreateListing").call(["listingId": listingId])
+                    print("[IntegrationRepository] ebayCreateListing succeeded: \(result.data)")
+                } catch {
+                    print("[IntegrationRepository] ebayCreateListing failed: \(error.localizedDescription)")
+                    throw error
+                }
+            } else {
+                print("[IntegrationRepository] Stub trigger for platform: \(platform)")
+            }
+        }
+    }
+}
