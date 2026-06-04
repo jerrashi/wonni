@@ -55,10 +55,14 @@ class UploadManager: ObservableObject {
     @Published var showProcessResults = false
     @Published var processedItemIDs: [UUID] = []
     @Published var processingFailedIDs: Set<UUID> = []
+    @Published var processQueuedIDs: [UUID] = []
 
     // ── Publish Phase ───────────────────────────────────────────────────────
     @Published var isPublishing = false
     @Published var publishError: String? = nil
+    /// IDs of SwiftData drafts that have been published to Firestore but whose
+    /// deletion is deferred until all cross-posting jobs for the session complete.
+    @Published var publishedPendingDeletionIDs: Set<UUID> = []
 
     // ── Legacy / Pill visibility ─────────────────────────────────────────────
     @Published var isPillVisible = false
@@ -278,6 +282,7 @@ class UploadManager: ObservableObject {
         processStatuses = [:]
         processedItemIDs = []
         processingFailedIDs = []
+        processQueuedIDs = drafts.map { $0.id }
 
         for draft in drafts { processStatuses[draft.id] = .pending }
 
@@ -297,7 +302,7 @@ class UploadManager: ObservableObject {
                     continue
                 }
 
-                processStatuses[draft.id] = .uploading(0)
+                processStatuses[draft.id] = .uploading(0)  // Identifying...
 
                 var images: [UIImage] = []
                 for assetId in draft.sourceAssetIdentifiers {
@@ -307,6 +312,8 @@ class UploadManager: ObservableObject {
                         images.append(img)
                     }
                 }
+
+                processStatuses[draft.id] = .uploading(0.35)  // Analyzing with AI...
 
                 do {
                     let hasUserTitle = draft.userEditedTitle != nil && !draft.userEditedTitle!.isEmpty && draft.userEditedTitle != draft.visionTitle
@@ -327,6 +334,7 @@ class UploadManager: ObservableObject {
                         userDescription: draft.userEditedDescription
                     )
                     print("[UploadManager] Gemini success for \(draft.id): \(gemini.name ?? "Untitled")")
+                    processStatuses[draft.id] = .uploading(0.7)  // Generating description...
                     
                     // Title merging
                     if hasUserTitle, let userTitle = draft.userEditedTitle, !userTitle.isEmpty, let geminiTitle = gemini.name, !geminiTitle.isEmpty {
@@ -378,6 +386,8 @@ class UploadManager: ObservableObject {
                     draft.lengthIn  = draft.lengthIn  ?? gemini.lengthIn
                     draft.widthIn   = draft.widthIn   ?? gemini.widthIn
                     draft.heightIn  = draft.heightIn  ?? gemini.heightIn
+                    draft.aiSuggestedCategory = draft.aiSuggestedCategory ?? gemini.category
+                    draft.aiSuggestedBrand = draft.aiSuggestedBrand ?? gemini.brand
                     draft.processedAt = Date()
                     processedItemIDs.append(draft.id)
                     processStatuses[draft.id] = .done
@@ -526,6 +536,8 @@ class UploadManager: ObservableObject {
                 listing.customDescription = draft.userEditedDescription ?? draft.aiSuggestedDescription
                 listing.price = draft.userEditedPrice ?? draft.aiSuggestedPrice
                 listing.geminiIdentificationConfirmed = draft.processedAt != nil
+                listing.category = draft.aiSuggestedCategory
+                listing.brand = draft.aiSuggestedBrand
                 listing.sourceAssetIdentifiers = []
 
                 var packageDimensions: PackageDimensions? = nil
@@ -545,7 +557,14 @@ class UploadManager: ObservableObject {
                 do {
                     let docID = try await ListingRepository.shared.saveDraft(listing)
                     print("[UploadManager] Published listing \(docID)")
-                    modelContext.delete(draft)
+                    if pendingAutofillJobsCount > 0 {
+                        // Cross-posting jobs are queued — keep the SwiftData item alive so
+                        // startPosting() can read photos directly without copying or re-downloading.
+                        // ProcessResultsOverviewView.checkAndStartNextWebJob() deletes when the queue empties.
+                        publishedPendingDeletionIDs.insert(draft.id)
+                    } else {
+                        modelContext.delete(draft)
+                    }
                     publishedCount += 1
                 } catch {
                     print("[UploadManager] Firestore write failed for \(draft.id): \(error)")
