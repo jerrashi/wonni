@@ -335,9 +335,10 @@ public struct CrossPostContainerView: View {
 private extension WKWebView {
     /// Wraps callAsyncJavaScript — passing a real closure forces the correct overload
     /// so JS actually executes (the ambiguous void overload silently drops execution).
-    func callJS(_ body: String, args: [String: Any] = [:], world: WKContentWorld = .page) async throws -> Any? {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Any?, Error>) in
-            callAsyncJavaScript(body, arguments: args, in: nil, in: world) { result in
+    func callJS(_ body: String, args: [String: Any] = [:], world: WKContentWorld? = nil) async throws -> Any? {
+        let contentWorld = world ?? .page
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Any?, Error>) in
+            callAsyncJavaScript(body, arguments: args, in: nil, in: contentWorld) { result in
                 switch result {
                 case .success(let value): cont.resume(returning: value)
                 case .failure(let error): cont.resume(throwing: error)
@@ -591,6 +592,11 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         // 4. Brand — tiered: suggested chips → AI search → no brand.
         let brandResult = await selectBrand(suggestedBrand: suggestedBrand)
         print("[MercariPostingState] Brand: \(brandResult)")
+        // Record the selected brand for future cross-post suggestions (fire-and-forget).
+        if brandResult.hasPrefix("tier1:") || brandResult.hasPrefix("tier2:") {
+            let selectedBrand = String(brandResult.dropFirst(6))
+            MercariObservedDataRepository.shared.observeAndStore(brands: [selectedBrand])
+        }
 
         // 5. Shipping — walk the multi-step carrier modal. Each step is polled, not timed,
         //    because the carrier list is fetched live from Mercari after a weight is entered.
@@ -1703,7 +1709,13 @@ struct MercariAutoPosterView: View {
                 Spacer()
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
-            .background(state.isListingComplete ? Color.green.opacity(0.08) : .ultraThinMaterial)
+            .background {
+                if state.isListingComplete {
+                    Color.green.opacity(0.08)
+                } else {
+                    Rectangle().fill(Material.ultraThinMaterial)
+                }
+            }
             .overlay(Rectangle().frame(height: 1).foregroundStyle(Color(.separator)), alignment: .bottom)
         case .success:
             HStack(spacing: 10) {

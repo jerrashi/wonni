@@ -179,6 +179,49 @@ public class IntegrationRepository: ObservableObject {
         await loadIntegrations()
     }
     
+    // MARK: - Mercari Shipping Preferences
+
+    /// Loads the seller's saved Mercari shipping preferences from Firestore so they sync across
+    /// devices. Returns nil if the user has never configured them (caller should collect them).
+    /// Stored at `users/{uid}/settings/mercariShipping`.
+    public func loadMercariShippingPreferences() async -> (acceptSuggestions: Bool, mode: String, carriers: [String])? {
+        guard let uid = userId else { return nil }
+        do {
+            let doc = try await db.collection(usersCollection)
+                .document(uid)
+                .collection("settings")
+                .document("mercariShipping")
+                .getDocument()
+            guard doc.exists, let data = doc.data() else { return nil }
+            let accept = data["acceptSuggestions"] as? Bool ?? true
+            let mode = data["mode"] as? String ?? "cheapestPrepaid"
+            let carriers = data["carriers"] as? [String] ?? ["usps"]
+            return (accept, mode, carriers)
+        } catch {
+            print("[IntegrationRepository] loadMercariShippingPreferences error: \(error)")
+            return nil
+        }
+    }
+
+    /// Persists the seller's Mercari shipping preferences to Firestore for cross-device sync.
+    public func saveMercariShippingPreferences(acceptSuggestions: Bool, mode: String, carriers: [String]) async {
+        guard let uid = userId else { return }
+        do {
+            try await db.collection(usersCollection)
+                .document(uid)
+                .collection("settings")
+                .document("mercariShipping")
+                .setData([
+                    "acceptSuggestions": acceptSuggestions,
+                    "mode": mode,
+                    "carriers": carriers,
+                    "updatedAt": FieldValue.serverTimestamp()
+                ], merge: true)
+        } catch {
+            print("[IntegrationRepository] saveMercariShippingPreferences error: \(error)")
+        }
+    }
+
     /// Submits a cross-post event to the backend.
     public func triggerCrossPost(listingId: String, platforms: [String]) async throws {
         print("[IntegrationRepository] Triggering cross-post for listing \(listingId) to \(platforms)")

@@ -7,7 +7,7 @@ import CoreImage
 import UIKit
 import os.log
 
-class Camera: NSObject {
+class Camera: NSObject, @unchecked Sendable {
     private let captureSession = AVCaptureSession()
     private var isCaptureSessionConfigured = false
     private var deviceInput: AVCaptureDeviceInput?
@@ -159,7 +159,9 @@ class Camera: NSObject {
         self.photoOutput = photoOutput
         self.videoOutput = videoOutput
         
-        photoOutput.isHighResolutionCaptureEnabled = true
+        if let maxDimensions = deviceInput.device.activeFormat.supportedMaxPhotoDimensions.last {
+            photoOutput.maxPhotoDimensions = maxDimensions
+        }
         photoOutput.maxPhotoQualityPrioritization = .quality
         
         updateVideoOutputConnection()
@@ -287,12 +289,12 @@ class Camera: NSObject {
     }
     
     //MARK: Updates video feed orientation to match device orientation
-    private func videoOrientationFor(_ deviceOrientation: UIDeviceOrientation) -> AVCaptureVideoOrientation? {
+    private func videoRotationAngleFor(_ deviceOrientation: UIDeviceOrientation) -> CGFloat? {
         switch deviceOrientation {
-        case .portrait: return AVCaptureVideoOrientation.portrait
-        case .portraitUpsideDown: return AVCaptureVideoOrientation.portraitUpsideDown
-        case .landscapeLeft: return AVCaptureVideoOrientation.landscapeRight
-        case .landscapeRight: return AVCaptureVideoOrientation.landscapeLeft
+        case .portrait: return 90.0
+        case .portraitUpsideDown: return 270.0
+        case .landscapeLeft: return 180.0
+        case .landscapeRight: return 0.0
         default: return nil
         }
     }
@@ -310,16 +312,18 @@ class Camera: NSObject {
             
             let isFlashAvailable = self.deviceInput?.device.isFlashAvailable ?? false
             photoSettings.flashMode = isFlashAvailable ? .auto : .off
-            photoSettings.isHighResolutionPhotoEnabled = true
+            if let maxDimensions = self.deviceInput?.device.activeFormat.supportedMaxPhotoDimensions.last {
+                photoSettings.maxPhotoDimensions = maxDimensions
+            }
             if let previewPhotoPixelFormatType = photoSettings.availablePreviewPhotoPixelFormatTypes.first {
                 photoSettings.previewPhotoFormat = [kCVPixelBufferPixelFormatTypeKey as String: previewPhotoPixelFormatType]
             }
             photoSettings.photoQualityPrioritization = .balanced
             
             if let photoOutputVideoConnection = photoOutput.connection(with: .video) {
-                if photoOutputVideoConnection.isVideoOrientationSupported,
-                    let videoOrientation = self.videoOrientationFor(self.deviceOrientation) {
-                    photoOutputVideoConnection.videoOrientation = videoOrientation
+                if let angle = self.videoRotationAngleFor(self.deviceOrientation),
+                   photoOutputVideoConnection.isVideoRotationAngleSupported(angle) {
+                    photoOutputVideoConnection.videoRotationAngle = angle
                 }
             }
             
@@ -347,10 +351,8 @@ extension Camera: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pixelBuffer = sampleBuffer.imageBuffer else { return }
         
-        if connection.isVideoOrientationSupported,
-           let videoOrientation = videoOrientationFor(deviceOrientation) {
-            connection.videoOrientation = .portrait
-            //connection.videoOrientation = videoOrientation
+        if connection.isVideoRotationAngleSupported(90.0) {
+            connection.videoRotationAngle = 90.0
         }
 
         addToPreviewStream?(CIImage(cvPixelBuffer: pixelBuffer))

@@ -16,6 +16,10 @@ struct wonniApp: App {
 
     init() {
         FirebaseApp.configure()
+        Task {
+            await CategoryMappingRepository.shared.fetchIfNeeded()
+            await MercariObservedDataRepository.shared.fetchBrandsIfNeeded()
+        }
     }
 
     var body: some Scene {
