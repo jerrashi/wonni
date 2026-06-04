@@ -336,31 +336,20 @@ class UploadManager: ObservableObject {
                     print("[UploadManager] Gemini success for \(draft.id): \(gemini.name ?? "Untitled")")
                     processStatuses[draft.id] = .uploading(0.7)  // Generating description...
                     
-                    // Title merging
-                    if hasUserTitle, let userTitle = draft.userEditedTitle, !userTitle.isEmpty, let geminiTitle = gemini.name, !geminiTitle.isEmpty {
-                        let userWords = userTitle.components(separatedBy: .whitespacesAndNewlines)
-                        let geminiWordsCleaned = geminiTitle.lowercased()
-                            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-                            .filter { !$0.isEmpty }
-                        
-                        var extraWords: [String] = []
-                        for word in userWords {
-                            let cleanedWord = word.lowercased().filter { $0.isLetter || $0.isNumber }
-                            if cleanedWord.isEmpty { continue }
-                            if !geminiWordsCleaned.contains(cleanedWord) {
-                                extraWords.append(word)
-                            }
-                        }
-                        
-                        if extraWords.isEmpty {
-                            draft.userEditedTitle = geminiTitle
-                        } else {
-                            let extraText = extraWords.joined(separator: " ")
-                            draft.userEditedTitle = "\(geminiTitle) - \(extraText)"
-                        }
+                    // Use Gemini's shortTitle (≤80 chars) as the primary listing title —
+                    // it already incorporates the user's title hints from the prompt.
+                    // Fall back to name if shortTitle wasn't returned.
+                    let primaryTitle = (gemini.shortTitle?.isEmpty == false) ? gemini.shortTitle : gemini.name
+                    if hasUserTitle {
+                        draft.userEditedTitle = primaryTitle
                     } else {
-                        draft.aiSuggestedTitle = gemini.name
+                        draft.aiSuggestedTitle = primaryTitle
                         draft.userEditedTitle = nil
+                    }
+
+                    // Condition from AI if user hasn't set one
+                    if draft.condition == nil {
+                        draft.condition = gemini.condition
                     }
 
                     if draft.aiSuggestedPrice == nil { draft.aiSuggestedPrice = gemini.suggestedPrice }

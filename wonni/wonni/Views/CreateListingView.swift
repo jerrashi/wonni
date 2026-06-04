@@ -829,6 +829,46 @@ struct CustomPhotoPickerView: View {
         }
     }
 
+// MARK: - Title character-count warning
+// eBay & Mercari: 80 chars · Facebook: 99 · Etsy: 140
+struct TitleCharCountView: View {
+    let count: Int
+
+    private var isVisible: Bool { count >= 65 }
+
+    private var color: Color {
+        if count > 140 { return Color(red: 0.75, green: 0.0, blue: 0.0) }
+        if count > 99  { return .red }
+        if count > 80  { return .yellow }
+        return .secondary
+    }
+
+    private var message: String? {
+        if count > 140 { return "Truncated on all platforms" }
+        if count > 99  { return "Only shows fully on Etsy" }
+        if count > 80  { return "Only shows fully on Facebook & Etsy" }
+        return nil
+    }
+
+    var body: some View {
+        if isVisible {
+            HStack(spacing: 4) {
+                if let msg = message {
+                    Image(systemName: count > 99 ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                    Text(msg)
+                        .font(.caption2)
+                }
+                Spacer()
+                Text("\(count)")
+                    .font(.caption2.monospacedDigit().weight(count > 80 ? .semibold : .regular))
+            }
+            .foregroundStyle(color)
+            .animation(.easeInOut(duration: 0.2), value: count)
+        }
+    }
+}
+
 // MARK: - DraftRow (redesigned)
 struct DraftRow: View {
     let item: Item
@@ -843,7 +883,7 @@ struct DraftRow: View {
     private var titleBinding: Binding<String> {
         Binding(
             get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? "" },
-            set: { item.userEditedTitle = $0.isEmpty ? nil : $0; try? modelContext.save() }
+            set: { let v = String($0.prefix(140)); item.userEditedTitle = v.isEmpty ? nil : v; try? modelContext.save() }
         )
     }
 
@@ -904,6 +944,8 @@ struct DraftRow: View {
                             guard let tf = notification.object as? UITextField else { return }
                             DispatchQueue.main.async { tf.selectAll(nil) }
                         }
+
+                    TitleCharCountView(count: titleBinding.wrappedValue.count)
 
                     HStack(spacing: 3) {
                         Text("$").font(.subheadline).foregroundStyle(.secondary)
@@ -1141,6 +1183,10 @@ struct DraftEditSheet: View {
                     Section("Title & Price") {
                         TextField("Title", text: $title)
                             .font(.body.weight(.medium))
+                            .onChange(of: title) { _, v in
+                                if v.count > 140 { title = String(v.prefix(140)) }
+                            }
+                        TitleCharCountView(count: title.count)
                         HStack {
                             Text("$")
                             TextField("0.00", text: $priceText)
@@ -1557,6 +1603,7 @@ struct ProcessResultsOverviewView: View {
     @State private var showPublishConfirmation = false
     @State private var webAutofillQueue: [CrossPostJob] = []
     @State private var activeAutofillJob: CrossPostJob? = nil
+    @State private var crossPostError: String? = nil
 
     // Only show the items that went through AI processing
     private var results: [Item] {
@@ -1658,6 +1705,14 @@ struct ProcessResultsOverviewView: View {
         } message: {
             Text(uploadManager.publishError ?? "")
         }
+        .alert("Cross-Post Failed", isPresented: Binding(
+            get: { crossPostError != nil },
+            set: { if !$0 { crossPostError = nil } }
+        )) {
+            Button("OK", role: .cancel) { crossPostError = nil }
+        } message: {
+            Text(crossPostError ?? "")
+        }
         .sheet(isPresented: $showPublishConfirmation) {
             PublishConfirmationSheet(itemsToPublish: toPublish) { selectedPlatforms in
                 // 1. Enqueue web-based autofill jobs
@@ -1687,13 +1742,21 @@ struct ProcessResultsOverviewView: View {
                 let apiPlatforms = selectedPlatforms.filter { $0 == "ebay" || $0 == "etsy" }
                 if !apiPlatforms.isEmpty {
                     Task {
+                        var errorMessages: [String] = []
                         for item in toPublish {
                             if let listingId = item.firestoreListingId {
-                                try? await IntegrationRepository.shared.triggerCrossPost(
-                                    listingId: listingId,
-                                    platforms: Array(apiPlatforms)
-                                )
+                                do {
+                                    try await IntegrationRepository.shared.triggerCrossPost(
+                                        listingId: listingId,
+                                        platforms: Array(apiPlatforms)
+                                    )
+                                } catch {
+                                    errorMessages.append(formatCrossPostError(error, item: item, platforms: apiPlatforms))
+                                }
                             }
+                        }
+                        if !errorMessages.isEmpty {
+                            crossPostError = errorMessages.joined(separator: "\n\n")
                         }
                     }
                 }
@@ -1781,6 +1844,31 @@ struct ProcessResultsOverviewView: View {
         }
         focusedField = DraftFocusField(itemID: results[row].id, field: field)
     }
+
+    private func formatCrossPostError(_ error: Error, item: Item, platforms: [String]) -> String {
+        let nsError = error as NSError
+        let serverMsg = nsError.userInfo["NSLocalizedDescription"] as? String ?? ""
+        let title = item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled"
+
+        // Title-too-long: eBay max is 80 chars
+        if serverMsg.lowercased().contains("title") && (serverMsg.lowercased().contains("long") || serverMsg.lowercased().contains("80") || serverMsg.lowercased().contains("character")) {
+            let count = title.count
+            return "eBay cross-post failed for "\(title.prefix(40))…"\n\nYour title is \(count) characters. eBay requires 80 or fewer. Edit the title and try again."
+        }
+        // Business policy / setup issue
+        if serverMsg.contains("bizpolicy") || serverMsg.contains("Business Policies") || serverMsg.contains("bp/manage") {
+            return "eBay cross-post failed: Your eBay Business Policies aren't configured yet. Visit your eBay Seller Hub → Business Policies to set up Payment, Return, and Shipping policies."
+        }
+        // Missing permissions / reconnect
+        if serverMsg.contains("missing required permissions") || serverMsg.contains("invalid_scope") {
+            return "eBay cross-post failed: Missing eBay permissions. Please disconnect and reconnect your eBay account in Settings."
+        }
+        // Generic fallback with raw message
+        if !serverMsg.isEmpty && serverMsg != "INTERNAL" {
+            return "Cross-post failed for "\(title.prefix(40))": \(serverMsg)"
+        }
+        return "Cross-post failed for "\(title.prefix(40))". Check your connection and integration settings, then try again."
+    }
 }
 
 // MARK: - ResultDraftRow
@@ -1801,7 +1889,7 @@ struct ResultDraftRow: View {
     private var titleBinding: Binding<String> {
         Binding(
             get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? "" },
-            set: { item.userEditedTitle = $0.isEmpty ? nil : $0; try? modelContext.save() }
+            set: { let v = String($0.prefix(140)); item.userEditedTitle = v.isEmpty ? nil : v; try? modelContext.save() }
         )
     }
 
@@ -1849,6 +1937,8 @@ struct ResultDraftRow: View {
                         .onChange(of: titleBinding.wrappedValue) { _, _ in
                             uploadManager.syncDraftData(item)
                         }
+
+                    TitleCharCountView(count: titleBinding.wrappedValue.count)
 
                     HStack(spacing: 3) {
                         Text("$").font(.subheadline).foregroundStyle(.secondary)
