@@ -4,13 +4,24 @@
 //
 
 import SwiftUI
+import SwiftData
 
 /// Full-screen view that shows Gemini processing progress for each draft.
-/// The user can tap "∨" to minimize it to the ProcessPillView.
+/// Present as a fullScreenCover from BulkListingOverviewView.
+/// Pass onMinimize to navigate home; the view auto-dismisses when results are ready.
 struct ProcessProgressView: View {
+    var onMinimize: (() -> Void)? = nil
+
     @EnvironmentObject private var uploadManager: UploadManager
     @Environment(\.dismiss) private var dismiss
+    @Query private var allItems: [Item]
     @State private var cache = CachedImageManager()
+
+    private var orderedDrafts: [Item] {
+        uploadManager.processQueuedIDs.compactMap { id in
+            allItems.first { $0.id == id }
+        }
+    }
 
     private var allDone: Bool {
         guard !uploadManager.processStatuses.isEmpty else { return false }
@@ -21,29 +32,24 @@ struct ProcessProgressView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // ── Header ─────────────────────────────────────────────────────
-            Group {
+            // ── Header ────────────────────────────────────────────────────────
+            ZStack {
                 if allDone {
-                    HStack(spacing: 12) {
+                    HStack(spacing: 10) {
                         Image(systemName: "sparkles")
                             .font(.title3)
                             .foregroundStyle(.purple)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("All items processed!")
-                                .font(.subheadline.weight(.semibold))
-                            Text("Review the results below and tap Publish.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                        Text("All items processed!")
+                            .font(.headline)
                         Spacer()
                     }
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, 24)
                 } else {
-                    VStack(spacing: 8) {
+                    VStack(spacing: 10) {
                         ProgressView(value: uploadManager.processProgress)
                             .tint(.purple)
-                            .padding(.horizontal, 20)
-                        HStack(spacing: 4) {
+                            .padding(.horizontal, 24)
+                        HStack(spacing: 6) {
                             Image(systemName: "sparkles")
                                 .font(.caption)
                                 .foregroundStyle(.purple)
@@ -54,48 +60,150 @@ struct ProcessProgressView: View {
                     }
                 }
             }
-            .padding(.vertical, 16)
+            .padding(.top, 20)
+            .padding(.bottom, 16)
             .animation(.easeInOut(duration: 0.35), value: allDone)
 
             Divider()
 
-            // ── Per-item list ───────────────────────────────────────────────
-            List(uploadManager.processedItemIDs.reversed(), id: \.self) { id in
-                let status = uploadManager.processStatuses[id] ?? .pending
-                HStack(spacing: 14) {
-                    StatusIconView(status: status)
-                        .frame(width: 28, height: 28)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Item \(id.uuidString.prefix(8))")
-                            .font(.body)
-                            .lineLimit(1)
-                        if case .done = status {
-                            Text("AI analysis complete")
-                                .font(.caption2)
-                                .foregroundStyle(.green)
-                        } else if case .uploading = status {
-                            Text("Analyzing with Gemini…")
-                                .font(.caption2)
-                                .foregroundStyle(.purple.opacity(0.8))
-                        }
+            // ── Per-item list ─────────────────────────────────────────────────
+            ScrollView {
+                VStack(spacing: 10) {
+                    ForEach(orderedDrafts) { item in
+                        draftStatusRow(item)
                     }
-                    Spacer()
                 }
-                .padding(.vertical, 2)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
             }
-            .listStyle(.plain)
-        }
-        .navigationTitle("AI Processing")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                // Minimize to pill
-                Button {
+
+            Spacer(minLength: 0)
+
+            Divider()
+
+            // ── Minimize button ───────────────────────────────────────────────
+            Button {
+                if let minimizeAction = onMinimize {
+                    minimizeAction()
+                } else {
                     dismiss()
-                } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.body.weight(.semibold))
                 }
+            } label: {
+                VStack(spacing: 6) {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 22, weight: .semibold))
+                    Text(allDone ? "Close" : "Minimize")
+                        .font(.subheadline.weight(.medium))
+                }
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 20)
+            }
+            .contentShape(Rectangle())
+        }
+        .navigationTitle("Processing")
+        .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: uploadManager.showProcessResults) { _, show in
+            if show { dismiss() }
+        }
+    }
+
+    @ViewBuilder
+    private func draftStatusRow(_ item: Item) -> some View {
+        let status = uploadManager.processStatuses[item.id] ?? .pending
+
+        HStack(spacing: 14) {
+            // Thumbnail
+            Group {
+                if let assetId = item.sourceAssetIdentifiers.first {
+                    if let img = item.image(for: assetId) {
+                        Image(uiImage: img)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        PhotoItemView(
+                            asset: PhotoAsset(identifier: assetId),
+                            cache: cache,
+                            imageSize: CGSize(width: 100, height: 100)
+                        )
+                    }
+                } else {
+                    Color(.systemGray5)
+                }
+            }
+            .frame(width: 52, height: 52)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            // Title + status text
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.userEditedTitle ?? item.visionTitle ?? "Item")
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+                Text(statusLabel(for: status))
+                    .font(.caption)
+                    .foregroundStyle(statusColor(for: status))
+                    .animation(.easeInOut(duration: 0.25), value: statusLabel(for: status))
+            }
+
+            Spacer()
+
+            // Status icon
+            statusIcon(for: status)
+                .frame(width: 28, height: 28)
+        }
+        .padding(12)
+        .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func statusLabel(for status: DraftUploadStatus) -> String {
+        switch status {
+        case .pending:                           return "Waiting…"
+        case .uploading(let p) where p < 0.34:  return "Identifying…"
+        case .uploading(let p) where p < 0.68:  return "Analyzing with AI…"
+        case .uploading:                         return "Generating description…"
+        case .done:                              return "Complete"
+        case .failed:                            return "Couldn't identify"
+        }
+    }
+
+    private func statusColor(for status: DraftUploadStatus) -> Color {
+        switch status {
+        case .pending:    return .secondary
+        case .uploading:  return .purple
+        case .done:       return .green
+        case .failed:     return .orange
+        }
+    }
+
+    @ViewBuilder
+    private func statusIcon(for status: DraftUploadStatus) -> some View {
+        switch status {
+        case .pending:
+            Image(systemName: "clock")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .uploading(let p):
+            ZStack {
+                Circle().stroke(Color.purple.opacity(0.2), lineWidth: 2.5)
+                Circle()
+                    .trim(from: 0, to: max(0.08, p))
+                    .stroke(Color.purple, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.linear(duration: 0.3), value: p)
+            }
+        case .done:
+            ZStack {
+                Circle().fill(Color.green.opacity(0.15))
+                Image(systemName: "checkmark")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.green)
+            }
+        case .failed:
+            ZStack {
+                Circle().fill(Color.orange.opacity(0.15))
+                Image(systemName: "exclamationmark")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.orange)
             }
         }
     }
