@@ -34,17 +34,20 @@ exports.identifyItem = onCall({
       Identify the item in these photos. Provide a detailed identification in JSON format.
       ${hintStr ? `\nHere is some user-provided context to help you:\n${hintStr}` : ""}
       Include:
-      - name: A concise, searchable product name.
+      - name: A concise, searchable product name (no length limit).
+      - shortTitle: A marketplace listing title that is AT MOST 80 characters long. It must include the most important identifying details (brand, model, key attribute). If user title context is provided, incorporate relevant specifics from it while staying under 80 characters. This will be used as the cross-platform listing title.
       - brand: The brand or manufacturer.
-      - category: A hierarchical category string (e.g., "Electronics > Audio > Headphones").
-      - attributes: Key product details (e.g., {"Color": "Black", "Model": "WH-1000XM4"}).
+      - category: A hierarchical category string matching common marketplace taxonomies (e.g., "Electronics > Audio > Headphones"). Be specific — this is used to fuzzy-match against platform category trees.
       - suggestedPrice: An estimated current market price in USD (numeric).
-      - description: A 2-3 sentence professional product description.
+      - description: A professional product description up to 1000 chars in length.
+      - condition: The item's condition. Use exactly one of: "new", "newWithoutTags", "likeNew", "good", "fair", "poor", "forParts". Priority order: (1) If the user title or description contains explicit keywords, map them directly — "sealed", "brand new", "factory sealed" → "new"; "NWT", "new with tags" → "new"; "NWOT", "new without tags" → "newWithoutTags"; "like new", "mint", "pristine", "opened never used" → "likeNew"; "used", "pre-owned" → "good". (2) If no explicit keywords, infer from photos — visible wear, scratches, yellowing → "fair" or "poor"; clean and intact → "good". Default to "good" if uncertain.
       - weightLbs: Best guess for the item's shipping weight in pounds (numeric).
       - lengthIn: Best guess for the item's shipping length in inches (numeric).
       - widthIn: Best guess for the item's shipping width in inches (numeric).
       - heightIn: Best guess for the item's shipping height in inches (numeric).
       - confidence: Your confidence score from 0.0 to 1.0.
+
+      IMPORTANT: shortTitle must be 80 characters or fewer. Count carefully.
 
       Return ONLY the JSON object.
     `;

@@ -12,11 +12,12 @@ import UIKit
 
 struct GeminiIdentificationResponse: Codable {
     var name: String?
+    var shortTitle: String?   // ≤80 chars, cross-platform optimized
     var brand: String?
     var category: String?
-    var attributes: [String: String]?
     var suggestedPrice: Double?
     var description: String?
+    var condition: String?    // ItemCondition rawValue predicted from photos
     var weightLbs: Double?
     var lengthIn: Double?
     var widthIn: Double?
