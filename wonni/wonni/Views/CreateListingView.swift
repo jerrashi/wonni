@@ -521,6 +521,7 @@ struct CustomPhotoPickerView: View {
         @State private var showingDeleteConfirm = false
         @State private var draggedCompositeId: String?
         @State private var isTrashTargeted = false
+        @State private var showingPickerForDraft = false
         @FocusState private var focusedDraftID: UUID?
 
         // Track drag original state for cancel/restoration
@@ -643,6 +644,24 @@ struct CustomPhotoPickerView: View {
                                                         }
                                                     }
                                                 }
+
+                                                // "+" tile — always the last item in the scroll
+                                                if !isSelectionMode {
+                                                    Button {
+                                                        uploadManager.activeDraftID = draft.id
+                                                        showingPickerForDraft = true
+                                                    } label: {
+                                                        RoundedRectangle(cornerRadius: 8)
+                                                            .fill(Color(.systemGray5))
+                                                            .frame(width: 80, height: 80)
+                                                            .overlay(
+                                                                Image(systemName: "plus")
+                                                                    .font(.system(size: 22, weight: .medium))
+                                                                    .foregroundStyle(.secondary)
+                                                            )
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                }
                                             }
                                             .padding(.horizontal)
                                         }
@@ -743,6 +762,10 @@ struct CustomPhotoPickerView: View {
                     }
                 } message: {
                     Text("Are you sure you want to delete the selected items?")
+                }
+                .sheet(isPresented: $showingPickerForDraft) {
+                    CustomPhotoPickerView(addingToExistingDraft: true)
+                        .environmentObject(uploadManager)
                 }
             }
         }
@@ -874,11 +897,9 @@ struct DraftRow: View {
     let item: Item
     var focusedField: FocusState<DraftFocusField?>.Binding
     let cache: CachedImageManager
-    var onAddPhotos: (() -> Void)? = nil
 
     @Environment(\.modelContext) private var modelContext
     @State private var priceText: String = ""
-    @State private var showEditSheet = false
 
     private var titleBinding: Binding<String> {
         Binding(
@@ -898,41 +919,24 @@ struct DraftRow: View {
         VStack(alignment: .leading, spacing: 8) {
             // ── Top row: photo + title/price + edit button ─────────────────
             HStack(alignment: .top, spacing: 14) {
-                // Photo thumbnail with "+" badge
-                ZStack(alignment: .bottomTrailing) {
-                    Group {
-                        if let assetId = item.sourceAssetIdentifiers.first {
-                            Group {
-                                if let uiImage = item.image(for: assetId) {
-                                    Image(uiImage: uiImage).resizable().scaledToFill()
-                                } else {
-                                    PhotoItemView(asset: PhotoAsset(identifier: assetId), cache: cache, imageSize: CGSize(width: 160, height: 160))
-                                }
+                // Photo thumbnail
+                Group {
+                    if let assetId = item.sourceAssetIdentifiers.first {
+                        Group {
+                            if let uiImage = item.image(for: assetId) {
+                                Image(uiImage: uiImage).resizable().scaledToFill()
+                            } else {
+                                PhotoItemView(asset: PhotoAsset(identifier: assetId), cache: cache, imageSize: CGSize(width: 160, height: 160))
                             }
-                        } else {
-                            Color(.systemGray5)
-                                .overlay(Image(systemName: "photo").foregroundStyle(.tertiary))
                         }
-                    }
-                    .frame(width: 76, height: 76)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .clipped()
-
-                    // "+" add-photo badge
-                    if onAddPhotos != nil {
-                        Button { onAddPhotos?() } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 22, height: 22)
-                                .background(Color.accentColor)
-                                .clipShape(Circle())
-                                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 1)
-                        }
-                        .buttonStyle(.plain)
-                        .offset(x: 4, y: 4)
+                    } else {
+                        Color(.systemGray5)
+                            .overlay(Image(systemName: "photo").foregroundStyle(.tertiary))
                     }
                 }
+                .frame(width: 76, height: 76)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .clipped()
 
                 // Title + price (constrained to photo height)
                 VStack(alignment: .leading, spacing: 6) {
@@ -961,15 +965,6 @@ struct DraftRow: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-
-                Button { showEditSheet = true } label: {
-                    Image(systemName: "square.and.pencil")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
             }
 
             // ── Description (full width) ────────────────────────────────────
@@ -1017,9 +1012,6 @@ struct DraftRow: View {
                         .buttonStyle(.plain)
                     }
                 }
-            } else if item.sourceAssetIdentifiers.count > 1 {
-                Label("\(item.sourceAssetIdentifiers.count) photos", systemImage: "photo.on.rectangle")
-                    .font(.caption2).foregroundStyle(.tertiary)
             }
         }
         .padding(.vertical, 8)
@@ -1027,9 +1019,6 @@ struct DraftRow: View {
             if let p = item.userEditedPrice {
                 priceText = String(format: "%.2f", p)
             }
-        }
-        .sheet(isPresented: $showEditSheet) {
-            DraftEditSheet(item: item)
         }
     }
 }
@@ -1444,11 +1433,7 @@ struct BulkListingOverviewView: View {
                         DraftRow(
                             item: item,
                             focusedField: $focusedField,
-                            cache: cache,
-                            onAddPhotos: {
-                                uploadManager.activeDraftID = item.id
-                                showingPickerForDraft = true
-                            }
+                            cache: cache
                         )
                         .id(item.id)
                     }
@@ -1681,7 +1666,7 @@ struct ProcessResultsOverviewView: View {
             .background(.bar)
         }
         .navigationTitle("Review & Publish")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 let atFirst: Bool = focusedIndex == nil || focusedIndex == 0

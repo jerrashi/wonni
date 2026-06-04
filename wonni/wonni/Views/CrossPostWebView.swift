@@ -438,6 +438,16 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
     ) async {
         status = .injecting
 
+        // Wait for the webview to finish its initial navigation before running any JS.
+        // callJS returns nil while the webview is mid-navigation, which would silently skip
+        // all field injection and leave the form empty.
+        var navAttempts = 0
+        while webView.isLoading && navAttempts < 30 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            navAttempts += 1
+        }
+        print("[MercariPostingState] Nav wait done (isLoading=\(webView.isLoading), attempts=\(navAttempts))")
+
         // Poll for React form mount (up to 10 s in 500 ms steps)
         let pollScript = """
         return new Promise(function(resolve) {
