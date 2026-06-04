@@ -38,6 +38,10 @@ struct ProfileView: View {
     @State private var selectedSort: ListingSortOption = .newest
     @State private var crossPostErrorMessage: String? = nil
     @State private var showCrossPostError = false
+    
+    // Web Autofill Queue for non-API cross-posting (Mercari, Facebook)
+    @State private var webAutofillQueue: [CrossPostJob] = []
+    @State private var activeAutofillJob: CrossPostJob? = nil
 
     @State private var profile: UserPublicProfile?
 
@@ -207,8 +211,17 @@ struct ProfileView: View {
                 }
             }
             .sheet(item: $listingToEdit) { listing in
-                EditListingSheet(listing: listing) {
+                EditListingSheet(listing: listing) { jobs in
                     Task { await loadListings() }
+                    
+                    if !jobs.isEmpty {
+                        self.webAutofillQueue.append(contentsOf: jobs)
+                        if self.activeAutofillJob == nil {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                self.checkAndStartNextWebJob()
+                            }
+                        }
+                    }
                 }
             }
             .sheet(isPresented: $showBulkPost) {
@@ -218,13 +231,26 @@ struct ProfileView: View {
                 }
                 .presentationDetents([.fraction(0.75), .large])
             }
+            .sheet(item: $activeAutofillJob, onDismiss: {
+                checkAndStartNextWebJob()
+            }) { job in
+                if job.platform == "mercari" {
+                    MercariAutoPosterView(job: job)
+                } else {
+                    CrossPostContainerView(
+                        platformName: "Facebook Marketplace",
+                        listingTitle: job.title,
+                        listingDescription: job.description,
+                        listingPrice: job.price
+                    )
+                }
+            }
             .task { 
                 await loadListings()
                 await loadProfile()
             }
         }
     }
-    
     private func loadProfile() async {
         guard let uid = user?.uid else { return }
         profile = try? await UserRepository.shared.fetchProfile(uid: uid)
@@ -390,11 +416,22 @@ struct ProfileView: View {
     private func bulkPostListings(platforms: Set<String>) {
         let selectedListingsArray = listings.filter { selectedListings.contains($0.id ?? "") }
         
+        var webJobs: [CrossPostJob] = []
+        
         for listing in selectedListingsArray {
             guard let id = listing.id else { continue }
             
             for platform in platforms {
-                if platform == "ebay" {
+                if platform == "mercari" || platform == "facebook" {
+                    webJobs.append(CrossPostJob(
+                        platform: platform,
+                        title: listing.customTitle ?? "Untitled",
+                        description: listing.customDescription ?? "",
+                        price: listing.price ?? 0.0,
+                        listingId: id,
+                        photoFirebasePaths: listing.photoPaths
+                    ))
+                } else if platform == "ebay" {
                     // Set pending state locally first so UI updates immediately
                     if let index = listings.firstIndex(where: { $0.id == id }) {
                         var updated = listings[index]
@@ -422,9 +459,24 @@ struct ProfileView: View {
             }
         }
         
+        if !webJobs.isEmpty {
+            self.webAutofillQueue = webJobs
+            // Delay to allow BulkCrossPostSheet to fully dismiss before presenting the autofill sheet
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.checkAndStartNextWebJob()
+            }
+        }
+        
         // Clear selection
         selectedListings.removeAll()
         editMode = .inactive
+    }
+    
+    private func checkAndStartNextWebJob() {
+        if !webAutofillQueue.isEmpty {
+            let nextJob = webAutofillQueue.removeFirst()
+            activeAutofillJob = nextJob
+        }
     }
 
     /// Extracts a user-readable error message from a Firebase FunctionsError.
@@ -571,7 +623,7 @@ struct EditProfileSheet: View {
 
 struct EditListingSheet: View {
     let listing: UserListing
-    let onSave: () -> Void
+    let onSave: ([CrossPostJob]) -> Void
     
     @Environment(\.dismiss) private var dismiss
     @State private var title: String
@@ -595,7 +647,7 @@ struct EditListingSheet: View {
     @State private var crossPostErrorMessage: String? = nil
     @State private var showCrossPostError = false
     
-    init(listing: UserListing, onSave: @escaping () -> Void) {
+    init(listing: UserListing, onSave: @escaping ([CrossPostJob]) -> Void) {
         self.listing = listing
         self.onSave = onSave
         _title = State(initialValue: listing.customTitle ?? "")
@@ -773,6 +825,8 @@ struct EditListingSheet: View {
             let added = selectedPlatforms.subtracting(initialPlatforms)
             let removed = initialPlatforms.subtracting(selectedPlatforms)
             
+            var newWebJobs: [CrossPostJob] = []
+            
             for platform in added {
                 if platform == "ebay" {
                     Task {
@@ -787,6 +841,15 @@ struct EditListingSheet: View {
                             showCrossPostError = true
                         }
                     }
+                } else if platform == "mercari" || platform == "facebook" {
+                    newWebJobs.append(CrossPostJob(
+                        platform: platform,
+                        title: title.trimmingCharacters(in: .whitespaces),
+                        description: description.trimmingCharacters(in: .whitespaces),
+                        price: price ?? 0.0,
+                        listingId: id,
+                        photoFirebasePaths: listing.photoPaths
+                    ))
                 }
             }
             
@@ -804,7 +867,7 @@ struct EditListingSheet: View {
                 }
             }
             
-            onSave()
+            onSave(newWebJobs)
             dismiss()
         } catch {
             print("Failed to save listing: \(error)")
@@ -982,6 +1045,7 @@ struct SettingsSheet: View {
     @State private var linkUsername = ""
     @State private var activeSession: ASWebAuthenticationSession?
     @State private var anchorProvider = WebAuthPresentationAnchor()
+    @State private var showMercariLogin = false
     
     // Selling Settings State
     @StateObject private var settingsRepo = SellingSettingsRepository.shared
@@ -1051,46 +1115,28 @@ struct SettingsSheet: View {
                         }
                     } else {
                         ForEach(integrationRepo.integrations) { integration in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(platformDisplayName(integration.platform))
-                                        .font(.body)
-                                    if integration.isConnected {
-                                        Text("Linked as: \(integration.connectedUsername ?? "Unknown")")
-                                            .font(.caption)
-                                            .foregroundColor(.green)
-                                    } else {
-                                        Text("Not Connected")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-                                
-                                Spacer()
-                                
-                                if integration.isConnected {
-                                    Button("Disconnect", role: .destructive) {
-                                        Task {
-                                            try? await integrationRepo.unlinkPlatform(platform: integration.platform)
-                                        }
-                                    }
-                                    .buttonStyle(.borderless)
-                                } else {
-                                    Button("Connect") {
-                                        if integration.platform == "ebay" {
-                                            startEbayOAuth()
-                                        } else {
-                                            selectedPlatformToLink = integration.platform
-                                            showLinkAlert = true
-                                        }
-                                    }
-                                    .buttonStyle(.borderless)
-                                }
-                            }
+                            PlatformRowView(
+                                integration: integration,
+                                onConnect: { connectPlatform(integration: integration) },
+                                onDisconnect: { disconnectPlatform(platform: integration.platform) }
+                            )
                         }
                     }
                 }
-                
+
+                Section(header: Text("Mercari Shipping")) {
+                    NavigationLink {
+                        MercariShippingPreferencesView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Shipping preferences")
+                            Text("How autofill picks weight, label, and carrier when posting to Mercari.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
                 Section(header: Text("Selling Settings")) {
                     if settingsRepo.isLoading {
                         HStack {
@@ -1252,9 +1298,31 @@ struct SettingsSheet: View {
             .onDisappear {
                 saveSellingSettings(showAlertOnSuccess: false)
             }
+            .sheet(isPresented: $showMercariLogin) {
+                MercariConnectSheet()
+            }
         }
     }
 
+    // MARK: - Handlers
+    
+    private func connectPlatform(integration: PlatformIntegration) {
+        if integration.platform == "ebay" {
+            startEbayOAuth()
+        } else if integration.platform == "mercari" {
+            showMercariLogin = true
+        } else {
+            selectedPlatformToLink = integration.platform
+            showLinkAlert = true
+        }
+    }
+    
+    private func disconnectPlatform(platform: String) {
+        Task {
+            try? await integrationRepo.unlinkPlatform(platform: platform)
+        }
+    }
+    
     private func startEbayOAuth() {
         print("[SettingsSheet] startEbayOAuth initiated")
         guard let clientId = Bundle.main.object(forInfoDictionaryKey: "EbayClientId") as? String,
@@ -1964,6 +2032,53 @@ struct AddressSetupSheet: View {
                 errorMessage = "Failed to save: \(error.localizedDescription)"
             }
             isSaving = false
+        }
+    }
+}
+
+// MARK: - PlatformRowView
+struct PlatformRowView: View {
+    let integration: PlatformIntegration
+    let onConnect: () -> Void
+    let onDisconnect: () -> Void
+    
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(platformDisplayName(integration.platform))
+                    .font(.body)
+                if integration.isConnected {
+                    Text("Linked as: \(integration.connectedUsername ?? "Unknown")")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                } else {
+                    Text("Not Connected")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            Spacer()
+            
+            if integration.isConnected {
+                Button("Disconnect", role: .destructive, action: onDisconnect)
+                    .buttonStyle(.borderless)
+            } else {
+                Button("Connect", action: onConnect)
+                    .buttonStyle(.borderless)
+            }
+        }
+    }
+    
+    private func platformDisplayName(_ key: String) -> String {
+        switch key {
+        case "ebay": return "eBay"
+        case "poshmark": return "Poshmark"
+        case "mercari": return "Mercari"
+        case "depop": return "Depop"
+        case "facebook": return "Facebook Marketplace"
+        case "etsy": return "Etsy"
+        default: return key.capitalized
         }
     }
 }

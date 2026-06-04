@@ -1656,16 +1656,14 @@ struct ProcessResultsOverviewView: View {
                 } label: {
                     HStack(spacing: 8) {
                         let busy = uploadManager.isUploadingPhotos || uploadManager.isPublishing
+                        let countLabel: String = selectedIDs.isEmpty ? "All" : "\(selectedIDs.count)"
+                        let buttonLabel: String = uploadManager.isPublishing ? "Publishing…" : uploadManager.isUploadingPhotos ? "Uploading Photos…" : "Publish \(countLabel)"
                         if busy {
                             ProgressView()
                                 .tint(.white)
                                 .scaleEffect(0.8)
                         }
-                        Text(
-                            uploadManager.isPublishing ? "Publishing…" :
-                            uploadManager.isUploadingPhotos ? "Uploading Photos…" :
-                            "Publish \(selectedIDs.isEmpty ? "All" : "\(selectedIDs.count)")"
-                        )
+                        Text(buttonLabel)
                         .fontWeight(.semibold)
                     }
                     .foregroundStyle(.white)
@@ -1686,10 +1684,12 @@ struct ProcessResultsOverviewView: View {
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
-                Button { moveFocus(by: -1) } label: { Image(systemName: "chevron.up") }
-                    .disabled(focusedIndex == nil || focusedIndex == 0)
-                Button { moveFocus(by: 1) } label: { Image(systemName: "chevron.down") }
-                    .disabled(focusedIndex == nil || focusedIndex == (results.count * 3 - 1))
+                let atFirst: Bool = focusedIndex == nil || focusedIndex == 0
+                let atLast: Bool = focusedIndex == nil || focusedIndex == results.count * 3 - 1
+                Button(action: { moveFocus(by: -1) }) { Image(systemName: "chevron.up") }
+                    .disabled(atFirst)
+                Button(action: { moveFocus(by: 1) }) { Image(systemName: "chevron.down") }
+                    .disabled(atLast)
                 Spacer()
                 Button("Done") {
                     focusedField = nil
@@ -1714,59 +1714,7 @@ struct ProcessResultsOverviewView: View {
             Text(crossPostError ?? "")
         }
         .sheet(isPresented: $showPublishConfirmation) {
-            PublishConfirmationSheet(itemsToPublish: toPublish) { selectedPlatforms in
-                // 1. Enqueue web-based autofill jobs
-                var jobs: [CrossPostJob] = []
-                for item in toPublish {
-                    for platform in selectedPlatforms {
-                        if platform == "mercari" || platform == "facebook" {
-                            jobs.append(CrossPostJob(
-                                platform: platform,
-                                title: item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled",
-                                description: item.userEditedDescription ?? item.aiSuggestedDescription ?? "",
-                                price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
-                                listingId: item.firestoreListingId,
-                                item: item
-                            ))
-                        }
-                    }
-                }
-                
-                self.webAutofillQueue = jobs
-                uploadManager.pendingAutofillJobsCount = jobs.count
-                
-                // 2. Perform Wonni publishing
-                uploadManager.publishDrafts(drafts: toPublish, modelContext: modelContext)
-                
-                // 3. Trigger API cross-posts on the backend if any connected
-                let apiPlatforms = selectedPlatforms.filter { $0 == "ebay" || $0 == "etsy" }
-                if !apiPlatforms.isEmpty {
-                    Task {
-                        var errorMessages: [String] = []
-                        for item in toPublish {
-                            if let listingId = item.firestoreListingId {
-                                do {
-                                    try await IntegrationRepository.shared.triggerCrossPost(
-                                        listingId: listingId,
-                                        platforms: Array(apiPlatforms)
-                                    )
-                                } catch {
-                                    errorMessages.append(formatCrossPostError(error, item: item, platforms: apiPlatforms))
-                                }
-                            }
-                        }
-                        if !errorMessages.isEmpty {
-                            crossPostError = errorMessages.joined(separator: "\n\n")
-                        }
-                    }
-                }
-                
-                // If there are only web jobs (and no publishing needed or publishing succeeded immediately), start immediately
-                if !jobs.isEmpty && !uploadManager.isPublishing {
-                    checkAndStartNextWebJob()
-                }
-            }
-            .presentationDetents([.fraction(0.75), .large])
+            publishConfirmationSheetContent
         }
         .sheet(item: $activeAutofillJob, onDismiss: {
             checkAndStartNextWebJob()
@@ -1790,6 +1738,54 @@ struct ProcessResultsOverviewView: View {
         }
     }
     
+    @ViewBuilder private var publishConfirmationSheetContent: some View {
+        PublishConfirmationSheet(itemsToPublish: toPublish) { selectedPlatforms in
+            var jobs: [CrossPostJob] = []
+            for item in toPublish {
+                for platform in selectedPlatforms {
+                    if platform == "mercari" || platform == "facebook" {
+                        jobs.append(CrossPostJob(
+                            platform: platform,
+                            title: item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled",
+                            description: item.userEditedDescription ?? item.aiSuggestedDescription ?? "",
+                            price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
+                            listingId: item.firestoreListingId,
+                            item: item
+                        ))
+                    }
+                }
+            }
+            self.webAutofillQueue = jobs
+            uploadManager.pendingAutofillJobsCount = jobs.count
+            uploadManager.publishDrafts(drafts: toPublish, modelContext: modelContext)
+            let apiPlatforms = selectedPlatforms.filter { $0 == "ebay" || $0 == "etsy" }
+            if !apiPlatforms.isEmpty {
+                Task {
+                    var errorMessages: [String] = []
+                    for item in toPublish {
+                        if let listingId = item.firestoreListingId {
+                            do {
+                                try await IntegrationRepository.shared.triggerCrossPost(
+                                    listingId: listingId,
+                                    platforms: Array(apiPlatforms)
+                                )
+                            } catch {
+                                errorMessages.append(formatCrossPostError(error, item: item, platforms: Array(apiPlatforms)))
+                            }
+                        }
+                    }
+                    if !errorMessages.isEmpty {
+                        crossPostError = errorMessages.joined(separator: "\n\n")
+                    }
+                }
+            }
+            if !jobs.isEmpty && !uploadManager.isPublishing {
+                checkAndStartNextWebJob()
+            }
+        }
+        .presentationDetents([.fraction(0.75), .large])
+    }
+
     private func checkAndStartNextWebJob() {
         if !webAutofillQueue.isEmpty {
             let nextJob = webAutofillQueue.removeFirst()
@@ -1853,7 +1849,7 @@ struct ProcessResultsOverviewView: View {
         // Title-too-long: eBay max is 80 chars
         if serverMsg.lowercased().contains("title") && (serverMsg.lowercased().contains("long") || serverMsg.lowercased().contains("80") || serverMsg.lowercased().contains("character")) {
             let count = title.count
-            return "eBay cross-post failed for "\(title.prefix(40))…"\n\nYour title is \(count) characters. eBay requires 80 or fewer. Edit the title and try again."
+            return "eBay cross-post failed for \"\(title.prefix(40))…\"\n\nYour title is \(count) characters. eBay requires 80 or fewer. Edit the title and try again."
         }
         // Business policy / setup issue
         if serverMsg.contains("bizpolicy") || serverMsg.contains("Business Policies") || serverMsg.contains("bp/manage") {
@@ -1865,9 +1861,9 @@ struct ProcessResultsOverviewView: View {
         }
         // Generic fallback with raw message
         if !serverMsg.isEmpty && serverMsg != "INTERNAL" {
-            return "Cross-post failed for "\(title.prefix(40))": \(serverMsg)"
+            return "Cross-post failed for \"\(title.prefix(40))\": \(serverMsg)"
         }
-        return "Cross-post failed for "\(title.prefix(40))". Check your connection and integration settings, then try again."
+        return "Cross-post failed for \"\(title.prefix(40))\". Check your connection and integration settings, then try again."
     }
 }
 

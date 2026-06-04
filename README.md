@@ -3,7 +3,17 @@
 **AI-first marketplace iOS app.** Wonni helps sellers list fast (camera → AI identification → live listing in seconds) and helps buyers discover, save, and buy items.
 
 **Author:** Jerry Shi  
-**Stack:** SwiftUI · Firebase (Auth, Firestore, Storage, AI) · Gemini 1.5 Flash
+**Stack:** SwiftUI · Firebase (Auth, Firestore, Storage, AI) · Gemini Flash API
+
+---
+
+## Project Motivation
+
+As previously mentioned, there already are a few options for sellers looking for an AI-enabled cross-listing app. The differentiator here is that the UI design should make listing even faster. Furthermore, our product roadmap is to implement cross-listing > importing URLs to scrape product info > drop-shipping pipelines > fully fledged catalog of products.
+
+## Project Timeline
+
+With AI, it is easy to get stuck in infinite scope creep. Over the last two days (6/2 - 6/3), I worked on implementing Mercari auto-fill. Eventually, I had to recognize that the feature had to be left in "good enough" mode instead of sucking up all the time to implement one feature.
 
 ---
 
@@ -183,9 +193,13 @@ expiresAt: <Timestamp>   (optional, omit for permanent)
 - Photo stacking (`[[UIImage]]`) with scrollable stack carousel
 - Plus button to create new stacks; portrait lock with orientation correction
 - Flash animation on capture (known bug: doesn't cover tab bar — see bugs)
-- `CreateListingView`: draft carousel, upload progress, Gemini identification confirmation
-- Inline price + description editing on result card after upload
-- Draft persistence and session restore
+- `CustomPhotoPickerView`: library picker with multi-draft support, "hide previously selected" toggle, numbered selection badges
+- `BulkListingOverviewView`: draft list with inline title/price/description editing, keyboard navigation, upload progress bar
+- `ProcessResultsOverviewView`: AI-processed results, select/deselect per item, "Review & Publish" with per-platform cross-post selection
+- `DraftEditSheet`: full per-draft editor (photos, title, price, description, condition, tags, note, shipping, dimensions)
+- `DraftHistoryModal`: drag-to-reorder photos across drafts, drag-to-trash, multi-select delete
+- `ActiveDraftCarouselView`: shared bottom panel in camera and picker showing committed drafts
+- Draft persistence and session restore via SwiftData
 
 **Feed (Home Tab)**
 - Live Firestore feed of active listings, 2-column grid with fixed square thumbnails (no overflow)
@@ -216,10 +230,21 @@ expiresAt: <Timestamp>   (optional, omit for permanent)
 - Unread counters, orange Offer badge
 
 **Profile**
-- User avatar (initials), display name, email
-- 2-column grid of active listings with cover photo
-- Tap listing → `ListingDetailView`
+- User avatar (initials or photo), display name, @username, email
+- Searchable + sortable list of active listings
+- `ProfileListingRow` with cross-post status badges (eBay, Mercari, etc.)
+- Edit mode with multi-select: bulk delete, bulk "Post to…", bulk edit sheet
+- `EditListingSheet`: edit title, price, description, condition, shipping, dimensions, and marketplace toggles
+- `EditProfileSheet`: change display name, username, profile photo (Firebase Storage)
 - Sign out with confirmation alert
+
+**Cross-Posting**
+- **eBay**: full API integration via Firebase Cloud Functions (`ebayCreateListing`, `ebayDeleteListing`, `ebayExchangeToken`); OAuth via `ASWebAuthenticationSession`
+- **Mercari**: headless WKWebView auto-poster (`MercariAutoPoster`) using `callAsyncJavaScript`; shared cookie store with `MercariLoginView` (both use `.default()` `WKWebsiteDataStore`); WKNavigationDelegate awaits page load + JS polls for React form mount; writes `crossPostStatus.mercari = "posted"` to Firestore after success
+- **Facebook Marketplace**: visible WKWebView (`CrossPostContainerView`) with "Autofill Fields" button; quick-copy header for title/price/description
+- Cross-post jobs queue sequentially via `CrossPostJob` / `checkAndStartNextWebJob`; SwiftData items are kept alive until the queue drains, then deleted
+- `PlatformStatusBadge`: per-platform posted / pending / failed indicators on listing rows
+- `PublishConfirmationSheet` / `BulkCrossPostSheet`: platform selection with API vs autofill labels
 
 **Backend / Infrastructure**
 - Firestore rules: listings, inventory, conversations, messages, users + all subcollections, trending
@@ -281,10 +306,19 @@ graph TD
   Analyze photos to auto-generate item titles, suggested prices, category taxonomy, and key specifications.
 - [x] **Live eBay API Integration**  
   Publish listings directly to eBay using their v1 Inventory API and handle multi-step offers gracefully.
-- [ ] **Camera UX & Asynchronous Pipeline**  
-  Refine the core loop: user takes photos while drafts process and list in the background (`WKWebView` queued uploads for closed platforms like Mercari/FB, or API uploads for open ones).
+- [x] **Asynchronous Bulk Pipeline**  
+  Snap photos → background upload → Gemini batch process → bulk review → publish to Wonni + cross-post to eBay/Mercari/Facebook in one flow. SwiftData drafts survive app restarts; cross-post jobs queue and run sequentially.
+- [x] **Mercari & Facebook Marketplace Cross-Posting**  
+  `MercariAutoPoster` headless WKWebView flow: await navigation, JS-poll for React form mount, inject title/price/description, attempt photo `DataTransfer`, click submit, write `crossPostStatus` to Firestore. Facebook uses visible WebView with autofill button.
 - [ ] **Etsy API Integration**  
   Integrate Etsy's v3 API with PKCE OAuth to expand the seamless API cross-posting footprint.
+- [ ] **Listing shipping-address field**  
+  Add a ship-from address to `Item`/`Listing` so Mercari cross-post can auto-fill the required "shipping address" (currently relies on the Mercari account's saved address loading in time). Needed because the Mercari sell form requires an address before listing.
+- [ ] **Mercari Smart Pricing preference**  
+  Smart Pricing is currently force-disabled on every cross-post (it auto-enables when the price field receives React events and would undercut the listed price). Add a seller preference — mirroring the shipping prefs — to opt *into* Smart Pricing (and optionally set the floor price Mercari may drop to), stored alongside the shipping prefs in `users/{uid}/settings/mercariShipping` and read by `MercariPostingState` to decide whether to call `disableSmartPricing()` or leave it on.
+- [ ] **Mercari shipping/category automation follow-ups**  
+  Stronger Tier-2 category matching: a Gemini-backed match against a cached Mercari category tree (fetch + cache the L0/L1/L2 lists to Firebase + on-device, refresh when stale) — current Tier 2 only fuzzy-matches `aiSuggestedCategory` against the live dropdown, then falls back to "Other". Also auto-fill **brand** (required for some categories — no `brand` field on the model yet).  
+  ✅ Done: tiered category selection (Tier 1 suggested → Tier 2 fuzzy → Tier 3 Other); full preference-driven shipping (ship-on-own / cheapest prepaid / cheapest among carriers; accept-suggested weight+label; weight + dimensions from the listing); oversized-no-dimensions-step warning; **shoebox-question handling + non-zero weight fallback in the weight modal**; **Smart Pricing off by default**; **robust auto-submit (polls for the enabled List button before clicking, since a disabled-button click silently no-ops)**; `ShippingPreferences` Settings UI synced to Firestore (`users/{uid}/settings/mercariShipping`) and collected on first cross-post.
 
 ---
 

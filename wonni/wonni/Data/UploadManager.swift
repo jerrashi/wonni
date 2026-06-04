@@ -526,6 +526,7 @@ class UploadManager: ObservableObject {
                 listing.price = draft.userEditedPrice ?? draft.aiSuggestedPrice
                 listing.geminiIdentificationConfirmed = draft.processedAt != nil
                 listing.category = draft.aiSuggestedCategory
+                listing.ebayCategory = await CategoryMappingRepository.shared.bestEbayCategory(for: draft.aiSuggestedCategory)
                 listing.brand = draft.aiSuggestedBrand
                 listing.sourceAssetIdentifiers = []
 

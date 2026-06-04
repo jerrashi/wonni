@@ -56,6 +56,14 @@ service cloud.firestore {
       }
     }
 
+    // ── System configuration ─────────────────────────────────────────────────
+    // categoryMappings: read-only for all authenticated users.
+    // mercariObservedBrands: crowd-sourced; authenticated users may write.
+    match /system/{docId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && docId == 'mercariObservedBrands';
+    }
+
     // ── User profiles and subcollections ─────────────────────────────────────
     // Profile document: readable by all authenticated users, writable by owner.
     match /users/{userId} {
@@ -100,6 +108,11 @@ service cloud.firestore {
 
       // Integrations — private, user-specific connection states
       match /integrations/{platformId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // App settings (e.g. Mercari shipping preferences) — private to each user
+      match /settings/{settingId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
     }

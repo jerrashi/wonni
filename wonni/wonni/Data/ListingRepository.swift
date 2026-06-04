@@ -36,13 +36,13 @@ class ListingRepository: ObservableObject {
         do {
             if let id = listing.id {
                 print("[ListingRepository] Updating existing document: \(id)")
-                try await db.collection(listingsCollection).document(id).setData(from: listingToSave)
+                try db.collection(listingsCollection).document(id).setData(from: listingToSave)
                 print("[ListingRepository] Update successful for \(id)")
                 return id
             } else {
                 print("[ListingRepository] Creating new document in collection: \(listingsCollection)")
                 let docRef = db.collection(listingsCollection).document()
-                try await docRef.setData(from: listingToSave)
+                try docRef.setData(from: listingToSave)
                 print("[ListingRepository] Creation successful: \(docRef.documentID)")
                 return docRef.documentID
             }

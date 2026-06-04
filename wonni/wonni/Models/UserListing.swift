@@ -125,6 +125,7 @@ struct UserListing: Identifiable, Codable {
     var sellingProfileId: String?
     var crossPostStatus: [String: String]?          // e.g. ["ebay": "posted", "mercari": "pending"]
     var crossPostListingIds: [String: String]?       // e.g. ["ebay": "123456789"]
+    var ebayCategory: Int?                           // pre-resolved eBay category ID
 
     // MARK: - Convenience
 
@@ -180,7 +181,8 @@ struct UserListing: Identifiable, Codable {
         geminiRawResponse: String? = nil,
         sellingProfileId: String? = nil,
         crossPostStatus: [String: String]? = nil,
-        crossPostListingIds: [String: String]? = nil
+        crossPostListingIds: [String: String]? = nil,
+        ebayCategory: Int? = nil
     ) {
         self.id = id
         self.userId = userId
@@ -208,5 +210,6 @@ struct UserListing: Identifiable, Codable {
         self.sellingProfileId = sellingProfileId
         self.crossPostStatus = crossPostStatus
         self.crossPostListingIds = crossPostListingIds
+        self.ebayCategory = ebayCategory
     }
 }

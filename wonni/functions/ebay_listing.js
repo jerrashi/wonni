@@ -9,7 +9,6 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const https = require("https");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 if (admin.apps.length === 0) {
   admin.initializeApp();
@@ -17,7 +16,6 @@ if (admin.apps.length === 0) {
 
 const ebayClientId = defineSecret("EBAY_CLIENT_ID");
 const ebayCertId = defineSecret("EBAY_CERT_ID");
-const geminiApiKey = defineSecret("GEMINI_API_KEY");
 
 /**
  * Promise wrapper for https.request.
@@ -529,7 +527,7 @@ async function ensureInventoryLocation(accessToken, host, defaultLocation, uid, 
  * Expects: { listingId: string }
  */
 exports.ebayCreateListing = onCall(
-  { secrets: [ebayClientId, ebayCertId, geminiApiKey] },
+  { secrets: [ebayClientId, ebayCertId] },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError("unauthenticated", "You must be signed in.");
@@ -599,12 +597,14 @@ exports.ebayCreateListing = onCall(
         throw new Error("eBay requires at least one product image.");
       }
 
-      // 6. Category resolution
+      // 6. Category resolution — use pre-resolved category from listing doc first,
+      //    fall back to eBay taxonomy suggestions, then Everything Else (99).
       const title = listing.customTitle || "Wonni Listing";
       const description = listing.customDescription || "Listed via Wonni";
-      let categoryId = "99"; // Everything Else
+      let categoryId = listing.ebayCategory ? String(listing.ebayCategory) : "99";
+      console.log(`[ebayCreateListing] Initial category from listing: ${categoryId}`);
 
-      if (!isSandbox) {
+      if (categoryId === "99" && !isSandbox) {
         try {
           const taxOptions = {
             hostname: "api.ebay.com",
@@ -626,47 +626,6 @@ exports.ebayCreateListing = onCall(
           }
         } catch (err) {
           console.warn("[ebayCreateListing] eBay taxonomy suggestions failed:", err.message);
-        }
-      }
-
-      if (categoryId === "99") {
-        try {
-          console.log("[ebayCreateListing] Querying Gemini for eBay category ID");
-          const genAI = new GoogleGenerativeAI(geminiApiKey.value());
-          const genModel = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
-          
-          const geminiPrompt = `
-            Given an item with title "${title}" and description "${description}", what is the most appropriate eBay US category ID?
-            Here are some common category IDs:
-            - Clothing, Shoes & Accessories: 11450
-            - Cell Phones & Accessories: 15032
-            - Video Games & Consoles: 1249
-            - Books & Magazines: 267
-            - Toys & Hobbies: 220
-            - Collectibles: 1
-            - Sporting Goods: 888
-            - Jewelry & Watches: 281
-            - Consumer Electronics: 293
-            - Camera & Photo: 625
-            - Music: 11233
-            - DVDs & Movies: 11232
-            - Home & Garden: 11700
-            - Everything Else: 99
-            
-            Please return ONLY the numeric eBay category ID as a JSON object, like: {"categoryId": "15032"}. If none fits, use "99".
-          `;
-          
-          const geminiResult = await genModel.generateContent([geminiPrompt]);
-          const geminiResponse = await geminiResult.response;
-          const geminiText = geminiResponse.text();
-          const cleanedJson = geminiText.replace(/```json/g, "").replace(/```/g, "").trim();
-          const parsed = JSON.parse(cleanedJson);
-          if (parsed.categoryId) {
-            categoryId = parsed.categoryId;
-            console.log(`[ebayCreateListing] Resolved category ID ${categoryId} via Gemini`);
-          }
-        } catch (err) {
-          console.warn("[ebayCreateListing] Gemini category resolution failed:", err.message);
         }
       }
 
@@ -710,7 +669,7 @@ exports.ebayCreateListing = onCall(
         },
         condition: conditionMapped,
         product: {
-          title: title,
+          title: title.slice(0, 80),
           description: description.slice(0, 1000), // Safety limit for descriptions in catalog
           imageUrls: imageUrls.slice(0, 12),
           brand: brand,
