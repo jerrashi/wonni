@@ -731,12 +731,74 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
             let result = (try? await webView.callJS(js)) as? String ?? "not-found"
             if result == "success" {
                 hasDetectedSuccess = true
-                print("[MercariPostingState] Success modal detected")
+                // Capture the Mercari item ID *before* flipping to .success, so updateFirestore()
+                // (which fires on the .success change) persists it. Without this the ID was almost
+                // never saved — the navigation delegate it used to rely on doesn't fire on the SPA.
+                if mercariItemId == nil {
+                    mercariItemId = await extractMercariItemId()
+                }
+                print("[MercariPostingState] Success modal detected, itemId=\(mercariItemId ?? "nil")")
                 status = .success
                 return
             }
         }
         print("[MercariPostingState] Success poll timed out (60s) — success modal not found")
+    }
+
+    /// Extracts the Mercari item ID (e.g. "m1234567890") from the post-success screen. First scrapes
+    /// any item link / share-URL already on the page; if none is present, opens "Share your listing"
+    /// (which surfaces the listing URL) and re-scrapes. Non-destructive scrape is tried first so we
+    /// only pop the share sheet when we have to.
+    private func extractMercariItemId() async -> String? {
+        let js = #"""
+        function waitFor(fn, timeout, interval) {
+            timeout = timeout || 4000; interval = interval || 200;
+            return new Promise(function(resolve) {
+                var start = Date.now();
+                (function loop() {
+                    var r = null; try { r = fn(); } catch (e) {}
+                    if (r) { resolve(r); return; }
+                    if (Date.now() - start >= timeout) { resolve(null); return; }
+                    setTimeout(loop, interval);
+                })();
+            });
+        }
+        function realClick(el) {
+            if (!el) return;
+            ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(type) {
+                el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+            });
+        }
+        function findId() {
+            var re = /\/item\/(m[A-Za-z0-9]+)/;
+            var links = document.querySelectorAll('a[href*="/item/"]');
+            for (var i = 0; i < links.length; i++) {
+                var m = (links[i].getAttribute('href') || '').match(re);
+                if (m) return m[1];
+            }
+            var fields = document.querySelectorAll('input, textarea');
+            for (var j = 0; j < fields.length; j++) {
+                var m2 = (fields[j].value || '').match(re);
+                if (m2) return m2[1];
+            }
+            var body = (document.body && document.body.innerText) || '';
+            var m3 = body.match(re);
+            if (m3) return m3[1];
+            return null;
+        }
+        return (async function() {
+            var id = findId();
+            if (id) return id;
+            var btns = document.querySelectorAll('button, a');
+            for (var i = 0; i < btns.length; i++) {
+                var t = (btns[i].textContent || '').trim().toLowerCase();
+                if (t.indexOf('share your listing') !== -1 || t === 'share') { realClick(btns[i]); break; }
+            }
+            await waitFor(findId, 4000);
+            return findId();
+        })();
+        """#
+        return (try? await webView.callJS(js)) as? String
     }
 
     /// Pre-submit gate: returns human-readable issues that would make a submit fail. Empty = clean.
