@@ -63,6 +63,10 @@ class UploadManager: ObservableObject {
     /// IDs of SwiftData drafts that have been published to Firestore but whose
     /// deletion is deferred until all cross-posting jobs for the session complete.
     @Published var publishedPendingDeletionIDs: Set<UUID> = []
+    /// True while a cross-post status overview is owed to the user. Suppresses the automatic
+    /// return-to-root after publish so the overview can be shown first (its Done button performs
+    /// the actual return). Set when any platform is cross-posted; cleared by the overview / reset.
+    @Published var crossPostStatusPending = false
 
     // ── Legacy / Pill visibility ─────────────────────────────────────────────
     @Published var isPillVisible = false
@@ -571,7 +575,10 @@ class UploadManager: ObservableObject {
 
             if publishedCount > 0 {
                 showProcessResults = false
-                if pendingAutofillJobsCount == 0 {
+                // Don't bounce home if a cross-post status overview is owed (web jobs pending, or
+                // an API-only cross-post like eBay). The results view shows the overview, whose
+                // Done button returns to root.
+                if pendingAutofillJobsCount == 0 && !crossPostStatusPending {
                     shouldReturnToRoot = true
                 }
             } else {
@@ -613,6 +620,7 @@ class UploadManager: ObservableObject {
         activeUploadCount = 0
         sessionDraftIDs.removeAll()
         activeDraftID = nil
+        crossPostStatusPending = false
     }
 
     // MARK: – On-device Vision Recognition
