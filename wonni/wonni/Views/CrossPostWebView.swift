@@ -685,13 +685,15 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
             print("[MercariPostingState] Submit: \(submitResult)")
             if submitResult.starts(with: "submitted") {
                 latestSubmitResult = submitResult
-                // Mercari is a React SPA — URL stays /sell/ after success. Poll for the post-success
-                // modal rather than relying on the navigation delegate, which won't fire.
-                Task { await pollForSuccessModal() }
             }
         } else {
             print("[MercariPostingState] Holding submit — photo upload failed after re-checks")
         }
+
+        // Watch for the post-success screen regardless of whether WE clicked List. The user often
+        // finishes by hand (e.g. after fixing photos the autofill missed), and that path needs to
+        // capture the item ID too. Guarded by hasDetectedSuccess, so it's a no-op once detected.
+        Task { await pollForSuccessModal() }
 
         // Poll once to set isListingComplete so the banner accurately reflects form state.
         // (The List button becomes enabled only after Mercari validates all required fields.)
@@ -717,15 +719,19 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
                     return 'success';
                 }
             }
-            // Also check for the success heading/toast text
+            // Also check for the success heading/toast text.
             var body = (document.body && document.body.innerText) || '';
-            if (body.indexOf('Listed!') !== -1 || body.indexOf('Your item has been listed') !== -1) {
+            if (body.indexOf('Listed!') !== -1
+                || body.indexOf('Your item has been listed') !== -1
+                || body.indexOf('Your listing is live') !== -1
+                || /your listing is live/i.test(body)) {
                 return 'success';
             }
             return 'not-found';
         })();
         """
-        for _ in 0..<60 {
+        // Up to ~4 minutes — long enough to cover the user manually finishing the listing by hand.
+        for _ in 0..<240 {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             guard !hasDetectedSuccess else { return }
             let result = (try? await webView.callJS(js)) as? String ?? "not-found"
@@ -742,7 +748,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
                 return
             }
         }
-        print("[MercariPostingState] Success poll timed out (60s) — success modal not found")
+        print("[MercariPostingState] Success poll ended — success screen not detected")
     }
 
     /// Extracts the Mercari item ID (e.g. "m1234567890") from the post-success screen. First scrapes
