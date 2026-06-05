@@ -260,6 +260,93 @@ function extractMissingAspects(responseBody) {
   return [...names];
 }
 
+// eBay Inventory API condition enums <-> numeric condition IDs (what the category policy lists).
+const CONDITION_ENUM_TO_ID = {
+  NEW: "1000", LIKE_NEW: "2750", NEW_OTHER: "1500", NEW_WITH_DEFECTS: "1750",
+  USED_EXCELLENT: "3000", USED_VERY_GOOD: "4000", USED_GOOD: "5000",
+  USED_ACCEPTABLE: "6000", FOR_PARTS_OR_NOT_WORKING: "7000",
+};
+const CONDITION_ID_TO_ENUM = Object.fromEntries(
+  Object.entries(CONDITION_ENUM_TO_ID).map(([k, v]) => [v, k])
+);
+
+/**
+ * Preference order (by condition ID) for degrading to an allowed condition when the category
+ * doesn't accept the one we intended. Stays as close as possible to the seller's stated grade,
+ * falling back to the generic "Used" (3000) which nearly every used-supporting category accepts.
+ */
+function conditionPreferenceIds(conditionEnum) {
+  switch (conditionEnum) {
+    case "NEW":                     return ["1000", "1500", "3000"];
+    case "LIKE_NEW":                return ["2750", "1500", "3000", "4000"];
+    case "USED_EXCELLENT":          return ["3000", "4000", "5000", "6000"];
+    case "USED_VERY_GOOD":          return ["4000", "3000", "5000", "6000"];
+    case "USED_GOOD":               return ["5000", "4000", "3000", "6000"];
+    case "USED_ACCEPTABLE":         return ["6000", "5000", "3000", "7000"];
+    case "FOR_PARTS_OR_NOT_WORKING":return ["7000", "6000", "3000"];
+    default:                        return ["3000", "4000", "5000", "1000"];
+  }
+}
+
+/**
+ * Fetches the condition IDs a category accepts via the eBay Metadata API. Returns null on any
+ * failure (caller keeps its mapped condition and relies on the reactive 25021 recovery).
+ */
+async function getAllowedConditionIds(accessToken, categoryId, host) {
+  const filter = encodeURIComponent(`categoryIds:{${categoryId}}`);
+  const options = {
+    hostname: host,
+    path: `/sell/metadata/v1/marketplace/EBAY_US/get_item_condition_policies?filter=${filter}`,
+    method: "GET",
+    headers: {
+      "Authorization": `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  };
+  try {
+    const res = await makeHttpRequest(options);
+    if (res.statusCode !== 200) {
+      console.warn(`[getAllowedConditionIds] ${res.statusCode}: ${res.body}`);
+      return null;
+    }
+    const data = JSON.parse(res.body);
+    const policy = (data.itemConditionPolicies || [])[0];
+    if (!policy) return null;
+    return (policy.itemConditions || []).map(c => String(c.conditionId));
+  } catch (err) {
+    console.warn(`[getAllowedConditionIds] request failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Picks the best eBay condition enum a category will accept, given our intended one. Returns the
+ * intended enum unchanged if it's allowed (or if allowed-list is unknown); otherwise degrades via
+ * conditionPreferenceIds, finally falling back to the category's first allowed condition.
+ */
+function resolveCondition(intendedEnum, allowedIds) {
+  if (!allowedIds || allowedIds.length === 0) return intendedEnum;
+  const intendedId = CONDITION_ENUM_TO_ID[intendedEnum];
+  if (intendedId && allowedIds.includes(intendedId)) return intendedEnum;
+  for (const id of conditionPreferenceIds(intendedEnum)) {
+    if (allowedIds.includes(id) && CONDITION_ID_TO_ENUM[id]) return CONDITION_ID_TO_ENUM[id];
+  }
+  return CONDITION_ID_TO_ENUM[allowedIds[0]] || intendedEnum;
+}
+
+/** True if a publish error body is the "invalid condition for this category" failure (25021). */
+function isConditionError(responseBody) {
+  try {
+    const obj = JSON.parse(responseBody);
+    return (obj.errors || []).some(e =>
+      e.errorId === 25021 ||
+      (e.parameters || []).some(p => p.value === "CONDITION_ID")
+    );
+  } catch (e) {
+    return false;
+  }
+}
+
 /**
  * Helper to get or create eBay Payment Policy.
  */
@@ -747,6 +834,10 @@ exports.ebayCreateListing = onCall(
         console.log(`[ebayCreateListing] Required aspects for ${categoryId}: ${requiredAspects.map(a => a.name).join(", ")}`);
       }
 
+      // Pre-fetch which conditions this category accepts. Many categories reject the generic
+      // grade we'd otherwise send (the 25021 "invalid condition for category" failure).
+      const allowedConditionIds = isSandbox ? null : await getAllowedConditionIds(accessToken, categoryId, host);
+
       // 7. Map Condition
       const conditionMap = {
         new:            "NEW",
@@ -757,7 +848,14 @@ exports.ebayCreateListing = onCall(
         poor:           "USED_ACCEPTABLE",
         forParts:       "FOR_PARTS_OR_NOT_WORKING"
       };
-      const conditionMapped = conditionMap[listing.condition] || "USED_EXCELLENT";
+      let conditionMapped = conditionMap[listing.condition] || "USED_EXCELLENT";
+      // Degrade to a condition the category actually accepts (e.g. some categories only allow
+      // New/Used, not the finer Good/Acceptable grades) so the publish isn't rejected with 25021.
+      const intendedCondition = conditionMapped;
+      conditionMapped = resolveCondition(conditionMapped, allowedConditionIds);
+      if (conditionMapped !== intendedCondition) {
+        console.log(`[ebayCreateListing] Condition ${intendedCondition} not allowed for ${categoryId}; using ${conditionMapped}`);
+      }
 
       // 8. Create or update inventory item
       const sku = `wonni_${listingId}`;
@@ -926,19 +1024,37 @@ exports.ebayCreateListing = onCall(
       console.log(`[ebayCreateListing] Publishing offerId=${offerId}`);
       let publishRes = await publishOnce();
 
-      // Up to 3 rounds of filling required aspects the publish error names, then retrying.
-      for (let round = 0; round < 3 && publishRes.statusCode !== 200; round++) {
+      // Recover from publish failures eBay reports against the inventory item: missing required
+      // aspects (25002) and an invalid condition for the category (25021). Each round mutates the
+      // inventory item, re-PUTs it, and republishes. Bounded to avoid loops.
+      let conditionFallbackTried = false;
+      for (let round = 0; round < 4 && publishRes.statusCode !== 200; round++) {
+        let changed = false;
+
+        // (a) Fill any required item aspects the error names.
         const missing = extractMissingAspects(publishRes.body);
-        if (missing.length === 0) break; // not a missing-aspect failure — surface the real error
-        let added = false;
         for (const name of missing) {
           if (!itemBody.product.aspects[name]) {
             itemBody.product.aspects[name] = [brand && brand !== "Generic" ? brand : "Unbranded"];
-            added = true;
+            changed = true;
           }
         }
-        if (!added) break; // already supplied everything it named — avoid an infinite loop
-        console.log(`[ebayCreateListing] Filling missing aspects and retrying: ${missing.join(", ")}`);
+        if (missing.length > 0 && changed) {
+          console.log(`[ebayCreateListing] Filling missing aspects and retrying: ${missing.join(", ")}`);
+        }
+
+        // (b) Category rejected the condition — fall back to generic "Used" once. (The proactive
+        //     remap usually prevents this; this only fires if the condition-policy fetch failed.)
+        if (isConditionError(publishRes.body) && !conditionFallbackTried) {
+          conditionFallbackTried = true;
+          if (itemBody.condition !== "USED_EXCELLENT") {
+            console.log(`[ebayCreateListing] Condition ${itemBody.condition} rejected by ${categoryId}; retrying as USED_EXCELLENT`);
+            itemBody.condition = "USED_EXCELLENT";
+            changed = true;
+          }
+        }
+
+        if (!changed) break; // nothing left we know how to fix — surface the real error
         const reput = await makeHttpRequest(itemOptions, itemBody);
         if (![200, 201, 204].includes(reput.statusCode)) {
           console.warn(`[ebayCreateListing] Re-PUT inventory item failed (${reput.statusCode}): ${reput.body}`);

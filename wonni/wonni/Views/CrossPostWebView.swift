@@ -382,6 +382,11 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
 
     let webView: WKWebView
     private var hasDetectedSuccess = false
+    /// Guards against re-entrant/duplicate autofill. SwiftUI can re-run the trigger (and the
+    /// simulator's flaky WebContent process can reload the page), which previously fired several
+    /// concurrent injection passes that fought over the same form — a carrier would save in one
+    /// pass and be cleared by another. One run per page load; reset on an explicit reload/retry.
+    private var hasStartedInjection = false
 
     override init() {
         let config = WKWebViewConfiguration()
@@ -401,6 +406,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
 
     func reloadSellPage() {
         hasDetectedSuccess = false
+        hasStartedInjection = false
         status = .loading
         webView.load(URLRequest(url: URL(string: "https://www.mercari.com/sell/")!))
     }
@@ -466,6 +472,13 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         heightIn: Double?,
         preferences: ShippingPreferences
     ) async {
+        // Run exactly one injection pass per page load. Without this, overlapping passes raced each
+        // other on the form (e.g. carrier saved by one pass, reset by the next).
+        guard !hasStartedInjection else {
+            print("[MercariPostingState] injectFields skipped — a pass is already in progress")
+            return
+        }
+        hasStartedInjection = true
         status = .injecting
 
         // Wait until the sell form is actually on the page before touching any field.
@@ -654,20 +667,30 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         //    reports 'list-btn:disabled'). We still hard-hold on async failures the button won't
         //    catch — a photo-upload error or a visible form error — leaving those for the user to
         //    finish by hand in the webview.
-        let issues = await outstandingIssues()
-        let blocking = issues.filter { $0 == "photo-upload-error" || $0.hasPrefix("error:") }
-        if blocking.isEmpty {
+        // submitListing() polls for Mercari's List button to become *enabled* before clicking, so
+        // unfinished validation (missing category/carrier/title/address) just prevents the click —
+        // it can't produce a broken listing. That makes a hard pre-gate on validation text harmful:
+        // a stale "Please select a shipping carrier" (which clears once React catches up after the
+        // carrier saves) would needlessly hold a submittable listing. The only failure the button
+        // wouldn't catch is a photo-upload error, so that's the sole hold — and it's re-checked,
+        // because Mercari shows a transient "Something wrong happened" that resolves on upload retry.
+        var photoFailed = false
+        for attempt in 0..<3 {
+            photoFailed = await outstandingIssues().contains("photo-upload-error")
+            if !photoFailed { break }
+            if attempt < 2 { try? await Task.sleep(nanoseconds: 1_500_000_000) }
+        }
+        if !photoFailed {
             let submitResult = await submitListing()
             print("[MercariPostingState] Submit: \(submitResult)")
             if submitResult.starts(with: "submitted") {
                 latestSubmitResult = submitResult
-                // Mercari is a React SPA — URL stays /sell/ after success.
-                // Start a background poll for the post-success modal instead of
-                // relying on the navigation delegate, which won't fire.
+                // Mercari is a React SPA — URL stays /sell/ after success. Poll for the post-success
+                // modal rather than relying on the navigation delegate, which won't fire.
                 Task { await pollForSuccessModal() }
             }
         } else {
-            print("[MercariPostingState] Holding submit — blocking issues: \(blocking) (all: \(issues))")
+            print("[MercariPostingState] Holding submit — photo upload failed after re-checks")
         }
 
         // Poll once to set isListingComplete so the banner accurately reflects form state.
@@ -951,6 +974,15 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
             return true;
         }
         return (async function() {
+            // Mercari renders the brand UI only after category + photo processing settle, so wait
+            // for either the suggested-brand chips or the search field before deciding — otherwise
+            // we'd report 'brand-ui-not-found' purely because we looked a beat too early.
+            await waitFor(function() {
+                return document.querySelector('[data-testid="SuggestedBrandSection"]')
+                    || document.querySelector('[data-testid="BrandSearchInput"], [data-testid="BrandInput"], input[placeholder*="brand" i]')
+                    || document.querySelector('[data-testid="NoBrandLink"]');
+            }, 8000);
+
             // Tier 1: Mercari's server-suggested brand chips.
             var suggested = document.querySelector('[data-testid="SuggestedBrandSection"]');
             if (suggested) {

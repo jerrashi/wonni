@@ -571,16 +571,36 @@ struct CustomPhotoPickerView: View {
                                             }
                                             
                                             let hasUserTitle = draft.userEditedTitle != nil
-                                            TextField("Add title…", text: draftTitleBinding(for: draft))
-                                                .font(.subheadline.weight(.semibold))
-                                                .foregroundStyle(hasUserTitle ? .primary : .secondary)
-                                                .focused($focusedDraftID, equals: draft.id)
-                                                .onReceive(NotificationCenter.default.publisher(
-                                                    for: UITextField.textDidBeginEditingNotification
-                                                )) { notification in
-                                                    guard let tf = notification.object as? UITextField else { return }
-                                                    DispatchQueue.main.async { tf.selectAll(nil) }
-                                                }
+                                            if isSelectionMode {
+                                                // In selection mode the title is read-only — tapping it toggles
+                                                // the draft's selection instead of focusing the field, so picking
+                                                // drafts to edit/delete isn't fighting the keyboard.
+                                                let title = draft.userEditedTitle ?? draft.visionTitle ?? draft.aiSuggestedTitle
+                                                Text(title?.isEmpty == false ? title! : "Untitled draft")
+                                                    .font(.subheadline.weight(.semibold))
+                                                    .foregroundStyle(hasUserTitle ? .primary : .secondary)
+                                                    .lineLimit(1)
+                                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                                    .contentShape(Rectangle())
+                                                    .onTapGesture {
+                                                        if isFullySelected {
+                                                            for id in draftCompositeIDs { selectedPhotos.remove(id) }
+                                                        } else {
+                                                            for id in draftCompositeIDs { selectedPhotos.insert(id) }
+                                                        }
+                                                    }
+                                            } else {
+                                                TextField("Add title…", text: draftTitleBinding(for: draft))
+                                                    .font(.subheadline.weight(.semibold))
+                                                    .foregroundStyle(hasUserTitle ? .primary : .secondary)
+                                                    .focused($focusedDraftID, equals: draft.id)
+                                                    .onReceive(NotificationCenter.default.publisher(
+                                                        for: UITextField.textDidBeginEditingNotification
+                                                    )) { notification in
+                                                        guard let tf = notification.object as? UITextField else { return }
+                                                        DispatchQueue.main.async { tf.selectAll(nil) }
+                                                    }
+                                            }
                                         }
                                         .padding(.horizontal)
 
@@ -1563,6 +1583,11 @@ struct ProcessResultsOverviewView: View {
     /// Firestore listing document exists before the Cloud Function tries to read it.
     /// Stores title for error messages since the SwiftData Item may be deleted by then.
     @State private var pendingAPITriggers: [(listingId: String, title: String, platforms: [String])] = []
+    /// Per-listing cross-post info captured at publish time, driving the post-publish status
+    /// overview. Captured before the SwiftData drafts are deleted so the overview can read live
+    /// platform status from Firestore and offer retries.
+    @State private var sessionCrossPostItems: [CrossPostSessionItem] = []
+    @State private var showStatusOverview = false
 
     // Only show the items that went through AI processing
     private var results: [Item] {
@@ -1716,9 +1741,19 @@ struct ProcessResultsOverviewView: View {
                     }
                 }
             }
-            // Start web autofill jobs (Mercari, Facebook) after publish completes.
+            // Start web autofill jobs (Mercari, Facebook) after publish completes. If there are
+            // none (e.g. eBay-only), jump straight to the status overview — eBay status fills in
+            // live as the Cloud Function calls above complete.
             if !webAutofillQueue.isEmpty {
                 checkAndStartNextWebJob()
+            } else if !sessionCrossPostItems.isEmpty {
+                showStatusOverview = true
+            }
+        }
+        .navigationDestination(isPresented: $showStatusOverview) {
+            CrossPostStatusView(items: sessionCrossPostItems) {
+                uploadManager.crossPostStatusPending = false
+                uploadManager.shouldReturnToRoot = true
             }
         }
     }
@@ -1742,6 +1777,24 @@ struct ProcessResultsOverviewView: View {
             }
             self.webAutofillQueue = jobs
             uploadManager.pendingAutofillJobsCount = jobs.count
+            // Capture per-listing cross-post info now (before the drafts are deleted) so the
+            // post-publish status overview can show per-platform status and offer retries.
+            let attemptedPlatforms = Array(selectedPlatforms).sorted()
+            if !attemptedPlatforms.isEmpty {
+                sessionCrossPostItems = toPublish.compactMap { item in
+                    guard let listingId = item.firestoreListingId else { return nil }
+                    return CrossPostSessionItem(
+                        id: listingId,
+                        title: item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled",
+                        description: item.userEditedDescription ?? item.aiSuggestedDescription ?? "",
+                        price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
+                        coverPhotoPath: item.firebasePhotoPaths?.first,
+                        photoPaths: item.firebasePhotoPaths ?? [],
+                        platforms: attemptedPlatforms
+                    )
+                }
+                uploadManager.crossPostStatusPending = true
+            }
             // Defer API cross-posts to onChange(of: isPublishing) so the Firestore write
             // completes before the Cloud Function tries to read the listing document.
             let apiPlatforms = selectedPlatforms.filter { $0 == "ebay" || $0 == "etsy" }
@@ -1762,7 +1815,12 @@ struct ProcessResultsOverviewView: View {
         if !webAutofillQueue.isEmpty {
             let nextJob = webAutofillQueue.removeFirst()
             uploadManager.pendingAutofillJobsCount = webAutofillQueue.count + 1
-            activeAutofillJob = nextJob
+            // Defer so the just-dismissed sheet fully tears down before the next presents. Setting
+            // a new .sheet(item:) value synchronously inside onDismiss is silently dropped by
+            // SwiftUI — that's why the second Mercari sheet never appeared.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                activeAutofillJob = nextJob
+            }
         } else {
             uploadManager.pendingAutofillJobsCount = 0
             // All cross-posting jobs finished — now safe to delete SwiftData items
@@ -1775,7 +1833,11 @@ struct ProcessResultsOverviewView: View {
                 try? modelContext.save()
                 uploadManager.publishedPendingDeletionIDs.removeAll()
             }
-            if uploadManager.shouldReturnToRoot == false {
+            // Show the per-platform status overview instead of bouncing home. Its Done button
+            // performs the actual return-to-root.
+            if !sessionCrossPostItems.isEmpty {
+                showStatusOverview = true
+            } else if uploadManager.shouldReturnToRoot == false {
                 uploadManager.shouldReturnToRoot = true
             }
         }
@@ -1835,6 +1897,190 @@ struct ProcessResultsOverviewView: View {
             return "Cross-post failed for \"\(title.prefix(40))\": \(serverMsg)"
         }
         return "Cross-post failed for \"\(title.prefix(40))\". Check your connection and integration settings, then try again."
+    }
+}
+
+// MARK: - Cross-Post Status Overview
+
+/// One published listing's cross-post info, captured at publish time so the status overview
+/// survives the SwiftData draft being deleted.
+struct CrossPostSessionItem: Identifiable, Equatable {
+    let id: String              // Firestore listing document ID
+    let title: String
+    let description: String
+    let price: Double
+    let coverPhotoPath: String?
+    let photoPaths: [String]
+    let platforms: [String]     // attempted cross-post platforms, e.g. ["ebay","mercari"]
+}
+
+/// Post-publish overview: per listing, shows Wonni plus each attempted platform's live status
+/// (read from Firestore `crossPostStatus`) with one-tap retry for any failures. This is the
+/// "see status + retry" screen, shown in place of silently bouncing home after a cross-post.
+struct CrossPostStatusView: View {
+    let items: [CrossPostSessionItem]
+    var onDone: () -> Void
+
+    @State private var statuses: [String: [String: String]] = [:]   // listingId -> platform -> status
+    @State private var listeners: [ListenerRegistration] = []
+    @State private var retryJob: CrossPostJob? = nil
+    @State private var retryingEbay: Set<String> = []
+
+    var body: some View {
+        VStack(spacing: 0) {
+            List {
+                ForEach(items) { item in
+                    Section {
+                        platformRow(item: item, platform: "wonni")
+                        ForEach(item.platforms.filter { $0 != "wonni" }, id: \.self) { platform in
+                            platformRow(item: item, platform: platform)
+                        }
+                    } header: {
+                        HStack(spacing: 10) {
+                            if let cover = item.coverPhotoPath {
+                                StorageImage(path: cover)
+                                    .frame(width: 30, height: 30)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                            }
+                            Text(item.title)
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                        }
+                        .textCase(nil)
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+
+            Divider()
+            Button(action: { stopListeners(); onDone() }) {
+                Text("Done")
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12))
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+        }
+        .navigationTitle("Cross-Post Status")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .onAppear(perform: startListeners)
+        .onDisappear(perform: stopListeners)
+        .sheet(item: $retryJob) { job in
+            if job.platform == "mercari" {
+                MercariAutoPosterView(job: job)
+            } else {
+                CrossPostContainerView(
+                    platformName: "Facebook Marketplace",
+                    listingTitle: job.title,
+                    listingDescription: job.description,
+                    listingPrice: job.price
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func platformRow(item: CrossPostSessionItem, platform: String) -> some View {
+        // Wonni is always "posted" — the listing reached Firestore. Others reflect live status.
+        let status = platform == "wonni" ? "posted" : (statuses[item.id]?[platform] ?? "pending")
+        HStack(spacing: 12) {
+            Image(systemName: platformIcon(platform))
+                .frame(width: 22)
+                .foregroundStyle(.secondary)
+            Text(platformName(platform))
+                .font(.subheadline)
+            Spacer()
+            statusBadge(status)
+            if status == "failed" {
+                Button("Retry") { retry(item: item, platform: platform) }
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.bordered)
+                    .disabled(platform == "ebay" && retryingEbay.contains(item.id))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func statusBadge(_ status: String) -> some View {
+        switch status {
+        case "posted":
+            Label("Posted", systemImage: "checkmark.circle.fill")
+                .font(.caption.weight(.semibold)).foregroundStyle(.green).labelStyle(.titleAndIcon)
+        case "failed":
+            Label("Failed", systemImage: "exclamationmark.circle.fill")
+                .font(.caption.weight(.semibold)).foregroundStyle(.red).labelStyle(.titleAndIcon)
+        case "pending", "removing":
+            HStack(spacing: 4) {
+                ProgressView().scaleEffect(0.6)
+                Text(status == "removing" ? "Removing…" : "In progress…")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+        default:
+            Text(status.capitalized).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func startListeners() {
+        stopListeners()
+        let db = Firestore.firestore()
+        for item in items {
+            let reg = db.collection("listings").document(item.id).addSnapshotListener { snap, _ in
+                guard let data = snap?.data() else { return }
+                statuses[item.id] = data["crossPostStatus"] as? [String: String] ?? [:]
+            }
+            listeners.append(reg)
+        }
+    }
+
+    private func stopListeners() {
+        listeners.forEach { $0.remove() }
+        listeners.removeAll()
+    }
+
+    private func retry(item: CrossPostSessionItem, platform: String) {
+        switch platform {
+        case "ebay", "etsy":
+            retryingEbay.insert(item.id)
+            Task {
+                try? await IntegrationRepository.shared.triggerCrossPost(listingId: item.id, platforms: [platform])
+                retryingEbay.remove(item.id)
+            }
+        case "mercari", "facebook":
+            // Re-run the web autofill from the published listing's Storage photos.
+            retryJob = CrossPostJob(
+                platform: platform,
+                title: item.title,
+                description: item.description,
+                price: item.price,
+                listingId: item.id,
+                photoFirebasePaths: item.photoPaths
+            )
+        default:
+            break
+        }
+    }
+
+    private func platformName(_ platform: String) -> String {
+        switch platform {
+        case "wonni":    return "Wonni"
+        case "ebay":     return "eBay"
+        case "mercari":  return "Mercari"
+        case "facebook": return "Facebook Marketplace"
+        case "etsy":     return "Etsy"
+        default:         return platform.capitalized
+        }
+    }
+
+    private func platformIcon(_ platform: String) -> String {
+        switch platform {
+        case "wonni":    return "bag.fill"
+        case "facebook": return "person.2.fill"
+        default:         return "globe"
+        }
     }
 }
 
