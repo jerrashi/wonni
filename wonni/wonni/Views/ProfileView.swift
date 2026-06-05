@@ -655,7 +655,14 @@ struct EditListingSheet: View {
     @State private var initialPlatforms: Set<String> = []
     @State private var crossPostErrorMessage: String? = nil
     @State private var showCrossPostError = false
-    
+
+    // Manual Mercari-link entry: lets the seller attach a Mercari item ID to a listing whose ID
+    // wasn't captured automatically (older posts, or a run where capture missed).
+    @State private var mercariLinkInput = ""
+    @State private var linkedMercariId: String?
+    @State private var isLinkingMercari = false
+    @State private var mercariLinkError: String?
+
     init(listing: UserListing, onSave: @escaping ([CrossPostJob]) -> Void) {
         self.listing = listing
         self.onSave = onSave
@@ -677,6 +684,7 @@ struct EditListingSheet: View {
             .map { $0.key } ?? []
         _selectedPlatforms = State(initialValue: Set(posted))
         _initialPlatforms = State(initialValue: Set(posted))
+        _linkedMercariId = State(initialValue: listing.crossPostListingIds?["mercari"])
     }
     
     var body: some View {
@@ -762,6 +770,8 @@ struct EditListingSheet: View {
                         }
                     }
                 }
+
+                crossPostStatusSection
             }
             .task {
                 await integrationRepo.loadIntegrations()
@@ -809,6 +819,123 @@ struct EditListingSheet: View {
         }
     }
     
+    // MARK: Cross-post status + manual Mercari linking
+
+    @ViewBuilder private var crossPostStatusSection: some View {
+        Section {
+            let statusMap = listing.crossPostStatus ?? [:]
+            let platforms = Set(statusMap.keys).union(linkedMercariId != nil ? ["mercari"] : []).sorted()
+
+            if platforms.isEmpty {
+                Text("Not cross-posted yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(platforms, id: \.self) { platform in
+                    HStack(spacing: 8) {
+                        Text(platformDisplayName(platform))
+                        Spacer()
+                        crossPostStatusBadge(statusMap[platform] ?? (platform == "mercari" && linkedMercariId != nil ? "posted" : ""))
+                        if platform == "mercari", let id = linkedMercariId,
+                           let url = URL(string: "https://www.mercari.com/us/item/\(id)/") {
+                            Link("View", destination: url).font(.caption.weight(.semibold))
+                        }
+                    }
+                }
+            }
+
+            // Manual Mercari linking — attach an item ID when capture missed it.
+            if let id = linkedMercariId {
+                HStack {
+                    Label("Mercari listing linked", systemImage: "checkmark.circle.fill")
+                        .font(.caption).foregroundStyle(.green)
+                    Spacer()
+                    Button("Change") { linkedMercariId = nil; mercariLinkError = nil }
+                        .font(.caption)
+                }
+                .accessibilityLabel("Mercari item \(id) linked")
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    TextField("Paste Mercari listing link", text: $mercariLinkInput)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                    if let err = mercariLinkError {
+                        Text(err).font(.caption).foregroundStyle(.red)
+                    }
+                    HStack {
+                        Spacer()
+                        Button {
+                            linkMercari()
+                        } label: {
+                            if isLinkingMercari { ProgressView() } else { Text("Link Mercari listing") }
+                        }
+                        .disabled(mercariLinkInput.trimmingCharacters(in: .whitespaces).isEmpty || isLinkingMercari)
+                    }
+                }
+            }
+        } header: {
+            Text("Cross-post status")
+        } footer: {
+            Text("Marketplaces this listing is posted to, with status. Paste a Mercari listing link to connect a post that wasn't linked automatically.")
+        }
+    }
+
+    @ViewBuilder private func crossPostStatusBadge(_ status: String) -> some View {
+        switch status {
+        case "posted":
+            Label("Posted", systemImage: "checkmark.circle.fill")
+                .font(.caption.weight(.semibold)).foregroundStyle(.green)
+        case "failed":
+            Label("Failed", systemImage: "exclamationmark.circle.fill")
+                .font(.caption.weight(.semibold)).foregroundStyle(.red)
+        case "pending":
+            Label("In progress", systemImage: "clock")
+                .font(.caption).foregroundStyle(.orange)
+        case "":
+            EmptyView()
+        default:
+            Text(status.capitalized).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    /// Extracts a Mercari item ID ("m" + digits) from a pasted listing URL or raw ID.
+    private func parseMercariItemId(_ input: String) -> String? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let range = trimmed.range(of: #"/item/(m[A-Za-z0-9]+)"#, options: .regularExpression) {
+            return String(trimmed[range]).replacingOccurrences(of: "/item/", with: "")
+        }
+        if let range = trimmed.range(of: #"\bm\d{6,}\b"#, options: .regularExpression) {
+            return String(trimmed[range])
+        }
+        return nil
+    }
+
+    private func linkMercari() {
+        mercariLinkError = nil
+        guard let itemId = parseMercariItemId(mercariLinkInput) else {
+            mercariLinkError = "Couldn't find a Mercari item ID in that link."
+            return
+        }
+        guard let listingId = listing.id else { return }
+        isLinkingMercari = true
+        Task {
+            do {
+                try await Firestore.firestore().collection("listings").document(listingId).updateData([
+                    "crossPostListingIds.mercari": itemId,
+                    // Mark it posted so it shows in status, unless a status is already recorded.
+                    "crossPostStatus.mercari": listing.crossPostStatus?["mercari"] ?? "posted",
+                    "updatedAt": Timestamp(date: Date())
+                ])
+                linkedMercariId = itemId
+                mercariLinkInput = ""
+            } catch {
+                mercariLinkError = "Couldn't save the link. Check your connection and try again."
+            }
+            isLinkingMercari = false
+        }
+    }
+
     private func saveListing() async {
         guard let id = listing.id else { return }
         isSaving = true
