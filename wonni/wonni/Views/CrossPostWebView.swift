@@ -2080,3 +2080,213 @@ struct MercariSheetWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView { webView }
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 }
+
+// MARK: - Mercari Sync (Level 1)
+
+/// Loads a Mercari item page in a headless WKWebView and scrapes its current price + availability.
+/// Mercari is a Next.js app, so the item data is embedded in the `__NEXT_DATA__` script — the most
+/// reliable source. Visible-DOM fallbacks cover layout the JSON shape doesn't.
+@MainActor
+final class MercariItemLoader: ObservableObject {
+    enum Phase: Equatable { case loading, loaded, failed }
+
+    @Published var phase: Phase = .loading
+    @Published var priceDollars: Double?
+    @Published var isSold: Bool = false
+    @Published var statusRaw: String?
+    @Published var name: String?
+
+    let webView: WKWebView
+
+    init() {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = WKWebsiteDataStore.default()   // share Mercari login cookies
+        webView = WKWebView(frame: .zero, configuration: config)
+        webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+    }
+
+    func load(itemId: String) async {
+        phase = .loading
+        guard let url = URL(string: "https://www.mercari.com/us/item/\(itemId)/") else {
+            phase = .failed; return
+        }
+        webView.load(URLRequest(url: url))
+
+        let js = #"""
+        return (function() {
+            var out = { price: null, status: null, name: null };
+            var nd = document.getElementById('__NEXT_DATA__');
+            var text = nd ? (nd.textContent || '') : '';
+            if (text) {
+                var pm = text.match(/"price":\s*(\d+(?:\.\d+)?)/);
+                if (pm) out.price = parseFloat(pm[1]);
+                var sm = text.match(/"status":\s*"([a-zA-Z_]+)"/);
+                if (sm) out.status = sm[1];
+                var nm = text.match(/"name":\s*"([^"]+)"/);
+                if (nm) out.name = nm[1];
+            }
+            if (out.price === null) {
+                var body = (document.body && document.body.innerText) || '';
+                var bm = body.match(/\$\s?([0-9,]+(?:\.[0-9]{2})?)/);
+                if (bm) out.price = parseFloat(bm[1].replace(/,/g, ''));
+            }
+            if (!out.status) {
+                var b2 = (document.body && document.body.innerText) || '';
+                if (/\bsold\b/i.test(b2)) out.status = 'sold_out';
+            }
+            return JSON.stringify(out);
+        })();
+        """#
+
+        // Poll until the SPA hydrates and the scrape yields something usable (or we time out).
+        let deadline = Date().addingTimeInterval(30)
+        while Date() < deadline {
+            if let json = (try? await webView.callJS(js)) as? String,
+               let data = json.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let price = (obj["price"] as? NSNumber)?.doubleValue
+                let status = obj["status"] as? String
+                if price != nil || status != nil {
+                    priceDollars = price
+                    statusRaw = status
+                    name = obj["name"] as? String
+                    isSold = ["sold_out", "sold", "trading"].contains(status ?? "")
+                    phase = .loaded
+                    return
+                }
+            }
+            try? await Task.sleep(nanoseconds: 700_000_000)
+        }
+        phase = .failed
+    }
+}
+
+/// Sync Level 1 UI: pulls the Mercari item's current price/availability, diffs it against the
+/// Wonni listing, and offers to apply the changes. Declining just closes — the diff is shown again
+/// on the next sync. (eBay revise/end from a sync is a follow-up.)
+struct MercariSyncSheet: View {
+    let listing: UserListing
+    let mercariId: String
+    /// Called after a successful Firestore update so the parent can reload.
+    var onApplied: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var loader = MercariItemLoader()
+    @State private var applyError: String?
+    @State private var isApplying = false
+
+    private var listingPrice: Double { listing.price ?? 0 }
+    private var priceDiffers: Bool {
+        guard let m = loader.priceDollars else { return false }
+        return abs(m - listingPrice) >= 0.01
+    }
+    private var soldDiffers: Bool { loader.isSold && listing.status != .sold }
+    private var hasChanges: Bool { priceDiffers || soldDiffers }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                switch loader.phase {
+                case .loading:
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("Reading your Mercari listing…").foregroundStyle(.secondary)
+                    }
+                case .failed:
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(.orange)
+                        Text("Couldn't read the Mercari listing.").font(.headline)
+                        Text("It may be private, removed, or need you to be logged into Mercari.")
+                            .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        if let url = URL(string: "https://www.mercari.com/us/item/\(mercariId)/") {
+                            Link("Open on Mercari", destination: url)
+                        }
+                    }
+                    .padding()
+                case .loaded:
+                    resultList
+                }
+            }
+            .navigationTitle("Sync from Mercari")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+            }
+            // Mount the scraping webview (1×1, effectively invisible) so it reliably loads and
+            // hydrates — off-screen WKWebViews can otherwise be throttled and never run the JS.
+            .background(
+                MercariSheetWebView(webView: loader.webView)
+                    .frame(width: 1, height: 1)
+                    .opacity(0.01)
+                    .allowsHitTesting(false)
+            )
+        }
+        .task { await loader.load(itemId: mercariId) }
+    }
+
+    @ViewBuilder private var resultList: some View {
+        List {
+            Section("Price") {
+                row(label: "Wonni", value: money(listingPrice))
+                row(label: "Mercari", value: loader.priceDollars.map(money) ?? "—",
+                    highlight: priceDiffers)
+            }
+            Section("Availability") {
+                row(label: "Wonni", value: listing.status == .sold ? "Sold" : "Active")
+                row(label: "Mercari", value: loader.isSold ? "Sold" : "Active", highlight: soldDiffers)
+            }
+            Section {
+                if hasChanges {
+                    Button {
+                        Task { await apply() }
+                    } label: {
+                        HStack {
+                            if isApplying { ProgressView() }
+                            Text("Update listing with Mercari changes").fontWeight(.semibold)
+                        }
+                    }
+                    .disabled(isApplying)
+                } else {
+                    Label("Wonni already matches Mercari", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+                if let err = applyError {
+                    Text(err).font(.caption).foregroundStyle(.red)
+                }
+            } footer: {
+                if hasChanges {
+                    Text("Applies Mercari's price and sold status to your Wonni listing. eBay isn't changed automatically yet.")
+                }
+            }
+        }
+    }
+
+    private func row(label: String, value: String, highlight: Bool = false) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value)
+                .foregroundStyle(highlight ? .orange : .primary)
+                .fontWeight(highlight ? .semibold : .regular)
+        }
+    }
+
+    private func money(_ v: Double) -> String { String(format: "$%.2f", v) }
+
+    private func apply() async {
+        guard let listingId = listing.id else { return }
+        isApplying = true
+        applyError = nil
+        var update: [String: Any] = ["updatedAt": Timestamp(date: Date())]
+        if priceDiffers, let m = loader.priceDollars { update["price"] = m }
+        if soldDiffers { update["status"] = ListingStatus.sold.rawValue }
+        do {
+            try await Firestore.firestore().collection("listings").document(listingId).updateData(update)
+            onApplied()
+            dismiss()
+        } catch {
+            applyError = "Couldn't update the listing. Try again."
+        }
+        isApplying = false
+    }
+}

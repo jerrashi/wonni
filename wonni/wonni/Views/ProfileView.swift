@@ -662,6 +662,7 @@ struct EditListingSheet: View {
     @State private var linkedMercariId: String?
     @State private var isLinkingMercari = false
     @State private var mercariLinkError: String?
+    @State private var showMercariSync = false
 
     init(listing: UserListing, onSave: @escaping ([CrossPostJob]) -> Void) {
         self.listing = listing
@@ -802,6 +803,14 @@ struct EditListingSheet: View {
                     }
                 }
             }
+            .sheet(isPresented: $showMercariSync) {
+                if let id = linkedMercariId {
+                    MercariSyncSheet(listing: listing, mercariId: id) {
+                        // Listing updated from Mercari — refresh the seller's list behind the sheet.
+                        onSave([])
+                    }
+                }
+            }
             .alert("Cross-Post Failed", isPresented: $showCrossPostError, presenting: crossPostErrorMessage) { _ in
                 if crossPostErrorMessage?.contains("ebay.com/bp/manage") == true || crossPostErrorMessage?.contains("bizpolicy.ebay.com") == true || crossPostErrorMessage?.contains("Business Policies") == true {
                     Button("Enable on eBay") {
@@ -854,6 +863,11 @@ struct EditListingSheet: View {
                         .font(.caption)
                 }
                 .accessibilityLabel("Mercari item \(id) linked")
+                Button {
+                    showMercariSync = true
+                } label: {
+                    Label("Sync from Mercari", systemImage: "arrow.triangle.2.circlepath")
+                }
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     TextField("Paste Mercari listing link", text: $mercariLinkInput)
