@@ -1376,7 +1376,6 @@ struct BulkListingOverviewView: View {
 
     @FocusState private var focusedField: DraftFocusField?
     @State private var cache = CachedImageManager()
-    @State private var showUploadWarning = false
     @State private var navigateToResults = false
     @State private var showProcessFullScreen = false
     @State private var showingPickerForDraft = false
@@ -1389,20 +1388,10 @@ struct BulkListingOverviewView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // ── Thin upload progress bar at top ────────────────────────
-            if uploadManager.isUploadingPhotos {
-                VStack(spacing: 4) {
-                    ProgressView(value: uploadManager.uploadProgress)
-                        .tint(.blue)
-                        .padding(.horizontal)
-                    Text("Uploading photos… \(uploadManager.uploadEtaString.map { $0 } ?? "")")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 8)
-                .background(.bar)
-                Divider()
-            }
+            // Photo upload runs silently in the background — no blocking bar here. AI processing
+            // reads photos straight from on-device storage, so it never has to wait on the upload,
+            // and publish re-uploads anything that didn't finish. Upload progress, when relevant,
+            // is surfaced inside ProcessProgressView instead.
 
             // ── Processing banner ──────────────────────────────────────
             if uploadManager.isProcessing {
@@ -1494,42 +1483,23 @@ struct BulkListingOverviewView: View {
             }
             .environmentObject(uploadManager)
         }
-        .overlay(alignment: .bottom) {
-            if showUploadWarning {
-                Text("Photos need to finish uploading first before processing")
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(.white)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-                    .background(Color.black.opacity(0.82), in: RoundedRectangle(cornerRadius: 14))
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 24)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
-        .animation(.spring(response: 0.3), value: showUploadWarning)
     }
 
     // MARK: Process Button
     @ViewBuilder
     private var processButton: some View {
-        let uploading = uploadManager.isUploadingPhotos
         let processing = uploadManager.isProcessing
         Button {
-            if uploading {
-                withAnimation { showUploadWarning = true }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                    withAnimation { showUploadWarning = false }
-                }
-            } else if !processing && !drafts.isEmpty {
+            // Start AI immediately — never make the user wait for the photo upload. Gemini reads
+            // the on-device images directly, so processing is independent of the Storage upload.
+            if !processing && !drafts.isEmpty {
                 uploadManager.processDrafts(drafts: drafts, modelContext: modelContext)
                 showProcessFullScreen = true
             }
         } label: {
             Text(processing ? "Processing…" : "Process")
                 .fontWeight(.semibold)
-                .foregroundStyle(uploading || processing || drafts.isEmpty ? .secondary : Color.accentColor)
+                .foregroundStyle(processing || drafts.isEmpty ? .secondary : Color.accentColor)
         }
         .disabled(processing || drafts.isEmpty)
     }
@@ -1589,6 +1559,10 @@ struct ProcessResultsOverviewView: View {
     @State private var webAutofillQueue: [CrossPostJob] = []
     @State private var activeAutofillJob: CrossPostJob? = nil
     @State private var crossPostError: String? = nil
+    /// eBay/Etsy cross-posts deferred until `isPublishing` becomes false, ensuring the
+    /// Firestore listing document exists before the Cloud Function tries to read it.
+    /// Stores title for error messages since the SwiftData Item may be deleted by then.
+    @State private var pendingAPITriggers: [(listingId: String, title: String, platforms: [String])] = []
 
     // Only show the items that went through AI processing
     private var results: [Item] {
@@ -1690,8 +1664,12 @@ struct ProcessResultsOverviewView: View {
         } message: {
             Text(uploadManager.publishError ?? "")
         }
+        // Only surface the eBay/API error once no web-autofill sheet is up. The Mercari sheet is
+        // presented from this same view, and you can't show an alert underneath an active sheet —
+        // that's why the error used to flash and vanish the instant Mercari opened. Gating on
+        // `activeAutofillJob == nil` holds the error until the web queue drains, then shows it.
         .alert("Cross-Post Failed", isPresented: Binding(
-            get: { crossPostError != nil },
+            get: { crossPostError != nil && activeAutofillJob == nil },
             set: { if !$0 { crossPostError = nil } }
         )) {
             Button("OK", role: .cancel) { crossPostError = nil }
@@ -1716,8 +1694,30 @@ struct ProcessResultsOverviewView: View {
             }
         }
         .onChange(of: uploadManager.isPublishing) { _, isPublishing in
-            // When publishing finishes, check if we have web autofill jobs enqueued
-            if !isPublishing && !webAutofillQueue.isEmpty {
+            guard !isPublishing else { return }
+            // Fire deferred API cross-posts now that the Firestore write has completed.
+            if !pendingAPITriggers.isEmpty {
+                let triggers = pendingAPITriggers
+                pendingAPITriggers = []
+                Task {
+                    var errorMessages: [String] = []
+                    for trigger in triggers {
+                        do {
+                            try await IntegrationRepository.shared.triggerCrossPost(
+                                listingId: trigger.listingId,
+                                platforms: trigger.platforms
+                            )
+                        } catch {
+                            errorMessages.append(formatCrossPostError(error, title: trigger.title, platforms: trigger.platforms))
+                        }
+                    }
+                    if !errorMessages.isEmpty {
+                        crossPostError = errorMessages.joined(separator: "\n\n")
+                    }
+                }
+            }
+            // Start web autofill jobs (Mercari, Facebook) after publish completes.
+            if !webAutofillQueue.isEmpty {
                 checkAndStartNextWebJob()
             }
         }
@@ -1742,36 +1742,23 @@ struct ProcessResultsOverviewView: View {
             }
             self.webAutofillQueue = jobs
             uploadManager.pendingAutofillJobsCount = jobs.count
-            uploadManager.publishDrafts(drafts: toPublish, modelContext: modelContext)
+            // Defer API cross-posts to onChange(of: isPublishing) so the Firestore write
+            // completes before the Cloud Function tries to read the listing document.
             let apiPlatforms = selectedPlatforms.filter { $0 == "ebay" || $0 == "etsy" }
             if !apiPlatforms.isEmpty {
-                Task {
-                    var errorMessages: [String] = []
-                    for item in toPublish {
-                        if let listingId = item.firestoreListingId {
-                            do {
-                                try await IntegrationRepository.shared.triggerCrossPost(
-                                    listingId: listingId,
-                                    platforms: Array(apiPlatforms)
-                                )
-                            } catch {
-                                errorMessages.append(formatCrossPostError(error, item: item, platforms: Array(apiPlatforms)))
-                            }
-                        }
-                    }
-                    if !errorMessages.isEmpty {
-                        crossPostError = errorMessages.joined(separator: "\n\n")
-                    }
+                pendingAPITriggers = toPublish.compactMap { item in
+                    guard let listingId = item.firestoreListingId else { return nil }
+                    let title = item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled"
+                    return (listingId: listingId, title: title, platforms: Array(apiPlatforms))
                 }
             }
-            if !jobs.isEmpty && !uploadManager.isPublishing {
-                checkAndStartNextWebJob()
-            }
+            uploadManager.publishDrafts(drafts: toPublish, modelContext: modelContext)
         }
         .presentationDetents([.fraction(0.75), .large])
     }
 
     private func checkAndStartNextWebJob() {
+        guard activeAutofillJob == nil else { return }
         if !webAutofillQueue.isEmpty {
             let nextJob = webAutofillQueue.removeFirst()
             uploadManager.pendingAutofillJobsCount = webAutofillQueue.count + 1
@@ -1826,10 +1813,9 @@ struct ProcessResultsOverviewView: View {
         focusedField = DraftFocusField(itemID: results[row].id, field: field)
     }
 
-    private func formatCrossPostError(_ error: Error, item: Item, platforms: [String]) -> String {
+    private func formatCrossPostError(_ error: Error, title: String, platforms: [String]) -> String {
         let nsError = error as NSError
         let serverMsg = nsError.userInfo["NSLocalizedDescription"] as? String ?? ""
-        let title = item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled"
 
         // Title-too-long: eBay max is 80 chars
         if serverMsg.lowercased().contains("title") && (serverMsg.lowercased().contains("long") || serverMsg.lowercased().contains("80") || serverMsg.lowercased().contains("character")) {

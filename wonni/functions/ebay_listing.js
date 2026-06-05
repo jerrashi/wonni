@@ -139,6 +139,128 @@ function extractDuplicatePolicyId(responseBody) {
 }
 
 /**
+ * Resolves an eBay leaf category from eBay's own taxonomy suggestions, built from the listing
+ * title plus the leaf of the Gemini category path. Returns null if no confident suggestion is
+ * available (caller falls back to "Everything Else"). Production only — the sandbox taxonomy
+ * service is unreliable.
+ */
+async function suggestEbayCategory(accessToken, title, geminiCategory) {
+  let query = title || "";
+  if (geminiCategory) {
+    const leaf = String(geminiCategory).split(">").pop().trim();
+    if (leaf && query.toLowerCase().indexOf(leaf.toLowerCase()) === -1) {
+      query = `${leaf} ${query}`;
+    }
+  }
+  query = query.trim().slice(0, 80);
+  if (!query) return null;
+
+  const options = {
+    hostname: "api.ebay.com",
+    path: `/commerce/taxonomy/v1/category_tree/0/get_category_suggestions?q=${encodeURIComponent(query)}`,
+    method: "GET",
+    headers: {
+      "Authorization": `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  };
+  try {
+    const res = await makeHttpRequest(options);
+    if (res.statusCode === 200) {
+      const data = JSON.parse(res.body);
+      const suggestions = data.categorySuggestions || [];
+      if (suggestions.length > 0 && suggestions[0].category) {
+        const cat = suggestions[0].category;
+        console.log(`[suggestEbayCategory] "${query}" -> ${cat.categoryId} (${cat.categoryName})`);
+        return cat.categoryId;
+      }
+    } else {
+      console.warn(`[suggestEbayCategory] ${res.statusCode}: ${res.body}`);
+    }
+  } catch (err) {
+    console.warn(`[suggestEbayCategory] request failed: ${err.message}`);
+  }
+  return null;
+}
+
+/**
+ * Fetches the REQUIRED item aspects for a category so we can fill them before publishing.
+ * Returns [{ name, mode, values }]. Production only; returns [] on any failure (the reactive
+ * recovery in the publish loop is the safety net).
+ */
+async function getRequiredAspects(accessToken, categoryId) {
+  const options = {
+    hostname: "api.ebay.com",
+    path: `/commerce/taxonomy/v1/category_tree/0/get_item_aspects_for_category?category_id=${encodeURIComponent(categoryId)}`,
+    method: "GET",
+    headers: {
+      "Authorization": `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  };
+  try {
+    const res = await makeHttpRequest(options);
+    if (res.statusCode !== 200) {
+      console.warn(`[getRequiredAspects] ${res.statusCode}: ${res.body}`);
+      return [];
+    }
+    const data = JSON.parse(res.body);
+    return (data.aspects || [])
+      .filter(a => a.aspectConstraint && a.aspectConstraint.aspectRequired)
+      .map(a => ({
+        name: a.localizedAspectName,
+        mode: a.aspectConstraint.aspectMode, // FREE_TEXT | SELECTION_ONLY
+        values: (a.aspectValues || []).map(v => v.localizedValue),
+      }));
+  } catch (err) {
+    console.warn(`[getRequiredAspects] request failed: ${err.message}`);
+    return [];
+  }
+}
+
+/**
+ * Builds the product.aspects object, satisfying every required aspect so the publish validates.
+ * Brand is always set. SELECTION_ONLY aspects take a valid value from eBay's allowed list (a free
+ * string would be rejected); FREE_TEXT aspects we have no data for get a neutral placeholder the
+ * seller can refine on eBay. Best-effort by design — the goal is "the listing posts."
+ */
+function buildProductAspects(requiredAspects, brand) {
+  const aspects = { Brand: [brand] };
+  for (const aspect of requiredAspects) {
+    if (aspects[aspect.name]) continue; // already supplied (e.g. Brand)
+    if (aspect.mode === "SELECTION_ONLY" && aspect.values.length > 0) {
+      aspects[aspect.name] = [aspect.values[0]];
+    } else {
+      aspects[aspect.name] = [brand && brand !== "Generic" ? brand : "Unbranded"];
+    }
+  }
+  return aspects;
+}
+
+/**
+ * Parses the aspect name(s) eBay reported as missing from a failed publish response, e.g.
+ * "The item specific Release Title is missing." -> ["Release Title"]. Used to reactively fill
+ * required aspects the proactive lookup didn't cover, then retry the publish.
+ */
+function extractMissingAspects(responseBody) {
+  const names = new Set();
+  try {
+    const obj = JSON.parse(responseBody);
+    for (const err of (obj.errors || [])) {
+      const match = (err.message || "").match(/item specific (.+?) is missing/i);
+      if (match && match[1]) names.add(match[1].trim());
+      // eBay also echoes the aspect name as the parameter named "3".
+      for (const p of (err.parameters || [])) {
+        if (p.name === "3" && p.value) names.add(String(p.value).trim());
+      }
+    }
+  } catch (e) {
+    console.warn("[extractMissingAspects] parse failed:", e.message);
+  }
+  return [...names];
+}
+
+/**
  * Helper to get or create eBay Payment Policy.
  */
 async function getOrCreatePaymentPolicy(accessToken, host) {
@@ -549,6 +671,13 @@ exports.ebayCreateListing = onCall(
       throw new HttpsError("permission-denied", "You do not own this listing.");
     }
 
+    // Idempotency guard: if already posted, return the existing eBay listing ID rather
+    // than re-submitting. Prevents duplicate listings from retry storms.
+    if (listing.crossPostStatus?.ebay === "posted" && listing.crossPostListingIds?.ebay) {
+      console.log(`[ebayCreateListing] Listing ${listingId} already posted to eBay (${listing.crossPostListingIds.ebay}). Skipping.`);
+      return { success: true, listingId: listing.crossPostListingIds.ebay };
+    }
+
     // Set status to pending in UserListing
     await listingRef.set({
       crossPostStatus: {
@@ -597,36 +726,25 @@ exports.ebayCreateListing = onCall(
         throw new Error("eBay requires at least one product image.");
       }
 
-      // 6. Category resolution — use pre-resolved category from listing doc first,
-      //    fall back to eBay taxonomy suggestions, then Everything Else (99).
+      // 6. Category resolution. Prefer eBay's own taxonomy suggestion (built from the title +
+      //    Gemini category); honor an explicit client-provided category only if present; fall back
+      //    to "Everything Else" (99). The previous static client-side map produced wrong leaf
+      //    categories (e.g. Music CDs) whose required item specifics then failed the publish.
       const title = listing.customTitle || "Wonni Listing";
       const description = listing.customDescription || "Listed via Wonni";
-      let categoryId = listing.ebayCategory ? String(listing.ebayCategory) : "99";
-      console.log(`[ebayCreateListing] Initial category from listing: ${categoryId}`);
+      let categoryId = listing.ebayCategory ? String(listing.ebayCategory) : null;
+      if (!categoryId && !isSandbox) {
+        categoryId = await suggestEbayCategory(accessToken, title, listing.category);
+      }
+      if (!categoryId) categoryId = "99"; // "Everything Else" — minimal required aspects
+      console.log(`[ebayCreateListing] Using category ${categoryId}`);
 
-      if (categoryId === "99" && !isSandbox) {
-        try {
-          const taxOptions = {
-            hostname: "api.ebay.com",
-            path: `/commerce/taxonomy/v1/category_tree/0/get_category_suggestions?q=${encodeURIComponent(title.slice(0, 80))}`,
-            method: "GET",
-            headers: {
-              "Authorization": `Bearer ${accessToken}`,
-              "Content-Type": "application/json",
-            }
-          };
-          const taxRes = await makeHttpRequest(taxOptions);
-          if (taxRes.statusCode === 200) {
-            const taxData = JSON.parse(taxRes.body);
-            const suggestions = taxData.categorySuggestions || [];
-            if (suggestions.length > 0 && suggestions[0].category) {
-              categoryId = suggestions[0].category.categoryId;
-              console.log(`[ebayCreateListing] Resolved category ID ${categoryId} from eBay taxonomy suggestions`);
-            }
-          }
-        } catch (err) {
-          console.warn("[ebayCreateListing] eBay taxonomy suggestions failed:", err.message);
-        }
+      // Pre-fetch the category's required item aspects so we can fill them before publishing.
+      // (Production only — getRequiredAspects returns [] in sandbox; the publish loop below also
+      // recovers reactively from any missing-aspect error the pre-fetch didn't cover.)
+      const requiredAspects = isSandbox ? [] : await getRequiredAspects(accessToken, categoryId);
+      if (requiredAspects.length > 0) {
+        console.log(`[ebayCreateListing] Required aspects for ${categoryId}: ${requiredAspects.map(a => a.name).join(", ")}`);
       }
 
       // 7. Map Condition
@@ -674,9 +792,7 @@ exports.ebayCreateListing = onCall(
           imageUrls: imageUrls.slice(0, 12),
           brand: brand,
           mpn: "Does Not Apply",
-          aspects: {
-            Brand: [brand]
-          }
+          aspects: buildProductAspects(requiredAspects, brand)
         },
         packageWeightAndSize: {
           weight: {
@@ -774,7 +890,13 @@ exports.ebayCreateListing = onCall(
         throw new Error(`Failed to create eBay offer (${offerRes.statusCode}): ${offerRes.body}`);
       }
 
-      // 10. Publish Offer
+      // 10. Publish the offer, recovering from "required item specific" errors.
+      //
+      // eBay validates required item aspects at publish time. We fill them up front (step 8), but
+      // some categories only surface additional required aspects at publish — so if the publish
+      // fails citing a missing item specific, we parse the aspect name(s), fill them, re-PUT the
+      // inventory item, and try again. This is what turns the observed "Release Title is missing" /
+      // "Artist is missing" failures into successful listings.
       const publishOptions = {
         hostname: host,
         path: `/sell/inventory/v1/offer/${offerId}/publish`,
@@ -785,8 +907,46 @@ exports.ebayCreateListing = onCall(
         }
       };
 
+      // Publish once, retrying transient 5xx (common on re-publishes of existing inventory).
+      const publishOnce = async () => {
+        let res;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          res = await makeHttpRequest(publishOptions, {});
+          if (res.statusCode === 200) return res;
+          if (attempt < 3 && res.statusCode >= 500) {
+            console.log(`[ebayCreateListing] Publish attempt ${attempt} returned ${res.statusCode}, retrying...`);
+            await new Promise(resolve => setTimeout(resolve, attempt * 1500));
+          } else {
+            return res;
+          }
+        }
+        return res;
+      };
+
       console.log(`[ebayCreateListing] Publishing offerId=${offerId}`);
-      const publishRes = await makeHttpRequest(publishOptions, {});
+      let publishRes = await publishOnce();
+
+      // Up to 3 rounds of filling required aspects the publish error names, then retrying.
+      for (let round = 0; round < 3 && publishRes.statusCode !== 200; round++) {
+        const missing = extractMissingAspects(publishRes.body);
+        if (missing.length === 0) break; // not a missing-aspect failure — surface the real error
+        let added = false;
+        for (const name of missing) {
+          if (!itemBody.product.aspects[name]) {
+            itemBody.product.aspects[name] = [brand && brand !== "Generic" ? brand : "Unbranded"];
+            added = true;
+          }
+        }
+        if (!added) break; // already supplied everything it named — avoid an infinite loop
+        console.log(`[ebayCreateListing] Filling missing aspects and retrying: ${missing.join(", ")}`);
+        const reput = await makeHttpRequest(itemOptions, itemBody);
+        if (![200, 201, 204].includes(reput.statusCode)) {
+          console.warn(`[ebayCreateListing] Re-PUT inventory item failed (${reput.statusCode}): ${reput.body}`);
+          break;
+        }
+        publishRes = await publishOnce();
+      }
+
       if (publishRes.statusCode !== 200) {
         throw new Error(`Failed to publish eBay offer (${publishRes.statusCode}): ${publishRes.body}`);
       }

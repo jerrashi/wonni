@@ -375,6 +375,10 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
     @Published var isListingComplete: Bool = false
     /// Mercari item ID extracted from the post-success URL (e.g. "m1234567890").
     @Published var mercariItemId: String?
+    /// Set to "submitted" or "submitted-confirmed" once the List button click succeeds.
+    /// Observed by MercariAutoPosterView to write a Firestore "pending" record immediately —
+    /// Mercari is a React SPA so the navigation delegate may not fire after a route change.
+    @Published var latestSubmitResult: String?
 
     let webView: WKWebView
     private var hasDetectedSuccess = false
@@ -422,6 +426,32 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
 
     // MARK: Field Injection
 
+    enum FormWaitResult { case ready, login, timedOut }
+
+    /// Polls the live page for Mercari's sell-form title input, returning as soon as it mounts.
+    /// Crucially, it tolerates `callAsyncJavaScript` throwing while the WebContent process is still
+    /// cold-starting or the SPA is mid-hydration — those throws are treated as "not ready yet" and
+    /// retried, rather than aborting the whole autofill (the bug that made the first post fail).
+    private func waitForSellForm(timeout: TimeInterval) async -> FormWaitResult {
+        let probe = """
+        return (function() {
+            if (document.querySelector('input[data-testid="Title"]')) { return 'form'; }
+            var u = (location && location.href) ? location.href.toLowerCase() : '';
+            if (u.indexOf('login') !== -1 || u.indexOf('signin') !== -1) { return 'login'; }
+            return 'wait';
+        })();
+        """
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let result = (try? await webView.callJS(probe)) as? String
+            if result == "form" { return .ready }
+            if result == "login" { return .login }
+            // nil (JS not ready yet) or "wait" → keep polling
+            try? await Task.sleep(nanoseconds: 400_000_000)
+        }
+        return .timedOut
+    }
+
     func injectFields(
         title: String,
         description: String,
@@ -438,34 +468,27 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
     ) async {
         status = .injecting
 
-        // Wait for the webview to finish its initial navigation before running any JS.
-        // callJS returns nil while the webview is mid-navigation, which would silently skip
-        // all field injection and leave the form empty.
-        var navAttempts = 0
-        while webView.isLoading && navAttempts < 30 {
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            navAttempts += 1
-        }
-        print("[MercariPostingState] Nav wait done (isLoading=\(webView.isLoading), attempts=\(navAttempts))")
-
-        // Poll for React form mount (up to 10 s in 500 ms steps)
-        let pollScript = """
-        return new Promise(function(resolve) {
-            var attempts = 0;
-            (function check() {
-                if (document.querySelector('input[data-testid="Title"]')) { resolve('ready'); }
-                else if (++attempts >= 20) { resolve('timeout'); }
-                else { setTimeout(check, 500); }
-            })();
-        });
-        """
-        let formResult = (try? await webView.callJS(pollScript)) as? String ?? "unknown"
-        print("[MercariPostingState] Form poll: \(formResult)")
-
-        let currentURL = webView.url?.absoluteString ?? ""
-        if currentURL.contains("login") || currentURL.contains("signin") {
+        // Wait until the sell form is actually on the page before touching any field.
+        //
+        // The old approach waited for `webView.isLoading == false`, then ran a single JS poll.
+        // Both are unreliable and caused the first cross-post of every session to fail:
+        //  • Mercari is a React SPA that holds long-lived connections open, so `isLoading` often
+        //    never settles to false — the 30s nav-wait just exhausted every time.
+        //  • `callAsyncJavaScript` THROWS (it doesn't wait) when the main frame isn't ready yet.
+        //    On the first post the WebContent process is cold-starting (~2.5s in your logs), so
+        //    that single poll threw, returned "unknown", and injection ran against a blank page.
+        //    The second post only worked because the process was already warm.
+        // waitForSellForm polls the real form element and tolerates those early failures, so the
+        // first post is now as reliable as the second.
+        switch await waitForSellForm(timeout: 45) {
+        case .login:
             status = .loginRequired
             return
+        case .timedOut:
+            status = .failed("Mercari's sell page didn't finish loading. Tap Retry to try again.")
+            return
+        case .ready:
+            break
         }
 
         let jsScript = """
@@ -586,6 +609,15 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
             status = .failed(result ?? "Injection failed — page may not be loaded")
             return
         }
+        // If every core field reports not-found, the React form hasn't mounted yet.
+        // Don't proceed to category/brand/shipping — surface a recoverable error.
+        let formNotMounted = result?.contains("title:not-found") == true
+            && result?.contains("desc:not-found") == true
+            && result?.contains("price:not-found") == true
+        if formNotMounted {
+            status = .failed("Mercari form didn't load in time — tap the reload button and try again")
+            return
+        }
 
         // 2. Category — the hard gate. The shipping carrier field stays disabled
         //    ("Add title and category to enable shipping") until a category is set.
@@ -627,6 +659,13 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         if blocking.isEmpty {
             let submitResult = await submitListing()
             print("[MercariPostingState] Submit: \(submitResult)")
+            if submitResult.starts(with: "submitted") {
+                latestSubmitResult = submitResult
+                // Mercari is a React SPA — URL stays /sell/ after success.
+                // Start a background poll for the post-success modal instead of
+                // relying on the navigation delegate, which won't fire.
+                Task { await pollForSuccessModal() }
+            }
         } else {
             print("[MercariPostingState] Holding submit — blocking issues: \(blocking) (all: \(issues))")
         }
@@ -635,10 +674,46 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         // (The List button becomes enabled only after Mercari validates all required fields.)
         isListingComplete = await checkListingButtonEnabled()
 
-        // The .success state is set by the navigation delegate when the page leaves /sell/.
+        // The .success state is set either by pollForSuccessModal or the navigation delegate.
         // If we're still here, leave a "review & list" resting state rather than a hard failure —
         // the form is filled as far as we could take it, so the user finishes in the webview.
         if status == .injecting { status = .waitingForCategory }
+    }
+
+    /// Polls the DOM for Mercari's post-success modal ("Post another item" / "Share your listing").
+    /// Mercari's React router does not navigate away from /sell/ after submission, so the
+    /// navigation delegate never fires. This is the only reliable success signal.
+    private func pollForSuccessModal() async {
+        guard !hasDetectedSuccess else { return }
+        let js = """
+        return (function() {
+            var buttons = document.querySelectorAll('button, a');
+            for (var i = 0; i < buttons.length; i++) {
+                var t = (buttons[i].textContent || '').trim().toLowerCase();
+                if (t.indexOf('post another') !== -1 || t.indexOf('share your listing') !== -1) {
+                    return 'success';
+                }
+            }
+            // Also check for the success heading/toast text
+            var body = (document.body && document.body.innerText) || '';
+            if (body.indexOf('Listed!') !== -1 || body.indexOf('Your item has been listed') !== -1) {
+                return 'success';
+            }
+            return 'not-found';
+        })();
+        """
+        for _ in 0..<60 {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !hasDetectedSuccess else { return }
+            let result = (try? await webView.callJS(js)) as? String ?? "not-found"
+            if result == "success" {
+                hasDetectedSuccess = true
+                print("[MercariPostingState] Success modal detected")
+                status = .success
+                return
+            }
+        }
+        print("[MercariPostingState] Success poll timed out (60s) — success modal not found")
     }
 
     /// Pre-submit gate: returns human-readable issues that would make a submit fail. Empty = clean.
@@ -1694,6 +1769,10 @@ struct MercariAutoPosterView: View {
             default: break
             }
         }
+        .onChange(of: state.latestSubmitResult) { _, result in
+            guard result != nil else { return }
+            Task { await writeMercariPending() }
+        }
     }
 
     // MARK: Banners
@@ -1736,11 +1815,23 @@ struct MercariAutoPosterView: View {
             .padding(.horizontal, 16).padding(.vertical, 10)
             .background(Color.green.opacity(0.15))
             .overlay(Rectangle().frame(height: 1).foregroundStyle(Color.green.opacity(0.3)), alignment: .bottom)
-        case .failed:
+        case .failed(let message):
             HStack(spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.title3)
-                Text("Autofill failed — fill fields manually").font(.subheadline.weight(.medium))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Autofill couldn't finish").font(.subheadline.weight(.semibold))
+                    Text(message).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                }
                 Spacer()
+                Button("Retry") {
+                    // Reload the sell page and run the autofill again from a clean slate.
+                    hasInjected = false
+                    state.reloadSellPage()
+                    Task { await fetchPhotosAndInject() }
+                }
+                .font(.subheadline.weight(.semibold))
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
             .background(.ultraThinMaterial)
@@ -1867,6 +1958,19 @@ struct MercariAutoPosterView: View {
         }
         try? await Firestore.firestore().collection("listings").document(listingId).updateData(update)
         print("[MercariAutoPosterView] Firestore updated for listing \(listingId)")
+    }
+
+    /// Writes "pending" to Firestore as soon as the List button click succeeds.
+    /// Mercari uses React Router so the navigation delegate may never fire after submission —
+    /// this ensures the badge appears even when URL-change detection is unreliable.
+    private func writeMercariPending() async {
+        guard let listingId = job.listingId else { return }
+        // Don't overwrite a confirmed "posted" status that arrived first.
+        try? await Firestore.firestore().collection("listings").document(listingId).updateData([
+            "crossPostStatus.mercari": "pending",
+            "updatedAt": Timestamp(date: Date())
+        ])
+        print("[MercariAutoPosterView] Wrote mercari=pending for listing \(listingId)")
     }
 }
 
