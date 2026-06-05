@@ -526,7 +526,11 @@ class UploadManager: ObservableObject {
                 listing.price = draft.userEditedPrice ?? draft.aiSuggestedPrice
                 listing.geminiIdentificationConfirmed = draft.processedAt != nil
                 listing.category = draft.aiSuggestedCategory
-                listing.ebayCategory = await CategoryMappingRepository.shared.bestEbayCategory(for: draft.aiSuggestedCategory)
+                // eBay category is resolved server-side from eBay's own taxonomy suggestions
+                // (using the title + this Gemini category string). The old static client-side map
+                // produced wrong leaf categories — e.g. mapping items into "Music > CDs", whose
+                // required "Artist"/"Release Title" item specifics then failed the eBay publish.
+                listing.ebayCategory = nil
                 listing.brand = draft.aiSuggestedBrand
                 listing.sourceAssetIdentifiers = []
 

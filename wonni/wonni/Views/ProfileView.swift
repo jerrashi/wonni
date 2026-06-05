@@ -179,7 +179,13 @@ struct ProfileView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             }
-            .alert("Cross-Post Failed", isPresented: $showCrossPostError, presenting: crossPostErrorMessage) { _ in
+            // Hold the eBay/API error until no web-autofill sheet is up — an alert can't show
+            // beneath an active sheet, so without this gate it would be swallowed the moment the
+            // Mercari sheet opened. Same fix as the bulk publish flow.
+            .alert("Cross-Post Failed", isPresented: Binding(
+                get: { showCrossPostError && activeAutofillJob == nil },
+                set: { showCrossPostError = $0 }
+            ), presenting: crossPostErrorMessage) { _ in
                 if crossPostErrorMessage?.contains("ebay.com/bp/manage") == true || crossPostErrorMessage?.contains("bizpolicy.ebay.com") == true || crossPostErrorMessage?.contains("Business Policies") == true {
                     Button("Enable on eBay") {
                         if let url = URL(string: "https://www.ebay.com/bp/manage") {
@@ -473,9 +479,12 @@ struct ProfileView: View {
     }
     
     private func checkAndStartNextWebJob() {
+        guard activeAutofillJob == nil else { return }
         if !webAutofillQueue.isEmpty {
             let nextJob = webAutofillQueue.removeFirst()
             activeAutofillJob = nextJob
+        } else {
+            Task { await loadListings() }
         }
     }
 

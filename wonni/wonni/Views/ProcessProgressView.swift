@@ -64,6 +64,23 @@ struct ProcessProgressView: View {
             .padding(.bottom, 16)
             .animation(.easeInOut(duration: 0.35), value: allDone)
 
+            // Photos finish uploading in the background while AI runs — show it here so the user
+            // sees progress, but nothing blocks on it (publish re-uploads anything incomplete).
+            if uploadManager.isUploadingPhotos {
+                HStack(spacing: 6) {
+                    Image(systemName: "icloud.and.arrow.up")
+                        .font(.caption2)
+                        .foregroundStyle(.blue)
+                    Text("Uploading photos… \(Int((uploadManager.uploadProgress * 100).rounded()))%")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 12)
+                .transition(.opacity)
+            }
+
             Divider()
 
             // ── Per-item list ─────────────────────────────────────────────────
