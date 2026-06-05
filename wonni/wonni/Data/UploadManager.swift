@@ -563,6 +563,10 @@ class UploadManager: ObservableObject {
                     } else {
                         modelContext.delete(draft)
                     }
+                    // This draft is now a live listing — drop it from the session set so the
+                    // discard-on-exit path can't call deleteDraftLocallyAndCloud on it and try to
+                    // delete the published Firestore document (which the rules correctly reject).
+                    sessionDraftIDs.removeAll { $0 == draft.id }
                     publishedCount += 1
                 } catch {
                     print("[UploadManager] Firestore write failed for \(draft.id): \(error)")
