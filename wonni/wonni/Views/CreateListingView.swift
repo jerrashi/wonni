@@ -1770,7 +1770,8 @@ struct ProcessResultsOverviewView: View {
                             description: item.userEditedDescription ?? item.aiSuggestedDescription ?? "",
                             price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
                             listingId: item.firestoreListingId,
-                            item: item
+                            item: item,
+                            buyerPaysShipping: item.buyerPaysShipping
                         ))
                     }
                 }
@@ -1790,7 +1791,8 @@ struct ProcessResultsOverviewView: View {
                         price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
                         coverPhotoPath: item.firebasePhotoPaths?.first,
                         photoPaths: item.firebasePhotoPaths ?? [],
-                        platforms: attemptedPlatforms
+                        platforms: attemptedPlatforms,
+                        buyerPaysShipping: item.buyerPaysShipping
                     )
                 }
                 uploadManager.crossPostStatusPending = true
@@ -1912,6 +1914,7 @@ struct CrossPostSessionItem: Identifiable, Equatable {
     let coverPhotoPath: String?
     let photoPaths: [String]
     let platforms: [String]     // attempted cross-post platforms, e.g. ["ebay","mercari"]
+    let buyerPaysShipping: Bool
 }
 
 /// Post-publish overview: per listing, shows Wonni plus each attempted platform's live status
@@ -2057,7 +2060,8 @@ struct CrossPostStatusView: View {
                 description: item.description,
                 price: item.price,
                 listingId: item.id,
-                photoFirebasePaths: item.photoPaths
+                photoFirebasePaths: item.photoPaths,
+                buyerPaysShipping: item.buyerPaysShipping
             )
         default:
             break

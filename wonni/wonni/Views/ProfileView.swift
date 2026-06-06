@@ -435,7 +435,8 @@ struct ProfileView: View {
                         description: listing.customDescription ?? "",
                         price: listing.price ?? 0.0,
                         listingId: id,
-                        photoFirebasePaths: listing.photoPaths
+                        photoFirebasePaths: listing.photoPaths,
+                        buyerPaysShipping: listing.shippingInfo?.buyerPaysShipping ?? false
                     ))
                 } else if platform == "ebay" {
                     // Set pending state locally first so UI updates immediately
@@ -937,8 +938,9 @@ struct EditListingSheet: View {
             do {
                 try await Firestore.firestore().collection("listings").document(listingId).updateData([
                     "crossPostListingIds.mercari": itemId,
-                    // Mark it posted so it shows in status, unless a status is already recorded.
-                    "crossPostStatus.mercari": listing.crossPostStatus?["mercari"] ?? "posted",
+                    // Providing the link asserts it's live — mark posted so the badge stops showing
+                    // "pending" and no further auto-post is attempted.
+                    "crossPostStatus.mercari": "posted",
                     "updatedAt": Timestamp(date: Date())
                 ])
                 linkedMercariId = itemId
@@ -998,7 +1000,8 @@ struct EditListingSheet: View {
                         description: description.trimmingCharacters(in: .whitespaces),
                         price: price ?? 0.0,
                         listingId: id,
-                        photoFirebasePaths: listing.photoPaths
+                        photoFirebasePaths: listing.photoPaths,
+                        buyerPaysShipping: !isFreeShipping
                     ))
                 }
             }
