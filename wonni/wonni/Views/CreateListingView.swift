@@ -783,7 +783,11 @@ struct CustomPhotoPickerView: View {
                 } message: {
                     Text("Are you sure you want to delete the selected items?")
                 }
-                .sheet(isPresented: $showingPickerForDraft) {
+                .sheet(isPresented: $showingPickerForDraft, onDismiss: {
+                    // Collapse the draft-history modal too once the add-photos picker closes, so the
+                    // user returns straight to the listing flow instead of unwinding nested modals.
+                    dismiss()
+                }) {
                     CustomPhotoPickerView(addingToExistingDraft: true)
                         .environmentObject(uploadManager)
                 }

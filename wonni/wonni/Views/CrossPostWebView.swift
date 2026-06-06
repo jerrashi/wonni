@@ -472,6 +472,39 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         return .timedOut
     }
 
+    /// Attaches the listing photos to Mercari's hidden file input as one DataTransfer set. Mercari
+    /// uploads them asynchronously afterward, so the caller polls for success/error and re-calls
+    /// this on failure.
+    private func attachPhotos(_ base64Strings: [String]) async -> String {
+        let js = """
+        var fileInput = document.querySelector('input[data-testid="SellPhotoInput"]');
+        if (!fileInput) { return 'no-file-input'; }
+        if (!base64Photos || base64Photos.length === 0) { return 'no-photos'; }
+        try {
+            var b64toBlob = function(b64Data) {
+                var byteCharacters = atob(b64Data);
+                var byteArrays = [];
+                for (var offset = 0; offset < byteCharacters.length; offset += 512) {
+                    var slice = byteCharacters.slice(offset, offset + 512);
+                    var byteNumbers = new Array(slice.length);
+                    for (var i = 0; i < slice.length; i++) { byteNumbers[i] = slice.charCodeAt(i); }
+                    byteArrays.push(new Uint8Array(byteNumbers));
+                }
+                return new Blob(byteArrays, {type: 'image/jpeg'});
+            };
+            var dt = new DataTransfer();
+            for (var pi = 0; pi < base64Photos.length; pi++) {
+                dt.items.add(new File([b64toBlob(base64Photos[pi])], 'photo_' + pi + '.jpg', {type: 'image/jpeg'}));
+            }
+            fileInput.files = dt.files;
+            fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+            fileInput.dispatchEvent(new Event('input', { bubbles: true }));
+            return 'attached-' + base64Photos.length;
+        } catch (e) { return 'error:' + e.message; }
+        """
+        return (try? await webView.callJS(js, args: ["base64Photos": base64Strings])) as? String ?? "error"
+    }
+
     func injectFields(
         title: String,
         description: String,
@@ -587,46 +620,18 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
                 shippingStatus = 'already-checked';
             }
 
-            var fileInput = document.querySelector('input[data-testid="SellPhotoInput"]');
-            var photoStatus = fileInput ? 'found-no-photos' : 'no-file-input';
-            if (fileInput && base64Photos.length > 0) {
-                try {
-                    var b64toBlob = function(b64Data) {
-                        var byteCharacters = atob(b64Data);
-                        var byteArrays = [];
-                        for (var offset = 0; offset < byteCharacters.length; offset += 512) {
-                            var slice = byteCharacters.slice(offset, offset + 512);
-                            var byteNumbers = new Array(slice.length);
-                            for (var i = 0; i < slice.length; i++) { byteNumbers[i] = slice.charCodeAt(i); }
-                            byteArrays.push(new Uint8Array(byteNumbers));
-                        }
-                        return new Blob(byteArrays, {type: 'image/jpeg'});
-                    };
-                    var dt = new DataTransfer();
-                    for (var pi = 0; pi < base64Photos.length; pi++) {
-                        dt.items.add(new File([b64toBlob(base64Photos[pi])], 'photo_' + pi + '.jpg', {type: 'image/jpeg'}));
-                    }
-                    fileInput.files = dt.files;
-                    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-                    fileInput.dispatchEvent(new Event('input', { bubbles: true }));
-                    photoStatus = 'attached-' + base64Photos.length;
-                } catch(e) { photoStatus = 'error:' + e.message; }
-            }
-
             return 'OK'
                 + ' | title:' + (titleEl ? (titleEl.value.length > 0 ? 'filled' : 'empty') : 'not-found')
                 + ' | desc:' + (descEl ? (descEl.value.length > 0 ? 'filled' : 'empty') : 'not-found')
                 + ' | price:' + (priceEl ? (priceEl.value.length > 0 ? 'filled' : 'empty') : 'not-found')
                 + ' | condition:' + conditionTestId
-                + ' | shipping:' + shippingStatus
-                + ' | photos:' + photoStatus;
+                + ' | shipping:' + shippingStatus;
         """
 
         let args: [String: Any] = [
             "title": title,
             "description": description,
             "price": String(format: "%.0f", price),
-            "base64Photos": photoBase64Strings,
             "condition": condition
         ]
 
@@ -645,6 +650,25 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         if formNotMounted {
             status = .failed("Mercari form didn't load in time — tap the reload button and try again")
             return
+        }
+
+        // 1b. Photos — Mercari uploads them asynchronously and intermittently fails with a
+        //     "Something wrong happened" toast. Re-attaching almost always fixes it, so attach,
+        //     wait for the upload to settle, and retry several times before giving up.
+        if !photoBase64Strings.isEmpty {
+            var photosOK = false
+            for attempt in 1...4 {
+                let attachResult = await attachPhotos(photoBase64Strings)
+                print("[MercariPostingState] Photos attempt \(attempt): \(attachResult)")
+                // Let the async upload complete (or error). Larger sets take longer.
+                try? await Task.sleep(nanoseconds: 3_500_000_000)
+                if !(await outstandingIssues().contains("photo-upload-error")) {
+                    photosOK = true
+                    break
+                }
+                print("[MercariPostingState] Photo upload errored — re-attaching")
+            }
+            if !photosOK { print("[MercariPostingState] Photos still failing after retries") }
         }
 
         // 2. Category — the hard gate. The shipping carrier field stays disabled
@@ -1008,17 +1032,20 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
                 || (t.className && String(t.className).indexOf('checked') !== -1);
         }
         return (async function() {
-            var toggle = await waitFor(findToggle, 5000);
+            var toggle = await waitFor(findToggle, 8000);
             if (!toggle) { return 'not-found'; }
             if (!isOn(toggle)) { return 'was-off'; }
             var target = toggle.tagName === 'INPUT'
                 ? (document.querySelector('label[for="' + toggle.id + '"]') || toggle.closest('label') || toggle)
                 : toggle;
-            realClick(target);
-            toggle.dispatchEvent(new Event('change', { bubbles: true }));
-            var off = await waitFor(function() { return isOn(toggle) ? null : 'off'; }, 1500);
-            if (!off) { realClick(target); off = await waitFor(function() { return isOn(toggle) ? null : 'off'; }, 1500); }
-            return off ? 'disabled' : 'still-on';
+            // Retry the toggle a few times — the click sometimes lands before React wires it up.
+            for (var attempt = 0; attempt < 3; attempt++) {
+                realClick(target);
+                toggle.dispatchEvent(new Event('change', { bubbles: true }));
+                var off = await waitFor(function() { return isOn(toggle) ? null : 'off'; }, 1500);
+                if (off) { return 'disabled'; }
+            }
+            return 'still-on';
         })();
         """
         return (try? await webView.callJS(js)) as? String ?? "error"
@@ -1061,17 +1088,15 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
             return true;
         }
         return (async function() {
-            // Mercari renders the brand UI only after category + photo processing settle, so wait
-            // for either the suggested-brand chips or the search field before deciding — otherwise
-            // we'd report 'brand-ui-not-found' purely because we looked a beat too early.
-            await waitFor(function() {
-                return document.querySelector('[data-testid="SuggestedBrandSection"]')
-                    || document.querySelector('[data-testid="BrandSearchInput"], [data-testid="BrandInput"], input[placeholder*="brand" i]')
-                    || document.querySelector('[data-testid="NoBrandLink"]');
-            }, 8000);
+            // Wait specifically for the SERVER-SUGGESTED brand chips. They're generated from the
+            // title + photos and appear a beat after the rest of the brand UI, so waiting for "any
+            // brand UI" (search box / no-brand link) used to resolve early and wrongly pick "No
+            // brand". Give the suggestions a real window — they only show once photos finish.
+            var suggested = await waitFor(function() {
+                return document.querySelector('[data-testid="SuggestedBrandSection"]');
+            }, 12000);
 
             // Tier 1: Mercari's server-suggested brand chips.
-            var suggested = document.querySelector('[data-testid="SuggestedBrandSection"]');
             if (suggested) {
                 // Pick first chip that is NOT the "No brand / Not sure" option.
                 var chips = suggested.querySelectorAll('[data-testid^="SuggestedBrand-"]:not([data-testid="NoBrandLink"])');
@@ -1542,14 +1567,20 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
             });
         }
         return (async function() {
-            var radio = document.querySelector('input[type="radio"][value="' + targetValue + '"]');
+            var radio = await waitFor(function() {
+                return document.querySelector('input[type="radio"][value="' + targetValue + '"]');
+            }, 4000);
             if (!radio) { return 'radio-not-found'; }
             var label = document.querySelector('label[for="' + radio.id + '"]') || radio.closest('label') || radio;
-            realClick(label);
-            radio.dispatchEvent(new Event('change', { bubbles: true }));
+            // Retry the selection until the radio actually registers as checked.
+            for (var a = 0; a < 3 && !radio.checked; a++) {
+                realClick(label);
+                radio.dispatchEvent(new Event('change', { bubbles: true }));
+                await waitFor(function() { return radio.checked ? 'y' : null; }, 1000);
+            }
             var save = await waitFor(function() {
                 return document.querySelector('[data-testid="SelectCarrierSaveButton"]');
-            }, 3000);
+            }, 4000);
             if (!save) { return 'save-not-found'; }
             realClick(save);
             return 'saved';
