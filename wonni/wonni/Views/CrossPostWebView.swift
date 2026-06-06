@@ -24,6 +24,9 @@ struct CrossPostJob: Identifiable {
     let item: Item?
     /// Profile flow: existing published listings whose photos live only on Firebase Storage.
     let photoFirebasePaths: [String]
+    /// When true, the seller wants the buyer to pay shipping (Mercari "Offer free shipping? → No").
+    /// Defaults to false = free shipping (Mercari's own default).
+    let buyerPaysShipping: Bool
 
     init(
         platform: String,
@@ -32,7 +35,8 @@ struct CrossPostJob: Identifiable {
         price: Double,
         listingId: String? = nil,
         item: Item? = nil,
-        photoFirebasePaths: [String] = []
+        photoFirebasePaths: [String] = [],
+        buyerPaysShipping: Bool = false
     ) {
         self.platform = platform
         self.title = title
@@ -41,6 +45,7 @@ struct CrossPostJob: Identifiable {
         self.listingId = listingId
         self.item = item
         self.photoFirebasePaths = photoFirebasePaths
+        self.buyerPaysShipping = buyerPaysShipping
     }
 }
 
@@ -411,6 +416,15 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         webView.load(URLRequest(url: URL(string: "https://www.mercari.com/sell/")!))
     }
 
+    /// Accepts an already-posted Mercari listing (its ID was captured earlier or linked by hand)
+    /// rather than posting again. Prevents duplicate listings.
+    func acceptExisting(id: String) {
+        hasStartedInjection = true   // block any injection attempt
+        hasDetectedSuccess = true
+        mercariItemId = id
+        status = .success
+    }
+
     // MARK: WKNavigationDelegate
 
     nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -470,6 +484,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         lengthIn: Double?,
         widthIn: Double?,
         heightIn: Double?,
+        buyerPaysShipping: Bool,
         preferences: ShippingPreferences
     ) async {
         // Run exactly one injection pass per page load. Without this, overlapping passes raced each
@@ -660,6 +675,10 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
             preferences: preferences
         )
         print("[MercariPostingState] Shipping: \(shippingResult)")
+
+        // 5b. "Offer buyers free shipping?" — Yes (seller pays, the default) vs No (buyer pays).
+        let payerResult = await selectShippingPayer(buyerPays: buyerPaysShipping)
+        print("[MercariPostingState] ShippingPayer: \(payerResult)")
 
         // 5. Submit. Mercari disables its List button until the whole form validates, and
         //    submitListing() polls for that enabled state before clicking — so a missing category,
@@ -1218,6 +1237,51 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         })();
         """
         return (try? await webView.callJS(js)) as? String ?? "error:soyo"
+    }
+
+    /// Sets Mercari's "Offer buyers free shipping?" dropdown to match the seller's preference:
+    /// free shipping = "Yes (Recommended)" (seller pays, the default), buyer-pays = "No".
+    /// Opens the custom listbox (a div, not a native <select>) and clicks the option by testid.
+    private func selectShippingPayer(buyerPays: Bool) async -> String {
+        let js = """
+        function waitFor(fn, timeout, interval) {
+            timeout = timeout || 4000; interval = interval || 200;
+            return new Promise(function(resolve) {
+                var start = Date.now();
+                (function loop() {
+                    var r = null; try { r = fn(); } catch (e) {}
+                    if (r) { resolve(r); return; }
+                    if (Date.now() - start >= timeout) { resolve(null); return; }
+                    setTimeout(loop, interval);
+                })();
+            });
+        }
+        function realClick(el) {
+            if (!el) return;
+            ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(type) {
+                el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+            });
+        }
+        return (async function() {
+            // The trigger and the options <ul> share data-testid="ShippingPayerOption"; the trigger
+            // is the one with aria-haspopup="listbox".
+            var trigger = document.querySelector('[data-testid="ShippingPayerOption"][aria-haspopup="listbox"]')
+                || document.querySelector('#ShippingPayerOption[aria-haspopup="listbox"]');
+            if (!trigger) { return 'payer-field-not-found'; }
+            var currentlyNo = (trigger.textContent || '').trim().toLowerCase() === 'no';
+            if (buyerPays && currentlyNo) { return 'already-buyer-pays'; }
+            if (!buyerPays && !currentlyNo) { return 'already-free'; }
+            realClick(trigger);
+            var wantTestId = buyerPays ? 'FreeShippingNoButton' : 'FreeShippingYesButton';
+            var option = await waitFor(function() {
+                return document.querySelector('[data-testid="' + wantTestId + '"]');
+            }, 3000);
+            if (!option) { return 'option-not-found'; }
+            realClick(option);
+            return buyerPays ? 'set-buyer-pays' : 'set-free';
+        })();
+        """
+        return (try? await webView.callJS(js, args: ["buyerPays": buyerPays])) as? String ?? "error:payer"
     }
 
     /// Stage 1: open the shipping field, clear the "weigh accurately" interstitial, then either
@@ -1973,6 +2037,17 @@ struct MercariAutoPosterView: View {
     /// Pulls saved preferences from Firestore (so they sync to a new device), then either starts
     /// the autofill or collects preferences first if the seller has never set them.
     private func loadPreferencesThenStart() async {
+        // If this listing already has a Mercari ID (captured earlier, or linked by hand), it's
+        // already live — accept it instead of posting a duplicate.
+        if let listingId = job.listingId,
+           let doc = try? await Firestore.firestore().collection("listings").document(listingId).getDocument(),
+           let existingId = (doc.data()?["crossPostListingIds"] as? [String: String])?["mercari"],
+           !existingId.isEmpty {
+            print("[MercariAutoPosterView] Listing already on Mercari (\(existingId)) — accepting, not re-posting")
+            state.acceptExisting(id: existingId)
+            return
+        }
+
         // Firestore is the source of truth for cross-device sync; mirror into the local cache.
         if let remote = await IntegrationRepository.shared.loadMercariShippingPreferences() {
             acceptSuggestions = remote.acceptSuggestions
@@ -2042,6 +2117,7 @@ struct MercariAutoPosterView: View {
             lengthIn: job.item?.lengthIn,
             widthIn: job.item?.widthIn,
             heightIn: job.item?.heightIn,
+            buyerPaysShipping: job.buyerPaysShipping,
             preferences: preferences
         )
     }
@@ -2119,7 +2195,8 @@ final class MercariItemLoader: ObservableObject {
             var text = nd ? (nd.textContent || '') : '';
             if (text) {
                 var pm = text.match(/"price":\s*(\d+(?:\.\d+)?)/);
-                if (pm) out.price = parseFloat(pm[1]);
+                // Mercari stores the price in cents (e.g. 7000 = $70.00) — convert to dollars.
+                if (pm) out.price = parseFloat(pm[1]) / 100;
                 var sm = text.match(/"status":\s*"([a-zA-Z_]+)"/);
                 if (sm) out.status = sm[1];
                 var nm = text.match(/"name":\s*"([^"]+)"/);
