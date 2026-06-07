@@ -362,6 +362,7 @@ struct ProfileView: View {
                     listingToEdit = listing
                 }
             }
+            .navigationLinkIndicatorVisibility(.hidden)
             .tag(listing.id ?? "")
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 Button(role: .destructive) {
@@ -664,6 +665,7 @@ struct EditListingSheet: View {
     @State private var isLinkingMercari = false
     @State private var mercariLinkError: String?
     @State private var showMercariSync = false
+    @State private var showMercariEdit = false
 
     init(listing: UserListing, onSave: @escaping ([CrossPostJob]) -> Void) {
         self.listing = listing
@@ -807,9 +809,19 @@ struct EditListingSheet: View {
             .sheet(isPresented: $showMercariSync) {
                 if let id = linkedMercariId {
                     MercariSyncSheet(listing: listing, mercariId: id) {
-                        // Listing updated from Mercari — refresh the seller's list behind the sheet.
                         onSave([])
                     }
+                }
+            }
+            .sheet(isPresented: $showMercariEdit) {
+                if let id = linkedMercariId,
+                   let url = URL(string: "https://www.mercari.com/us/item/\(id)/") {
+                    MercariListingEditSheet(
+                        url: url,
+                        title: title.trimmingCharacters(in: .whitespaces),
+                        description: description.trimmingCharacters(in: .whitespaces),
+                        price: price ?? 0
+                    )
                 }
             }
             .alert("Cross-Post Failed", isPresented: $showCrossPostError, presenting: crossPostErrorMessage) { _ in
@@ -834,42 +846,21 @@ struct EditListingSheet: View {
     @ViewBuilder private var crossPostStatusSection: some View {
         Section {
             let statusMap = listing.crossPostStatus ?? [:]
-            let platforms = Set(statusMap.keys).union(linkedMercariId != nil ? ["mercari"] : []).sorted()
+            let platforms = Set(statusMap.keys)
+                .union(linkedMercariId != nil ? ["mercari"] : [])
+                .sorted()
 
             if platforms.isEmpty {
                 Text("Not cross-posted yet.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.secondary)
             } else {
                 ForEach(platforms, id: \.self) { platform in
-                    HStack(spacing: 8) {
-                        Text(platformDisplayName(platform))
-                        Spacer()
-                        crossPostStatusBadge(statusMap[platform] ?? (platform == "mercari" && linkedMercariId != nil ? "posted" : ""))
-                        if platform == "mercari", let id = linkedMercariId,
-                           let url = URL(string: "https://www.mercari.com/us/item/\(id)/") {
-                            Link("View", destination: url).font(.caption.weight(.semibold))
-                        }
-                    }
+                    crossPostPlatformRow(platform: platform, statusMap: statusMap)
                 }
             }
 
-            // Manual Mercari linking — attach an item ID when capture missed it.
-            if let id = linkedMercariId {
-                HStack {
-                    Label("Mercari listing linked", systemImage: "checkmark.circle.fill")
-                        .font(.caption).foregroundStyle(.green)
-                    Spacer()
-                    Button("Change") { linkedMercariId = nil; mercariLinkError = nil }
-                        .font(.caption)
-                }
-                .accessibilityLabel("Mercari item \(id) linked")
-                Button {
-                    showMercariSync = true
-                } label: {
-                    Label("Sync from Mercari", systemImage: "arrow.triangle.2.circlepath")
-                }
-            } else {
+            // Manual Mercari link input when no Mercari ID is saved.
+            if linkedMercariId == nil {
                 VStack(alignment: .leading, spacing: 6) {
                     TextField("Paste Mercari listing link", text: $mercariLinkInput)
                         .textInputAutocapitalization(.never)
@@ -891,8 +882,57 @@ struct EditListingSheet: View {
             }
         } header: {
             Text("Cross-post status")
-        } footer: {
-            Text("Marketplaces this listing is posted to, with status. Paste a Mercari listing link to connect a post that wasn't linked automatically.")
+                .textCase(nil)
+        }
+    }
+
+    @ViewBuilder
+    private func crossPostPlatformRow(platform: String, statusMap: [String: String]) -> some View {
+        let status = statusMap[platform] ?? (platform == "mercari" && linkedMercariId != nil ? "posted" : "")
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(platformDisplayName(platform))
+                    .font(.subheadline)
+                Spacer()
+                crossPostStatusBadge(status)
+                if platform == "mercari", let id = linkedMercariId,
+                   let url = URL(string: "https://www.mercari.com/us/item/\(id)/") {
+                    Link("View", destination: url)
+                        .font(.caption.weight(.semibold))
+                } else if platform == "ebay",
+                          let id = listing.crossPostListingIds?["ebay"],
+                          let url = URL(string: "https://www.ebay.com/itm/\(id)") {
+                    Link("View", destination: url)
+                        .font(.caption.weight(.semibold))
+                }
+            }
+            if platform == "mercari", linkedMercariId != nil {
+                HStack {
+                    Button { showMercariEdit = true } label: {
+                        Label("Edit", systemImage: "pencil")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                    Spacer()
+                    Button { showMercariSync = true } label: {
+                        Label("Sync", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                }
+            }
+        }
+        .contextMenu {
+            if platform == "mercari", linkedMercariId != nil {
+                Button(role: .destructive) {
+                    linkedMercariId = nil
+                    mercariLinkError = nil
+                } label: {
+                    Label("Unlink Mercari listing", systemImage: "xmark.circle")
+                }
+            }
         }
     }
 
@@ -976,9 +1016,26 @@ struct EditListingSheet: View {
             
             let added = selectedPlatforms.subtracting(initialPlatforms)
             let removed = initialPlatforms.subtracting(selectedPlatforms)
-            
+            let alreadyPosted = initialPlatforms.intersection(selectedPlatforms)
+
             var newWebJobs: [CrossPostJob] = []
-            
+
+            // Push edits to already-live eBay listings.
+            if alreadyPosted.contains("ebay") {
+                Task {
+                    do {
+                        let functions = Functions.functions()
+                        let _ = try await functions.httpsCallable("ebayUpdateListing").call(["listingId": id])
+                        print("[EditListingSheet] ebayUpdateListing succeeded for \(id)")
+                    } catch {
+                        print("[EditListingSheet] ebayUpdateListing failed: \(error)")
+                        let msg = extractCrossPostErrorMessage(error)
+                        crossPostErrorMessage = msg
+                        showCrossPostError = true
+                    }
+                }
+            }
+
             for platform in added {
                 if platform == "ebay" {
                     Task {
@@ -1199,6 +1256,7 @@ struct SettingsSheet: View {
     @State private var activeSession: ASWebAuthenticationSession?
     @State private var anchorProvider = WebAuthPresentationAnchor()
     @State private var showMercariLogin = false
+    @State private var showEtsyConnect = false
     
     // Selling Settings State
     @StateObject private var settingsRepo = SellingSettingsRepository.shared
@@ -1454,6 +1512,11 @@ struct SettingsSheet: View {
             .sheet(isPresented: $showMercariLogin) {
                 MercariConnectSheet()
             }
+            .sheet(isPresented: $showEtsyConnect, onDismiss: {
+                Task { await integrationRepo.loadIntegrations() }
+            }) {
+                EtsyConnectView()
+            }
         }
     }
 
@@ -1464,6 +1527,8 @@ struct SettingsSheet: View {
             startEbayOAuth()
         } else if integration.platform == "mercari" {
             showMercariLogin = true
+        } else if integration.platform == "etsy" {
+            showEtsyConnect = true
         } else {
             selectedPlatformToLink = integration.platform
             showLinkAlert = true
