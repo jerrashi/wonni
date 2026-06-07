@@ -20,32 +20,40 @@ struct DraftsStackIcon: View {
     var cache: CachedImageManager
     var bouncing: Bool = false
 
+    private static let cardW: CGFloat = 30
+    private static let cardH: CGFloat = 38
+    private static let rotations: [Double] = [-14, 0, 14]
+
     var body: some View {
-        let assets: [PhotoAsset] = drafts.compactMap {
+        // Always show 3 slots. Most recent draft = top (index 2 in ZStack = rendered on top).
+        let allAssets: [PhotoAsset] = drafts.compactMap {
             $0.sourceAssetIdentifiers.first.map(PhotoAsset.init(identifier:))
         }
-        let topAssets = Array(assets.prefix(3))
+        // suffix(3) keeps the 3 newest; pad the front with nils for empty ghost cards.
+        let recent = Array(allAssets.suffix(3))
+        let slots: [PhotoAsset?] = Array(repeating: nil, count: 3 - recent.count) + recent.map { .some($0) }
 
         ZStack {
-            if topAssets.isEmpty {
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color(.systemGray2))
-                    .frame(width: 35, height: 45)
-            } else {
-                ForEach(topAssets.indices, id: \.self) { index in
-                    let asset = topAssets[index]
-                    let rotation = index == 0 ? -15.0 : (index == 1 ? 0.0 : 15.0)
-                    let xOffset  = index == 0 ? -1.0  : (index == 1 ? 0.0  : 1.0)
-                    PhotoItemView(asset: asset, cache: cache, imageSize: CGSize(width: 70, height: 90))
-                        .scaledToFill()
-                        .frame(width: 35, height: 45)
-                        .cornerRadius(4)
-                        .rotationEffect(.degrees(topAssets.count > 1 ? rotation : 0), anchor: .bottom)
-                        .shadow(color: .black.opacity(0.2), radius: 2, x: xOffset, y: 1)
+            ForEach(0..<3, id: \.self) { index in
+                let rotation = Self.rotations[index]
+                Group {
+                    if let asset = slots[index] {
+                        PhotoItemView(asset: asset, cache: cache,
+                                      imageSize: CGSize(width: Self.cardW * 2, height: Self.cardH * 2))
+                            .scaledToFill()
+                            .frame(width: Self.cardW, height: Self.cardH)
+                            .cornerRadius(4)
+                    } else {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color(.systemGray2))
+                            .frame(width: Self.cardW, height: Self.cardH)
+                    }
                 }
+                .rotationEffect(.degrees(rotation), anchor: .bottom)
+                .shadow(color: .black.opacity(0.18), radius: 2, x: 0, y: 1)
             }
         }
-        .frame(width: 60, height: 60)
+        .frame(width: 70, height: 62)
         .scaleEffect(bouncing ? 1.25 : 1.0)
         .animation(.spring(response: 0.35, dampingFraction: 0.45), value: bouncing)
     }
@@ -110,7 +118,6 @@ struct CustomPhotoPickerView: View {
         @State private var navigateToOverview = false
         @State private var showingDraftHistory = false
         @State private var hidePreviouslySelected = false
-        @State private var showingExitAlert = false
         @Environment(\.dismiss) private var dismiss
 
         @Environment(\.modelContext) private var modelContext
@@ -223,16 +230,11 @@ struct CustomPhotoPickerView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button {
                         if addingToExistingDraft {
-                            // Commit active draft and go back to overview
                             if uploadManager.activeDraftID != nil {
                                 uploadManager.commitActiveDraft(modelContext: modelContext)
                             }
-                            dismiss()
-                        } else if uploadManager.sessionDraftIDs.isEmpty && uploadManager.activeDraftID == nil {
-                            dismiss()
-                        } else {
-                            showingExitAlert = true
                         }
+                        dismiss()
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "chevron.left")
@@ -277,26 +279,6 @@ struct CustomPhotoPickerView: View {
             }
             .sheet(isPresented: $showingDraftHistory) {
                 DraftHistoryModal(photoCollection: photoCollection)
-            }
-            .alert("Save Drafts?", isPresented: $showingExitAlert) {
-                Button("Discard", role: .destructive) {
-                    // Discard active draft
-                    if let activeID = uploadManager.activeDraftID,
-                       let draft = allItems.first(where: { $0.id == activeID }) {
-                        uploadManager.deleteDraftLocallyAndCloud(draft: draft, modelContext: modelContext)
-                        uploadManager.activeDraftID = nil
-                    }
-                    // Discard session committed drafts
-                    for draft in allItems where uploadManager.sessionDraftIDs.contains(draft.id) {
-                        uploadManager.deleteDraftLocallyAndCloud(draft: draft, modelContext: modelContext)
-                    }
-                    uploadManager.sessionDraftIDs.removeAll()
-                    dismiss()
-                }
-                Button("Save") { dismiss() }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("You have created drafts in this session. Would you like to save or discard them?")
             }
             .navigationDestination(isPresented: $navigateToOverview) {
                 BulkListingOverviewView(sessionDraftIDs: uploadManager.sessionDraftIDs)
@@ -917,6 +899,7 @@ struct DraftRow: View {
 
     @Environment(\.modelContext) private var modelContext
     @State private var priceText: String = ""
+    @State private var showDescriptionEditor = false
 
     private var titleBinding: Binding<String> {
         Binding(
@@ -985,20 +968,25 @@ struct DraftRow: View {
             }
 
             // ── Description (full width) ────────────────────────────────────
-            let isDescFocused = focusedField.wrappedValue == DraftFocusField(itemID: item.id, field: .description)
-            TextField("Add description…", text: descriptionBinding, axis: .vertical)
-                .lineLimit(isDescFocused ? 10 : 2)
-                .font(.caption)
-                .foregroundStyle(item.userEditedDescription != nil ? .primary : .secondary)
-                .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .description))
-                .padding(8)
-                .background(item.originalUserDescriptionBeforeAI != nil ? Color.purple.opacity(0.08) : Color(.systemGray6))
-                .cornerRadius(8)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(item.originalUserDescriptionBeforeAI != nil ? Color.purple.opacity(0.2) : Color.clear, lineWidth: 1)
-                )
-                .animation(.easeInOut(duration: 0.2), value: isDescFocused)
+            let descText = descriptionBinding.wrappedValue
+            Button { showDescriptionEditor = true } label: {
+                Text(descText.isEmpty ? "Add description…" : descText)
+                    .lineLimit(2)
+                    .font(.caption)
+                    .foregroundStyle(descText.isEmpty ? Color(.placeholderText) : (item.userEditedDescription != nil ? .primary : .secondary))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(item.originalUserDescriptionBeforeAI != nil ? Color.purple.opacity(0.08) : Color(.systemGray6))
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(item.originalUserDescriptionBeforeAI != nil ? Color.purple.opacity(0.2) : Color.clear, lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .sheet(isPresented: $showDescriptionEditor) {
+                DescriptionEditorSheet(text: descriptionBinding, hasAIPurple: item.originalUserDescriptionBeforeAI != nil)
+            }
 
             // ── AI badge / undo row ─────────────────────────────────────────
             let hasAIEdits = item.originalUserTitleBeforeAI != nil || item.originalUserDescriptionBeforeAI != nil
@@ -1384,6 +1372,33 @@ struct DraftEditSheet: View {
             return true
         }
     }
+
+// MARK: - DescriptionEditorSheet
+private struct DescriptionEditorSheet: View {
+    var text: Binding<String>
+    var hasAIPurple: Bool
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        NavigationStack {
+            TextEditor(text: text)
+                .focused($focused)
+                .font(.body)
+                .padding(.horizontal, 12)
+                .padding(.top, 4)
+                .background(hasAIPurple ? Color.purple.opacity(0.05) : Color(.systemBackground))
+                .navigationTitle("Description")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
+                }
+        }
+        .onAppear { focused = true }
+    }
+}
 
 // MARK: - BulkListingOverviewView (Drafts)
 struct BulkListingOverviewView: View {
