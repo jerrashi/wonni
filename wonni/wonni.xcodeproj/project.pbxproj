@@ -38,6 +38,7 @@
 		61EE007D2D778EFA006063C3 /* Listing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61EE007C2D778EFA006063C3 /* Listing.swift */; };
 		61F0F0022FB022A0001C28CE /* IntegrationRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61F0F0012FB022A0001C28CE /* IntegrationRepository.swift */; };
 		61F0F0042FB022A0001C28CE /* CrossPostWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61F0F0032FB022A0001C28CE /* CrossPostWebView.swift */; };
+		61E75A012FC100A000D4B3F1 /* EtsyConnectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61E75A002FC100A000D4B3F1 /* EtsyConnectView.swift */; };
 		61FAA54A2FAA8F80001C28CE /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 61FAA5492FAA8F80001C28CE /* FirebaseAuth */; };
 		61FAA54C2FAA8F80001C28CE /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 61FAA54B2FAA8F80001C28CE /* FirebaseFirestore */; };
 		61FAA54E2FAA8F80001C28CE /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 61FAA54D2FAA8F80001C28CE /* FirebaseStorage */; };
@@ -97,6 +98,7 @@
 		61EE007C2D778EFA006063C3 /* Listing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Listing.swift; sourceTree = "<group>"; };
 		61F0F0012FB022A0001C28CE /* IntegrationRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegrationRepository.swift; sourceTree = "<group>"; };
 		61F0F0032FB022A0001C28CE /* CrossPostWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossPostWebView.swift; sourceTree = "<group>"; };
+		61E75A002FC100A000D4B3F1 /* EtsyConnectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EtsyConnectView.swift; sourceTree = "<group>"; };
 		61FAA54F2FAA9041001C28CE /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		61FAA5622FAE216D001C28CE /* CatalogItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatalogItem.swift; sourceTree = "<group>"; };
 		61FAA5632FAE216D001C28CE /* InventoryUnit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InventoryUnit.swift; sourceTree = "<group>"; };
@@ -225,6 +227,7 @@
 				6192AA5F2D7F583E00EC2EFA /* ProfileView.swift */,
 				6192AA612D7F585C00EC2EFA /* InboxView.swift */,
 				61F0F0032FB022A0001C28CE /* CrossPostWebView.swift */,
+				61E75A002FC100A000D4B3F1 /* EtsyConnectView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -376,6 +379,7 @@
 				A1B2C3D4E5F6A7B82E9D0001 /* ActiveDraftCarouselView.swift in Sources */,
 				61F0F0022FB022A0001C28CE /* IntegrationRepository.swift in Sources */,
 				61F0F0042FB022A0001C28CE /* CrossPostWebView.swift in Sources */,
+				61E75A012FC100A000D4B3F1 /* EtsyConnectView.swift in Sources */,
 				AA0011223344556677AABBDD /* CategoryMappingRepository.swift in Sources */,
 				AA0011223344556677AABBFF /* MercariObservedDataRepository.swift in Sources */,
 			);

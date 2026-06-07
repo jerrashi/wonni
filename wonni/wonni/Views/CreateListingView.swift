@@ -881,38 +881,31 @@ struct CustomPhotoPickerView: View {
 struct TitleCharCountView: View {
     let count: Int
 
-    private var isVisible: Bool { count >= 65 }
-
     private var color: Color {
         if count > 140 { return Color(red: 0.75, green: 0.0, blue: 0.0) }
         if count > 99  { return .red }
-        if count > 80  { return .yellow }
+        if count > 80  { return .orange }
         return .secondary
     }
 
     private var message: String? {
         if count > 140 { return "Truncated on all platforms" }
         if count > 99  { return "Only shows fully on Etsy" }
-        if count > 80  { return "Only shows fully on Facebook & Etsy" }
+        if count > 80  { return "Facebook & Etsy only" }
         return nil
     }
 
     var body: some View {
-        if isVisible {
-            HStack(spacing: 4) {
-                if let msg = message {
-                    Image(systemName: count > 99 ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .font(.caption2)
-                    Text(msg)
-                        .font(.caption2)
-                }
-                Spacer()
-                Text("\(count)")
-                    .font(.caption2.monospacedDigit().weight(count > 80 ? .semibold : .regular))
+        HStack(spacing: 4) {
+            if let msg = message {
+                Text(msg).font(.caption2)
             }
-            .foregroundStyle(color)
-            .animation(.easeInOut(duration: 0.2), value: count)
+            Spacer()
+            Text("\(count)")
+                .font(.caption2.monospacedDigit().weight(count > 80 ? .semibold : .regular))
         }
+        .foregroundStyle(color)
+        .animation(.easeInOut(duration: 0.2), value: count)
     }
 }
 
@@ -992,8 +985,9 @@ struct DraftRow: View {
             }
 
             // ── Description (full width) ────────────────────────────────────
+            let isDescFocused = focusedField.wrappedValue == DraftFocusField(itemID: item.id, field: .description)
             TextField("Add description…", text: descriptionBinding, axis: .vertical)
-                .lineLimit(2)
+                .lineLimit(isDescFocused ? 10 : 2)
                 .font(.caption)
                 .foregroundStyle(item.userEditedDescription != nil ? .primary : .secondary)
                 .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .description))
@@ -1004,6 +998,7 @@ struct DraftRow: View {
                     RoundedRectangle(cornerRadius: 8)
                         .stroke(item.originalUserDescriptionBeforeAI != nil ? Color.purple.opacity(0.2) : Color.clear, lineWidth: 1)
                 )
+                .animation(.easeInOut(duration: 0.2), value: isDescFocused)
 
             // ── AI badge / undo row ─────────────────────────────────────────
             let hasAIEdits = item.originalUserTitleBeforeAI != nil || item.originalUserDescriptionBeforeAI != nil
@@ -1578,6 +1573,8 @@ struct ProcessResultsOverviewView: View {
     @State private var selectedIDs: Set<UUID> = []
     @State private var showingEditSheet: Item? = nil
     @FocusState private var focusedField: DraftFocusField?
+    /// Measured height of the List container, used to compute per-item description size.
+    @State private var listHeight: CGFloat = 0
 
     @State private var showPublishConfirmation = false
     @State private var webAutofillQueue: [CrossPostJob] = []
@@ -1613,7 +1610,8 @@ struct ProcessResultsOverviewView: View {
                         isSelected: selectedIDs.contains(item.id),
                         onToggle: { toggleSelection(item) },
                         focusedField: $focusedField,
-                        isGeminiFailed: uploadManager.processingFailedIDs.contains(item.id)
+                        isGeminiFailed: uploadManager.processingFailedIDs.contains(item.id),
+                        descriptionLineLimit: descriptionLineLimit
                     )
                 }
                 .onDelete { offsets in
@@ -1623,6 +1621,9 @@ struct ProcessResultsOverviewView: View {
                 }
             }
             .listStyle(.plain)
+            .background(GeometryReader { geo in
+                Color.clear.onAppear { listHeight = geo.size.height }
+            })
             .onAppear { selectedIDs = Set(results.map { $0.id }) }
 
             // ── Bottom action bar ────────────────────────────────────────
@@ -1852,6 +1853,19 @@ struct ProcessResultsOverviewView: View {
     private func toggleSelection(_ item: Item) {
         if selectedIDs.contains(item.id) { selectedIDs.remove(item.id) }
         else { selectedIDs.insert(item.id) }
+    }
+
+    private var descriptionLineLimit: Int {
+        guard !results.isEmpty, listHeight > 0 else { return 4 }
+        let count = CGFloat(results.count)
+        let bottomBarH: CGFloat = 72
+        let processingBannerH: CGFloat = uploadManager.isProcessing ? 50 : 0
+        let perRowFixedH: CGFloat = 120
+        let lineH: CGFloat = 17
+        let descPaddingH: CGFloat = 16
+        let totalFixed = perRowFixedH * count + bottomBarH + processingBannerH
+        let perItemDescH = (listHeight - totalFixed) / count
+        return max(3, Int((perItemDescH - descPaddingH) / lineH))
     }
 
     private var focusedIndex: Int? {
@@ -2101,6 +2115,8 @@ struct ResultDraftRow: View {
     let onToggle: () -> Void
     var focusedField: FocusState<DraftFocusField?>.Binding
     var isGeminiFailed: Bool = false
+    /// Minimum lines for the description field; computed from available screen height.
+    var descriptionLineLimit: Int = 4
 
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var uploadManager: UploadManager
@@ -2189,11 +2205,13 @@ struct ResultDraftRow: View {
             }
 
             // ── Description (full width) ────────────────────────────────────
+            let isDescFocused = focusedField.wrappedValue == DraftFocusField(itemID: item.id, field: .description)
             TextField("Description", text: descriptionBinding, axis: .vertical)
-                .lineLimit(2)
+                .lineLimit(isDescFocused ? nil : descriptionLineLimit)
                 .font(.caption)
                 .foregroundStyle(item.userEditedDescription != nil ? .primary : .secondary)
                 .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .description))
+                .animation(.easeInOut(duration: 0.2), value: isDescFocused)
                 .padding(8)
                 .background(item.originalUserDescriptionBeforeAI != nil ? Color.purple.opacity(0.08) : Color(.systemGray6))
                 .cornerRadius(8)

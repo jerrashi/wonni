@@ -1918,15 +1918,65 @@ struct MercariAutoPosterView: View {
     @AppStorage("mercariPrefsConfigured") private var prefsConfigured = false
     @State private var showPrefSetup = false
 
+    // True when the user must see and interact with the live Mercari page.
+    // In all other states (loading, injecting, success, loginRequired) we hide the WebView
+    // behind a clean progress UI — the WebView stays mounted so JS keeps running.
+    private var requiresUserInteraction: Bool {
+        switch state.status {
+        case .waitingForCategory, .failed: return true
+        default: return false
+        }
+    }
+
+    @ViewBuilder private var headlessOverlay: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            switch state.status {
+            case .loading:
+                ProgressView().scaleEffect(1.2)
+                Text("Connecting to Mercari…")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            case .injecting:
+                ProgressView().scaleEffect(1.2)
+                VStack(spacing: 10) {
+                    Text("Posting your listing…")
+                        .font(.headline)
+                    Text("Autofilling photos, title, price, category, and shipping.\nThis takes about 30–60 seconds.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                }
+            case .success:
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 52)).foregroundStyle(.green)
+                Text("Listed on Mercari!")
+                    .font(.title2.weight(.semibold))
+            default:
+                EmptyView()
+            }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+    }
+
     var body: some View {
         NavigationStack {
             ZStack(alignment: .top) {
+                // WebView always mounted — JS execution stops if it leaves the hierarchy.
                 MercariSheetWebView(webView: state.webView)
-                VStack(spacing: 0) {
-                    statusBanner
-                    if let warning = state.warning {
-                        warningBanner(warning)
+
+                if requiresUserInteraction {
+                    // Show the live page with interactive status banners.
+                    VStack(spacing: 0) {
+                        statusBanner
+                        if let warning = state.warning {
+                            warningBanner(warning)
+                        }
                     }
+                } else {
+                    // Cover the WebView with a clean progress/result UI.
+                    headlessOverlay
                 }
             }
             .navigationTitle("Post to Mercari")
@@ -1966,7 +2016,15 @@ struct MercariAutoPosterView: View {
         }
         .onChange(of: state.latestSubmitResult) { _, result in
             guard result != nil else { return }
-            Task { await writeMercariPending() }
+            Task {
+                await writeMercariPending()
+                // Give pollForSuccessModal a window to detect the success screen and set status.
+                // If it doesn't fire (Mercari DOM change or unexpected modal text), force-close.
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                guard state.status != .success else { return }
+                await updateFirestore()
+                dismiss()
+            }
         }
     }
 
@@ -2186,6 +2244,100 @@ struct MercariSheetWebView: UIViewRepresentable {
     let webView: WKWebView
     func makeUIView(context: Context) -> WKWebView { webView }
     func updateUIView(_ uiView: WKWebView, context: Context) {}
+}
+
+// MARK: - MercariListingEditSheet
+
+/// Opens the seller's existing Mercari listing page in a web view so they can tap Edit and
+/// update it. Provides clipboard access to the current Wonni values as a reference.
+struct MercariListingEditSheet: View {
+    let url: URL
+    let title: String
+    let description: String
+    let price: Double
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var webView: WKWebView = {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = WKWebsiteDataStore.default()
+        let wv = WKWebView(frame: .zero, configuration: config)
+        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        return wv
+    }()
+    @State private var showClipboardNotification = false
+    @State private var notificationText = ""
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                VStack(spacing: 0) {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Title").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
+                            Text(title).font(.subheadline).lineLimit(1)
+                        }
+                        .onTapGesture { copyToClipboard(title, label: "Title") }
+
+                        Divider().frame(height: 24)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Price").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
+                            Text(String(format: "$%.2f", price)).font(.subheadline.weight(.semibold))
+                        }
+                        .onTapGesture { copyToClipboard(String(format: "%.0f", price), label: "Price") }
+
+                        Divider().frame(height: 24)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Description").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
+                            Text(description).font(.subheadline).lineLimit(1)
+                        }
+                        .onTapGesture { copyToClipboard(description, label: "Description") }
+                    }
+                    .padding()
+                    .background(Color(.systemBackground))
+                    .overlay(Rectangle().frame(height: 1).foregroundStyle(Color(.separator)), alignment: .bottom)
+
+                    CrossPostWebView(url: url, webView: webView)
+                }
+
+                if showClipboardNotification {
+                    VStack {
+                        Text(notificationText)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.vertical, 8).padding(.horizontal, 16)
+                            .background(Color.black.opacity(0.85))
+                            .clipShape(Capsule())
+                            .padding(.top, 20)
+                        Spacer()
+                    }
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .navigationTitle("Update Mercari Listing")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button { webView.reload() } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+            }
+        }
+    }
+
+    private func copyToClipboard(_ text: String, label: String) {
+        UIPasteboard.general.string = text
+        notificationText = "Copied \(label)!"
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) { showClipboardNotification = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            withAnimation { showClipboardNotification = false }
+        }
+    }
 }
 
 // MARK: - Mercari Sync (Level 1)
