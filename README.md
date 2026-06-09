@@ -88,10 +88,11 @@ All data lives in Firebase:
 
 | Service | Purpose |
 |---|---|
-| **Firestore** | Listings, users, conversations, messages, favorites, search history |
+| **Firestore** | Listings, users, sales, conversations, messages, favorites, search history |
 | **Firebase Storage** | Listing photos at `users/{userId}/{listingId}/{index}.jpg` |
 | **Firebase Auth** | Sign In with Apple + email/password |
 | **Firebase AI (Gemini)** | Item identification from photos — model `gemini-1.5-flash` via `.googleAI()` backend |
+| **Cloud Functions (Node.js)** | eBay/Etsy OAuth, cross-posting, listing sync, sale sync (`syncSales`) |
 
 ### Data Layer (`wonni/Data/`)
 
@@ -102,6 +103,7 @@ All data lives in Firebase:
 | `GeminiService.swift` | Item identification from `[UIImage]` → `GeminiIdentificationResponse` |
 | `ConversationRepository.swift` | Conversations + messages, offer flow, real-time listeners |
 | `SearchRepository.swift` | Trending, search history, saved searches, prefix-match listing search |
+| `SaleRepository.swift` | Fetch + delete sales ordered by `soldAt DESC`, filtered by `userId` |
 | `UploadManager.swift` | Orchestrates draft → upload → Gemini → publish flow |
 | `AuthManager.swift` | Firebase Auth state, sign-in/sign-out |
 | `ImageCompressor.swift` | Resize images before Storage upload |
@@ -111,6 +113,7 @@ All data lives in Firebase:
 | File | Key Types |
 |---|---|
 | `UserListing.swift` | `UserListing`, `ListingStatus`, `ItemCondition` |
+| `Sale.swift` | `Sale`, `SaleStatus`, `SaleAddress` — sales records with take-home breakdown |
 | `CatalogItem.swift` | Shared product catalog (future — referenced by `catalogItemId`) |
 | `InventoryUnit.swift` | Per-unit inventory tracking |
 
@@ -246,10 +249,24 @@ expiresAt: <Timestamp>   (optional, omit for permanent)
 - `PlatformStatusBadge`: per-platform posted / pending / failed indicators on listing rows
 - `PublishConfirmationSheet` / `BulkCrossPostSheet`: platform selection with API vs autofill labels
 
+**Sales Dashboard**
+- `SalesDashboardView` — sales list with summary cards (count / revenue / take-home), platform filter chips, per-sale row with cover photo, take-home hint, and status badge
+- `SaleDetailSheet` — full P&L breakdown: item price, shipping charged to buyer, shipping label cost, take-home; ship-to address with copy button; editable carrier / tracking / status
+- `SaleRepository.swift` + `Sale.swift` / `SaleStatus` / `SaleAddress` models
+- `syncSales` Cloud Function (`functions/sale_poller.js`):
+  - Fetches eBay orders via Fulfillment API (`/sell/fulfillment/v1/order`); matches to Wonni listings by `platformListingId`
+  - **Take-home**: Finances API paginated up to 5 × 20 transactions, filtered client-side by `orderId` (eBay ignores the server-side filter); uses `SALE.amount` (already net of fees) minus each `SHIPPING_LABEL` cost
+  - **Tracking**: `/sell/fulfillment/v1/order/{id}/shipping_fulfillment`, field `shipmentTrackingNumber`; stores latest fulfillment and full `shippingFulfillments` array
+  - **Addresses**: ship-to address from `fulfillmentStartInstructions[].shippingStep.shipTo.contactAddress`; `buyerRegisteredAddress` stored separately as bonus data
+  - **Revenue split**: `priceSoldFor` = `pricingSummary.priceSubtotal` (item only); `shippingRevenue` = `pricingSummary.deliveryCost`
+  - Re-sync / backfill updates tracking, take-home, addresses, and revenue split on all existing orders
+- Firestore `sales` collection with owner-only security rule
+- Composite index: `sales` collection, `userId ASC + soldAt DESC`
+
 **Backend / Infrastructure**
-- Firestore rules: listings, inventory, conversations, messages, users + all subcollections, trending
+- Firestore rules: listings, inventory, sales, conversations, messages, users + all subcollections, trending
 - Firebase Storage rules: `users/{userId}/**` owner-write + authenticated read
-- Composite Firestore indexes: feed query, promotions query
+- Composite Firestore indexes: feed query, promotions query, sales query
 - Gemini AI: `gemini-1.5-flash` model, resizes images to 1024px before sending
 
 ---
@@ -318,6 +335,8 @@ graph TD
   When "who pays shipping" changes in Wonni, automatically update the eBay fulfillment policy and Etsy shipping profile instead of showing a manual reminder. Requires creating/managing platform shipping profiles via API.
 - [ ] **eBay Webhooks (Commerce Notifications API)**  
   Replace the manual sync button for sales with real-time eBay push notifications. Requires registering a webhook endpoint, mapping eBay order IDs to Wonni listing IDs, and handling notification verification. See eBay Commerce Notifications API docs.
+- [ ] **Voided eBay shipping label refund handling**  
+  When a label is voided, eBay eventually posts a refund via the Finances API. If it comes back as a **negative `SHIPPING_LABEL`** transaction, `ebayFetchTakeHome` in `sale_poller.js` already self-corrects (subtracting a negative = adding back). If it posts as a **`CREDIT`** transaction type, handling for that type needs to be added. An affected order (two SHIPPING_LABEL entries, one voided) can be rescanned once the credit appears; check the `[ebayFetchTakeHome]` log lines to confirm the transaction type and sign.
 - [ ] **Listing shipping-address field**  
   Add a ship-from address to `Item`/`Listing` so Mercari cross-post can auto-fill the required "shipping address" (currently relies on the Mercari account's saved address loading in time). Needed because the Mercari sell form requires an address before listing.
 - [ ] **Mercari Smart Pricing preference**  
@@ -359,6 +378,24 @@ graph TD
   Identify high-demand, low-supply items in the catalog (e.g., items that sell instantly or have massive waitlists).
 - [ ] **White-Label Production**  
   Spin up specialized storefronts around specific niches (e.g., a dedicated eBay collectibles store, a daily-use items store) using owned or direct-manufactured white-label goods.
+
+---
+
+## Quick Reference for Claude Code
+
+**Stack:** SwiftUI + Firebase (Auth, Firestore, Storage, AI/Gemini) · Cloud Functions (Node.js)
+
+**Project root:** `wonni/wonni.xcodeproj` — all source under `wonni/wonni/`
+
+**Key conventions:**
+- New `Data/` files must be registered in `wonni.xcodeproj/project.pbxproj` (4 places: PBXBuildFile, PBXFileReference, Data group, PBXSourcesBuildPhase)
+- New `Views/` files already in the project do not need pbxproj edits; new view files do
+- Firebase Storage paths: `users/{userId}/{listingId}/{index}.jpg` — permanent from upload, no temp paths
+- Listings pre-generate their Firestore ID client-side (UUID) so Storage path is known before the Firestore write
+- Avoid composite Firestore indexes where possible — use single-field queries + client-side sort; add to `firestore.indexes.json` when a compound query is unavoidable
+- New Firestore collections need an explicit security rule or all client reads/writes will be silently denied (Admin SDK bypasses rules; client SDK enforces them)
+- SourceKit errors ("No such module 'FirebaseAI'", etc.) after edits are stale index noise — not real build errors
+- Deploy rules/indexes/functions: `cd wonni && firebase deploy --only firestore:rules,firestore:indexes,storage` or `--only functions:<name>`
 
 ---
 
