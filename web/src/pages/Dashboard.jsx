@@ -1,8 +1,139 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { collection, query, where, orderBy, onSnapshot } from "firebase/firestore";
 import { db, callFunction } from "../firebase";
 import { auth } from "../firebase";
 import Layout from "../components/Layout";
+
+// ── List Modal ────────────────────────────────────────────────────────────────
+
+function ListModal({ product, onClose, onListed }) {
+  const [title, setTitle] = useState(product.title.slice(0, 255));
+  const [price, setPrice] = useState(
+    ((product.suggestedSellPrice ?? product.aliexpressPrice * 2.5) || 0).toFixed(2)
+  );
+  const [categories, setCategories] = useState([]);
+  const [loadingCats, setLoadingCats] = useState(true);
+  const [catSearch, setCatSearch] = useState("");
+  const [selectedCat, setSelectedCat] = useState(null);
+  const [listing, setListing] = useState(false);
+  const [error, setError] = useState("");
+  const listRef = useRef(null);
+
+  useEffect(() => {
+    callFunction("getTiktokCategories")({})
+      .then((r) => setCategories(r.data.categories ?? []))
+      .catch(() => setError("Could not load TikTok categories. Is TikTok Shop connected?"))
+      .finally(() => setLoadingCats(false));
+  }, []);
+
+  const filtered = catSearch
+    ? categories.filter((c) => c.name.toLowerCase().includes(catSearch.toLowerCase()))
+    : categories;
+
+  async function handleSubmit() {
+    if (!selectedCat) { setError("Select a category to continue."); return; }
+    setListing(true);
+    setError("");
+    try {
+      await callFunction("tiktokCreateListing")({
+        productId: product.id,
+        title: title.slice(0, 255),
+        sellPrice: parseFloat(price),
+        categoryId: selectedCat.id,
+      });
+      onListed?.();
+      onClose();
+    } catch (e) {
+      setError(e.message ?? "Listing failed.");
+    } finally {
+      setListing(false);
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2>List on TikTok Shop</h2>
+          <button className="btn btn-ghost" style={{ padding: "4px 8px" }} onClick={onClose}>✕</button>
+        </div>
+
+        <div className="modal-body">
+          <div className="modal-field">
+            <label>Title</label>
+            <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={255} />
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>{title.length}/255</span>
+          </div>
+
+          <div className="modal-field">
+            <label>Sell Price (USD)</label>
+            <input
+              className="input"
+              type="number"
+              step="0.01"
+              min="0"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+            />
+            {product.aliexpressPrice > 0 && (
+              <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                Cost: ${product.aliexpressPrice.toFixed(2)} · Margin: ${(parseFloat(price || 0) * 0.925 - product.aliexpressPrice).toFixed(2)}
+              </span>
+            )}
+          </div>
+
+          <div className="modal-field">
+            <label>Category</label>
+            <input
+              className="input"
+              placeholder={loadingCats ? "Loading categories…" : "Search categories…"}
+              value={catSearch}
+              disabled={loadingCats}
+              onChange={(e) => { setCatSearch(e.target.value); setSelectedCat(null); }}
+            />
+            {!loadingCats && catSearch && (
+              <div className="category-dropdown" ref={listRef}>
+                {filtered.length === 0 ? (
+                  <div className="category-item" style={{ color: "var(--muted)" }}>No matches</div>
+                ) : (
+                  filtered.slice(0, 60).map((c) => (
+                    <div
+                      key={c.id}
+                      className={`category-item ${selectedCat?.id === c.id ? "selected" : ""}`}
+                      onClick={() => { setSelectedCat(c); setCatSearch(c.name); }}
+                    >
+                      {c.name}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+            {selectedCat && (
+              <span style={{ fontSize: 11, color: "var(--success)" }}>
+                ✓ {selectedCat.name} (ID: {selectedCat.id})
+              </span>
+            )}
+          </div>
+
+          {error && <div style={{ fontSize: 13, color: "var(--danger)" }}>{error}</div>}
+        </div>
+
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button
+            className="btn btn-primary"
+            onClick={handleSubmit}
+            disabled={listing || !selectedCat}
+          >
+            {listing ? "Listing…" : "List Product"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Import bar ────────────────────────────────────────────────────────────────
 
 function ImportBar({ onImported }) {
   const [url, setUrl] = useState("");
@@ -14,8 +145,7 @@ function ImportBar({ onImported }) {
     setLoading(true);
     setError("");
     try {
-      const fn = callFunction("aliexpressImportProduct");
-      const result = await fn({ productUrl: url.trim() });
+      const result = await callFunction("aliexpressImportProduct")({ productUrl: url.trim() });
       setUrl("");
       onImported?.(result.data.productId);
     } catch (e) {
@@ -47,21 +177,10 @@ function ImportBar({ onImported }) {
   );
 }
 
-function ProductCard({ product }) {
-  const [listing, setListing] = useState(false);
-  const [error, setError] = useState("");
+// ── Product card ──────────────────────────────────────────────────────────────
 
-  async function handleList() {
-    setListing(true);
-    setError("");
-    try {
-      await callFunction("tiktokCreateListing")({ productId: product.id });
-    } catch (e) {
-      setError(e.message ?? "Failed to list");
-    } finally {
-      setListing(false);
-    }
-  }
+function ProductCard({ product }) {
+  const [showModal, setShowModal] = useState(false);
 
   const statusMap = {
     draft: "chip-draft",
@@ -70,31 +189,46 @@ function ProductCard({ product }) {
   };
 
   return (
-    <div className="product-card">
-      <img src={product.images?.[0] ?? ""} alt={product.title} />
-      <div className="product-card-body">
-        <div className="product-card-title">{product.title}</div>
-        <div className="product-card-meta">
-          <span>${product.aliexpressPrice?.toFixed(2) ?? "—"}</span>
-          <span className={`chip ${statusMap[product.tiktokStatus ?? "draft"]}`}>
-            {product.tiktokStatus ?? "draft"}
-          </span>
-        </div>
-        {error && <div style={{ fontSize: 12, color: "var(--danger)" }}>{error}</div>}
-        <div className="product-card-actions">
-          {(!product.tiktokStatus || product.tiktokStatus === "draft") && (
-            <button className="btn btn-primary" style={{ width: "100%" }} onClick={handleList} disabled={listing}>
-              {listing ? "Listing…" : "List on TikTok Shop"}
-            </button>
-          )}
-          {product.tiktokStatus === "active" && (
-            <span style={{ fontSize: 12, color: "var(--success)" }}>Live on TikTok Shop</span>
-          )}
+    <>
+      <div className="product-card">
+        <img src={product.images?.[0] ?? ""} alt={product.title} />
+        <div className="product-card-body">
+          <div className="product-card-title">{product.title}</div>
+          <div className="product-card-meta">
+            <span>${product.aliexpressPrice?.toFixed(2) ?? "—"}</span>
+            <span className={`chip ${statusMap[product.tiktokStatus ?? "draft"]}`}>
+              {product.tiktokStatus ?? "draft"}
+            </span>
+          </div>
+          <div className="product-card-actions">
+            {(!product.tiktokStatus || product.tiktokStatus === "draft") && (
+              <button
+                className="btn btn-primary"
+                style={{ width: "100%" }}
+                onClick={() => setShowModal(true)}
+              >
+                List on TikTok Shop
+              </button>
+            )}
+            {product.tiktokStatus === "active" && (
+              <span style={{ fontSize: 12, color: "var(--success)" }}>Live on TikTok Shop</span>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+
+      {showModal && (
+        <ListModal
+          product={product}
+          onClose={() => setShowModal(false)}
+          onListed={() => setShowModal(false)}
+        />
+      )}
+    </>
   );
 }
+
+// ── Dashboard page ────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
   const [products, setProducts] = useState([]);

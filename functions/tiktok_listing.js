@@ -36,14 +36,42 @@ async function uploadImageToTiktok(imageUrl, uid) {
   return response?.data?.img_id ?? null;
 }
 
+// Fetch and flatten TikTok Shop leaf categories for the connected shop
+exports.getTiktokCategories = onCall(
+  { secrets: [TT_APP_KEY, TT_APP_SECRET] },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+    const response = await tiktokRequest("GET", "/api/product/202309/categories", null, uid);
+    if (response.code !== 0) throw new HttpsError("internal", `TikTok error: ${response.message}`);
+
+    function flatten(cats, path = []) {
+      const result = [];
+      for (const cat of cats ?? []) {
+        const breadcrumb = [...path, cat.name];
+        if (cat.is_leaf || !cat.children?.length) {
+          result.push({ id: String(cat.id), name: breadcrumb.join(" > ") });
+        } else {
+          result.push(...flatten(cat.children, breadcrumb));
+        }
+      }
+      return result;
+    }
+
+    return { categories: flatten(response.data?.category_list) };
+  }
+);
+
 exports.tiktokCreateListing = onCall(
   { secrets: [TT_APP_KEY, TT_APP_SECRET], timeoutSeconds: 120, memory: "512MiB" },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
 
-    const { productId } = request.data;
+    const { productId, title: titleOverride, sellPrice, categoryId } = request.data;
     if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
+    if (!categoryId) throw new HttpsError("invalid-argument", "Missing categoryId.");
 
     const db = admin.firestore();
     const docRef = db.collection("products").doc(productId);
@@ -62,12 +90,12 @@ exports.tiktokCreateListing = onCall(
     }
     if (!imgIds.length) throw new HttpsError("internal", "No images could be uploaded to TikTok.");
 
-    // Resolve category via Gemini (reuse Wonni pattern — simple keyword lookup for now)
-    // TODO: integrate Gemini taxonomy call (see etsy_listing.js in wonni for reference)
-    const categoryId = "600001"; // placeholder: Electronics > Other
+    const finalPrice = sellPrice
+      ?? product.suggestedSellPrice
+      ?? product.aliexpressPrice * 2.5;
 
     const payload = {
-      title: product.title.slice(0, 255),
+      title: (titleOverride ?? product.title).slice(0, 255),
       description: product.description ?? product.title,
       category_id: categoryId,
       main_images: imgIds,
@@ -75,7 +103,7 @@ exports.tiktokCreateListing = onCall(
         {
           sales_attributes: [],
           price: {
-            amount: String((product.aliexpressPrice * 2.5).toFixed(2)),
+            amount: String(parseFloat(finalPrice).toFixed(2)),
             currency: "USD",
           },
           inventory: [{ warehouse_id: "default", quantity: 999 }],

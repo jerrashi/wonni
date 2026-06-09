@@ -4,6 +4,19 @@
 const DASHBOARD_URL = "https://wonni-dropship.web.app";
 const IMPORT_FUNCTION_URL = "https://us-central1-wonni-dropship.cloudfunctions.net/aliexpressImportProduct";
 
+// Receive token + fee rate updates from the web app
+chrome.runtime.onMessageExternal.addListener((message, _sender, sendResponse) => {
+  if (message.type === "SET_TOKEN") {
+    chrome.storage.local.set({ idToken: message.idToken, userEmail: message.email });
+    sendResponse({ ok: true });
+  }
+  if (message.type === "SET_FEE_RATE") {
+    chrome.storage.local.set({ tiktokFeeRate: message.feeRate });
+    sendResponse({ ok: true });
+  }
+  return true;
+});
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "IMPORT_PRODUCT") {
     handleImport(message.data).then(sendResponse).catch((e) => sendResponse({ error: e.message }));
