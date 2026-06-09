@@ -3,16 +3,35 @@ const admin = require("firebase-admin");
 const https = require("https");
 const { callAliexpressApi } = require("./aliexpress_auth");
 
+const ALLOWED_IMAGE_HOSTS = [".alicdn.com", ".aliexpress-media.com"];
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
+
+function isAllowedImageUrl(rawUrl) {
+  try {
+    const { protocol, hostname } = new URL(rawUrl);
+    if (protocol !== "https:") return false;
+    return ALLOWED_IMAGE_HOSTS.some((h) => hostname === h.slice(1) || hostname.endsWith(h));
+  } catch {
+    return false;
+  }
+}
+
 // Download a remote image buffer (for re-uploading to Firebase Storage)
-function downloadBuffer(url) {
+function downloadBuffer(url, depth = 0) {
+  if (!isAllowedImageUrl(url)) return Promise.reject(new Error(`Disallowed image URL: ${url}`));
+  if (depth > 2) return Promise.reject(new Error("Too many redirects"));
   return new Promise((resolve, reject) => {
-    const mod = url.startsWith("https") ? https : require("http");
-    mod.get(url, (res) => {
+    https.get(url, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return downloadBuffer(res.headers.location).then(resolve).catch(reject);
+        return downloadBuffer(res.headers.location, depth + 1).then(resolve).catch(reject);
       }
       const chunks = [];
-      res.on("data", (c) => chunks.push(c));
+      let size = 0;
+      res.on("data", (c) => {
+        size += c.length;
+        if (size > MAX_IMAGE_BYTES) { res.destroy(); return reject(new Error("Image too large")); }
+        chunks.push(c);
+      });
       res.on("end", () => resolve(Buffer.concat(chunks)));
       res.on("error", reject);
     }).on("error", reject);

@@ -37,8 +37,20 @@ exports.aliexpressExchangeToken = onCall(
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
 
-    const { code, redirectUri } = request.data;
+    const { code, redirectUri, state } = request.data;
     if (!code) throw new HttpsError("invalid-argument", "Missing code.");
+
+    const stateRef = admin.firestore().doc(`users/${uid}/oauthStates/aliexpress`);
+    const stateSnap = await stateRef.get();
+    const stored = stateSnap.data();
+    if (!stored?.nonce || stored.nonce !== state) {
+      throw new HttpsError("invalid-argument", "Invalid OAuth state.");
+    }
+    if (Date.now() - stored.createdAt.toMillis() > 10 * 60 * 1000) {
+      await stateRef.delete();
+      throw new HttpsError("deadline-exceeded", "OAuth state expired.");
+    }
+    await stateRef.delete();
 
     const appKey = AE_APP_KEY.value();
     const appSecret = AE_APP_SECRET.value();

@@ -3,22 +3,8 @@ import { doc, onSnapshot } from "firebase/firestore";
 import { db, auth, callFunction } from "../firebase";
 import Layout from "../components/Layout";
 
-const ALIEXPRESS_OAUTH_URL =
-  "https://oauth.aliexpress.com/authorize?" +
-  new URLSearchParams({
-    response_type: "code",
-    client_id: import.meta.env.VITE_ALIEXPRESS_APP_KEY ?? "REPLACE_ME",
-    redirect_uri: "https://wonni-dropship.web.app/oauth/aliexpress",
-    state: "aliexpress",
-  });
-
-const TIKTOK_OAUTH_URL =
-  "https://auth.tiktok-shops.com/oauth/authorize?" +
-  new URLSearchParams({
-    app_key: import.meta.env.VITE_TIKTOK_APP_KEY ?? "REPLACE_ME",
-    redirect_uri: "https://wonni-dropship.web.app/oauth/tiktok",
-    state: "tiktok",
-  });
+const ALIEXPRESS_APP_KEY = import.meta.env.VITE_ALIEXPRESS_APP_KEY ?? "REPLACE_ME";
+const TIKTOK_APP_KEY = import.meta.env.VITE_TIKTOK_APP_KEY ?? "REPLACE_ME";
 
 function ConnectRow({ label, description, connected, username, onConnect, onDisconnect }) {
   return (
@@ -62,10 +48,24 @@ export default function Settings() {
     return () => unsubs.forEach((u) => u());
   }, []);
 
-  function openOAuth(url) {
-    const w = window.open(url, "_blank", "width=600,height=700");
-    // Callback page calls the Cloud Function and closes; Firestore listener will update UI
-    const poll = setInterval(() => { if (w?.closed) clearInterval(poll); }, 500);
+  async function openOAuth(platform) {
+    const { data } = await callFunction("generateOAuthState")({ platform });
+    const state = data.state;
+
+    const url = platform === "aliexpress"
+      ? "https://oauth.aliexpress.com/authorize?" + new URLSearchParams({
+          response_type: "code",
+          client_id: ALIEXPRESS_APP_KEY,
+          redirect_uri: "https://wonni-dropship.web.app/oauth/aliexpress",
+          state,
+        })
+      : "https://auth.tiktok-shops.com/oauth/authorize?" + new URLSearchParams({
+          app_key: TIKTOK_APP_KEY,
+          redirect_uri: "https://wonni-dropship.web.app/oauth/tiktok",
+          state,
+        });
+
+    window.open(url, "_blank", "width=600,height=700");
   }
 
   async function disconnect(platform) {
@@ -86,7 +86,7 @@ export default function Settings() {
             description="Connect to import products and place orders"
             connected={integrations.aliexpress?.isConnected}
             username={integrations.aliexpress?.connectedUsername}
-            onConnect={() => openOAuth(ALIEXPRESS_OAUTH_URL)}
+            onConnect={() => openOAuth("aliexpress")}
             onDisconnect={() => disconnect("aliexpress")}
           />
           <ConnectRow
@@ -94,7 +94,7 @@ export default function Settings() {
             description="Connect to list products and receive orders"
             connected={integrations.tiktok?.isConnected}
             username={integrations.tiktok?.connectedUsername}
-            onConnect={() => openOAuth(TIKTOK_OAUTH_URL)}
+            onConnect={() => openOAuth("tiktok")}
             onDisconnect={() => disconnect("tiktok")}
           />
         </div>
