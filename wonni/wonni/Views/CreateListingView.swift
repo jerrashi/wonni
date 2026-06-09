@@ -1112,13 +1112,30 @@ struct DraftEditSheet: View {
                                             .cornerRadius(8)
                                             .clipped()
                                             .opacity(selectedPhotos.contains(assetId) ? 0.6 : 1.0)
-                                            .onDrag {
+                                            .onDrag({
                                                 if !isSelectionMode {
                                                     draggedAssetId = assetId
                                                     return NSItemProvider(object: assetId as NSString)
                                                 }
                                                 return NSItemProvider()
-                                            }
+                                            }, preview: {
+                                                Group {
+                                                    if let uiImage = item.image(for: assetId) {
+                                                        Image(uiImage: uiImage)
+                                                            .resizable()
+                                                            .scaledToFill()
+                                                    } else {
+                                                        PhotoItemView(
+                                                            asset: PhotoAsset(identifier: assetId),
+                                                            cache: cache,
+                                                            imageSize: CGSize(width: 160, height: 160)
+                                                        )
+                                                    }
+                                                }
+                                                .frame(width: 80, height: 80)
+                                                .cornerRadius(8)
+                                                .clipped()
+                                            })
                                             .onDrop(of: [.text], delegate: SheetPhotoDropDelegate(
                                                 item: item,
                                                 assetId: assetId,

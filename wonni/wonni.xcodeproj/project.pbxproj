@@ -62,6 +62,10 @@
 		A1B2C3D4E5F6A7B82E9D0001 /* ActiveDraftCarouselView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B82E9D0002 /* ActiveDraftCarouselView.swift */; };
 		AA0011223344556677AABBDD /* CategoryMappingRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0011223344556677AABBCC /* CategoryMappingRepository.swift */; };
 		AA0011223344556677AABBFF /* MercariObservedDataRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0011223344556677AABBEE /* MercariObservedDataRepository.swift */; };
+		4DE0F3AA27864C66A4EC49AB /* Sale.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7EBEECFD9B24F3D971DDEA2 /* Sale.swift */; };
+		1A589EC58F7C4BA78F4A2708 /* SaleRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9C92C11853A41889AB9C925 /* SaleRepository.swift */; };
+		60A7C95275BB4BCCAA8FA838 /* RecordSaleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */; };
+		EC4CE9E74B3D4A44A464E4A6 /* SalesDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -119,6 +123,10 @@
 		A1B2C3D4E5F6A7B82E9D0002 /* ActiveDraftCarouselView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveDraftCarouselView.swift; sourceTree = "<group>"; };
 		AA0011223344556677AABBCC /* CategoryMappingRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryMappingRepository.swift; sourceTree = "<group>"; };
 		AA0011223344556677AABBEE /* MercariObservedDataRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MercariObservedDataRepository.swift; sourceTree = "<group>"; };
+		E7EBEECFD9B24F3D971DDEA2 /* Sale.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sale.swift; sourceTree = "<group>"; };
+		E9C92C11853A41889AB9C925 /* SaleRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SaleRepository.swift; sourceTree = "<group>"; };
+		209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordSaleSheet.swift; sourceTree = "<group>"; };
+		93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalesDashboardView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -228,6 +236,8 @@
 				6192AA612D7F585C00EC2EFA /* InboxView.swift */,
 				61F0F0032FB022A0001C28CE /* CrossPostWebView.swift */,
 				61E75A002FC100A000D4B3F1 /* EtsyConnectView.swift */,
+				209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */,
+				93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -239,6 +249,7 @@
 				61FAA5632FAE216D001C28CE /* InventoryUnit.swift */,
 				61FAA5642FAE216D001C28CE /* UserListing.swift */,
 				61EE007C2D778EFA006063C3 /* Listing.swift */,
+				E7EBEECFD9B24F3D971DDEA2 /* Sale.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -257,6 +268,7 @@
 				61F0F0012FB022A0001C28CE /* IntegrationRepository.swift */,
 				AA0011223344556677AABBCC /* CategoryMappingRepository.swift */,
 				AA0011223344556677AABBEE /* MercariObservedDataRepository.swift */,
+				E9C92C11853A41889AB9C925 /* SaleRepository.swift */,
 			);
 			path = Data;
 			sourceTree = "<group>";
@@ -382,6 +394,10 @@
 				61E75A012FC100A000D4B3F1 /* EtsyConnectView.swift in Sources */,
 				AA0011223344556677AABBDD /* CategoryMappingRepository.swift in Sources */,
 				AA0011223344556677AABBFF /* MercariObservedDataRepository.swift in Sources */,
+				4DE0F3AA27864C66A4EC49AB /* Sale.swift in Sources */,
+				1A589EC58F7C4BA78F4A2708 /* SaleRepository.swift in Sources */,
+				60A7C95275BB4BCCAA8FA838 /* RecordSaleSheet.swift in Sources */,
+				EC4CE9E74B3D4A44A464E4A6 /* SalesDashboardView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

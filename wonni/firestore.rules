@@ -38,6 +38,17 @@ service cloud.firestore {
                     && request.auth.uid == request.resource.data.userId;
     }
 
+    // ── Sales ────────────────────────────────────────────────────────────────
+    // Each user can only access their own sales records.
+    match /sales/{saleId} {
+      allow read: if request.auth != null
+                  && request.auth.uid == resource.data.userId;
+      allow create: if request.auth != null
+                    && request.auth.uid == request.resource.data.userId;
+      allow update, delete: if request.auth != null
+                             && request.auth.uid == resource.data.userId;
+    }
+
     // ── Conversations ─────────────────────────────────────────────────────────
     // Participants only. Buyers can create; both parties can update (send messages).
     match /conversations/{conversationId} {

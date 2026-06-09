@@ -146,7 +146,7 @@ public struct EtsyConnectView: View {
         let codeChallenge = EtsyPKCEHelper.generateCodeChallenge(from: codeVerifier)
         
         // Build Auth URL
-        let redirectUri = "wonni://oauth/etsy"
+        let redirectUri = "https://wonni-app.web.app/oauth/etsy"
         let state = UUID().uuidString.prefix(8) // CSRF Token state
         
         var components = URLComponents(string: "https://www.etsy.com/oauth/connect")!

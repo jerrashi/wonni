@@ -91,6 +91,7 @@ struct UserListing: Identifiable, Codable {
     // ── Pricing ───────────────────────────────────────────────────────────────
     var price: Double?
     var currency: String            // "USD"
+    var quantity: Int?              // nil = 1 (default for single-item listings)
 
     // ── Condition ─────────────────────────────────────────────────────────────
     var condition: ItemCondition
@@ -126,6 +127,11 @@ struct UserListing: Identifiable, Codable {
     var crossPostStatus: [String: String]?          // e.g. ["ebay": "posted", "mercari": "pending"]
     var crossPostListingIds: [String: String]?       // e.g. ["ebay": "123456789"]
     var ebayCategory: Int?                           // pre-resolved eBay category ID
+
+    // Mercari pending actions (set by decrementAndCascade Cloud Function)
+    // iOS clears these after the user completes the headless action.
+    var pendingMercariDeactivation: Bool?  // qty hit 0; Mercari listing needs deactivating
+    var pendingMercariRelist: Bool?        // Mercari sold while qty>0; needs re-listing
 
     // MARK: - Convenience
 
@@ -166,6 +172,7 @@ struct UserListing: Identifiable, Codable {
         customDescription: String? = nil,
         price: Double? = nil,
         currency: String = "USD",
+        quantity: Int? = nil,
         condition: ItemCondition = .good,
         conditionNotes: String? = nil,
         photoPaths: [String] = [],
@@ -182,7 +189,9 @@ struct UserListing: Identifiable, Codable {
         sellingProfileId: String? = nil,
         crossPostStatus: [String: String]? = nil,
         crossPostListingIds: [String: String]? = nil,
-        ebayCategory: Int? = nil
+        ebayCategory: Int? = nil,
+        pendingMercariDeactivation: Bool? = nil,
+        pendingMercariRelist: Bool? = nil
     ) {
         self.id = id
         self.userId = userId
@@ -194,6 +203,7 @@ struct UserListing: Identifiable, Codable {
         self.customDescription = customDescription
         self.price = price
         self.currency = currency
+        self.quantity = quantity
         self.condition = condition
         self.conditionNotes = conditionNotes
         self.photoPaths = photoPaths
@@ -211,5 +221,7 @@ struct UserListing: Identifiable, Codable {
         self.crossPostStatus = crossPostStatus
         self.crossPostListingIds = crossPostListingIds
         self.ebayCategory = ebayCategory
+        self.pendingMercariDeactivation = pendingMercariDeactivation
+        self.pendingMercariRelist = pendingMercariRelist
     }
 }

@@ -19,6 +19,8 @@
 	<string>$(EBAY_CLIENT_ID)</string>
 	<key>EbayRuName</key>
 	<string>$(EBAY_RUNAME)</string>
+	<key>EtsyClientId</key>
+	<string>$(ETSY_CLIENT_ID)</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Wonni needs your location to automatically pre-fill your shipping settings address.</string>
 </dict>

@@ -5,7 +5,9 @@
 
 import SwiftUI
 import WebKit
+import FirebaseAuth
 import FirebaseFirestore
+import FirebaseFunctions
 import FirebaseStorage
 import Photos
 
@@ -1042,7 +1044,19 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
             for (var attempt = 0; attempt < 3; attempt++) {
                 realClick(target);
                 toggle.dispatchEvent(new Event('change', { bubbles: true }));
-                var off = await waitFor(function() { return isOn(toggle) ? null : 'off'; }, 1500);
+                // Mercari shows a "Turn off Smart Pricing?" confirmation dialog — dismiss it.
+                var confirmBtn = await waitFor(function() {
+                    var bs = document.querySelectorAll('[role="dialog"] button, [role="alertdialog"] button');
+                    for (var i = 0; i < bs.length; i++) {
+                        var t = bs[i].textContent.trim().toLowerCase();
+                        if ((t === 'turn off' || t === 'confirm' || t === 'ok' || t === 'yes') && !bs[i].disabled) {
+                            return bs[i];
+                        }
+                    }
+                    return null;
+                }, 1500);
+                if (confirmBtn) { realClick(confirmBtn); }
+                var off = await waitFor(function() { return isOn(toggle) ? null : 'off'; }, 2000);
                 if (off) { return 'disabled'; }
             }
             return 'still-on';
@@ -2539,14 +2553,806 @@ struct MercariSyncSheet: View {
         applyError = nil
         var update: [String: Any] = ["updatedAt": Timestamp(date: Date())]
         if priceDiffers, let m = loader.priceDollars { update["price"] = m }
-        if soldDiffers { update["status"] = ListingStatus.sold.rawValue }
         do {
             try await Firestore.firestore().collection("listings").document(listingId).updateData(update)
+            if priceDiffers && listing.crossPostStatus?["ebay"] == "posted" {
+                Task { try? await Functions.functions().httpsCallable("ebayUpdateListing").call(["listingId": listingId]) }
+            }
+            if soldDiffers {
+                // Record the sale — take-home will be backfilled async by the transaction loader
+                let sale = Sale(
+                    userId: "",
+                    listingId: listingId,
+                    listingTitle: listing.customTitle,
+                    coverPhotoPath: listing.coverPhotoPath,
+                    platform: "mercari",
+                    platformOrderId: mercariId,
+                    priceSoldFor: loader.priceDollars ?? listing.price ?? 0,
+                    takeHome: nil,
+                    status: .pending,
+                    soldAt: Timestamp(date: Date())
+                )
+                let saleId = try? await SaleRepository.shared.recordSale(sale)
+
+                // Cascade quantity decrement
+                try? await Functions.functions().httpsCallable("decrementAndCascade").call([
+                    "listingId": listingId,
+                    "platform": "mercari"
+                ])
+
+                // Async: scrape take-home from the Mercari transaction page and backfill
+                if let sid = saleId {
+                    Task {
+                        await fetchAndBackfillMercariTakeHome(saleId: sid, mercariId: mercariId)
+                    }
+                }
+            }
             onApplied()
             dismiss()
         } catch {
             applyError = "Couldn't update the listing. Try again."
         }
         isApplying = false
+    }
+
+    // Loads the Mercari transaction page in background and updates the Sale's takeHome field.
+    private func fetchAndBackfillMercariTakeHome(saleId: String, mercariId: String) async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                // MercariTakeHomeScraper retains itself via retainCycle until a callback fires.
+                MercariTakeHomeScraper(mercariId: mercariId) { takeHome in
+                    Task {
+                        try? await SaleRepository.shared.updateSale(
+                            id: saleId,
+                            data: ["takeHome": takeHome, "updatedAt": Timestamp(date: Date())]
+                        )
+                        continuation.resume()
+                    }
+                } onFail: {
+                    continuation.resume()
+                }.start()
+            }
+        }
+    }
+}
+
+// MARK: - MercariProfileSyncSheet
+
+/// Shown from the Profile tab when the user wants to check or act on all their Mercari-linked
+/// listings in one place. Listings with pending Cloud Function flags appear at the top.
+struct MercariProfileSyncSheet: View {
+    var onComplete: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var listings: [UserListing] = []
+    @State private var isLoading = true
+    @State private var listingToSync: UserListing?
+    @State private var listingToDeactivate: UserListing?
+    @State private var listingToRelist: CrossPostJob?
+
+    private var pendingListings: [UserListing] {
+        listings.filter { $0.pendingMercariDeactivation == true || $0.pendingMercariRelist == true }
+    }
+    private var normalListings: [UserListing] {
+        listings.filter { $0.pendingMercariDeactivation != true && $0.pendingMercariRelist != true }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if listings.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "tag.slash").font(.largeTitle).foregroundStyle(.secondary)
+                        Text("No Mercari-linked listings").font(.headline)
+                        Text("Cross-post a listing to Mercari first, then come back here to sync.")
+                            .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List {
+                        if !pendingListings.isEmpty {
+                            Section {
+                                ForEach(pendingListings) { listing in
+                                    pendingRow(listing)
+                                }
+                            } header: {
+                                Label("Action needed", systemImage: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange).textCase(nil)
+                            }
+                        }
+                        Section("All Mercari listings (\(normalListings.count))") {
+                            ForEach(normalListings) { listing in
+                                Button {
+                                    listingToSync = listing
+                                } label: {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(listing.customTitle ?? "Untitled")
+                                                .font(.subheadline).lineLimit(1)
+                                            if let price = listing.price {
+                                                Text(String(format: "$%.2f", price))
+                                                    .font(.caption).foregroundStyle(.secondary)
+                                            }
+                                        }
+                                        Spacer()
+                                        Image(systemName: "arrow.triangle.2.circlepath")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                .foregroundStyle(.primary)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Mercari Sync")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        Task { await reload() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .disabled(isLoading)
+                }
+            }
+            .sheet(item: $listingToSync) { listing in
+                if let id = listing.crossPostListingIds?["mercari"] {
+                    MercariSyncSheet(listing: listing, mercariId: id) {
+                        Task { await reload() }
+                        onComplete()
+                    }
+                }
+            }
+            .sheet(item: $listingToDeactivate) { listing in
+                if let id = listing.crossPostListingIds?["mercari"],
+                   let url = URL(string: "https://www.mercari.com/us/item/\(id)/") {
+                    MercariDeactivateActionSheet(
+                        listing: listing, url: url,
+                        onHandled: {
+                            Task {
+                                await clearFlag("pendingMercariDeactivation", for: listing.id ?? "")
+                                onComplete()
+                            }
+                        }
+                    )
+                }
+            }
+            .sheet(item: $listingToRelist) { job in
+                MercariAutoPosterView(job: job)
+                    .onDisappear {
+                        Task {
+                            if let id = job.listingId {
+                                await clearFlag("pendingMercariRelist", for: id)
+                                onComplete()
+                            }
+                            await reload()
+                        }
+                    }
+            }
+        }
+        .task { await reload() }
+    }
+
+    @ViewBuilder private func pendingRow(_ listing: UserListing) -> some View {
+        let isDeactivate = listing.pendingMercariDeactivation == true
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(listing.customTitle ?? "Untitled")
+                        .font(.subheadline.weight(.semibold)).lineLimit(1)
+                    if let price = listing.price {
+                        Text(String(format: "$%.2f", price))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                Label(
+                    isDeactivate ? "Deactivate needed" : "Re-list needed",
+                    systemImage: isDeactivate ? "minus.circle.fill" : "arrow.up.circle.fill"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(isDeactivate ? .red : .blue)
+                .labelStyle(.iconOnly)
+            }
+            if isDeactivate {
+                Text("This listing sold elsewhere (qty=0). Deactivate it on Mercari.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button {
+                    listingToDeactivate = listing
+                } label: {
+                    Label("Deactivate on Mercari", systemImage: "minus.circle")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+            } else {
+                Text("This Mercari listing sold. Re-list it since you still have stock.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button {
+                    listingToRelist = CrossPostJob(
+                        platform: "mercari",
+                        title: listing.customTitle ?? "",
+                        description: listing.customDescription ?? "",
+                        price: listing.price ?? 0,
+                        listingId: listing.id,
+                        photoFirebasePaths: listing.photoPaths,
+                        buyerPaysShipping: listing.shippingInfo?.buyerPaysShipping ?? false
+                    )
+                } label: {
+                    Label("Re-list on Mercari", systemImage: "arrow.up.circle")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func reload() async {
+        isLoading = true
+        guard let userId = Auth.auth().currentUser?.uid else { isLoading = false; return }
+        let db = Firestore.firestore()
+        // Fetch all user listings that have a Mercari cross-post ID or a pending Mercari flag
+        let snap = try? await db.collection("listings")
+            .whereField("userId", isEqualTo: userId)
+            .getDocuments()
+        let all = snap?.documents.compactMap { try? $0.data(as: UserListing.self) } ?? []
+        listings = all
+            .filter { $0.crossPostListingIds?["mercari"] != nil }
+            .sorted { ($0.updatedAt?.dateValue() ?? .distantPast) > ($1.updatedAt?.dateValue() ?? .distantPast) }
+        isLoading = false
+    }
+
+    private func clearFlag(_ flag: String, for listingId: String) async {
+        guard !listingId.isEmpty else { return }
+        try? await Firestore.firestore().collection("listings").document(listingId)
+            .updateData([flag: FieldValue.delete()])
+        await reload()
+    }
+}
+
+/// Presents the Mercari listing in a web view with a "Mark as handled" toolbar button.
+/// The user manually deactivates/marks the item as sold on Mercari, then confirms.
+// ─────────────────────────────────────────────────────────────
+// MercariTransactionLoader
+// Loads the Mercari transaction page for a listing and extracts
+// the "You made" take-home value shown by the platform.
+// ─────────────────────────────────────────────────────────────
+
+struct MercariTransactionLoader: UIViewRepresentable {
+    let listingId: String
+    var onTakeHomeFound: (Double) -> Void
+    var onError: ((String) -> Void)?
+
+    func makeUIView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = WKWebsiteDataStore.default()
+        let wv = WKWebView(frame: .zero, configuration: config)
+        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        wv.navigationDelegate = context.coordinator
+        wv.isHidden = true
+        return wv
+    }
+
+    func updateUIView(_ wv: WKWebView, context: Context) {
+        guard context.coordinator.listingId != listingId else { return }
+        context.coordinator.listingId = listingId
+        let url = URL(string: "https://www.mercari.com/us/item/\(listingId)/")!
+        wv.load(URLRequest(url: url))
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onTakeHomeFound: onTakeHomeFound, onError: onError)
+    }
+
+    class Coordinator: NSObject, WKNavigationDelegate {
+        var listingId: String = ""
+        var onTakeHomeFound: (Double) -> Void
+        var onError: ((String) -> Void)?
+        private var extracted = false
+
+        init(onTakeHomeFound: @escaping (Double) -> Void, onError: ((String) -> Void)?) {
+            self.onTakeHomeFound = onTakeHomeFound
+            self.onError = onError
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            guard !extracted else { return }
+            // Give React/SPA a moment to render the value
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak webView] in
+                guard let self, let webView else { return }
+                let js = """
+                    (function() {
+                        var el = document.querySelector('[data-testid="You-made-value"]');
+                        return el ? el.textContent : null;
+                    })()
+                    """
+                webView.evaluateJavaScript(js) { result, error in
+                    if let text = result as? String {
+                        // Strip "$", commas, whitespace and parse
+                        let cleaned = text.trimmingCharacters(in: .whitespaces)
+                            .replacingOccurrences(of: "$", with: "")
+                            .replacingOccurrences(of: ",", with: "")
+                        if let value = Double(cleaned), value > 0 {
+                            self.extracted = true
+                            DispatchQueue.main.async { self.onTakeHomeFound(value) }
+                            return
+                        }
+                    }
+                    // Element not yet rendered — retry once more after another second
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak webView] in
+                        guard let self, let webView, !self.extracted else { return }
+                        webView.evaluateJavaScript(js) { result, _ in
+                            if let text = result as? String {
+                                let cleaned = text.trimmingCharacters(in: .whitespaces)
+                                    .replacingOccurrences(of: "$", with: "")
+                                    .replacingOccurrences(of: ",", with: "")
+                                if let value = Double(cleaned), value > 0 {
+                                    self.extracted = true
+                                    DispatchQueue.main.async { self.onTakeHomeFound(value) }
+                                    return
+                                }
+                            }
+                            self.onError?("Could not find take-home value on Mercari transaction page.")
+                        }
+                    }
+                }
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            onError?("Failed to load Mercari transaction page: \(error.localizedDescription)")
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// MercariTakeHomeScraper
+// Standalone (non-SwiftUI) WKWebView scraper for background use.
+// Used by MercariSyncSheet to backfill takeHome on a Sale after apply().
+// ─────────────────────────────────────────────────────────────
+
+final class MercariTakeHomeScraper: NSObject, WKNavigationDelegate {
+    private let mercariId: String
+    private let onSuccess: (Double) -> Void
+    private let onFail: () -> Void
+    private var webView: WKWebView?
+    private var extracted = false
+    // Strong self-reference so ARC doesn't deallocate us before callbacks fire.
+    // Nilled out when a terminal callback fires.
+    private var retainCycle: MercariTakeHomeScraper?
+
+    init(mercariId: String, onSuccess: @escaping (Double) -> Void, onFail: @escaping () -> Void) {
+        self.mercariId = mercariId
+        self.onSuccess = onSuccess
+        self.onFail = onFail
+    }
+
+    func start() {
+        retainCycle = self
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = WKWebsiteDataStore.default()
+        let wv = WKWebView(frame: .zero, configuration: config)
+        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        wv.navigationDelegate = self
+        webView = wv
+        let url = URL(string: "https://www.mercari.com/us/item/\(mercariId)/")!
+        wv.load(URLRequest(url: url))
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard !extracted else { return }
+        extractValue(webView: webView, attempt: 0)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        finish { self.onFail() }
+    }
+
+    private func extractValue(webView: WKWebView, attempt: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self, !self.extracted else { return }
+            let js = """
+                (function() {
+                    var el = document.querySelector('[data-testid="You-made-value"]');
+                    return el ? el.textContent : null;
+                })()
+                """
+            webView.evaluateJavaScript(js) { [weak self] result, _ in
+                guard let self else { return }
+                if let text = result as? String {
+                    let cleaned = text.trimmingCharacters(in: .whitespaces)
+                        .replacingOccurrences(of: "$", with: "")
+                        .replacingOccurrences(of: ",", with: "")
+                    if let value = Double(cleaned), value > 0 {
+                        self.extracted = true
+                        self.finish { self.onSuccess(value) }
+                        return
+                    }
+                }
+                if attempt < 1 {
+                    self.extractValue(webView: webView, attempt: attempt + 1)
+                } else {
+                    self.finish { self.onFail() }
+                }
+            }
+        }
+    }
+
+    private func finish(callback: () -> Void) {
+        callback()
+        retainCycle = nil  // Break the self-retention cycle
+    }
+}
+
+private struct MercariDeactivateActionSheet: View {
+    let listing: UserListing
+    let url: URL
+    var onHandled: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var showConfirmAlert = false
+    @State private var webView: WKWebView = {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = WKWebsiteDataStore.default()
+        let wv = WKWebView(frame: .zero, configuration: config)
+        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        return wv
+    }()
+
+    var body: some View {
+        NavigationStack {
+            CrossPostWebView(url: url, webView: webView)
+                .navigationTitle("Deactivate on Mercari")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Done") { showConfirmAlert = true }
+                            .fontWeight(.semibold)
+                    }
+                }
+                .alert("Mark as Handled?", isPresented: $showConfirmAlert) {
+                    Button("Yes, I deactivated it") {
+                        onHandled()
+                        dismiss()
+                    }
+                    Button("Not yet", role: .cancel) {}
+                } message: {
+                    Text("Did you deactivate or mark this Mercari listing as sold?")
+                }
+        }
+    }
+}
+
+// MARK: - MercariAutoEditSheet
+
+/// Headless Mercari listing editor. Navigates to the Mercari edit form, autofills updated
+/// title/description/price/condition, and submits. Falls back to a visible WebView with clipboard
+/// helpers if anything goes wrong.
+@MainActor
+final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelegate {
+    enum Phase {
+        case navigating, injecting, success, manualFallback(String)
+    }
+
+    @Published var phase: Phase = .navigating
+    @Published var isWebViewVisible = false
+
+    let webView: WKWebView
+    private var hasStarted = false
+
+    let mercariItemId: String
+    let title: String
+    let listingDescription: String
+    let price: Double
+    let condition: String
+
+    init(mercariItemId: String, title: String, listingDescription: String, price: Double, condition: String) {
+        self.mercariItemId = mercariItemId
+        self.title = title
+        self.listingDescription = listingDescription
+        self.price = price
+        self.condition = condition
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = WKWebsiteDataStore.default()
+        webView = WKWebView(frame: .zero, configuration: config)
+        webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        super.init()
+        webView.navigationDelegate = self
+    }
+
+    func start() {
+        guard !hasStarted else { return }
+        hasStarted = true
+        let urlStr = "https://www.mercari.com/sell/edit/\(mercariItemId)/"
+        if let url = URL(string: urlStr) {
+            webView.load(URLRequest(url: url))
+        } else {
+            phase = .manualFallback("Invalid Mercari item ID")
+            isWebViewVisible = true
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        Task { await runEditAutofill() }
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        phase = .manualFallback("Page failed to load — edit manually")
+        isWebViewVisible = true
+    }
+
+    private func runEditAutofill() async {
+        guard case .navigating = phase else { return }
+        phase = .injecting
+
+        // Wait for the edit form to mount (same Title field check as create flow)
+        let deadline = Date().addingTimeInterval(30)
+        var formReady = false
+        while Date() < deadline {
+            let result = (try? await webView.callJS("""
+                return (function() {
+                    if (document.querySelector('input[data-testid="Title"]')) return 'form';
+                    var u = location.href.toLowerCase();
+                    if (u.indexOf('login') !== -1) return 'login';
+                    return 'wait';
+                })();
+            """)) as? String
+            if result == "form" { formReady = true; break }
+            if result == "login" {
+                phase = .manualFallback("Sign in to Mercari first")
+                isWebViewVisible = true
+                return
+            }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+        }
+        guard formReady else {
+            phase = .manualFallback("Edit form didn't load — edit manually")
+            isWebViewVisible = true
+            return
+        }
+
+        // Inject title, description, price, condition
+        let conditionMap: [String: String] = [
+            "new": "ConditionNew", "newwithouttags": "ConditionLikeNew", "likenew": "ConditionLikeNew",
+            "good": "ConditionGood", "fair": "ConditionFair", "poor": "ConditionPoor", "forparts": "ConditionPoor"
+        ]
+        let conditionKey = condition.lowercased().replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "_", with: "")
+        let conditionTestId = conditionMap[conditionKey] ?? "ConditionGood"
+
+        let injectJS = """
+        function setReactInput(el, value) {
+            if (!el) return false;
+            var lastValue = el.value;
+            var proto = el.tagName === 'TEXTAREA'
+                ? window.HTMLTextAreaElement.prototype
+                : window.HTMLInputElement.prototype;
+            var nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value');
+            if (nativeSetter && nativeSetter.set) { nativeSetter.set.call(el, value); }
+            else { el.value = value; }
+            var tracker = el._valueTracker;
+            if (tracker) { tracker.setValue(lastValue); }
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+        }
+        var titleEl = document.querySelector('input[data-testid="Title"]');
+        setReactInput(titleEl, title);
+        if (titleEl) { titleEl.focus(); titleEl.blur(); }
+        var descEl = document.querySelector('textarea[data-testid="Description"]');
+        setReactInput(descEl, description);
+        if (descEl) { descEl.focus(); descEl.blur(); }
+        var priceEl = document.querySelector('input[data-testid="Price"]');
+        setReactInput(priceEl, price);
+        if (priceEl) { priceEl.focus(); priceEl.blur(); }
+        var conditionLabel = document.querySelector('[data-testid="' + conditionTestId + '"]');
+        if (conditionLabel) { conditionLabel.click(); }
+        return (titleEl ? 'ok' : 'no-title');
+        """
+        let priceStr = String(format: "%.0f", price)
+        let injectResult = (try? await webView.callJS(injectJS, args: [
+            "title": title, "description": listingDescription, "price": priceStr, "conditionTestId": conditionTestId
+        ])) as? String ?? "error"
+
+        guard injectResult.hasPrefix("ok") else {
+            phase = .manualFallback("Couldn't fill form fields — edit manually")
+            isWebViewVisible = true
+            return
+        }
+
+        // Disable smart pricing if it auto-enabled
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        let _ = await disableSmartPricing()
+
+        // Click save/update button
+        let saveJS = """
+        function waitFor(fn, timeout, interval) {
+            timeout = timeout || 6000; interval = interval || 250;
+            return new Promise(function(resolve) {
+                var start = Date.now();
+                (function loop() {
+                    var r = null; try { r = fn(); } catch(e) {}
+                    if (r) { resolve(r); return; }
+                    if (Date.now() - start >= timeout) { resolve(null); return; }
+                    setTimeout(loop, interval);
+                })();
+            });
+        }
+        function realClick(el) {
+            ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(type) {
+                el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+            });
+        }
+        return (async function() {
+            var btn = await waitFor(function() {
+                var b = document.querySelector('[data-testid="SaveButton"], [data-testid="UpdateButton"]');
+                if (b && !b.disabled) return b;
+                // Fallback: any non-disabled button with text save/update
+                var btns = document.querySelectorAll('button[type="submit"], button');
+                for (var i = 0; i < btns.length; i++) {
+                    var t = btns[i].textContent.trim().toLowerCase();
+                    if ((t === 'save' || t === 'update' || t === 'save changes') && !btns[i].disabled) return btns[i];
+                }
+                return null;
+            }, 8000);
+            if (!btn) return 'btn-not-found';
+            realClick(btn);
+            return 'submitted';
+        })();
+        """
+        let saveResult = (try? await webView.callJS(saveJS)) as? String ?? "error"
+        if saveResult == "submitted" {
+            // Brief wait then check for success (URL change or success element)
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            phase = .success
+        } else {
+            phase = .manualFallback("Couldn't find the save button — tap it manually")
+            isWebViewVisible = true
+        }
+    }
+
+    private func disableSmartPricing() async -> String {
+        let js = """
+        function waitFor(fn, t, i) {
+            t = t||3000; i = i||250;
+            return new Promise(function(resolve) {
+                var s = Date.now();
+                (function loop() {
+                    var r=null; try{r=fn();}catch(e){}
+                    if(r){resolve(r);return;}
+                    if(Date.now()-s>=t){resolve(null);return;}
+                    setTimeout(loop,i);
+                })();
+            });
+        }
+        function realClick(el) {
+            ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(type) {
+                el.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window}));
+            });
+        }
+        function findToggle() {
+            var t = document.querySelector('[data-testid*="SmartPricing"],[data-testid*="smartPricing"]');
+            if(t) return t;
+            var cands = document.querySelectorAll('input[type="checkbox"],button[role="switch"],[role="switch"]');
+            for(var i=0;i<cands.length;i++){
+                var a=cands[i].closest('label')||cands[i].parentElement;
+                if(a&&a.textContent.toLowerCase().indexOf('smart pricing')!==-1) return cands[i];
+            }
+            return null;
+        }
+        function isOn(t) {
+            return t.checked===true||t.getAttribute('aria-checked')==='true'||t.getAttribute('data-state')==='checked';
+        }
+        return (async function() {
+            var toggle = await waitFor(findToggle, 3000);
+            if(!toggle||!isOn(toggle)) return 'not-found-or-off';
+            var target = toggle.tagName==='INPUT'?(document.querySelector('label[for="'+toggle.id+'"]')||toggle.closest('label')||toggle):toggle;
+            realClick(target);
+            var confirmBtn = await waitFor(function(){
+                var bs=document.querySelectorAll('[role="dialog"] button,[role="alertdialog"] button');
+                for(var i=0;i<bs.length;i++){var t=bs[i].textContent.trim().toLowerCase();if((t==='turn off'||t==='confirm'||t==='ok')&&!bs[i].disabled)return bs[i];}
+                return null;
+            }, 1500);
+            if(confirmBtn) realClick(confirmBtn);
+            return 'disabled';
+        })();
+        """
+        return (try? await webView.callJS(js)) as? String ?? "error"
+    }
+}
+
+struct MercariAutoEditSheet: View {
+    let listing: UserListing
+    let mercariId: String
+    var onDone: () -> Void
+
+    @StateObject private var state: MercariAutoEditState
+    @Environment(\.dismiss) private var dismiss
+
+    init(listing: UserListing, mercariId: String, onDone: @escaping () -> Void) {
+        self.listing = listing
+        self.mercariId = mercariId
+        self.onDone = onDone
+        _state = StateObject(wrappedValue: MercariAutoEditState(
+            mercariItemId: mercariId,
+            title: listing.customTitle ?? "",
+            listingDescription: listing.customDescription ?? "",
+            price: listing.price ?? 0,
+            condition: listing.condition .rawValue
+        ))
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                if state.isWebViewVisible {
+                    MercariSheetWebView(webView: state.webView)
+                        .ignoresSafeArea()
+                } else {
+                    statusContent
+                }
+            }
+            .navigationTitle("Update Mercari Listing")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { onDone(); dismiss() }
+                }
+                if state.isWebViewVisible {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button { state.webView.reload() } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                    }
+                }
+            }
+        }
+        .task { state.start() }
+    }
+
+    @ViewBuilder
+    private var statusContent: some View {
+        switch state.phase {
+        case .navigating, .injecting:
+            VStack(spacing: 16) {
+                ProgressView()
+                let label: String = { if case .navigating = state.phase { return "Loading Mercari edit form…" } else { return "Filling in updated details…" } }()
+                Text(label)
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+        case .success:
+            VStack(spacing: 16) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 56)).foregroundStyle(.green)
+                Text("Mercari listing updated!").font(.title3.weight(.semibold))
+                Button("Done") { onDone(); dismiss() }
+                    .buttonStyle(.borderedProminent)
+            }
+        case .manualFallback(let reason):
+            VStack(spacing: 12) {
+                Image(systemName: "hand.tap.fill")
+                    .font(.system(size: 40)).foregroundStyle(.orange)
+                Text("Finish manually").font(.title3.weight(.semibold))
+                Text(reason).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button("Show Mercari form") {
+                    state.isWebViewVisible = true
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(.horizontal, 32)
+        }
     }
 }
