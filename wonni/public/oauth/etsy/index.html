@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Completing Etsy Sign-In…</title>
+  <style>
+    body {
+      font-family: -apple-system, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      background: #f5f5f7;
+      color: #1d1d1f;
+    }
+    p { font-size: 17px; }
+  </style>
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      var code = params.get('code');
+      var state = params.get('state');
+      var error = params.get('error');
+
+      if (code) {
+        var redirect = 'wonni://oauth/etsy?code=' + encodeURIComponent(code);
+        if (state) redirect += '&state=' + encodeURIComponent(state);
+        window.location.href = redirect;
+      } else if (error) {
+        window.location.href = 'wonni://oauth/etsy?error=' + encodeURIComponent(error);
+      }
+    })();
+  </script>
+</head>
+<body>
+  <p>Completing Etsy sign-in…</p>
+</body>
+</html>

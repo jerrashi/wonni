@@ -1,4 +1,5 @@
 import SwiftUI
+import FirebaseFunctions
 
 struct BulkEditSheet: View {
     let selectedListingIds: Set<String>
@@ -19,13 +20,27 @@ struct BulkEditSheet: View {
     
     @State private var selectedCondition: ItemCondition? = nil
     @State private var selectedShipping: ShippingPolicyMode = .unchanged
-    
+    @State private var weightWholeLbs: Int = 0
+    @State private var weightOz: Double = 0
+    @State private var lengthIn: Double? = nil
+    @State private var widthIn: Double? = nil
+    @State private var heightIn: Double? = nil
+
     @State private var isApplying = false
-    
+
     @FocusState private var focusedField: FocusField?
-    
+
     enum FocusField: Hashable {
         case titlePrepend, titleAppend, descPrepend, descAppend, priceAmount, priceLimit
+        case weightLbs, weightOz, lengthIn, widthIn, heightIn
+    }
+
+    private var combinedWeightLbs: Double? {
+        let total = Double(weightWholeLbs) + weightOz / 16.0
+        return total > 0 ? total : nil
+    }
+    private var hasDimensions: Bool {
+        lengthIn != nil && widthIn != nil && heightIn != nil
     }
     
     enum PriceAdjustmentDirection {
@@ -167,7 +182,7 @@ struct BulkEditSheet: View {
                             Text(condition.displayName).tag(ItemCondition?.some(condition))
                         }
                     }
-                    
+
                     Picker("Shipping", selection: $selectedShipping) {
                         ForEach(ShippingPolicyMode.allCases, id: \.self) { policy in
                             Text(policy.rawValue).tag(policy)
@@ -175,6 +190,54 @@ struct BulkEditSheet: View {
                     }
                 } header: {
                     Text("Details")
+                }
+
+                Section {
+                    HStack(spacing: 8) {
+                        Text("Weight")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                        Spacer()
+                        TextField("0", value: $weightWholeLbs, format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 56)
+                            .focused($focusedField, equals: .weightLbs)
+                        Text("lbs").font(.subheadline).foregroundStyle(.secondary)
+                        TextField("0", value: $weightOz, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 56)
+                            .focused($focusedField, equals: .weightOz)
+                        Text("oz").font(.subheadline).foregroundStyle(.secondary)
+                    }
+
+                    HStack(spacing: 6) {
+                        Text("L×W×H")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                        Spacer()
+                        TextField("L", value: $lengthIn, format: .number)
+                            .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                            .textFieldStyle(.roundedBorder).frame(width: 50)
+                            .focused($focusedField, equals: .lengthIn)
+                        Text("×").foregroundStyle(.secondary)
+                        TextField("W", value: $widthIn, format: .number)
+                            .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                            .textFieldStyle(.roundedBorder).frame(width: 50)
+                            .focused($focusedField, equals: .widthIn)
+                        Text("×").foregroundStyle(.secondary)
+                        TextField("H", value: $heightIn, format: .number)
+                            .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                            .textFieldStyle(.roundedBorder).frame(width: 50)
+                            .focused($focusedField, equals: .heightIn)
+                        Text("in").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Shipping Dimensions")
+                } footer: {
+                    Text("Leave at 0 / blank to keep existing values.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Bulk Edit (\(selectedListingIds.count))")
@@ -261,25 +324,59 @@ struct BulkEditSheet: View {
     
     private func focusPrevious() {
         switch focusedField {
-        case .titlePrepend: focusedField = nil
-        case .titleAppend: focusedField = .titlePrepend
-        case .descPrepend: focusedField = .titleAppend
-        case .descAppend: focusedField = .descPrepend
-        case .priceAmount: focusedField = .descAppend
-        case .priceLimit: focusedField = .priceAmount
-        case nil: focusedField = .priceLimit
+        case .titlePrepend:
+            focusedField = nil
+        case .titleAppend:
+            focusedField = .titlePrepend
+        case .descPrepend:
+            focusedField = .titleAppend
+        case .descAppend:
+            focusedField = .descPrepend
+        case .priceAmount:
+            focusedField = .descAppend
+        case .priceLimit:
+            focusedField = .priceAmount
+        case .weightLbs:
+            focusedField = .priceLimit
+        case .weightOz:
+            focusedField = .weightLbs
+        case .lengthIn:
+            focusedField = .weightOz
+        case .widthIn:
+            focusedField = .lengthIn
+        case .heightIn:
+            focusedField = .widthIn
+        case nil:
+            focusedField = .heightIn
         }
     }
     
     private func focusNext() {
         switch focusedField {
-        case .titlePrepend: focusedField = .titleAppend
-        case .titleAppend: focusedField = .descPrepend
-        case .descPrepend: focusedField = .descAppend
-        case .descAppend: focusedField = .priceAmount
-        case .priceAmount: focusedField = .priceLimit
-        case .priceLimit: focusedField = nil
-        case nil: focusedField = .titlePrepend
+        case .titlePrepend:
+            focusedField = .titleAppend
+        case .titleAppend:
+            focusedField = .descPrepend
+        case .descPrepend:
+            focusedField = .descAppend
+        case .descAppend:
+            focusedField = .priceAmount
+        case .priceAmount:
+            focusedField = .priceLimit
+        case .priceLimit:
+            focusedField = .weightLbs
+        case .weightLbs:
+            focusedField = .weightOz
+        case .weightOz:
+            focusedField = .lengthIn
+        case .lengthIn:
+            focusedField = .widthIn
+        case .widthIn:
+            focusedField = .heightIn
+        case .heightIn:
+            focusedField = nil
+        case nil:
+            focusedField = .titlePrepend
         }
     }
     
@@ -287,7 +384,8 @@ struct BulkEditSheet: View {
         (priceAdjustmentMode != .none && priceAdjustmentValue != nil) ||
         !titlePrepend.isEmpty || !titleAppend.isEmpty ||
         !descriptionPrepend.isEmpty || !descriptionAppend.isEmpty ||
-        selectedCondition != nil || selectedShipping != .unchanged
+        selectedCondition != nil || selectedShipping != .unchanged ||
+        combinedWeightLbs != nil || hasDimensions
     }
     
     private func applyBulkEdit() {
@@ -319,7 +417,8 @@ struct BulkEditSheet: View {
             }
             
             do {
-                try await ListingRepository.shared.bulkUpdate(
+                let dims: (Double, Double, Double)? = hasDimensions ? (lengthIn!, widthIn!, heightIn!) : nil
+                let ebayIds = try await ListingRepository.shared.bulkUpdate(
                     listingIds: Array(selectedListingIds),
                     priceAdjustment: adjustment,
                     isPercentage: isPercentage,
@@ -331,9 +430,17 @@ struct BulkEditSheet: View {
                     descriptionPrepend: descriptionPrepend.isEmpty ? nil : descriptionPrepend,
                     descriptionAppend: descriptionAppend.isEmpty ? nil : descriptionAppend,
                     condition: selectedCondition,
-                    buyerPaysShipping: buyerPaysShipping
+                    buyerPaysShipping: buyerPaysShipping,
+                    setWeightLbs: combinedWeightLbs,
+                    setPackageDimensions: dims
                 )
-                
+
+                for id in ebayIds {
+                    Task {
+                        try? await Functions.functions().httpsCallable("ebayUpdateListing").call(["listingId": id])
+                    }
+                }
+
                 await MainActor.run {
                     isApplying = false
                     onComplete()
@@ -348,3 +455,4 @@ struct BulkEditSheet: View {
         }
     }
 }
+

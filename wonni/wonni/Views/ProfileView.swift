@@ -44,8 +44,21 @@ struct ProfileView: View {
     @State private var activeAutofillJob: CrossPostJob? = nil
 
     @State private var profile: UserPublicProfile?
+    @State private var showMercariProfileSync = false
+    @State private var showSalesDashboard = false
+    @State private var listingToRecordSale: UserListing?
+    @State private var saleSummary: (count: Int, takeHome: Double) = (0, 0)
 
     private var user: FirebaseAuth.User? { authManager.currentUser }
+
+    private var hasMercariListings: Bool {
+        listings.contains { $0.crossPostListingIds?["mercari"] != nil }
+    }
+    private var pendingMercariCount: Int {
+        listings.filter {
+            $0.pendingMercariDeactivation == true || $0.pendingMercariRelist == true
+        }.count
+    }
 
     private var initials: String {
         let nameToUse = (user?.displayName?.isEmpty == false) ? user!.displayName! : (user?.email ?? "?")
@@ -132,7 +145,24 @@ struct ProfileView: View {
                         }
                     }
                 }
-                
+
+                ToolbarItem(placement: .topBarLeading) {
+                    if hasMercariListings && editMode == .inactive {
+                        Button {
+                            showMercariProfileSync = true
+                        } label: {
+                            ZStack(alignment: .topTrailing) {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                if pendingMercariCount > 0 {
+                                    Circle()
+                                        .fill(Color.orange)
+                                        .frame(width: 8, height: 8)
+                                        .offset(x: 4, y: -4)
+                                }
+                            }
+                        }
+                    }
+                }
             }
             .safeAreaInset(edge: .bottom) {
                 if editMode == .active {
@@ -172,6 +202,22 @@ struct ProfileView: View {
             }
             .sheet(isPresented: $showSettings) {
                 SettingsSheet()
+            }
+            .sheet(isPresented: $showMercariProfileSync) {
+                MercariProfileSyncSheet {
+                    Task { await loadListings() }
+                }
+            }
+            .sheet(isPresented: $showSalesDashboard) {
+                SalesDashboardView()
+            }
+            .sheet(item: $listingToRecordSale) { listing in
+                RecordSaleSheet(listing: listing) {
+                    Task {
+                        await loadListings()
+                        await loadSaleSummary()
+                    }
+                }
             }
             .alert("Delete \(selectedListings.count) Listings?", isPresented: $isBulkDeleting) {
                 Button("Delete", role: .destructive) {
@@ -251,15 +297,22 @@ struct ProfileView: View {
                     )
                 }
             }
-            .task { 
+            .task {
                 await loadListings()
                 await loadProfile()
+                await loadSaleSummary()
             }
         }
     }
     private func loadProfile() async {
         guard let uid = user?.uid else { return }
         profile = try? await UserRepository.shared.fetchProfile(uid: uid)
+    }
+
+    private func loadSaleSummary() async {
+        let allSales = (try? await SaleRepository.shared.fetchSales()) ?? []
+        let takeHome = allSales.reduce(0.0) { $0 + ($1.takeHome ?? 0) }
+        saleSummary = (count: allSales.count, takeHome: takeHome)
     }
 
     private var header: some View {
@@ -349,13 +402,37 @@ struct ProfileView: View {
     
     @ViewBuilder
     private var listingsList: some View {
+        // Sales summary row
+        if saleSummary.count > 0 || !listings.isEmpty {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Sales")
+                        .font(.title2.weight(.medium))
+                    if saleSummary.count > 0 {
+                        Text("\(saleSummary.count) sold · \(String(format: "$%.2f", saleSummary.takeHome)) take-home")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                Button {
+                    showSalesDashboard = true
+                } label: {
+                    Text(saleSummary.count > 0 ? "View All" : "Dashboard")
+                        .font(.subheadline)
+                }
+            }
+            .padding(.top, 8)
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+        }
+
         Text("\(filteredListings.count) Listing\(filteredListings.count == 1 ? "" : "s")")
             .font(.title2.weight(.medium))
             .foregroundStyle(.primary)
-            .padding(.top, 8)
+            .padding(.top, 4)
             .padding(.bottom, 4)
             .listRowSeparator(.hidden)
-            
+
         ForEach(filteredListings) { listing in
             NavigationLink(destination: ListingDetailView(listing: listing)) {
                 ProfileListingRow(listing: listing) {
@@ -364,6 +441,14 @@ struct ProfileView: View {
             }
             .navigationLinkIndicatorVisibility(.hidden)
             .tag(listing.id ?? "")
+            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                Button {
+                    listingToRecordSale = listing
+                } label: {
+                    Label("Record Sale", systemImage: "dollarsign.circle")
+                }
+                .tint(.green)
+            }
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 Button(role: .destructive) {
                     Task { await deleteListing(listing) }
@@ -453,7 +538,6 @@ struct ProfileView: View {
                         do {
                             let functions = Functions.functions()
                             let _ = try await functions.httpsCallable("ebayCreateListing").call(["listingId": id])
-                            print("Bulk cross-post triggered for: \(id)")
                             await loadListings()
                         } catch {
                             print("Failed to bulk cross-post listing \(id): \(error)")
@@ -630,6 +714,54 @@ struct EditProfileSheet: View {
     }
 }
 
+// MARK: - Edit Photo Item
+enum EditPhotoItem: Identifiable, Hashable {
+    case existing(path: String)
+    case new(id: String, image: UIImage)
+    
+    var id: String {
+        switch self {
+        case .existing(let path): return path
+        case .new(let id, _): return id
+        }
+    }
+    
+    static func == (lhs: EditPhotoItem, rhs: EditPhotoItem) -> Bool {
+        lhs.id == rhs.id
+    }
+    
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+}
+
+// MARK: - Edit Photo Drop Delegate
+struct EditPhotoDropDelegate: DropDelegate {
+    let item: EditPhotoItem
+    @Binding var photos: [EditPhotoItem]
+    @Binding var draggedPhotoId: String?
+
+    func dropEntered(info: DropInfo) {
+        guard let dragged = draggedPhotoId, dragged != item.id else { return }
+        if let from = photos.firstIndex(where: { $0.id == dragged }),
+           let to = photos.firstIndex(where: { $0.id == item.id }) {
+            withAnimation {
+                let moved = photos.remove(at: from)
+                photos.insert(moved, at: to)
+            }
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        return DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggedPhotoId = nil
+        return true
+    }
+}
+
 // MARK: - Edit Listing Sheet
 
 struct EditListingSheet: View {
@@ -648,6 +780,7 @@ struct EditListingSheet: View {
     @State private var lengthIn: Double?
     @State private var widthIn: Double?
     @State private var heightIn: Double?
+    @State private var quantity: Int
     @State private var isSaving = false
     @State private var showAddressSetupSheet = false
     @State private var platformToEnableAfterAddressSetup = ""
@@ -666,6 +799,20 @@ struct EditListingSheet: View {
     @State private var mercariLinkError: String?
     @State private var showMercariSync = false
     @State private var showMercariEdit = false
+    @State private var showMercariUpdatePrompt = false
+    @State private var showMercariAutoEdit = false
+    @State private var pendingOnSaveJobs: [CrossPostJob] = []
+    @State private var showShippingProfileAlert = false
+    @State private var reconnectSession: ASWebAuthenticationSession?
+    @State private var reconnectAnchor = WebAuthPresentationAnchor()
+    @State private var showMercariReconnect = false
+    
+    // Photo Editing
+    @State private var editPhotos: [EditPhotoItem]
+    @State private var isSelectionMode = false
+    @State private var selectedPhotos = Set<String>()
+    @State private var newPhotosItems: [PhotosPickerItem] = []
+    @State private var draggedPhotoId: String? = nil
 
     init(listing: UserListing, onSave: @escaping ([CrossPostJob]) -> Void) {
         self.listing = listing
@@ -675,6 +822,7 @@ struct EditListingSheet: View {
         _description = State(initialValue: listing.customDescription ?? "")
         _condition = State(initialValue: listing.condition)
         _category = State(initialValue: listing.category ?? "")
+        _quantity = State(initialValue: listing.quantity ?? 1)
         _brand = State(initialValue: listing.brand ?? "")
         let ship = listing.shippingInfo
         _isFreeShipping = State(initialValue: !(ship?.buyerPaysShipping ?? true))
@@ -689,11 +837,132 @@ struct EditListingSheet: View {
         _selectedPlatforms = State(initialValue: Set(posted))
         _initialPlatforms = State(initialValue: Set(posted))
         _linkedMercariId = State(initialValue: listing.crossPostListingIds?["mercari"])
+        _editPhotos = State(initialValue: listing.photoPaths.map { .existing(path: $0) })
     }
     
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("Photos").font(.headline)
+                            Spacer()
+                            if !editPhotos.isEmpty {
+                                if isSelectionMode {
+                                    HStack(spacing: 12) {
+                                        Button("Delete") {
+                                            for id in selectedPhotos {
+                                                editPhotos.removeAll(where: { $0.id == id })
+                                            }
+                                            selectedPhotos.removeAll()
+                                            isSelectionMode = false
+                                        }
+                                        .foregroundColor(.red)
+                                        .disabled(selectedPhotos.isEmpty)
+                                        
+                                        Button("Cancel") {
+                                            isSelectionMode = false
+                                            selectedPhotos.removeAll()
+                                        }
+                                    }
+                                } else {
+                                    Button("Select") {
+                                        isSelectionMode = true
+                                        selectedPhotos.removeAll()
+                                    }
+                                }
+                            }
+                        }
+                        
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 12) {
+                                ForEach(editPhotos) { item in
+                                    ZStack(alignment: .topTrailing) {
+                                        Group {
+                                            switch item {
+                                            case .existing(let path):
+                                                StorageImage(path: path)
+                                            case .new(_, let image):
+                                                Image(uiImage: image).resizable().scaledToFill()
+                                            }
+                                        }
+                                        .frame(width: 80, height: 80)
+                                        .cornerRadius(8)
+                                        .clipped()
+                                        .opacity(selectedPhotos.contains(item.id) ? 0.6 : 1.0)
+                                        .onDrag({
+                                            if !isSelectionMode {
+                                                draggedPhotoId = item.id
+                                                return NSItemProvider(object: item.id as NSString)
+                                            }
+                                            return NSItemProvider()
+                                        }, preview: {
+                                            Group {
+                                                switch item {
+                                                case .existing(let path):
+                                                    StorageImage(path: path)
+                                                case .new(_, let image):
+                                                    Image(uiImage: image).resizable().scaledToFill()
+                                                }
+                                            }
+                                            .frame(width: 80, height: 80)
+                                            .cornerRadius(8)
+                                            .clipped()
+                                        })
+                                        .onDrop(of: [.text], delegate: EditPhotoDropDelegate(
+                                            item: item,
+                                            photos: $editPhotos,
+                                            draggedPhotoId: $draggedPhotoId
+                                        ))
+                                        
+                                        if isSelectionMode {
+                                            Image(systemName: selectedPhotos.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                                                .foregroundColor(selectedPhotos.contains(item.id) ? .blue : .white)
+                                                .background(Circle().fill(Color.black.opacity(0.4)))
+                                                .padding(4)
+                                        }
+                                    }
+                                    .onTapGesture {
+                                        if isSelectionMode {
+                                            if selectedPhotos.contains(item.id) {
+                                                selectedPhotos.remove(item.id)
+                                            } else {
+                                                selectedPhotos.insert(item.id)
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                if !isSelectionMode {
+                                    PhotosPicker(selection: $newPhotosItems, matching: .images) {
+                                        VStack {
+                                            Image(systemName: "plus.circle").font(.title2)
+                                            Text("Add Photo").font(.caption2)
+                                        }
+                                        .foregroundColor(.accentColor)
+                                        .frame(width: 80, height: 80)
+                                        .background(Color(.systemGray6))
+                                        .cornerRadius(8)
+                                    }
+                                    .onChange(of: newPhotosItems) { _, newItems in
+                                        Task {
+                                            for phItem in newItems {
+                                                if let data = try? await phItem.loadTransferable(type: Data.self),
+                                                   let uiImage = UIImage(data: data) {
+                                                    editPhotos.append(.new(id: UUID().uuidString, image: uiImage))
+                                                }
+                                            }
+                                            newPhotosItems = []
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+                
                 Section("Details") {
                     TextField("Title", text: $title)
                     TextField("Description", text: $description, axis: .vertical)
@@ -707,12 +976,13 @@ struct EditListingSheet: View {
                     TextField("Brand", text: $brand)
                     TextField("Category", text: $category)
                 }
-                Section("Price") {
+                Section("Price & Quantity") {
                     HStack {
                         Text("$")
                         TextField("0.00", value: $price, format: .number)
                             .keyboardType(.decimalPad)
                     }
+                    Stepper("Quantity: \(quantity)", value: $quantity, in: 1...999)
                 }
                 Section("Shipping") {
                     Toggle("Free Shipping (Seller Pays)", isOn: $isFreeShipping)
@@ -824,6 +1094,27 @@ struct EditListingSheet: View {
                     )
                 }
             }
+            .sheet(isPresented: $showMercariAutoEdit, onDismiss: {
+                onSave(pendingOnSaveJobs)
+                dismiss()
+            }) {
+                if let id = linkedMercariId {
+                    MercariAutoEditSheet(listing: listing, mercariId: id) {
+                        // onDone fires before onDismiss — nothing extra needed here
+                    }
+                }
+            }
+            .alert("Update Mercari Listing?", isPresented: $showMercariUpdatePrompt) {
+                Button("Update Mercari") { showMercariAutoEdit = true }
+                Button("Not now", role: .cancel) { onSave(pendingOnSaveJobs); dismiss() }
+            } message: {
+                Text("Wonni was updated. Would you like to apply these changes to the Mercari listing too?")
+            }
+            .alert("Shipping Profile", isPresented: $showShippingProfileAlert) {
+                Button("Got it", role: .cancel) {}
+            } message: {
+                Text("You changed who pays shipping. Remember to update your shipping profile on eBay or Etsy to match.")
+            }
             .alert("Cross-Post Failed", isPresented: $showCrossPostError, presenting: crossPostErrorMessage) { _ in
                 if crossPostErrorMessage?.contains("ebay.com/bp/manage") == true || crossPostErrorMessage?.contains("bizpolicy.ebay.com") == true || crossPostErrorMessage?.contains("Business Policies") == true {
                     Button("Enable on eBay") {
@@ -889,24 +1180,51 @@ struct EditListingSheet: View {
     @ViewBuilder
     private func crossPostPlatformRow(platform: String, statusMap: [String: String]) -> some View {
         let status = statusMap[platform] ?? (platform == "mercari" && linkedMercariId != nil ? "posted" : "")
+        let isAPIplatform = platform == "ebay" || platform == "etsy"
+        let integration = integrationRepo.integrations.first(where: { $0.platform == platform })
+        let isDisconnected = isAPIplatform && status == "posted" && integration?.isConnected == false
+
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text(platformDisplayName(platform))
                     .font(.subheadline)
                 Spacer()
-                crossPostStatusBadge(status)
-                if platform == "mercari", let id = linkedMercariId,
-                   let url = URL(string: "https://www.mercari.com/us/item/\(id)/") {
-                    Link("View", destination: url)
-                        .font(.caption.weight(.semibold))
-                } else if platform == "ebay",
-                          let id = listing.crossPostListingIds?["ebay"],
-                          let url = URL(string: "https://www.ebay.com/itm/\(id)") {
-                    Link("View", destination: url)
-                        .font(.caption.weight(.semibold))
+                if isDisconnected {
+                    Label("Disconnected", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption.weight(.semibold)).foregroundStyle(.orange)
+                } else {
+                    crossPostStatusBadge(status)
+                }
+                // View link — skip if disconnected or deleted
+                if !isDisconnected && status != "deleted" {
+                    if platform == "mercari", let id = linkedMercariId,
+                       let url = URL(string: "https://www.mercari.com/us/item/\(id)/") {
+                        Link("View", destination: url)
+                            .font(.caption.weight(.semibold))
+                    } else if platform == "ebay",
+                              let id = listing.crossPostListingIds?["ebay"],
+                              let url = URL(string: "https://www.ebay.com/itm/\(id)") {
+                        Link("View", destination: url)
+                            .font(.caption.weight(.semibold))
+                    }
                 }
             }
-            if platform == "mercari", linkedMercariId != nil {
+            // Second row: action buttons
+            if isDisconnected {
+                Button { reconnectPlatform(platform) } label: {
+                    Label("Reconnect account", systemImage: "arrow.clockwise")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.orange)
+            } else if status == "deleted" {
+                Button { repostToPlatform(platform) } label: {
+                    Label("Listing deleted — Repost", systemImage: "arrow.up.circle")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+            } else if platform == "mercari", linkedMercariId != nil {
                 HStack {
                     Button { showMercariEdit = true } label: {
                         Label("Edit", systemImage: "pencil")
@@ -934,6 +1252,9 @@ struct EditListingSheet: View {
                 }
             }
         }
+        .sheet(isPresented: $showMercariReconnect) {
+            MercariConnectSheet()
+        }
     }
 
     @ViewBuilder private func crossPostStatusBadge(_ status: String) -> some View {
@@ -947,10 +1268,62 @@ struct EditListingSheet: View {
         case "pending":
             Label("In progress", systemImage: "clock")
                 .font(.caption).foregroundStyle(.orange)
+        case "deleted":
+            Label("Deleted", systemImage: "trash.circle.fill")
+                .font(.caption.weight(.semibold)).foregroundStyle(.red)
         case "":
             EmptyView()
         default:
             Text(status.capitalized).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func reconnectPlatform(_ platform: String) {
+        switch platform {
+        case "ebay":
+            guard let clientId = Bundle.main.object(forInfoDictionaryKey: "EbayClientId") as? String, !clientId.isEmpty,
+                  let ruName = Bundle.main.object(forInfoDictionaryKey: "EbayRuName") as? String, !ruName.isEmpty
+            else { return }
+            let isSandbox = ruName.lowercased().contains("sbx")
+            var components = URLComponents(string: "https://\(isSandbox ? "auth.sandbox.ebay.com" : "auth.ebay.com")/oauth2/authorize")!
+            components.queryItems = [
+                URLQueryItem(name: "client_id", value: clientId),
+                URLQueryItem(name: "redirect_uri", value: ruName),
+                URLQueryItem(name: "response_type", value: "code"),
+                URLQueryItem(name: "scope", value: "https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.account https://api.ebay.com/oauth/api_scope/sell.fulfillment https://api.ebay.com/oauth/api_scope/sell.finances https://api.ebay.com/oauth/api_scope/commerce.identity.readonly")
+            ]
+            guard let authURL = components.url else { return }
+            let session = ASWebAuthenticationSession(url: authURL, callbackURLScheme: "wonni") { callbackURL, _ in
+                Task { @MainActor in
+                    self.reconnectSession = nil
+                    guard let code = URLComponents(url: callbackURL ?? URL(string: "x://")!, resolvingAgainstBaseURL: false)?
+                            .queryItems?.first(where: { $0.name == "code" })?.value else { return }
+                    try? await IntegrationRepository.shared.linkPlatformWithCode(platform: "ebay", code: code)
+                }
+            }
+            session.presentationContextProvider = reconnectAnchor
+            session.prefersEphemeralWebBrowserSession = false
+            reconnectSession = session
+            session.start()
+        case "mercari":
+            showMercariReconnect = true
+        default:
+            break
+        }
+    }
+
+    private func repostToPlatform(_ platform: String) {
+        guard let id = listing.id else { return }
+        Task {
+            do {
+                let functions = Functions.functions()
+                if platform == "ebay" {
+                    let _ = try await functions.httpsCallable("ebayCreateListing").call(["listingId": id])
+                }
+            } catch {
+                let msg = extractCrossPostErrorMessage(error)
+                await MainActor.run { crossPostErrorMessage = msg; showCrossPostError = true }
+            }
         }
     }
 
@@ -1001,6 +1374,28 @@ struct EditListingSheet: View {
             if let l = lengthIn, let w = widthIn, let h = heightIn {
                 dims = PackageDimensions(lengthIn: l, widthIn: w, heightIn: h)
             }
+            
+            var finalPhotoPaths: [String] = []
+            for item in editPhotos {
+                switch item {
+                case .existing(let path):
+                    finalPhotoPaths.append(path)
+                case .new(_, let image):
+                    if let newPath = try? await StorageService.shared.uploadListingImageWithUUID(image: image, userId: listing.userId, listingId: id) {
+                        finalPhotoPaths.append(newPath)
+                    }
+                }
+            }
+            
+            let pathsToDelete = listing.photoPaths.filter { !finalPhotoPaths.contains($0) }
+            if !pathsToDelete.isEmpty {
+                Task {
+                    for path in pathsToDelete {
+                        try? await Storage.storage().reference().child(path).delete()
+                    }
+                }
+            }
+            
             try await ListingRepository.shared.updateFields(
                 id: id,
                 title: title.trimmingCharacters(in: .whitespaces),
@@ -1009,9 +1404,12 @@ struct EditListingSheet: View {
                 condition: condition,
                 brand: brand.isEmpty ? nil : brand.trimmingCharacters(in: .whitespaces),
                 category: category.isEmpty ? nil : category.trimmingCharacters(in: .whitespaces),
+                quantity: quantity,
                 weightLbs: weightLbs,
                 packageDimensions: dims,
-                buyerPaysShipping: !isFreeShipping
+                buyerPaysShipping: !isFreeShipping,
+                photoPaths: finalPhotoPaths,
+                coverPhotoPath: finalPhotoPaths.first
             )
             
             let added = selectedPlatforms.subtracting(initialPlatforms)
@@ -1021,33 +1419,34 @@ struct EditListingSheet: View {
             var newWebJobs: [CrossPostJob] = []
 
             // Push edits to already-live eBay listings.
-            if alreadyPosted.contains("ebay") {
+            // Push edits to already-live API listings
+            for platform in alreadyPosted where platform == "ebay" || platform == "etsy" {
+                let fn = platform == "ebay" ? "ebayUpdateListing" : "etsyUpdateListing"
                 Task {
                     do {
-                        let functions = Functions.functions()
-                        let _ = try await functions.httpsCallable("ebayUpdateListing").call(["listingId": id])
-                        print("[EditListingSheet] ebayUpdateListing succeeded for \(id)")
+                        let _ = try await Functions.functions().httpsCallable(fn).call(["listingId": id])
                     } catch {
-                        print("[EditListingSheet] ebayUpdateListing failed: \(error)")
                         let msg = extractCrossPostErrorMessage(error)
-                        crossPostErrorMessage = msg
-                        showCrossPostError = true
+                        if msg.localizedLowercase.contains("not found") {
+                            try? await Firestore.firestore().collection("listings").document(id).updateData([
+                                "crossPostStatus.\(platform)": "deleted"
+                            ])
+                        } else {
+                            await MainActor.run { crossPostErrorMessage = msg; showCrossPostError = true }
+                        }
                     }
                 }
             }
 
             for platform in added {
-                if platform == "ebay" {
+                if platform == "ebay" || platform == "etsy" {
+                    let fn = platform == "ebay" ? "ebayCreateListing" : "etsyCreateListing"
                     Task {
                         do {
-                            let functions = Functions.functions()
-                            let _ = try await functions.httpsCallable("ebayCreateListing").call(["listingId": id])
-                            print("Successfully triggered ebayCreateListing Cloud Function for listing: \(id)")
+                            let _ = try await Functions.functions().httpsCallable(fn).call(["listingId": id])
                         } catch {
-                            print("Failed to call ebayCreateListing: \(error)")
                             let msg = extractCrossPostErrorMessage(error)
-                            crossPostErrorMessage = msg
-                            showCrossPostError = true
+                            await MainActor.run { crossPostErrorMessage = msg; showCrossPostError = true }
                         }
                     }
                 } else if platform == "mercari" || platform == "facebook" {
@@ -1062,23 +1461,40 @@ struct EditListingSheet: View {
                     ))
                 }
             }
-            
+
             for platform in removed {
-                if platform == "ebay" {
+                if platform == "ebay" || platform == "etsy" {
+                    let fn = platform == "ebay" ? "ebayDeleteListing" : "etsyDeleteListing"
                     Task {
-                        do {
-                            let functions = Functions.functions()
-                            let _ = try await functions.httpsCallable("ebayDeleteListing").call(["listingId": id])
-                            print("Successfully triggered ebayDeleteListing Cloud Function for listing: \(id)")
-                        } catch {
-                            print("Failed to call ebayDeleteListing: \(error)")
-                        }
+                        try? await Functions.functions().httpsCallable(fn).call(["listingId": id])
                     }
                 }
             }
             
-            onSave(newWebJobs)
-            dismiss()
+            // Shipping profile alert: if buyer-pays-shipping changed on a live API listing
+            let shippingChanged = isFreeShipping != !(listing.shippingInfo?.buyerPaysShipping ?? true)
+            let hasLiveAPIListing = alreadyPosted.contains("ebay") || alreadyPosted.contains("etsy")
+            if shippingChanged && hasLiveAPIListing {
+                showShippingProfileAlert = true
+            }
+
+            // Mercari update prompt: ask before dismissing if Mercari is linked
+            // and a Mercari-visible field (title, description, price, condition) changed.
+            // Quantity, weight, dimensions are not editable on Mercari, so skip the prompt
+            // if those are the only changes.
+            let mercariIsLive = linkedMercariId != nil
+            let mercariFieldsChanged =
+                title.trimmingCharacters(in: .whitespaces) != (listing.customTitle ?? "") ||
+                description.trimmingCharacters(in: .whitespaces) != (listing.customDescription ?? "") ||
+                price != listing.price ||
+                condition != listing.condition
+            if mercariIsLive && mercariFieldsChanged {
+                pendingOnSaveJobs = newWebJobs
+                showMercariUpdatePrompt = true
+            } else {
+                onSave(newWebJobs)
+                dismiss()
+            }
         } catch {
             print("Failed to save listing: \(error)")
         }
@@ -1256,7 +1672,9 @@ struct SettingsSheet: View {
     @State private var activeSession: ASWebAuthenticationSession?
     @State private var anchorProvider = WebAuthPresentationAnchor()
     @State private var showMercariLogin = false
-    @State private var showEtsyConnect = false
+    @State private var showEtsySetupAlert = false
+    @State private var etsySetupMissingShipping = false
+    @State private var etsySetupMissingReturn = false
     
     // Selling Settings State
     @StateObject private var settingsRepo = SellingSettingsRepository.shared
@@ -1512,10 +1930,28 @@ struct SettingsSheet: View {
             .sheet(isPresented: $showMercariLogin) {
                 MercariConnectSheet()
             }
-            .sheet(isPresented: $showEtsyConnect, onDismiss: {
-                Task { await integrationRepo.loadIntegrations() }
-            }) {
-                EtsyConnectView()
+            .alert("Finish Etsy Setup", isPresented: $showEtsySetupAlert) {
+                if etsySetupMissingShipping {
+                    Button("Add Shipping Profile") {
+                        if let url = URL(string: "https://www.etsy.com/your-shop/shipping-settings") {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                }
+                if etsySetupMissingReturn {
+                    Button("Add Return Policy") {
+                        if let url = URL(string: "https://www.etsy.com/your-shop/policies/edit") {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                }
+                Button("Later", role: .cancel) {}
+            } message: {
+                let items = [
+                    etsySetupMissingShipping ? "a shipping profile" : nil,
+                    etsySetupMissingReturn   ? "a return policy"    : nil,
+                ].compactMap { $0 }.joined(separator: " and ")
+                Text("Before you can post to Etsy, your shop needs \(items). Tap below to set them up on Etsy.")
             }
         }
     }
@@ -1528,7 +1964,7 @@ struct SettingsSheet: View {
         } else if integration.platform == "mercari" {
             showMercariLogin = true
         } else if integration.platform == "etsy" {
-            showEtsyConnect = true
+            startEtsyOAuth()
         } else {
             selectedPlatformToLink = integration.platform
             showLinkAlert = true
@@ -1542,7 +1978,6 @@ struct SettingsSheet: View {
     }
     
     private func startEbayOAuth() {
-        print("[SettingsSheet] startEbayOAuth initiated")
         guard let clientId = Bundle.main.object(forInfoDictionaryKey: "EbayClientId") as? String,
               !clientId.isEmpty,
               let ruName = Bundle.main.object(forInfoDictionaryKey: "EbayRuName") as? String,
@@ -1551,7 +1986,6 @@ struct SettingsSheet: View {
             return
         }
         
-        print("[SettingsSheet] Loaded EbayClientId: \(clientId), EbayRuName: \(ruName)")
         let isSandbox = ruName.lowercased().contains("sbx") || ruName.lowercased().contains("sandbox")
         let authHost = isSandbox ? "auth.sandbox.ebay.com" : "auth.ebay.com"
         
@@ -1560,16 +1994,14 @@ struct SettingsSheet: View {
             URLQueryItem(name: "client_id", value: clientId),
             URLQueryItem(name: "redirect_uri", value: ruName),
             URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "scope", value: "https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.account https://api.ebay.com/oauth/api_scope/commerce.identity.readonly")
+            URLQueryItem(name: "scope", value: "https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.account https://api.ebay.com/oauth/api_scope/sell.fulfillment https://api.ebay.com/oauth/api_scope/sell.finances https://api.ebay.com/oauth/api_scope/commerce.identity.readonly")
         ]
-        
+
         guard let authURL = components.url else {
             print("[SettingsSheet] Error: Could not construct eBay auth URL")
             return
         }
         
-        print("[SettingsSheet] Full eBay auth URL: \(authURL.absoluteString)")
-        print("[SettingsSheet] Presenting ASWebAuthenticationSession (ephemeral=false)")
         
         let session = ASWebAuthenticationSession(
             url: authURL,
@@ -1589,14 +2021,11 @@ struct SettingsSheet: View {
                     print("[SettingsSheet] Authentication session callbackURL is nil")
                     return
                 }
-                print("[SettingsSheet] Authentication session callbackURL received: \(callbackURL.absoluteString)")
 
                 let callbackComponents = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)
                 if let code = callbackComponents?.queryItems?.first(where: { $0.name == "code" })?.value {
-                    print("[SettingsSheet] Authentication session extracted authorization code: \(code)")
                     do {
                         try await IntegrationRepository.shared.linkPlatformWithCode(platform: "ebay", code: code)
-                        print("[SettingsSheet] Successfully linked platform with code")
                     } catch {
                         print("[SettingsSheet] Error linking platform with code: \(error)")
                     }
@@ -1613,11 +2042,69 @@ struct SettingsSheet: View {
         session.prefersEphemeralWebBrowserSession = false
         
         self.activeSession = session
-        
-        print("[SettingsSheet] Starting ASWebAuthenticationSession...")
         session.start()
     }
-    
+
+    private func startEtsyOAuth() {
+        let clientId = (Bundle.main.object(forInfoDictionaryKey: "EtsyClientId") as? String) ?? ""
+        guard !clientId.isEmpty, clientId != "YOUR_ETSY_CLIENT_ID_HERE" else { return }
+
+        let codeVerifier = EtsyPKCEHelper.generateCodeVerifier()
+        let codeChallenge = EtsyPKCEHelper.generateCodeChallenge(from: codeVerifier)
+        let redirectUri = "https://wonni-app.web.app/oauth/etsy"
+        let state = String(UUID().uuidString.prefix(8))
+
+        var components = URLComponents(string: "https://www.etsy.com/oauth/connect")!
+        components.queryItems = [
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "client_id", value: clientId),
+            URLQueryItem(name: "redirect_uri", value: redirectUri),
+            URLQueryItem(name: "scope", value: "listings_w listings_r shops_r transactions_r"),
+            URLQueryItem(name: "state", value: state),
+            URLQueryItem(name: "code_challenge", value: codeChallenge),
+            URLQueryItem(name: "code_challenge_method", value: "S256")
+        ]
+
+        guard let authURL = components.url else { return }
+
+        let session = ASWebAuthenticationSession(url: authURL, callbackURLScheme: "wonni") { callbackURL, error in
+            Task { @MainActor in
+                self.activeSession = nil
+                guard let callbackURL,
+                      let code = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?
+                          .queryItems?.first(where: { $0.name == "code" })?.value
+                else { return }
+
+                do {
+                    let functions = Functions.functions()
+                    let result = try await functions.httpsCallable("etsyExchangeToken").call([
+                        "code": code, "codeVerifier": codeVerifier, "redirectUri": redirectUri
+                    ])
+                    if (result.data as? [String: Any])?["success"] as? Bool == true {
+                        await integrationRepo.loadIntegrations()
+                        // Check if the shop has the required shipping profile and return policy.
+                        if let setup = try? await functions.httpsCallable("etsyCheckShopSetup").call([:]),
+                           let setupData = setup.data as? [String: Any] {
+                            let missingShipping = (setupData["hasShippingProfile"] as? Bool) == false
+                            let missingReturn   = (setupData["hasReturnPolicy"]   as? Bool) == false
+                            if missingShipping || missingReturn {
+                                etsySetupMissingShipping = missingShipping
+                                etsySetupMissingReturn   = missingReturn
+                                showEtsySetupAlert = true
+                            }
+                        }
+                    }
+                } catch {
+                    // silent — exchange errors are rare and hard to surface without extra UI
+                }
+            }
+        }
+        session.presentationContextProvider = anchorProvider
+        session.prefersEphemeralWebBrowserSession = false
+        self.activeSession = session
+        session.start()
+    }
+
     private func loadLocalSettingsState() {
         if let currentSettings = settingsRepo.settings {
             self.addressLine1 = currentSettings.defaultLocation.addressLine1
@@ -1660,7 +2147,6 @@ struct SettingsSheet: View {
             
             do {
                 try await settingsRepo.saveSettings(updated)
-                print("[SettingsSheet] Selling settings saved successfully")
                 if showAlertOnSuccess {
                     await MainActor.run {
                         settingsAlertTitle = "Success"

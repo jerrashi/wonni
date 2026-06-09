@@ -49,7 +49,7 @@ function makeHttpRequest(options, bodyData = null) {
  */
 async function refreshEbayToken(clientId, certId, refreshToken, isSandbox) {
   const credentials = Buffer.from(`${clientId}:${certId}`).toString("base64");
-  const body = `grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshToken)}&scope=${encodeURIComponent("https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.account https://api.ebay.com/oauth/api_scope/commerce.identity.readonly")}`;
+  const body = `grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshToken)}&scope=${encodeURIComponent("https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.account https://api.ebay.com/oauth/api_scope/sell.fulfillment https://api.ebay.com/oauth/api_scope/sell.finances https://api.ebay.com/oauth/api_scope/commerce.identity.readonly")}`;
 
   const host = isSandbox ? "api.sandbox.ebay.com" : "api.ebay.com";
   const options = {
@@ -876,11 +876,12 @@ exports.ebayCreateListing = onCall(
       const heightIn = listing.shippingInfo?.packageDimensions?.heightIn || 4.0;
       const brand = listing.brand || "Generic";
       const price = listing.price || 0.0;
+      const quantity = listing.quantity ?? 1;
 
       const itemBody = {
         availability: {
           shipToLocationAvailability: {
-            quantity: 1
+            quantity: quantity
           }
         },
         condition: conditionMapped,
@@ -936,7 +937,7 @@ exports.ebayCreateListing = onCall(
         sku: sku,
         marketplaceId: "EBAY_US",
         format: "FIXED_PRICE",
-        availableQuantity: 1,
+        availableQuantity: quantity,
         categoryId: categoryId,
         listingDescription: description,
         listingPolicies: {
@@ -1126,6 +1127,196 @@ exports.ebayCreateListing = onCall(
           code = err.code;
         }
       }
+      throw new HttpsError(code, err.message);
+    }
+  }
+);
+
+/**
+ * Callable Function: ebayUpdateListing
+ * Updates the title, description, price, condition, and dimensions of an already-live eBay listing.
+ * Uses the same Inventory API PUTs as create — no re-publish needed; changes go live immediately.
+ * Expects: { listingId: string }
+ */
+exports.ebayUpdateListing = onCall(
+  { secrets: [ebayClientId, ebayCertId] },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "You must be signed in.");
+    }
+    const uid = request.auth.uid;
+    const { listingId } = request.data;
+    if (!listingId) {
+      throw new HttpsError("invalid-argument", "listingId is required.");
+    }
+
+    const db = admin.firestore();
+    const listingRef = db.collection("listings").doc(listingId);
+    const listingDoc = await listingRef.get();
+    if (!listingDoc.exists) {
+      throw new HttpsError("not-found", "Listing not found.");
+    }
+    const listing = listingDoc.data();
+    if (listing.userId !== uid) {
+      throw new HttpsError("permission-denied", "You do not own this listing.");
+    }
+    if (!listing.crossPostListingIds?.ebay) {
+      throw new HttpsError("failed-precondition", "This listing is not posted on eBay.");
+    }
+
+    try {
+      const { accessToken, isSandbox } = await getActiveAccessToken(uid, ebayClientId.value(), ebayCertId.value(), db);
+      const host = isSandbox ? "api.sandbox.ebay.com" : "api.ebay.com";
+      const sku = `wonni_${listingId}`;
+
+      const title = listing.customTitle || "Wonni Listing";
+      const description = listing.customDescription || "Listed via Wonni";
+      const price = listing.price || 0.0;
+      const brand = listing.brand || "Generic";
+      const quantity = listing.quantity ?? 1;
+      console.log(`[ebayUpdateListing] listing.quantity raw=${listing.quantity}, resolved quantity=${quantity}`);
+      const weightLbs = listing.shippingInfo?.weightLbs || 1.0;
+      const lengthIn = listing.shippingInfo?.packageDimensions?.lengthIn || 8.0;
+      const widthIn = listing.shippingInfo?.packageDimensions?.widthIn || 6.0;
+      const heightIn = listing.shippingInfo?.packageDimensions?.heightIn || 4.0;
+
+      const conditionMap = {
+        new: "NEW", newWithoutTags: "USED_EXCELLENT", likeNew: "USED_EXCELLENT",
+        good: "USED_GOOD", fair: "USED_ACCEPTABLE", poor: "USED_ACCEPTABLE",
+        forParts: "FOR_PARTS_OR_NOT_WORKING"
+      };
+      const condition = conditionMap[listing.condition] || "USED_EXCELLENT";
+
+      // 1. Update inventory item (title, description, condition, brand, dimensions).
+      const photoPaths = listing.photoPaths || [];
+      const bucket = admin.storage().bucket();
+      const imageUrls = photoPaths.map(path =>
+        `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(path)}?alt=media`
+      );
+
+      const itemBody = {
+        availability: { shipToLocationAvailability: { quantity: quantity } },
+        condition: condition,
+        product: {
+          title: title.slice(0, 80),
+          description: description.slice(0, 1000),
+          imageUrls: imageUrls.slice(0, 12),
+          brand: brand,
+          mpn: "Does Not Apply",
+          aspects: { Brand: [brand] }
+        },
+        packageWeightAndSize: {
+          weight: { value: weightLbs, unit: "POUND" },
+          dimensions: { length: lengthIn, width: widthIn, height: heightIn, unit: "INCH" }
+        }
+      };
+      if (listing.conditionNotes) {
+        itemBody.conditionDescription = listing.conditionNotes;
+      }
+
+      console.log(`[ebayUpdateListing] Updating inventory item SKU=${sku}`);
+      const itemRes = await makeHttpRequest({
+        hostname: host,
+        path: `/sell/inventory/v1/inventory_item/${sku}`,
+        method: "PUT",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "Content-Language": "en-US"
+        }
+      }, itemBody);
+      if (![200, 201, 204].includes(itemRes.statusCode)) {
+        throw new Error(`Failed to update eBay inventory item (${itemRes.statusCode}): ${itemRes.body}`);
+      }
+
+      // 2. Look up the existing offer so we can update price and description.
+      const offersRes = await makeHttpRequest({
+        hostname: host,
+        path: `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}`,
+        method: "GET",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        }
+      });
+      if (offersRes.statusCode !== 200) {
+        throw new Error(`Failed to retrieve eBay offers (${offersRes.statusCode}): ${offersRes.body}`);
+      }
+      const offersData = JSON.parse(offersRes.body);
+      const offer = (offersData.offers || []).find(o => o.status === "PUBLISHED") || offersData.offers?.[0];
+      if (!offer?.offerId) {
+        throw new Error("No eBay offer found for this listing. It may have been manually ended.");
+      }
+      const offerId = offer.offerId;
+      console.log(`[ebayUpdateListing] Updating offerId=${offerId} with availableQuantity=${quantity}`);
+
+      // 3. Update the offer (price, description, policies preserved from the existing offer).
+      const offerUpdateBody = {
+        sku: sku,
+        marketplaceId: "EBAY_US",
+        format: "FIXED_PRICE",
+        availableQuantity: quantity,
+        categoryId: offer.categoryId,
+        listingDescription: description,
+        listingPolicies: offer.listingPolicies,
+        merchantLocationKey: offer.merchantLocationKey,
+        pricingSummary: {
+          price: { value: price.toFixed(2), currency: "USD" }
+        }
+      };
+      const offerUpdateRes = await makeHttpRequest({
+        hostname: host,
+        path: `/sell/inventory/v1/offer/${offerId}`,
+        method: "PUT",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "Content-Language": "en-US"
+        }
+      }, offerUpdateBody);
+      if (![200, 204].includes(offerUpdateRes.statusCode)) {
+        throw new Error(`Failed to update eBay offer (${offerUpdateRes.statusCode}): ${offerUpdateRes.body}`);
+      }
+
+      console.log(`[ebayUpdateListing] Offer update response: ${offerUpdateRes.statusCode}, body=${offerUpdateRes.body || '(empty)'}`);
+
+      // 4. Use bulkUpdatePriceQuantity for a more reliable quantity + price sync
+      //    on published offers. eBay recommends this endpoint for live listings.
+      const bulkBody = {
+        requests: [
+          {
+            sku: sku,
+            shipToLocationAvailability: { quantity: quantity },
+            offers: [
+              {
+                offerId: offerId,
+                availableQuantity: quantity,
+                price: { value: price.toFixed(2), currency: "USD" }
+              }
+            ]
+          }
+        ]
+      };
+      const bulkRes = await makeHttpRequest({
+        hostname: host,
+        path: "/sell/inventory/v1/bulk_update_price_quantity",
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "Content-Language": "en-US"
+        }
+      }, bulkBody);
+      console.log(`[ebayUpdateListing] bulkUpdatePriceQuantity response: ${bulkRes.statusCode}, body=${bulkRes.body || '(empty)'}`);
+
+      console.log(`[ebayUpdateListing] Updated successfully for listing ${listingId}`);
+      await listingRef.set({ updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      return { success: true };
+
+    } catch (err) {
+      console.error(`[ebayUpdateListing] Error:`, err);
+      let code = "internal";
+      if (err instanceof HttpsError) { code = err.code; }
       throw new HttpsError(code, err.message);
     }
   }

@@ -33,6 +33,24 @@ class StorageService: ObservableObject {
         return path
     }
 
+    /// Uploads a single listing image directly to its permanent path using a UUID instead of an integer index.
+    func uploadListingImageWithUUID(image: UIImage, userId: String, listingId: String) async throws -> String {
+        let resized = ImageCompressor.resize(image: image, maxDimension: 1200)
+        guard let data = ImageCompressor.compress(image: resized, targetSizeInBytes: 180 * 1024) else {
+            throw NSError(domain: "StorageService", code: 500, userInfo: [NSLocalizedDescriptionKey: "Failed to compress image"])
+        }
+
+        let path = "users/\(userId)/\(listingId)/\(UUID().uuidString).jpg"
+        let ref = storage.child(path)
+
+        let metadata = StorageMetadata()
+        metadata.contentType = "image/jpeg"
+        metadata.customMetadata = ["userId": userId]
+
+        _ = try await ref.putDataAsync(data, metadata: metadata)
+        return path
+    }
+
     /// Deletes all images for a listing.
     func deleteListingImages(userId: String, listingId: String) async throws {
         let listRef = storage.child("users/\(userId)/\(listingId)")

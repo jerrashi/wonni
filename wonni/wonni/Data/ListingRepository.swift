@@ -127,9 +127,12 @@ class ListingRepository: ObservableObject {
         condition: ItemCondition? = nil,
         brand: String? = nil,
         category: String? = nil,
+        quantity: Int? = nil,
         weightLbs: Double? = nil,
         packageDimensions: PackageDimensions? = nil,
-        buyerPaysShipping: Bool? = nil
+        buyerPaysShipping: Bool? = nil,
+        photoPaths: [String]? = nil,
+        coverPhotoPath: String? = nil
     ) async throws {
         var data: [String: Any] = ["updatedAt": Timestamp(date: Date())]
         if let title { data["customTitle"] = title }
@@ -138,6 +141,9 @@ class ListingRepository: ObservableObject {
         if let condition { data["condition"] = condition.rawValue }
         if let brand { data["brand"] = brand }
         if let category { data["category"] = category }
+        if let quantity { data["quantity"] = quantity }
+        if let photoPaths { data["photoPaths"] = photoPaths }
+        if let coverPhotoPath { data["coverPhotoPath"] = coverPhotoPath }
         
         if buyerPaysShipping != nil || weightLbs != nil || packageDimensions != nil {
             let doc = try await db.collection(listingsCollection).document(id).getDocument()
@@ -290,15 +296,19 @@ class ListingRepository: ObservableObject {
         descriptionPrepend: String? = nil,
         descriptionAppend: String? = nil,
         condition: ItemCondition? = nil,
-        buyerPaysShipping: Bool? = nil
-    ) async throws {
+        buyerPaysShipping: Bool? = nil,
+        setWeightLbs: Double? = nil,
+        setPackageDimensions: (Double, Double, Double)? = nil
+    ) async throws -> [String] {
         var updates: [String: [String: Any]] = [:]
-        
+        var ebayPostedIds: [String] = []
+
         // Fetch current states to compute new values
         for id in listingIds {
             let doc = try await db.collection(listingsCollection).document(id).getDocument()
             guard let listing = try? doc.data(as: UserListing.self) else { continue }
-            
+            if listing.crossPostStatus?["ebay"] == "posted" { ebayPostedIds.append(id) }
+
             var data: [String: Any] = [:]
             
             if let adj = priceAdjustment {
@@ -335,16 +345,14 @@ class ListingRepository: ObservableObject {
                 data["condition"] = newCondition.rawValue
             }
             
-            if let buyerPays = buyerPaysShipping {
-                // If they already have shipping info, we just update the field.
-                // Otherwise we build a default struct.
-                if var existingInfo = listing.shippingInfo {
-                    existingInfo.buyerPaysShipping = buyerPays
-                    data["shippingInfo"] = try? Firestore.Encoder().encode(existingInfo)
-                } else {
-                    let newInfo = ShippingInfo(buyerPaysShipping: buyerPays, handlingFee: 0, estimatedShippingDays: 3)
-                    data["shippingInfo"] = try? Firestore.Encoder().encode(newInfo)
+            if buyerPaysShipping != nil || setWeightLbs != nil || setPackageDimensions != nil {
+                var info = listing.shippingInfo ?? ShippingInfo(buyerPaysShipping: true, handlingFee: 0, estimatedShippingDays: 3)
+                if let buyerPays = buyerPaysShipping { info.buyerPaysShipping = buyerPays }
+                if let w = setWeightLbs { info.weightLbs = w }
+                if let (l, w, h) = setPackageDimensions {
+                    info.packageDimensions = PackageDimensions(lengthIn: l, widthIn: w, heightIn: h)
                 }
+                data["shippingInfo"] = try? Firestore.Encoder().encode(info)
             }
             
             if !data.isEmpty {
@@ -353,7 +361,7 @@ class ListingRepository: ObservableObject {
             }
         }
         
-        guard !updates.isEmpty else { return }
+        guard !updates.isEmpty else { return ebayPostedIds }
         
         // Apply computed updates in a batch
         let batch = db.batch()
@@ -362,5 +370,6 @@ class ListingRepository: ObservableObject {
             batch.updateData(data, forDocument: ref)
         }
         try await batch.commit()
+        return ebayPostedIds
     }
 }

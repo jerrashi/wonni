@@ -87,10 +87,35 @@ exports.ebayWebhook = ebayWebhook;
 const { ebayExchangeToken } = require("./ebay_auth");
 exports.ebayExchangeToken = ebayExchangeToken;
 
+// Etsy Token Exchange
+const { etsyExchangeToken } = require("./etsy_auth");
+exports.etsyExchangeToken = etsyExchangeToken;
+
+// Etsy Listing Management
+const { etsyCreateListing, etsyUpdateListing, etsyDeleteListing, etsyCheckShopSetup } = require("./etsy_listing");
+exports.etsyCreateListing = etsyCreateListing;
+exports.etsyUpdateListing = etsyUpdateListing;
+exports.etsyDeleteListing = etsyDeleteListing;
+exports.etsyCheckShopSetup = etsyCheckShopSetup;
+
 // eBay Listing Management
-const { ebayCreateListing, ebayDeleteListing } = require("./ebay_listing");
+const { ebayCreateListing, ebayUpdateListing, ebayDeleteListing } = require("./ebay_listing");
 exports.ebayCreateListing = ebayCreateListing;
+exports.ebayUpdateListing = ebayUpdateListing;
 exports.ebayDeleteListing = ebayDeleteListing;
+
+// Sale cascade — decrements quantity across all platforms when a sale occurs
+const { decrementAndCascade } = require("./sale_sync");
+exports.decrementAndCascade = decrementAndCascade;
+
+// Sale take-home fetch — retrieves platform-provided net payout per order
+const { ebayGetOrderTakeHome, etsyGetReceiptTakeHome } = require("./sale_fetch");
+exports.ebayGetOrderTakeHome = ebayGetOrderTakeHome;
+exports.etsyGetReceiptTakeHome = etsyGetReceiptTakeHome;
+
+// Sale sync — on-demand callable to check eBay + Etsy for new orders
+const { syncSales } = require("./sale_poller");
+exports.syncSales = syncSales;
 
 // eBay OAuth Redirect Intermediary (legacy — kept for fallback)
 exports.ebayRedirect = onRequest({ cors: true }, (req, res) => {

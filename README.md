@@ -310,8 +310,14 @@ graph TD
   Snap photos → background upload → Gemini batch process → bulk review → publish to Wonni + cross-post to eBay/Mercari/Facebook in one flow. SwiftData drafts survive app restarts; cross-post jobs queue and run sequentially.
 - [x] **Mercari & Facebook Marketplace Cross-Posting**  
   `MercariAutoPoster` headless WKWebView flow: await navigation, JS-poll for React form mount, inject title/price/description, attempt photo `DataTransfer`, click submit, write `crossPostStatus` to Firestore. Facebook uses visible WebView with autofill button.
-- [ ] **Etsy API Integration**  
-  Integrate Etsy's v3 API with PKCE OAuth to expand the seamless API cross-posting footprint.
+- [x] **Etsy API Integration**  
+  `EtsyConnectView` wired into Settings using PKCE OAuth via `ASWebAuthenticationSession`. Firebase Function `etsyExchangeToken` exchanges code for tokens and persists shop info. **TODO:** Set `ETSY_CLIENT_ID = <your-keystring>` in `Secrets.xcconfig` (same value as `ETSY_CLIENT_ID` in Firebase Secret Manager), then deploy: `firebase deploy --only functions:etsyExchangeToken`.
+- [x] **Full cross-platform listing sync on edit**  
+  Saving a listing in Wonni automatically syncs all fields (title, description, price, quantity, condition, weight, dimensions) to eBay (`ebayUpdateListing`) and Etsy (`etsyUpdateListing`) for already-live listings. For Mercari, a prompt asks if the user wants to auto-update the Mercari listing via headless WKWebView (`MercariAutoEditSheet`); falls back to visible browser if autofill fails. Changing who pays shipping shows an acknowledgment alert reminding the user to update their shipping profile on eBay/Etsy. Bulk edits also push to eBay for all affected listings.
+- [ ] **Shipping profile auto-sync**  
+  When "who pays shipping" changes in Wonni, automatically update the eBay fulfillment policy and Etsy shipping profile instead of showing a manual reminder. Requires creating/managing platform shipping profiles via API.
+- [ ] **eBay Webhooks (Commerce Notifications API)**  
+  Replace the manual sync button for sales with real-time eBay push notifications. Requires registering a webhook endpoint, mapping eBay order IDs to Wonni listing IDs, and handling notification verification. See eBay Commerce Notifications API docs.
 - [ ] **Listing shipping-address field**  
   Add a ship-from address to `Item`/`Listing` so Mercari cross-post can auto-fill the required "shipping address" (currently relies on the Mercari account's saved address loading in time). Needed because the Mercari sell form requires an address before listing.
 - [ ] **Mercari Smart Pricing preference**  
