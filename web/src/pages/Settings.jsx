@@ -3,6 +3,13 @@ import { doc, onSnapshot } from "firebase/firestore";
 import { db, auth, callFunction } from "../firebase";
 import Layout from "../components/Layout";
 
+const EXT_ID = import.meta.env.VITE_EXTENSION_ID;
+
+function sendToExtension(msg) {
+  if (!EXT_ID || typeof chrome === "undefined" || !chrome.runtime?.sendMessage) return;
+  chrome.runtime.sendMessage(EXT_ID, msg).catch(() => {});
+}
+
 const ALIEXPRESS_APP_KEY = import.meta.env.VITE_ALIEXPRESS_APP_KEY ?? "REPLACE_ME";
 const TIKTOK_APP_KEY = import.meta.env.VITE_TIKTOK_APP_KEY ?? "REPLACE_ME";
 
@@ -114,7 +121,11 @@ export default function Settings() {
           />
           <button
             className="btn btn-primary"
-            onClick={() => callFunction("updateSettings")({ tiktokFeeRate: parseFloat(feeRate) / 100 })}
+            onClick={async () => {
+              const rate = parseFloat(feeRate) / 100;
+              await callFunction("updateSettings")({ tiktokFeeRate: rate });
+              sendToExtension({ type: "SET_FEE_RATE", feeRate: rate });
+            }}
           >
             Save
           </button>

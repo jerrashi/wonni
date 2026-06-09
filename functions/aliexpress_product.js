@@ -122,6 +122,7 @@ exports.aliexpressImportProduct = onCall(
       description: product.description ?? "",
       images: storedImages.length ? storedImages : product.images.slice(0, 5),
       aliexpressPrice: product.price,
+      suggestedSellPrice: typeof product.suggestedSellPrice === "number" ? product.suggestedSellPrice : null,
       variants: product.variants ?? [],
       tiktokStatus: "draft",
       importedAt: admin.firestore.FieldValue.serverTimestamp(),
