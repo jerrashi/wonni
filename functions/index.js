@@ -7,7 +7,7 @@ const { placeAliexpressOrder, confirmTiktokShipment, pollAliexpressTracking } = 
 const { tiktokExchangeToken } = require("./tiktok_auth");
 const { tiktokCreateListing, tiktokUpdateListing, tiktokDeleteListing } = require("./tiktok_listing");
 const { syncTiktokOrders, syncTiktokOrdersScheduled } = require("./tiktok_orders");
-const { disconnectPlatform, updateSettings } = require("./user_settings");
+const { disconnectPlatform, updateSettings, generateOAuthState } = require("./user_settings");
 
 module.exports = {
   // Auth
@@ -23,6 +23,7 @@ module.exports = {
   tiktokDeleteListing,
 
   // User settings
+  generateOAuthState,
   disconnectPlatform,
   updateSettings,
 

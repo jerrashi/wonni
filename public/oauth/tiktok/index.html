@@ -21,6 +21,7 @@
 
   const params = new URLSearchParams(window.location.search);
   const code = params.get("code") ?? params.get("auth_code");
+  const state = params.get("state");
 
   if (!code) {
     document.body.innerText = "No code received. Close this window and try again.";
@@ -34,6 +35,7 @@
       try {
         await httpsCallable(functions, "tiktokExchangeToken")({
           code,
+          state,
           redirectUri: window.location.origin + window.location.pathname,
         });
         document.body.innerText = "TikTok Shop connected! You can close this window.";
