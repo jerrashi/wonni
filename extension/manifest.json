@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "Wonni Drop",
+  "version": "1.0.0",
+  "description": "Import AliExpress products to Wonni Drop with one click.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://www.aliexpress.com/*",
+    "https://aliexpress.com/*",
+    "https://us.aliexpress.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.aliexpress.com/item/*",
+        "https://aliexpress.com/item/*",
+        "https://us.aliexpress.com/item/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "externally_connectable": {
+    "matches": ["https://wonni-dropship.web.app/*"]
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
