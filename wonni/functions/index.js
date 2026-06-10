@@ -79,9 +79,10 @@ exports.identifyItem = onCall({
   }
 });
 
-// eBay Webhook Integration
-const { ebayWebhook } = require("./ebay_webhook");
+// eBay Webhook + one-time notification subscription setup
+const { ebayWebhook, setupEbayNotifications } = require("./ebay_webhook");
 exports.ebayWebhook = ebayWebhook;
+exports.setupEbayNotifications = setupEbayNotifications;
 
 // eBay Token Exchange
 const { ebayExchangeToken } = require("./ebay_auth");

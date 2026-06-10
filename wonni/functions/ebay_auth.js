@@ -12,6 +12,10 @@ const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const https = require("https");
 
+// Destination registered with eBay Commerce Notifications (set in .env).
+// All per-user ORDER_CONFIRMATION subscriptions share this one destination.
+const NOTIFICATION_DESTINATION_ID = process.env.EBAY_NOTIFICATION_DESTINATION_ID ?? "";
+
 if (admin.apps.length === 0) {
   admin.initializeApp();
 }
@@ -108,14 +112,15 @@ exports.ebayExchangeToken = onCall(
 
     console.log(`[ebayExchangeToken] Token exchange succeeded for uid=${uid}`);
 
-    // ── Fetch eBay username ─────────────────────────────────────────────
-    // Use the access token to look up the user's eBay username so we can
-    // display it in the "Linked as: …" row in Settings.
+    // ── Fetch eBay user info ────────────────────────────────────────────
+    // Retrieve username (for display in Settings) and internal userId
+    // (stored as ebayUserId so ebay_webhook.js can map notifications → Wonni user).
     let ebayUsername = "eBay User";
+    let ebayUserId = null;
     try {
-      ebayUsername = await fetchEbayUsername(tokenData.access_token, isSandbox);
+      ({ username: ebayUsername, userId: ebayUserId } = await fetchEbayUserInfo(tokenData.access_token, isSandbox));
     } catch (err) {
-      console.warn("[ebayExchangeToken] Could not fetch eBay username:", err.message);
+      console.warn("[ebayExchangeToken] Could not fetch eBay user info:", err.message);
     }
 
     // ── Persist to Firestore ────────────────────────────────────────────
@@ -135,6 +140,7 @@ exports.ebayExchangeToken = onCall(
         platform:           "ebay",
         isConnected:        true,
         connectedUsername:  ebayUsername,
+        ebayUserId:         ebayUserId,
         connectedAt:        admin.firestore.FieldValue.serverTimestamp(),
         accessToken:        tokenData.access_token,
         refreshToken:       tokenData.refresh_token ?? null,
@@ -145,16 +151,73 @@ exports.ebayExchangeToken = onCall(
       { merge: true }
     );
 
-    console.log(`[ebayExchangeToken] Firestore updated for uid=${uid}, username=${ebayUsername}, scopes=${tokenData.scope}`);
+    console.log(`[ebayExchangeToken] Firestore updated for uid=${uid}, username=${ebayUsername}, ebayUserId=${ebayUserId}, scopes=${tokenData.scope}`);
+
+    // Subscribe to ORDER_CONFIRMATION for real-time order push (production only —
+    // sandbox eBay accounts don't receive Commerce Notification events).
+    if (!isSandbox && NOTIFICATION_DESTINATION_ID) {
+      const subscriptionId = await subscribeToOrderNotifications(
+        tokenData.access_token, NOTIFICATION_DESTINATION_ID
+      );
+      if (subscriptionId) {
+        await integrationRef.update({ orderNotificationSubscriptionId: subscriptionId });
+        console.log(`[ebayExchangeToken] ORDER_CONFIRMATION subscription=${subscriptionId} for uid=${uid}`);
+      }
+    }
 
     return { success: true, username: ebayUsername };
   }
 );
 
 /**
- * Calls the eBay Identity API to retrieve the authenticated user's username.
+ * Creates an ORDER_CONFIRMATION subscription for the seller using their user token.
+ * Returns the subscriptionId, or null on failure.
  */
-function fetchEbayUsername(accessToken, isSandbox) {
+async function subscribeToOrderNotifications(accessToken, destinationId) {
+  try {
+    const body = JSON.stringify({
+      topicId: "ORDER_CONFIRMATION",
+      status: "ENABLED",
+      destinationId,
+      payload: { format: "JSON", schemaVersion: "1.0", deliveryProtocol: "HTTPS" },
+    });
+    const result = await new Promise((resolve, reject) => {
+      const options = {
+        hostname: "api.ebay.com",
+        path: "/commerce/notification/v1/subscription",
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body),
+        },
+      };
+      const req = https.request(options, (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => resolve({ statusCode: res.statusCode, body: data }));
+      });
+      req.on("error", reject);
+      req.write(body);
+      req.end();
+    });
+
+    if (result.statusCode !== 201) {
+      console.warn(`[ebayExchangeToken] ORDER_CONFIRMATION subscription failed: ${result.statusCode} ${result.body}`);
+      return null;
+    }
+    return JSON.parse(result.body).subscriptionId ?? null;
+  } catch (e) {
+    console.warn(`[ebayExchangeToken] ORDER_CONFIRMATION subscription error: ${e.message}`);
+    return null;
+  }
+}
+
+/**
+ * Calls the eBay Identity API to retrieve the authenticated user's username and userId.
+ * Returns { username, userId } — userId is eBay's internal identifier used in webhook payloads.
+ */
+function fetchEbayUserInfo(accessToken, isSandbox) {
   return new Promise((resolve, reject) => {
     const host    = isSandbox ? "apiz.sandbox.ebay.com" : "apiz.ebay.com";
     const options = {
@@ -173,7 +236,10 @@ function fetchEbayUsername(accessToken, isSandbox) {
       res.on("end", () => {
         try {
           const parsed = JSON.parse(data);
-          resolve(parsed.username ?? parsed.userId ?? "eBay User");
+          resolve({
+            username: parsed.username ?? "eBay User",
+            userId: parsed.userId ?? null,
+          });
         } catch {
           reject(new Error("Could not parse eBay identity response"));
         }

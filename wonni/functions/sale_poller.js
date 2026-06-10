@@ -2,8 +2,8 @@
  * sale_poller.js
  *
  * syncSales — on-demand callable (triggered by the iOS "Sync Sales" button).
- * Checks the authenticated user's connected eBay and Etsy accounts for new
- * orders/receipts, creates Sale documents, and calls decrementAndCascade.
+ * Also exports processSingleEbayOrder / getEbayAccessToken / makeRequest so
+ * ebay_webhook.js can reuse the same order-processing logic on push events.
  *
  * Matching logic:
  *   eBay  — SKU format is "wonni_{listingId}", set by ebayCreateListing
@@ -130,24 +130,54 @@ async function findExistingSaleDoc(db, uid, platformOrderId) {
 
 async function ebayFetchTakeHome(orderId, accessToken, isSandbox) {
   try {
-    const res = await makeRequest({
-      hostname: isSandbox ? "apiz.sandbox.ebay.com" : "apiz.ebay.com",
-      path: `/sell/finances/v1/transaction?orderId=${encodeURIComponent(orderId)}&transactionType=SALE`,
-      method: "GET",
-      headers: {
-        "Authorization": `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
-      },
-    });
-    if (res.statusCode !== 200) return null;
-    const txs = JSON.parse(res.body).transactions ?? [];
-    const sale = txs.find(t => t.transactionType === "SALE") ?? txs[0];
+    // eBay ignores the orderId query param and returns paginated account-wide transactions.
+    // Walk pages until we find the order or exhaust 5 pages (~100 recent transactions).
+    let txs = [];
+    let offset = 0;
+    const limit = 20;
+    for (let page = 0; page < 5; page++) {
+      const res = await makeRequest({
+        hostname: isSandbox ? "apiz.sandbox.ebay.com" : "apiz.ebay.com",
+        path: `/sell/finances/v1/transaction?limit=${limit}&offset=${offset}`,
+        method: "GET",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+        },
+      });
+      if (res.statusCode !== 200) break;
+      const page_txs = JSON.parse(res.body).transactions ?? [];
+      const matching = page_txs.filter(tx => tx.orderId === orderId);
+      txs = txs.concat(matching);
+      // Stop once we've found the SALE transaction for this order
+      if (txs.some(t => t.transactionType === "SALE")) break;
+      if (page_txs.length < limit) break; // no more pages
+      offset += limit;
+    }
+
+    // SALE amount is already net of eBay fees (totalFeeBasisAmount - totalFeeAmount).
+    // SHIPPING_LABEL transactions are positive costs — deduct eBay-purchased label costs.
+    const sale = txs.find(t => t.transactionType === "SALE");
     if (!sale) return null;
-    const gross = parseFloat(sale.amount?.value ?? "0");
-    const fees  = parseFloat(sale.totalFeeAmount?.value ?? "0");
-    return gross > 0 ? Math.round((gross - fees) * 100) / 100 : null;
-  } catch { return null; }
+    let takeHome = parseFloat(sale.amount?.value ?? "0");
+    let labelCost = 0;
+    for (const tx of txs) {
+      if (tx.transactionType === "SHIPPING_LABEL") {
+        const cost = parseFloat(tx.amount?.value ?? "0");
+        takeHome -= cost;
+        labelCost += cost;
+      }
+    }
+    console.log(`[ebayFetchTakeHome] order=${orderId} sale=${sale.amount?.value} labelCost=${labelCost} takeHome=${takeHome}`);
+    return {
+      takeHome: takeHome > 0 ? Math.round(takeHome * 100) / 100 : null,
+      labelCost: labelCost > 0 ? Math.round(labelCost * 100) / 100 : null,
+    };
+  } catch (e) {
+    console.warn(`[ebayFetchTakeHome] order=${orderId} error: ${e.message}`);
+    return null;
+  }
 }
 
 async function ebayFetchTracking(orderId, accessToken, isSandbox) {
@@ -207,6 +237,174 @@ async function etsyFetchTakeHome(receiptId, accessToken, shopId, clientId) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Single eBay order processor
+// Shared by syncEbayOrders (poll path) and ebay_webhook.js (push path).
+//
+// clientId / certId / etsyClientIdVal are the plain string secret values,
+// not the Firebase Secret objects — so this function is safe to export.
+// ─────────────────────────────────────────────────────────────
+
+async function processSingleEbayOrder(order, uid, accessToken, isSandbox, db, clientId, certId, etsyClientIdVal) {
+  if (order.orderPaymentStatus !== "PAID") {
+    console.log(`[processSingleEbayOrder] skipping order ${order.orderId}: paymentStatus=${order.orderPaymentStatus}`);
+    return { isNew: false };
+  }
+
+  const orderId = order.orderId;
+  const existingDoc = await findExistingSaleDoc(db, uid, orderId);
+
+  if (existingDoc) {
+    // Backfill tracking, all fulfillments, corrected address, and registered address
+    const existing = existingDoc.data();
+    const updates = {};
+
+    const [tracking, freshTakeHome] = await Promise.all([
+      ebayFetchTracking(orderId, accessToken, isSandbox),
+      ebayFetchTakeHome(orderId, accessToken, isSandbox),
+    ]);
+
+    if (tracking) {
+      if (tracking.trackingNumber && !existing.trackingNumber) {
+        updates.trackingNumber = tracking.trackingNumber;
+        updates.carrier = tracking.carrier ?? null;
+        updates.status = "shipped";
+        console.log(`[processSingleEbayOrder] backfilled tracking for order ${orderId}: ${tracking.trackingNumber}`);
+      }
+      if (tracking.allFulfillments?.length) {
+        updates.shippingFulfillments = tracking.allFulfillments;
+      }
+    }
+    if (freshTakeHome?.takeHome !== null && freshTakeHome?.takeHome !== undefined) {
+      updates.takeHome = freshTakeHome.takeHome;
+    }
+    if (freshTakeHome?.labelCost != null) {
+      updates.shippingLabelCost = freshTakeHome.labelCost;
+    }
+    // Backfill item-only price and shipping revenue
+    const itemPrice = parseFloat(order.pricingSummary?.priceSubtotal?.value ?? "0");
+    const shippingRev = parseFloat(order.pricingSummary?.deliveryCost?.value ?? "0");
+    if (itemPrice > 0 && existing.priceSoldFor !== itemPrice) {
+      updates.priceSoldFor = itemPrice;
+    }
+    if (shippingRev > 0 && !existing.shippingRevenue) {
+      updates.shippingRevenue = shippingRev;
+    }
+
+    const shipStep = (order.fulfillmentStartInstructions ?? [])
+      .find(i => i.fulfillmentInstructionsType === "SHIP_TO" || i.shippingStep)
+      ?.shippingStep?.shipTo;
+    const addr = shipStep?.contactAddress ?? order.buyer?.buyerRegistrationAddress?.contactAddress ?? {};
+    const buyerName = shipStep?.fullName ?? order.buyer?.buyerRegistrationAddress?.fullName ?? null;
+    const correctLine1 = addr.addressLine1 ?? null;
+    if (correctLine1 && existing.buyerAddress?.line1 !== correctLine1) {
+      updates.buyerAddress = {
+        name: buyerName,
+        line1: addr.addressLine1 ?? null,
+        line2: addr.addressLine2 ?? null,
+        city: addr.city ?? null,
+        state: addr.stateOrProvince ?? null,
+        zip: addr.postalCode ?? null,
+        country: addr.countryCode ?? "US",
+      };
+    }
+    if (!existing.buyerRegisteredAddress) {
+      const regAddr = order.buyer?.buyerRegistrationAddress?.contactAddress ?? {};
+      updates.buyerRegisteredAddress = {
+        name: order.buyer?.buyerRegistrationAddress?.fullName ?? null,
+        line1: regAddr.addressLine1 ?? null,
+        line2: regAddr.addressLine2 ?? null,
+        city: regAddr.city ?? null,
+        state: regAddr.stateOrProvince ?? null,
+        zip: regAddr.postalCode ?? null,
+        country: regAddr.countryCode ?? null,
+      };
+    }
+
+    if (Object.keys(updates).length > 0) {
+      updates.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+      await existingDoc.ref.update(updates);
+    }
+    return { isNew: false };
+  }
+
+  let newCount = 0;
+  for (const item of (order.lineItems ?? [])) {
+    const sku = item.sku ?? "";
+    if (!sku.startsWith("wonni_")) {
+      console.log(`[processSingleEbayOrder] skipping line item: sku="${sku}" title="${item.title}" — no wonni_ prefix`);
+      continue;
+    }
+    const listingId = sku.replace(/^wonni_/, "");
+
+    const [listingSnap, finances, tracking] = await Promise.all([
+      db.collection("listings").doc(listingId).get(),
+      ebayFetchTakeHome(orderId, accessToken, isSandbox),
+      ebayFetchTracking(orderId, accessToken, isSandbox),
+    ]);
+    const listing = listingSnap.exists ? listingSnap.data() : null;
+    // Item price only — shipping is not revenue
+    const priceSoldFor = parseFloat(order.pricingSummary?.priceSubtotal?.value ?? order.pricingSummary?.total?.value ?? "0");
+    const shippingRevenue = parseFloat(order.pricingSummary?.deliveryCost?.value ?? "0");
+
+    // fulfillmentStartInstructions contains the actual ship-to address (what goes on the label).
+    // buyer.buyerRegistrationAddress is the billing/account address and can differ at checkout.
+    const shipStep = (order.fulfillmentStartInstructions ?? [])
+      .find(i => i.fulfillmentInstructionsType === "SHIP_TO" || i.shippingStep)
+      ?.shippingStep?.shipTo;
+    const addr = shipStep?.contactAddress ?? order.buyer?.buyerRegistrationAddress?.contactAddress ?? {};
+    const buyerName = shipStep?.fullName ?? order.buyer?.buyerRegistrationAddress?.fullName ?? null;
+    const regAddr = order.buyer?.buyerRegistrationAddress?.contactAddress ?? {};
+
+    await db.collection("sales").add({
+      userId: uid,
+      listingId,
+      listingTitle: listing?.customTitle ?? item.title ?? null,
+      coverPhotoPath: listing?.coverPhotoPath ?? null,
+      platform: "ebay",
+      platformOrderId: orderId,
+      priceSoldFor,
+      shippingRevenue: shippingRevenue > 0 ? shippingRevenue : null,
+      takeHome: finances?.takeHome ?? null,
+      shippingLabelCost: finances?.labelCost ?? null,
+      buyerAddress: {
+        name: buyerName,
+        line1: addr.addressLine1 ?? null,
+        line2: addr.addressLine2 ?? null,
+        city: addr.city ?? null,
+        state: addr.stateOrProvince ?? null,
+        zip: addr.postalCode ?? null,
+        country: addr.countryCode ?? "US",
+      },
+      buyerRegisteredAddress: {
+        name: order.buyer?.buyerRegistrationAddress?.fullName ?? null,
+        line1: regAddr.addressLine1 ?? null,
+        line2: regAddr.addressLine2 ?? null,
+        city: regAddr.city ?? null,
+        state: regAddr.stateOrProvince ?? null,
+        zip: regAddr.postalCode ?? null,
+        country: regAddr.countryCode ?? null,
+      },
+      trackingNumber: tracking?.trackingNumber ?? null,
+      carrier: tracking?.carrier ?? null,
+      shippingFulfillments: tracking?.allFulfillments ?? null,
+      status: tracking?.trackingNumber ? "shipped" : "pending",
+      soldAt: admin.firestore.Timestamp.fromDate(new Date(order.creationDate)),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    newCount++;
+    try {
+      await decrementAndCascadeInternal(listingId, "ebay", db, clientId, certId, etsyClientIdVal);
+    } catch (e) {
+      console.error(`[processSingleEbayOrder] cascade failed listingId=${listingId}: ${e.message}`);
+    }
+  }
+
+  return { isNew: newCount > 0, count: newCount };
+}
+
+// ─────────────────────────────────────────────────────────────
 // eBay order sync — returns count of new sales recorded
 // ─────────────────────────────────────────────────────────────
 
@@ -249,139 +447,14 @@ async function syncEbayOrders(uid, integrationRef, clientId, certId, db, force =
   for (const o of orders) {
     console.log(`[syncSales]   order ${o.orderId} paymentStatus=${o.orderPaymentStatus} skus=${(o.lineItems||[]).map(i=>i.sku).join(",")}`);
   }
+
   let newCount = 0;
-
   for (const order of orders) {
-    if (order.orderPaymentStatus !== "PAID") {
-      console.log(`[syncSales] skipping order ${order.orderId}: paymentStatus=${order.orderPaymentStatus}`);
-      continue;
-    }
-    const orderId = order.orderId;
-    const existingDoc = await findExistingSaleDoc(db, uid, orderId);
-
-    if (existingDoc) {
-      // Backfill tracking, all fulfillments, corrected address, and registered address
-      const existing = existingDoc.data();
-      const updates = {};
-
-      const tracking = await ebayFetchTracking(orderId, accessToken, isSandbox);
-      if (tracking) {
-        if (tracking.trackingNumber && !existing.trackingNumber) {
-          updates.trackingNumber = tracking.trackingNumber;
-          updates.carrier = tracking.carrier ?? null;
-          updates.status = "shipped";
-          console.log(`[syncSales] backfilled tracking for order ${orderId}: ${tracking.trackingNumber}`);
-        }
-        if (tracking.allFulfillments?.length) {
-          updates.shippingFulfillments = tracking.allFulfillments;
-        }
-      }
-
-      const shipStep = (order.fulfillmentStartInstructions ?? [])
-        .find(i => i.fulfillmentInstructionsType === "SHIP_TO" || i.shippingStep)
-        ?.shippingStep?.shipTo;
-      const addr = shipStep?.contactAddress ?? order.buyer?.buyerRegistrationAddress?.contactAddress ?? {};
-      const buyerName = shipStep?.fullName ?? order.buyer?.buyerRegistrationAddress?.fullName ?? null;
-      const correctLine1 = addr.addressLine1 ?? null;
-      if (correctLine1 && existing.buyerAddress?.line1 !== correctLine1) {
-        updates.buyerAddress = {
-          name: buyerName,
-          line1: addr.addressLine1 ?? null,
-          line2: addr.addressLine2 ?? null,
-          city: addr.city ?? null,
-          state: addr.stateOrProvince ?? null,
-          zip: addr.postalCode ?? null,
-          country: addr.countryCode ?? "US",
-        };
-      }
-      if (!existing.buyerRegisteredAddress) {
-        const regAddr = order.buyer?.buyerRegistrationAddress?.contactAddress ?? {};
-        updates.buyerRegisteredAddress = {
-          name: order.buyer?.buyerRegistrationAddress?.fullName ?? null,
-          line1: regAddr.addressLine1 ?? null,
-          line2: regAddr.addressLine2 ?? null,
-          city: regAddr.city ?? null,
-          state: regAddr.stateOrProvince ?? null,
-          zip: regAddr.postalCode ?? null,
-          country: regAddr.countryCode ?? null,
-        };
-      }
-
-      if (Object.keys(updates).length > 0) {
-        updates.updatedAt = admin.firestore.FieldValue.serverTimestamp();
-        await existingDoc.ref.update(updates);
-      }
-      continue;
-    }
-
-    for (const item of (order.lineItems ?? [])) {
-      const sku = item.sku ?? "";
-      if (!sku.startsWith("wonni_")) {
-        console.log(`[syncSales] skipping line item: sku="${sku}" title="${item.title}" — no wonni_ prefix`);
-        continue;
-      }
-      const listingId = sku.replace(/^wonni_/, "");
-
-      const [listingSnap, takeHome, tracking] = await Promise.all([
-        db.collection("listings").doc(listingId).get(),
-        ebayFetchTakeHome(orderId, accessToken, isSandbox),
-        ebayFetchTracking(orderId, accessToken, isSandbox),
-      ]);
-      const listing = listingSnap.exists ? listingSnap.data() : null;
-      const priceSoldFor = parseFloat(order.pricingSummary?.total?.value ?? "0");
-
-      // fulfillmentStartInstructions contains the actual ship-to address (what goes on the label).
-      // buyer.buyerRegistrationAddress is the billing/account address and can differ at checkout.
-      const shipStep = (order.fulfillmentStartInstructions ?? [])
-        .find(i => i.fulfillmentInstructionsType === "SHIP_TO" || i.shippingStep)
-        ?.shippingStep?.shipTo;
-      const addr = shipStep?.contactAddress ?? order.buyer?.buyerRegistrationAddress?.contactAddress ?? {};
-      const buyerName = shipStep?.fullName ?? order.buyer?.buyerRegistrationAddress?.fullName ?? null;
-      const regAddr = order.buyer?.buyerRegistrationAddress?.contactAddress ?? {};
-
-      await db.collection("sales").add({
-        userId: uid,
-        listingId,
-        listingTitle: listing?.customTitle ?? item.title ?? null,
-        coverPhotoPath: listing?.coverPhotoPath ?? null,
-        platform: "ebay",
-        platformOrderId: orderId,
-        priceSoldFor,
-        takeHome: takeHome ?? null,
-        buyerAddress: {
-          name: buyerName,
-          line1: addr.addressLine1 ?? null,
-          line2: addr.addressLine2 ?? null,
-          city: addr.city ?? null,
-          state: addr.stateOrProvince ?? null,
-          zip: addr.postalCode ?? null,
-          country: addr.countryCode ?? "US",
-        },
-        buyerRegisteredAddress: {
-          name: order.buyer?.buyerRegistrationAddress?.fullName ?? null,
-          line1: regAddr.addressLine1 ?? null,
-          line2: regAddr.addressLine2 ?? null,
-          city: regAddr.city ?? null,
-          state: regAddr.stateOrProvince ?? null,
-          zip: regAddr.postalCode ?? null,
-          country: regAddr.countryCode ?? null,
-        },
-        trackingNumber: tracking?.trackingNumber ?? null,
-        carrier: tracking?.carrier ?? null,
-        shippingFulfillments: tracking?.allFulfillments ?? null,
-        status: tracking?.trackingNumber ? "shipped" : "pending",
-        soldAt: admin.firestore.Timestamp.fromDate(new Date(order.creationDate)),
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      newCount++;
-      try {
-        await decrementAndCascadeInternal(listingId, "ebay", db, clientId, certId, etsyClientId.value());
-      } catch (e) {
-        console.error(`[syncSales] cascade failed listingId=${listingId}: ${e.message}`);
-      }
-    }
+    const result = await processSingleEbayOrder(
+      order, uid, accessToken, isSandbox, db,
+      clientId, certId, etsyClientId.value()
+    );
+    if (result.isNew) newCount += result.count ?? 1;
   }
 
   await integrationRef.update({ lastEbayPollAt: admin.firestore.Timestamp.now() });
@@ -541,3 +614,8 @@ exports.syncSales = onCall(
     return { newSales: total, ebay: ebayNew, etsy: etsyNew, ebayError };
   }
 );
+
+// Exported for use by ebay_webhook.js
+exports.processSingleEbayOrder = processSingleEbayOrder;
+exports.getEbayAccessToken = getEbayAccessToken;
+exports.makeRequest = makeRequest;
