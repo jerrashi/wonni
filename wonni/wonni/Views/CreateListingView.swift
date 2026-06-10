@@ -121,7 +121,8 @@ struct CustomPhotoPickerView: View {
         @Environment(\.dismiss) private var dismiss
 
         @Environment(\.modelContext) private var modelContext
-        @Query private var allItems: [Item]
+        @Query(filter: #Predicate<Item> { $0.isDraft })
+        private var allItems: [Item]
 
         @EnvironmentObject private var uploadManager: UploadManager
 
@@ -493,7 +494,8 @@ struct CustomPhotoPickerView: View {
     // MARK: - DraftHistoryModal
     struct DraftHistoryModal: View {
         @Environment(\.dismiss) private var dismiss
-        @Query private var allItems: [Item]
+        @Query(filter: #Predicate<Item> { $0.isDraft })
+        private var allItems: [Item]
         @ObservedObject var photoCollection: PhotoCollection
         @Environment(\.modelContext) private var modelContext
         @EnvironmentObject private var uploadManager: UploadManager
@@ -1454,7 +1456,8 @@ struct BulkListingOverviewView: View {
     var sessionDraftIDs: [UUID] = []
 
     @Environment(\.modelContext) private var modelContext
-    @Query private var allItems: [Item]
+    @Query(filter: #Predicate<Item> { $0.isDraft }, sort: \Item.createdAt, order: .reverse)
+    private var allItems: [Item]
     @EnvironmentObject private var uploadManager: UploadManager
 
     @FocusState private var focusedField: DraftFocusField?
@@ -1467,9 +1470,7 @@ struct BulkListingOverviewView: View {
     @State private var showDraftBulkEdit = false
 
     private var drafts: [Item] {
-        allItems
-            .filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty }
-            .sorted { $0.createdAt > $1.createdAt }
+        allItems.filter { !$0.sourceAssetIdentifiers.isEmpty }
     }
 
     var body: some View {
@@ -1680,7 +1681,8 @@ enum DraftFocusSubfield: Hashable { case title, price, description }
 
 struct ProcessResultsOverviewView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query private var allItems: [Item]
+    @Query(filter: #Predicate<Item> { $0.isDraft })
+    private var allItems: [Item]
     @EnvironmentObject private var uploadManager: UploadManager
 
     @State private var cache = CachedImageManager()
@@ -1707,7 +1709,7 @@ struct ProcessResultsOverviewView: View {
     // Only show the items that went through AI processing
     private var results: [Item] {
         let processedSet = Set(uploadManager.processedItemIDs)
-        return allItems.filter { $0.isDraft && processedSet.contains($0.id) }
+        return allItems.filter { processedSet.contains($0.id) }
     }
 
     private var toPublish: [Item] {
@@ -2548,14 +2550,13 @@ struct ResultDraftRow: View {
 
 struct PublishedListingsView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query private var allItems: [Item]
+    @Query(filter: #Predicate<Item> { $0.isDraft == false })
+    private var allItems: [Item]
     @State private var cache = CachedImageManager()
-
-    private var publishedItems: [Item] { allItems.filter { !$0.isDraft } }
 
     var body: some View {
         Group {
-            if publishedItems.isEmpty {
+            if allItems.isEmpty {
                 VStack(spacing: 16) {
                     Image(systemName: "checkmark.circle")
                         .font(.system(size: 60))
@@ -2564,7 +2565,7 @@ struct PublishedListingsView: View {
                         .foregroundStyle(.secondary)
                 }
             } else {
-                List(publishedItems) { item in
+                List(allItems) { item in
                     PublishedRow(item: item, cache: cache)
                 }
                 .listStyle(.plain)
