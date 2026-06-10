@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 import FirebaseFunctions
 
 struct BulkEditSheet: View {
@@ -390,12 +391,12 @@ struct BulkEditSheet: View {
     
     private func applyBulkEdit() {
         isApplying = true
-        
+
         Task {
             var adjustment: Double?
             var isPercentage = false
             var isPriceSet = false
-            
+
             if let val = priceAdjustmentValue, priceAdjustmentMode != .none {
                 if priceAdjustmentMode == .set {
                     adjustment = val
@@ -405,17 +406,17 @@ struct BulkEditSheet: View {
                     isPercentage = (priceAdjustmentType == .percentage)
                 }
             }
-            
+
             let minP: Double = (priceAdjustmentMode == .decrease && priceLimitValue != nil) ? priceLimitValue! : 0.01
             let maxP: Double? = (priceAdjustmentMode == .increase) ? priceLimitValue : nil
-            
+
             let buyerPaysShipping: Bool?
             switch selectedShipping {
             case .unchanged: buyerPaysShipping = nil
             case .buyerPays: buyerPaysShipping = true
             case .freeShipping: buyerPaysShipping = false
             }
-            
+
             do {
                 let dims: (Double, Double, Double)? = hasDimensions ? (lengthIn!, widthIn!, heightIn!) : nil
                 let ebayIds = try await ListingRepository.shared.bulkUpdate(
@@ -453,6 +454,213 @@ struct BulkEditSheet: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - DraftBulkEditSheet
+// Operates on SwiftData Item objects (pre-publish drafts) — no Firestore round-trip.
+
+struct DraftBulkEditSheet: View {
+    let items: [Item]
+    let onComplete: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var uploadManager: UploadManager
+
+    @State private var priceAdjustmentMode: BulkEditSheet.PriceAdjustmentDirection = .none
+    @State private var priceAdjustmentType: BulkEditSheet.PriceAdjustmentType = .absolute
+    @State private var priceAdjustmentValue: Double?
+    @State private var priceLimitValue: Double?
+
+    @State private var titlePrepend: String = ""
+    @State private var titleAppend: String = ""
+    @State private var descriptionPrepend: String = ""
+    @State private var descriptionAppend: String = ""
+
+    @State private var selectedCondition: ItemCondition? = nil
+    @State private var selectedShipping: BulkEditSheet.ShippingPolicyMode = .unchanged
+
+    @FocusState private var focusedField: BulkEditSheet.FocusField?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    dynamicTextRow(prepend: $titlePrepend, label: "Title", append: $titleAppend,
+                                   focus1: .titlePrepend, focus2: .titleAppend)
+                    dynamicTextRow(prepend: $descriptionPrepend, label: "Desc.", append: $descriptionAppend,
+                                   focus1: .descPrepend, focus2: .descAppend)
+                } header: { Text("Text Modifications") }
+
+                Section {
+                    VStack(spacing: 12) {
+                        HStack(spacing: 0) {
+                            priceButton("- Decrease", mode: .decrease, color: .red)
+                            Divider().frame(height: 24)
+                            priceButton("Set Price", mode: .set, color: .blue)
+                            Divider().frame(height: 24)
+                            priceButton("+ Increase", mode: .increase, color: .green)
+                        }
+                        .background(Color(.systemGray6))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .buttonStyle(.plain)
+
+                        if priceAdjustmentMode != .none {
+                            Divider()
+                            if priceAdjustmentMode == .set {
+                                HStack {
+                                    Text("New Price:").font(.subheadline).foregroundStyle(.secondary)
+                                    TextField("Amount", value: $priceAdjustmentValue, format: .number)
+                                        .keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
+                                        .focused($focusedField, equals: .priceAmount)
+                                }
+                            } else {
+                                HStack {
+                                    Picker("Type", selection: $priceAdjustmentType) {
+                                        Text("$").tag(BulkEditSheet.PriceAdjustmentType.absolute)
+                                        Text("%").tag(BulkEditSheet.PriceAdjustmentType.percentage)
+                                    }
+                                    .pickerStyle(.segmented).frame(width: 100)
+                                    TextField("Amount", value: $priceAdjustmentValue, format: .number)
+                                        .keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
+                                        .focused($focusedField, equals: .priceAmount)
+                                }
+                                if priceAdjustmentValue != nil {
+                                    HStack {
+                                        Text(priceAdjustmentMode == .decrease ? "Minimum:" : "Maximum:")
+                                            .font(.subheadline).foregroundStyle(.secondary)
+                                        TextField("Amount", value: $priceLimitValue, format: .number)
+                                            .keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
+                                            .focused($focusedField, equals: .priceLimit)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                } header: { Text("Price Adjustment") }
+
+                Section {
+                    Picker("Condition", selection: $selectedCondition) {
+                        Text("Unchanged").tag(ItemCondition?.none)
+                        ForEach(ItemCondition.allCases, id: \.self) { c in
+                            Text(c.displayName).tag(ItemCondition?.some(c))
+                        }
+                    }
+                    Picker("Shipping", selection: $selectedShipping) {
+                        ForEach(BulkEditSheet.ShippingPolicyMode.allCases, id: \.self) { p in
+                            Text(p.rawValue).tag(p)
+                        }
+                    }
+                } header: { Text("Details") }
+            }
+            .navigationTitle("Bulk Edit (\(items.count))")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Apply") { applyBulkEdit() }
+                        .disabled(!hasChanges)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focusedField = nil }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func priceButton(_ label: String, mode: BulkEditSheet.PriceAdjustmentDirection, color: Color) -> some View {
+        Button {
+            withAnimation { priceAdjustmentMode = (priceAdjustmentMode == mode) ? .none : mode }
+        } label: {
+            Text(label)
+                .font(.subheadline).fontWeight(.medium)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(priceAdjustmentMode == mode
+                    ? (mode == .set ? color : color.opacity(0.15))
+                    : Color.clear)
+                .foregroundStyle(priceAdjustmentMode == mode
+                    ? (mode == .set ? Color.white : color)
+                    : Color.primary)
+        }
+    }
+
+    @ViewBuilder
+    private func dynamicTextRow(
+        prepend: Binding<String>, label: String, append: Binding<String>,
+        focus1: BulkEditSheet.FocusField, focus2: BulkEditSheet.FocusField
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                TextField("Prepend", text: prepend, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($focusedField, equals: focus1)
+                Text(label).font(.subheadline).fontWeight(.medium).foregroundStyle(.secondary).fixedSize()
+                TextField("Append", text: append, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($focusedField, equals: focus2)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var hasChanges: Bool {
+        (priceAdjustmentMode != .none && priceAdjustmentValue != nil) ||
+        !titlePrepend.isEmpty || !titleAppend.isEmpty ||
+        !descriptionPrepend.isEmpty || !descriptionAppend.isEmpty ||
+        selectedCondition != nil || selectedShipping != .unchanged
+    }
+
+    private func applyBulkEdit() {
+        for item in items {
+            let currentTitle = item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? ""
+            var newTitle = currentTitle
+            if !titlePrepend.isEmpty { newTitle = titlePrepend + newTitle }
+            if !titleAppend.isEmpty { newTitle = newTitle + titleAppend }
+            if newTitle != currentTitle {
+                item.userEditedTitle = newTitle.isEmpty ? nil : String(newTitle.prefix(140))
+            }
+
+            let currentDesc = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
+            var newDesc = currentDesc
+            if !descriptionPrepend.isEmpty { newDesc = descriptionPrepend + newDesc }
+            if !descriptionAppend.isEmpty { newDesc = newDesc + descriptionAppend }
+            if newDesc != currentDesc {
+                item.userEditedDescription = newDesc.isEmpty ? nil : newDesc
+            }
+
+            if let val = priceAdjustmentValue, priceAdjustmentMode != .none {
+                let base = item.userEditedPrice ?? item.aiSuggestedPrice ?? 0
+                var newPrice: Double
+                switch priceAdjustmentMode {
+                case .set: newPrice = val
+                case .increase:
+                    newPrice = priceAdjustmentType == .percentage ? base * (1 + val / 100) : base + val
+                    if let maxP = priceLimitValue { newPrice = Swift.min(newPrice, maxP) }
+                case .decrease:
+                    newPrice = priceAdjustmentType == .percentage ? base * (1 - val / 100) : base - val
+                    newPrice = Swift.max(newPrice, priceLimitValue ?? 0.01)
+                case .none: newPrice = base
+                }
+                item.userEditedPrice = Swift.max(0.01, newPrice)
+            }
+
+            if let condition = selectedCondition { item.condition = condition.rawValue }
+            switch selectedShipping {
+            case .buyerPays: item.buyerPaysShipping = true
+            case .freeShipping: item.buyerPaysShipping = false
+            case .unchanged: break
+            }
+
+            uploadManager.syncDraftData(item)
+        }
+        try? modelContext.save()
+        onComplete()
+        dismiss()
     }
 }
 

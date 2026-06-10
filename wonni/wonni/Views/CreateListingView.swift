@@ -504,7 +504,15 @@ struct CustomPhotoPickerView: View {
         @State private var draggedCompositeId: String?
         @State private var isTrashTargeted = false
         @State private var showingPickerForDraft = false
+        @State private var showingDraftBulkEdit = false
         @FocusState private var focusedDraftID: UUID?
+
+        private var fullySelectedDrafts: [Item] {
+            drafts.filter { draft in
+                let ids = Set(draft.sourceAssetIdentifiers.map { "\(draft.id.uuidString)|\($0)" })
+                return !ids.isEmpty && ids.isSubset(of: selectedPhotos)
+            }
+        }
 
         // Track drag original state for cancel/restoration
         @State private var originalDraftID: UUID?
@@ -737,11 +745,15 @@ struct CustomPhotoPickerView: View {
                     }
                     ToolbarItem(placement: .navigationBarTrailing) {
                         if isSelectionMode {
-                            Button("Delete") {
-                                showingDeleteConfirm = true
+                            HStack(spacing: 16) {
+                                if !fullySelectedDrafts.isEmpty {
+                                    Button("Bulk Edit") { showingDraftBulkEdit = true }
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                                Button("Delete") { showingDeleteConfirm = true }
+                                    .foregroundColor(.red)
+                                    .disabled(selectedPhotos.isEmpty)
                             }
-                            .foregroundColor(.red)
-                            .disabled(selectedPhotos.isEmpty)
                         } else {
                             Button("Done") { dismiss() }
                         }
@@ -772,6 +784,13 @@ struct CustomPhotoPickerView: View {
                 }) {
                     CustomPhotoPickerView(addingToExistingDraft: true)
                         .environmentObject(uploadManager)
+                }
+                .sheet(isPresented: $showingDraftBulkEdit) {
+                    DraftBulkEditSheet(items: fullySelectedDrafts) {
+                        isSelectionMode = false
+                        selectedPhotos.removeAll()
+                    }
+                    .environmentObject(uploadManager)
                 }
             }
         }
@@ -896,6 +915,9 @@ struct DraftRow: View {
     let item: Item
     var focusedField: FocusState<DraftFocusField?>.Binding
     let cache: CachedImageManager
+    var isSelectable: Bool = false
+    var isSelected: Bool = false
+    var onToggle: (() -> Void)? = nil
 
     @Environment(\.modelContext) private var modelContext
     @State private var priceText: String = ""
@@ -919,6 +941,16 @@ struct DraftRow: View {
         VStack(alignment: .leading, spacing: 8) {
             // ── Top row: photo + title/price + edit button ─────────────────
             HStack(alignment: .top, spacing: 14) {
+                if isSelectable {
+                    Button(action: { onToggle?() }) {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.title3)
+                            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 4)
+                }
+
                 // Photo thumbnail
                 Group {
                     if let assetId = item.sourceAssetIdentifiers.first {
@@ -1430,6 +1462,9 @@ struct BulkListingOverviewView: View {
     @State private var navigateToResults = false
     @State private var showProcessFullScreen = false
     @State private var showingPickerForDraft = false
+    @State private var isSelectMode = false
+    @State private var selectedItemIDs: Set<UUID> = []
+    @State private var showDraftBulkEdit = false
 
     private var drafts: [Item] {
         allItems
@@ -1473,7 +1508,13 @@ struct BulkListingOverviewView: View {
                         DraftRow(
                             item: item,
                             focusedField: $focusedField,
-                            cache: cache
+                            cache: cache,
+                            isSelectable: isSelectMode,
+                            isSelected: selectedItemIDs.contains(item.id),
+                            onToggle: {
+                                if selectedItemIDs.contains(item.id) { selectedItemIDs.remove(item.id) }
+                                else { selectedItemIDs.insert(item.id) }
+                            }
                         )
                         .id(item.id)
                     }
@@ -1495,11 +1536,45 @@ struct BulkListingOverviewView: View {
                     }
                 }
             }
+
+            if isSelectMode && !selectedItemIDs.isEmpty {
+                Divider()
+                HStack {
+                    Text("\(selectedItemIDs.count) selected")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Edit \(selectedItemIDs.count) selected") {
+                        showDraftBulkEdit = true
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.accentColor, in: Capsule())
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 10)
+                .background(Color(.systemBackground))
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isSelectMode && !selectedItemIDs.isEmpty)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                if isSelectMode {
+                    Button("Cancel") {
+                        isSelectMode = false
+                        selectedItemIDs.removeAll()
+                    }
+                } else {
+                    Button("Select") { isSelectMode = true }
+                        .disabled(drafts.isEmpty)
+                }
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
-                processButton
+                if !isSelectMode { processButton }
             }
             ToolbarItemGroup(placement: .keyboard) {
                 Button { moveFocus(by: -1) } label: { Image(systemName: "chevron.up") }
@@ -1531,6 +1606,13 @@ struct BulkListingOverviewView: View {
                     showProcessFullScreen = false
                     uploadManager.selectedTab = 0
                 })
+            }
+            .environmentObject(uploadManager)
+        }
+        .sheet(isPresented: $showDraftBulkEdit) {
+            DraftBulkEditSheet(items: drafts.filter { selectedItemIDs.contains($0.id) }) {
+                isSelectMode = false
+                selectedItemIDs.removeAll()
             }
             .environmentObject(uploadManager)
         }
@@ -2138,6 +2220,102 @@ struct CrossPostStatusView: View {
     }
 }
 
+// MARK: - WordDiffView
+
+private struct WordDiffView: View {
+    let before: String
+    let after: String
+
+    enum TokenKind { case same, deleted, added }
+    struct Token { let word: String; let kind: TokenKind }
+
+    var body: some View {
+        tokens.reduce(Text("")) { acc, tok in
+            switch tok.kind {
+            case .same:    return acc + Text(tok.word + " ").font(.caption).foregroundColor(.primary)
+            case .deleted: return acc + Text(tok.word + " ").font(.caption).foregroundColor(.red).strikethrough()
+            case .added:   return acc + Text(tok.word + " ").font(.caption).foregroundColor(.green).fontWeight(.semibold)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var tokens: [Token] {
+        let old = before.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        let new = after.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        let lcs = longestCommonSubsequence(old, new)
+        return buildDiff(old: old, new: new, lcs: lcs)
+    }
+
+    private func buildDiff(old: [String], new: [String], lcs: [String]) -> [Token] {
+        var result: [Token] = []
+        var oi = 0, ni = 0, li = 0
+        while oi < old.count || ni < new.count {
+            if li < lcs.count {
+                while oi < old.count && old[oi] != lcs[li] {
+                    result.append(Token(word: old[oi], kind: .deleted)); oi += 1
+                }
+                while ni < new.count && new[ni] != lcs[li] {
+                    result.append(Token(word: new[ni], kind: .added)); ni += 1
+                }
+                if oi < old.count && ni < new.count {
+                    result.append(Token(word: lcs[li], kind: .same))
+                    oi += 1; ni += 1; li += 1
+                }
+            } else {
+                while oi < old.count { result.append(Token(word: old[oi], kind: .deleted)); oi += 1 }
+                while ni < new.count { result.append(Token(word: new[ni], kind: .added)); ni += 1 }
+            }
+        }
+        return result
+    }
+
+    private func longestCommonSubsequence(_ a: [String], _ b: [String]) -> [String] {
+        guard !a.isEmpty && !b.isEmpty else { return [] }
+        var dp = [[Int]](repeating: [Int](repeating: 0, count: b.count + 1), count: a.count + 1)
+        for i in 1...a.count {
+            for j in 1...b.count {
+                dp[i][j] = a[i-1] == b[j-1] ? dp[i-1][j-1] + 1 : Swift.max(dp[i-1][j], dp[i][j-1])
+            }
+        }
+        var res: [String] = []
+        var i = a.count, j = b.count
+        while i > 0 && j > 0 {
+            if a[i-1] == b[j-1] { res.insert(a[i-1], at: 0); i -= 1; j -= 1 }
+            else if dp[i-1][j] > dp[i][j-1] { i -= 1 }
+            else { j -= 1 }
+        }
+        return res
+    }
+}
+
+// MARK: - AIUndoToastView
+
+private struct AIUndoToastView: View {
+    let message: String
+    let onRestore: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+            if let restore = onRestore {
+                Button("Restore", action: restore)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color(.label).opacity(0.85), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal)
+        .padding(.bottom, 8)
+    }
+}
+
 // MARK: - ResultDraftRow
 
 struct ResultDraftRow: View {
@@ -2154,6 +2332,11 @@ struct ResultDraftRow: View {
     @EnvironmentObject private var uploadManager: UploadManager
     @State private var priceText: String = ""
     @State private var showEditSheet = false
+    @State private var showDescriptionEditor = false
+    @State private var undoneAITitle: String? = nil
+    @State private var undoneAIDescription: String? = nil
+    @State private var toastMessage: String? = nil
+    @State private var toastRestoreAction: (() -> Void)? = nil
 
     private var titleBinding: Binding<String> {
         Binding(
@@ -2200,6 +2383,14 @@ struct ResultDraftRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
 
                 VStack(alignment: .leading, spacing: 6) {
+                    if let origTitle = item.originalUserTitleBeforeAI {
+                        WordDiffView(before: origTitle, after: titleBinding.wrappedValue)
+                        Button("Undo AI title edits") { undoAITitle() }
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.blue)
+                            .buttonStyle(.plain)
+                    }
+
                     TextField("Title", text: titleBinding)
                         .font(.body.weight(.semibold))
                         .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .title))
@@ -2237,22 +2428,42 @@ struct ResultDraftRow: View {
             }
 
             // ── Description (full width) ────────────────────────────────────
-            let isDescFocused = focusedField.wrappedValue == DraftFocusField(itemID: item.id, field: .description)
-            TextField("Description", text: descriptionBinding, axis: .vertical)
-                .lineLimit(isDescFocused ? nil : descriptionLineLimit)
-                .font(.caption)
-                .foregroundStyle(item.userEditedDescription != nil ? .primary : .secondary)
-                .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .description))
-                .animation(.easeInOut(duration: 0.2), value: isDescFocused)
-                .padding(8)
-                .background(item.originalUserDescriptionBeforeAI != nil ? Color.purple.opacity(0.08) : Color(.systemGray6))
-                .cornerRadius(8)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(item.originalUserDescriptionBeforeAI != nil ? Color.purple.opacity(0.2) : Color.clear, lineWidth: 1)
-                )
+            if let origDesc = item.originalUserDescriptionBeforeAI {
+                WordDiffView(before: origDesc, after: descriptionBinding.wrappedValue)
+                    .padding(.horizontal, 4)
+                Button("Undo AI description edits") { undoAIDescription() }
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.blue)
+                    .buttonStyle(.plain)
+                    .padding(.leading, 4)
+            }
 
-            // ── AI badge / undo row ─────────────────────────────────────────
+            let descText = descriptionBinding.wrappedValue
+            Button { showDescriptionEditor = true } label: {
+                Text(descText.isEmpty ? "Add description…" : descText)
+                    .lineLimit(3)
+                    .font(.caption)
+                    .foregroundStyle(descText.isEmpty
+                        ? Color(.placeholderText)
+                        : (item.userEditedDescription != nil ? .primary : .secondary))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(item.originalUserDescriptionBeforeAI != nil
+                        ? Color.purple.opacity(0.08) : Color(.systemGray6))
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(item.originalUserDescriptionBeforeAI != nil
+                                ? Color.purple.opacity(0.2) : Color.clear, lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .sheet(isPresented: $showDescriptionEditor) {
+                DescriptionEditorSheet(text: descriptionBinding,
+                                       hasAIPurple: item.originalUserDescriptionBeforeAI != nil)
+            }
+
+            // ── AI badge row ────────────────────────────────────────────────
             let hasAIEdits = item.originalUserTitleBeforeAI != nil || item.originalUserDescriptionBeforeAI != nil
             HStack(spacing: 0) {
                 if isGeminiFailed {
@@ -2267,28 +2478,16 @@ struct ResultDraftRow: View {
                     }
                 }
                 Spacer()
-                if hasAIEdits {
-                    Button {
-                        withAnimation {
-                            if let origTitle = item.originalUserTitleBeforeAI {
-                                item.userEditedTitle = origTitle
-                                item.originalUserTitleBeforeAI = nil
-                            }
-                            if let origDesc = item.originalUserDescriptionBeforeAI {
-                                item.userEditedDescription = origDesc
-                                item.originalUserDescriptionBeforeAI = nil
-                            }
-                            try? modelContext.save()
-                            uploadManager.syncDraftData(item)
-                        }
-                    } label: {
-                        Text("Undo").font(.caption2.weight(.medium)).foregroundStyle(.blue)
-                    }
-                    .buttonStyle(.plain)
-                }
             }
         }
         .padding(.vertical, 8)
+        .overlay(alignment: .bottom) {
+            if let msg = toastMessage {
+                AIUndoToastView(message: msg, onRestore: toastRestoreAction)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: toastMessage != nil)
         .onAppear {
             if let p = item.userEditedPrice ?? item.aiSuggestedPrice {
                 priceText = String(format: "%.2f", p)
@@ -2296,6 +2495,51 @@ struct ResultDraftRow: View {
         }
         .sheet(isPresented: $showEditSheet) {
             DraftEditSheet(item: item)
+        }
+    }
+
+    private func undoAITitle() {
+        guard let orig = item.originalUserTitleBeforeAI else { return }
+        let aiTitle = item.userEditedTitle
+        item.userEditedTitle = orig.isEmpty ? nil : orig
+        item.originalUserTitleBeforeAI = nil
+        try? modelContext.save()
+        uploadManager.syncDraftData(item)
+        undoneAITitle = aiTitle
+        showToast(message: "AI title edits discarded") { [self] in
+            item.originalUserTitleBeforeAI = item.userEditedTitle
+            item.userEditedTitle = self.undoneAITitle
+            self.undoneAITitle = nil
+            try? modelContext.save()
+            uploadManager.syncDraftData(item)
+        }
+    }
+
+    private func undoAIDescription() {
+        guard let orig = item.originalUserDescriptionBeforeAI else { return }
+        let aiDesc = item.userEditedDescription
+        item.userEditedDescription = orig.isEmpty ? nil : orig
+        item.originalUserDescriptionBeforeAI = nil
+        try? modelContext.save()
+        uploadManager.syncDraftData(item)
+        undoneAIDescription = aiDesc
+        showToast(message: "AI description edits discarded") { [self] in
+            item.originalUserDescriptionBeforeAI = item.userEditedDescription
+            item.userEditedDescription = self.undoneAIDescription
+            self.undoneAIDescription = nil
+            try? modelContext.save()
+            uploadManager.syncDraftData(item)
+        }
+    }
+
+    private func showToast(message: String, onRestore: @escaping () -> Void) {
+        toastMessage = message
+        toastRestoreAction = {
+            onRestore()
+            withAnimation { toastMessage = nil; toastRestoreAction = nil }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            withAnimation { toastMessage = nil; toastRestoreAction = nil }
         }
     }
 }
