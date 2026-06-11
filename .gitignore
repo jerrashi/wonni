@@ -12,9 +12,11 @@ node_modules/
 firebase-debug.log
 firestore-debug.log
 
-# Vite / build output
+# Vite / build output (Vite outputs into public/ alongside source oauth/ files)
 web/dist/
 functions/lib/
+public/index.html
+public/assets/
 
 # Xcode
 #
