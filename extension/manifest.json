@@ -29,7 +29,10 @@
     }
   ],
   "externally_connectable": {
-    "matches": ["https://wonni-dropship.web.app/*"]
+    "matches": [
+      "https://wonni-dropship.web.app/*",
+      "http://localhost:5173/*"
+    ]
   },
   "action": {
     "default_popup": "popup.html",
