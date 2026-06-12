@@ -400,4 +400,15 @@ class ListingRepository: ObservableObject {
         try await batch.commit()
         return ebayPostedIds
     }
+
+    func findListingByMercariId(_ mercariId: String) async -> (listingId: String, coverPhotoPath: String?)? {
+        let snap = try? await db.collection(listingsCollection)
+            .whereField("crossPostListingIds.mercari", isEqualTo: mercariId)
+            .limit(to: 1)
+            .getDocuments()
+        guard let doc = snap?.documents.first,
+              let listing = try? doc.data(as: UserListing.self),
+              let id = listing.id else { return nil }
+        return (listingId: id, coverPhotoPath: listing.coverPhotoPath)
+    }
 }

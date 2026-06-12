@@ -18,39 +18,49 @@ struct MainView: View {
     var body: some View {
         TabView(selection: $uploadManager.selectedTab) {
             NavigationStack { HomeView() }
-                .processPill(uploadManager)
-                .bulkImportPill(bulkImportManager)
-                .mercariSyncPill(mercariSyncManager)
+                .appTaskQueuePill()
                 .tabItem { Label("Home", systemImage: "house.fill") }
                 .tag(0)
 
             NavigationStack { SearchView() }
-                .processPill(uploadManager)
-                .bulkImportPill(bulkImportManager)
-                .mercariSyncPill(mercariSyncManager)
+                .appTaskQueuePill()
                 .tabItem { Label("Search", systemImage: "magnifyingglass") }
                 .tag(1)
 
             NavigationStack { CameraViewController() }
-                .processPill(uploadManager)
-                .bulkImportPill(bulkImportManager)
-                .mercariSyncPill(mercariSyncManager)
+                .appTaskQueuePill()
                 .tabItem { Label("Sell", systemImage: "plus.circle.fill") }
                 .tag(2)
 
             NavigationStack { InboxView() }
-                .processPill(uploadManager)
-                .bulkImportPill(bulkImportManager)
-                .mercariSyncPill(mercariSyncManager)
+                .appTaskQueuePill()
                 .tabItem { Label("Inbox", systemImage: "tray.fill") }
                 .tag(3)
 
             NavigationStack { ProfileView() }
-                .processPill(uploadManager)
-                .bulkImportPill(bulkImportManager)
-                .mercariSyncPill(mercariSyncManager)
+                .appTaskQueuePill()
                 .tabItem { Label("Profile", systemImage: "person.crop.circle.fill") }
                 .tag(4)
+        }
+        .background(
+            Group {
+                MercariSheetWebView(webView: bulkImportManager.urlExtractor.webView)
+                    .frame(width: 1, height: 1).opacity(0).allowsHitTesting(false)
+                MercariSheetWebView(webView: mercariSyncManager.loader.webView)
+                    .frame(width: 1, height: 1).opacity(0).allowsHitTesting(false)
+            }
+        )
+        .sheet(isPresented: $uploadManager.showProgressSheet) {
+            NavigationStack { ProcessProgressView() }
+                .environmentObject(uploadManager)
+        }
+        .sheet(isPresented: $bulkImportManager.showProgressSheet) {
+            NavigationStack { BulkImportProgressView() }
+                .environmentObject(bulkImportManager)
+        }
+        .sheet(isPresented: $mercariSyncManager.showProgressSheet) {
+            NavigationStack { MercariSyncProgressSheet() }
+                .environmentObject(mercariSyncManager)
         }
         // When AI processing finishes, hop back to the Sell tab so the review/publish step is
         // shown right away. Without this, a user who minimized the processing screen and walked
@@ -94,93 +104,85 @@ struct MainView: View {
 }
 
 private extension View {
-    /// Pins the processing pill just above the tab bar and pushes this tab's content up to make
-    /// room for it (a true VStack-style inset, not a ZStack overlay). Applied per-tab rather than
-    /// on the TabView itself: a `safeAreaInset` on the TabView reserves space at the very bottom,
-    /// where the tab bar already sits, so the pill ends up overlapping it. Insetting each tab's
-    /// content instead places the pill in that tab's content area, cleanly above the tab bar.
-    func processPill(_ uploadManager: UploadManager) -> some View {
+    // Pins the universal task queue pill just above the tab bar.
+    // Applied per-tab (not on the TabView) so the pill sits in each tab's
+    // content area rather than overlapping the tab bar itself.
+    func appTaskQueuePill() -> some View {
         self.safeAreaInset(edge: .bottom, spacing: 0) {
-            if uploadManager.isProcessPillVisible {
-                ProcessPillView()
-                    .environmentObject(uploadManager)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
+            AppTaskQueuePillContent()
         }
-        .animation(.spring(response: 0.35, dampingFraction: 0.8),
-                   value: uploadManager.isProcessPillVisible)
-    }
-
-    func bulkImportPill(_ bulkImportManager: BulkImportManager) -> some View {
-        self.safeAreaInset(edge: .bottom, spacing: 0) {
-            if bulkImportManager.isPillVisible {
-                BulkImportPillView()
-                    .environmentObject(bulkImportManager)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
-        .background(
-            MercariSheetWebView(webView: bulkImportManager.urlExtractor.webView)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .opacity(0.01)
-                .allowsHitTesting(false)
-        )
-        .animation(.spring(response: 0.35, dampingFraction: 0.8),
-                   value: bulkImportManager.isPillVisible)
-    }
-
-    func mercariSyncPill(_ mercariSyncManager: MercariSyncManager) -> some View {
-        self.safeAreaInset(edge: .bottom, spacing: 0) {
-            if mercariSyncManager.isPillVisible {
-                MercariSyncPillView()
-                    .environmentObject(mercariSyncManager)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
-        .background(
-            MercariSheetWebView(webView: mercariSyncManager.loader.webView)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .opacity(0.01)
-                .allowsHitTesting(false)
-        )
-        .animation(.spring(response: 0.35, dampingFraction: 0.8),
-                   value: mercariSyncManager.isPillVisible)
     }
 }
 
-struct MercariSyncPillView: View {
-    @EnvironmentObject var syncManager: MercariSyncManager
-    
+// MARK: - Universal task queue pill
+
+struct AppTaskQueuePillContent: View {
+    @ObservedObject private var queue = AppTaskQueue.shared
+
+    var body: some View {
+        if queue.hasActiveTasks, let task = queue.current {
+            AppTaskQueuePillView(task: task, queueCount: queue.count)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+}
+
+struct AppTaskQueuePillView: View {
+    let task: AppTaskQueue.AppTask
+    let queueCount: Int
+
     var body: some View {
         HStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .stroke(Color.white.opacity(0.25), lineWidth: 2.5)
-                Circle()
-                    .trim(from: 0, to: syncManager.progress)
-                    .stroke(Color.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                    .animation(.linear(duration: 0.3), value: syncManager.progress)
+            if task.progress < 0 {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(.white)
+                    .scaleEffect(0.75)
+                    .frame(width: 20, height: 20)
+            } else {
+                ZStack {
+                    Circle()
+                        .stroke(Color.white.opacity(0.25), lineWidth: 2.5)
+                    Circle()
+                        .trim(from: 0, to: task.progress)
+                        .stroke(Color.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .animation(.linear(duration: 0.3), value: task.progress)
+                }
+                .frame(width: 20, height: 20)
             }
-            .frame(width: 20, height: 20)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("Syncing with Mercari...")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white)
-                Text("\(syncManager.currentIndex) of \(syncManager.totalCount)")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.65))
+                HStack(spacing: 6) {
+                    Text(task.label)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                    if queueCount > 1 {
+                        Text("+\(queueCount - 1)")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(.white.opacity(0.25)))
+                    }
+                }
+                if let detail = task.detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.65))
+                }
             }
 
             Spacer()
 
-            Button {
-                syncManager.showProgressSheet = true
-            } label: {
-                Image(systemName: "chevron.up")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.white.opacity(0.8))
+            if task.onTap != nil {
+                Button {
+                    task.onTap?()
+                } label: {
+                    Image(systemName: "chevron.up")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.8))
+                }
             }
         }
         .padding(.horizontal, 16)
@@ -188,17 +190,12 @@ struct MercariSyncPillView: View {
         .background(
             Capsule()
                 .fill(.ultraThinMaterial)
-                .overlay(Capsule().fill(Color.accentColor.opacity(0.85)))
+                .overlay(Capsule().fill(task.accentColor.opacity(0.85)))
                 .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
         )
         .padding(.horizontal, 20)
         .padding(.bottom, 4)
-        .sheet(isPresented: $syncManager.showProgressSheet) {
-            NavigationStack {
-                MercariSyncProgressSheet()
-            }
-            .environmentObject(syncManager)
-        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: task.label)
     }
 }
 

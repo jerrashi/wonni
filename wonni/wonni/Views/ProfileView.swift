@@ -901,16 +901,16 @@ struct EditPhotoDropDelegate: DropDelegate {
     let item: EditPhotoItem
     @Binding var photos: [EditPhotoItem]
     @Binding var draggedPhotoId: String?
+    @Binding var isDraggingPhoto: Bool
 
     func dropEntered(info: DropInfo) {
         guard let dragged = draggedPhotoId, dragged != item.id else { return }
-        if let from = photos.firstIndex(where: { $0.id == dragged }),
-           let to = photos.firstIndex(where: { $0.id == item.id }) {
-            withAnimation {
-                let moved = photos.remove(at: from)
-                photos.insert(moved, at: to)
-            }
-        }
+        guard let from = photos.firstIndex(where: { $0.id == dragged }),
+              let to = photos.firstIndex(where: { $0.id == item.id }),
+              from != to else { return }
+        // No animation here — animating during live drag causes the layout to shift
+        // which invalidates the drag session and makes items jump around.
+        photos.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
@@ -918,6 +918,7 @@ struct EditPhotoDropDelegate: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
+        isDraggingPhoto = false
         draggedPhotoId = nil
         return true
     }
@@ -959,10 +960,12 @@ struct EditListingSheet: View {
     @State private var isLinkingMercari = false
     @State private var mercariLinkError: String?
     @State private var showMercariSync = false
+    @State private var showTemplatePicker = false
     @State private var showMercariEdit = false
     @State private var applyEditsToMercari = true
     @State private var showMercariAutoEdit = false
     @State private var pendingOnSaveJobs: [CrossPostJob] = []
+    @State private var pendingPhotosUpdated = false
     @State private var showShippingProfileAlert = false
     @State private var reconnectSession: ASWebAuthenticationSession?
     @State private var reconnectAnchor = WebAuthPresentationAnchor()
@@ -988,6 +991,7 @@ struct EditListingSheet: View {
     @State private var selectedPhotos = Set<String>()
     @State private var newPhotosItems: [PhotosPickerItem] = []
     @State private var draggedPhotoId: String? = nil
+    @State private var isDraggingPhoto = false
 
     init(listing: UserListing, onSave: @escaping ([CrossPostJob]) -> Void) {
         self.listing = listing
@@ -1042,6 +1046,14 @@ struct EditListingSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
+                ToolbarItem(placement: .bottomBar) {
+                    Button {
+                        showTemplatePicker = true
+                    } label: {
+                        Label("Templates", systemImage: "doc.on.doc")
+                            .font(.caption.weight(.semibold))
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     if isSaving {
                         ProgressView()
@@ -1058,6 +1070,11 @@ struct EditListingSheet: View {
                         }
                         .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
+                }
+            }
+            .sheet(isPresented: $showTemplatePicker) {
+                TemplatePickerSheet { template in
+                    applyTemplate(template)
                 }
             }
             .sheet(isPresented: $showAddressSetupSheet) {
@@ -1091,8 +1108,8 @@ struct EditListingSheet: View {
                 dismiss()
             }) {
                 if let id = linkedMercariId {
-                    MercariAutoEditSheet(listing: listing, mercariId: id) {
-                        // onDone fires before onDismiss — nothing extra needed here
+                    MercariAutoEditSheet(listing: listing, mercariId: id, photosWereUpdated: pendingPhotosUpdated) {
+                        pendingPhotosUpdated = false
                     }
                 }
             }
@@ -1274,10 +1291,11 @@ struct EditListingSheet: View {
                                 .frame(width: 80, height: 80)
                                 .cornerRadius(8)
                                 .clipped()
-                                .opacity(selectedPhotos.contains(item.id) ? 0.6 : 1.0)
+                                .opacity(draggedPhotoId == item.id ? 0.4 : (selectedPhotos.contains(item.id) ? 0.6 : 1.0))
                                 .onDrag({
                                     if !isSelectionMode {
                                         draggedPhotoId = item.id
+                                        isDraggingPhoto = true
                                         return NSItemProvider(object: item.id as NSString)
                                     }
                                     return NSItemProvider()
@@ -1297,7 +1315,8 @@ struct EditListingSheet: View {
                                 .onDrop(of: [.text], delegate: EditPhotoDropDelegate(
                                     item: item,
                                     photos: $editPhotos,
-                                    draggedPhotoId: $draggedPhotoId
+                                    draggedPhotoId: $draggedPhotoId,
+                                    isDraggingPhoto: $isDraggingPhoto
                                 ))
                                 if isSelectionMode {
                                     Image(systemName: selectedPhotos.contains(item.id) ? "checkmark.circle.fill" : "circle")
@@ -1342,6 +1361,7 @@ struct EditListingSheet: View {
                     }
                     .padding(.vertical, 4)
                 }
+                .scrollDisabled(isDraggingPhoto)
             }
         }
     }
@@ -1726,7 +1746,8 @@ struct EditListingSheet: View {
         coreFieldsChanged || shippingChanged ||
         selectedPlatforms != initialPlatforms ||
         mercariCleared || photosChanged ||
-        (isEditingMercariId && mercariIdDraft != (linkedMercariId ?? ""))
+        (isEditingMercariId && mercariIdDraft != (linkedMercariId ?? "")) ||
+        !mercariLinkInput.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     /// Saves just the Mercari listing ID without requiring a full listing save.
@@ -1786,6 +1807,26 @@ struct EditListingSheet: View {
             "updatedAt": Timestamp(date: Date())
         ])
         print("[EditListingSheet] Cleared stale mercari=pending for listing \(listingId) (age: \(Int(age))s)")
+    }
+
+    private func applyTemplate(_ template: ListingTemplate) {
+        if let t = template.title, !t.isEmpty { title = t }
+        if let d = template.customDescription, !d.isEmpty { description = d }
+        if let c = template.condition, let cond = ItemCondition(rawValue: c) { condition = cond }
+        if let b = template.brand, !b.isEmpty { brand = b }
+        if let cat = template.category, !cat.isEmpty { category = cat }
+        if let free = template.isFreeShipping { isFreeShipping = free }
+        if let w = template.weightLbs { weightLbs = w }
+        if let dims = template.packageDimensions {
+            lengthIn = dims.lengthIn; widthIn = dims.widthIn; heightIn = dims.heightIn
+        }
+        if let platforms = template.platforms, !platforms.isEmpty {
+            selectedPlatforms = selectedPlatforms.union(Set(platforms))
+        }
+        // Append template photos that aren't already present
+        for path in template.photoPaths where !editPhotos.contains(where: { $0.id == path }) {
+            editPhotos.append(.existing(path: path))
+        }
     }
 
     private func saveListing() async {
@@ -1904,6 +1945,18 @@ struct EditListingSheet: View {
                 ])
             }
 
+            // Persist a new Mercari link pasted in the "no ID" input field.
+            let trimmedLink = mercariLinkInput.trimmingCharacters(in: .whitespaces)
+            if !trimmedLink.isEmpty, let parsedId = parseMercariItemId(trimmedLink) {
+                try? await Firestore.firestore().collection("listings").document(id).updateData([
+                    "crossPostListingIds.mercari": parsedId,
+                    "crossPostStatus.mercari": "posted",
+                    "updatedAt": Timestamp(date: Date())
+                ])
+                linkedMercariId = parsedId
+                mercariLinkInput = ""
+            }
+
             // Persist a manually-edited Mercari listing ID (new link entered via Edit ID flow).
             if isEditingMercariId && !mercariCleared {
                 let trimmed = mercariIdDraft.trimmingCharacters(in: .whitespaces)
@@ -1933,9 +1986,11 @@ struct EditListingSheet: View {
                 title.trimmingCharacters(in: .whitespaces) != (listing.customTitle ?? "") ||
                 description.trimmingCharacters(in: .whitespaces) != (listing.customDescription ?? "") ||
                 price != listing.price ||
-                condition != listing.condition
+                condition != listing.condition ||
+                photosChanged
             if mercariIsLive && mercariFieldsChanged && applyEditsToMercari {
                 pendingOnSaveJobs = newWebJobs
+                pendingPhotosUpdated = photosChanged
                 showMercariAutoEdit = true
             } else {
                 onSave(newWebJobs)
@@ -2197,6 +2252,19 @@ struct SettingsSheet: View {
                                 onConnect: { connectPlatform(integration: integration) },
                                 onDisconnect: { disconnectPlatform(platform: integration.platform) }
                             )
+                        }
+                    }
+                }
+
+                Section(header: Text("Listing Templates")) {
+                    NavigationLink {
+                        ListingTemplatesView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Manage templates")
+                            Text("Reusable fields (title, description, shipping, platforms, photos) applied when creating or editing a listing.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
                     }
                 }

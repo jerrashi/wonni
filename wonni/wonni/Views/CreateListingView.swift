@@ -113,6 +113,9 @@ struct SelectablePhotoGridItem: View {
 
 struct CustomPhotoPickerView: View {
         var addingToExistingDraft: Bool = false
+        /// Called when the user taps the green checkmark (non-addingToExistingDraft mode).
+        /// The parent navigation controller should handle pushing the drafts overview.
+        var onProceed: (() -> Void)? = nil
 
         @StateObject var photoCollection = PhotoCollection(smartAlbum: .smartAlbumUserLibrary)
         @State private var navigateToOverview = false
@@ -277,7 +280,11 @@ struct CustomPhotoPickerView: View {
                             if hasActiveDraft {
                                 uploadManager.commitActiveDraft(modelContext: modelContext)
                             }
-                            navigateToOverview = true
+                            if let proceed = onProceed {
+                                proceed()
+                            } else {
+                                navigateToOverview = true
+                            }
                         } label: {
                             Image(systemName: "checkmark.circle.fill")
                                 .font(.system(size: 24))
@@ -1130,6 +1137,9 @@ struct DraftEditSheet: View {
         @State private var widthText: String = ""
         @State private var heightText: String = ""
 
+        @State private var showTemplatePicker = false
+        @State private var isApplyingTemplate = false
+
         var body: some View {
             NavigationStack {
                 Form {
@@ -1368,12 +1378,25 @@ struct DraftEditSheet: View {
                     ToolbarItem(placement: .navigationBarLeading) {
                         Button("Cancel") { dismiss() }
                     }
+                    ToolbarItem(placement: .bottomBar) {
+                        Button {
+                            showTemplatePicker = true
+                        } label: {
+                            Label("Templates", systemImage: "doc.on.doc")
+                                .font(.caption.weight(.semibold))
+                        }
+                    }
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button("Save") {
                             saveToDraft()
                             dismiss()
                         }
                         .fontWeight(.semibold)
+                    }
+                }
+                .sheet(isPresented: $showTemplatePicker) {
+                    TemplatePickerSheet { template in
+                        applyTemplateToDraft(template)
                     }
                 }
                 .onAppear { loadFromDraft() }
@@ -1387,6 +1410,32 @@ struct DraftEditSheet: View {
             selectedPhotos.removeAll()
             isSelectionMode = false
             try? modelContext.save()
+        }
+
+        private func applyTemplateToDraft(_ template: ListingTemplate) {
+            if let t = template.title, !t.isEmpty { title = t }
+            if let d = template.customDescription, !d.isEmpty { description = d }
+            if let c = template.condition, let cond = ItemCondition(rawValue: c) { selectedCondition = cond }
+            if let free = template.isFreeShipping { buyerPaysShipping = !free }
+            if let w = template.weightLbs { weightText = String(format: "%.2f", w) }
+            if let dims = template.packageDimensions {
+                lengthText = String(format: "%.2f", dims.lengthIn)
+                widthText = String(format: "%.2f", dims.widthIn)
+                heightText = String(format: "%.2f", dims.heightIn)
+            }
+            guard !template.photoPaths.isEmpty else { return }
+            isApplyingTemplate = true
+            Task {
+                for path in template.photoPaths {
+                    if let data = try? await StorageService.shared.downloadImageData(path: path),
+                       let img = UIImage(data: data) {
+                        let fakeId = "tpl_\(UUID().uuidString)"
+                        item.insertPhoto(assetId: fakeId, data: img.jpegData(compressionQuality: 0.85), at: item.sourceAssetIdentifiers.count)
+                        try? modelContext.save()
+                    }
+                }
+                isApplyingTemplate = false
+            }
         }
 
         private func loadFromDraft() {

@@ -428,6 +428,202 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         webView.load(URLRequest(url: URL(string: "https://www.mercari.com/sell/")!))
     }
 
+    // Resets the injection guard so a resume pass can run without reloading the page.
+    func prepareForResume() {
+        hasDetectedSuccess = false
+        hasStartedInjection = false
+        status = .injecting
+    }
+
+    // Probes the current DOM to find out which steps are already complete.
+    struct FormProbe {
+        var formMounted: Bool      // all core fields exist in DOM
+        var titleFilled: Bool
+        var descFilled: Bool
+        var priceFilled: Bool
+        var uploadedPhotoCount: Int
+        var hasPhotoError: Bool
+        var shippingFullySet: Bool  // shipping field shows a carrier (category + carrier both done)
+    }
+
+    func probeFormState() async -> FormProbe {
+        let js = """
+        return (function() {
+            var title = document.querySelector('input[data-testid="Title"]');
+            var desc  = document.querySelector('textarea[data-testid="Description"]');
+            var price = document.querySelector('input[data-testid="Price"]');
+            var bodyText = document.body ? (document.body.innerText || '') : '';
+            var hasPhotoError = bodyText.indexOf('Something wrong happened') !== -1;
+            var photoCount = document.querySelectorAll('img[src^="blob:"]').length;
+            var ship = document.querySelector('#sellShippingClassesInput, [data-testid="SelectShipping"]');
+            var shipValue = ship ? (ship.value || '').trim() : '';
+            var shippingFullySet = !!(shipValue
+                && shipValue.indexOf('Add title') === -1
+                && shipValue.indexOf('enable shipping') === -1
+                && shipValue.length > 0);
+            return JSON.stringify({
+                formMounted:       !!(title && desc && price),
+                titleFilled:       !!(title && title.value.trim().length > 0),
+                descFilled:        !!(desc  && desc.value.trim().length  > 0),
+                priceFilled:       !!(price && price.value.trim().length > 0),
+                uploadedPhotoCount: photoCount,
+                hasPhotoError:     hasPhotoError,
+                shippingFullySet:  shippingFullySet
+            });
+        })();
+        """
+        guard let json = (try? await webView.callJS(js)) as? String,
+              let data = json.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return FormProbe(formMounted: false, titleFilled: false, descFilled: false,
+                                priceFilled: false, uploadedPhotoCount: 0,
+                                hasPhotoError: false, shippingFullySet: false) }
+        return FormProbe(
+            formMounted:        dict["formMounted"]        as? Bool ?? false,
+            titleFilled:        dict["titleFilled"]        as? Bool ?? false,
+            descFilled:         dict["descFilled"]         as? Bool ?? false,
+            priceFilled:        dict["priceFilled"]        as? Bool ?? false,
+            uploadedPhotoCount: dict["uploadedPhotoCount"] as? Int  ?? 0,
+            hasPhotoError:      dict["hasPhotoError"]      as? Bool ?? false,
+            shippingFullySet:   dict["shippingFullySet"]   as? Bool ?? false
+        )
+    }
+
+    // Resume from wherever the form is right now — only re-runs steps that look incomplete.
+    func resumeInjection(
+        title: String,
+        description: String,
+        price: Double,
+        photoBase64Strings: [String],
+        condition: String,
+        suggestedCategory: String?,
+        suggestedBrand: String?,
+        weightLbs: Double?,
+        lengthIn: Double?,
+        widthIn: Double?,
+        heightIn: Double?,
+        buyerPaysShipping: Bool,
+        preferences: ShippingPreferences
+    ) async {
+        guard !hasStartedInjection else { return }
+        hasStartedInjection = true
+        status = .injecting
+
+        let probe = await probeFormState()
+
+        // If the form isn't even in the DOM the page didn't load — fall back to a full reload.
+        if !probe.formMounted {
+            hasStartedInjection = false
+            reloadSellPage()
+            return
+        }
+
+        // Re-fill any core field that's missing (idempotent — React accepts repeated sets).
+        if !probe.titleFilled || !probe.descFilled || !probe.priceFilled {
+            injectionStep = "Re-filling fields…"
+            let jsFields = """
+                function setReactInput(el, value) {
+                    if (!el) return false;
+                    var lastValue = el.value;
+                    var proto = el.tagName === 'TEXTAREA'
+                        ? window.HTMLTextAreaElement.prototype
+                        : window.HTMLInputElement.prototype;
+                    var nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value');
+                    if (nativeSetter && nativeSetter.set) { nativeSetter.set.call(el, value); }
+                    else { el.value = value; }
+                    var tracker = el._valueTracker;
+                    if (tracker) { tracker.setValue(lastValue); }
+                    el.dispatchEvent(new Event('input',  { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    return true;
+                }
+                var titleEl = document.querySelector('input[data-testid="Title"]');
+                var descEl  = document.querySelector('textarea[data-testid="Description"]');
+                var priceEl = document.querySelector('input[data-testid="Price"]');
+                if (titleEl && !titleEl.value.trim()) { setReactInput(titleEl, title); titleEl.blur(); }
+                if (descEl  && !descEl.value.trim())  { setReactInput(descEl,  description); descEl.blur(); }
+                if (priceEl && !priceEl.value.trim()) { setReactInput(priceEl, price); priceEl.blur(); }
+                var conditionMap = {
+                    'new':'ConditionNew','newwithouttags':'ConditionLikeNew',
+                    'likenew':'ConditionLikeNew','good':'ConditionGood',
+                    'fair':'ConditionFair','poor':'ConditionPoor','forparts':'ConditionPoor'
+                };
+                var conditionTestId = conditionMap[condition.toLowerCase().replace(/[\\s_\\-]/g,'')] || 'ConditionGood';
+                var conditionLabel = document.querySelector('[data-testid="' + conditionTestId + '"]');
+                if (conditionLabel) { conditionLabel.click(); }
+                return 'ok';
+            """
+            _ = try? await webView.callJS(jsFields, args: [
+                "title": title, "description": description,
+                "price": String(format: "%.0f", price), "condition": condition
+            ])
+        }
+
+        // Retry photos if there's an upload error or no photos made it through.
+        let needsPhotos = (probe.hasPhotoError || probe.uploadedPhotoCount == 0)
+                          && !photoBase64Strings.isEmpty
+        if needsPhotos {
+            injectionStep = "Retrying photo upload…"
+            var photosOK = false
+            for attempt in 1...4 {
+                let attachResult = await attachPhotos(photoBase64Strings)
+                print("[MercariPostingState] Photo resume attempt \(attempt): \(attachResult)")
+                try? await Task.sleep(nanoseconds: 3_500_000_000)
+                if !(await outstandingIssues().contains("photo-upload-error")) {
+                    photosOK = true
+                    break
+                }
+            }
+            if !photosOK { print("[MercariPostingState] Photos still failing after resume retries") }
+        }
+
+        // Category + shipping — only run if not already set.
+        if !probe.shippingFullySet {
+            injectionStep = "Selecting category…"
+            let categoryResult = await selectCategory(suggestedCategory: suggestedCategory)
+            print("[MercariPostingState] Category resume: \(categoryResult)")
+        }
+
+        // Smart pricing (idempotent toggle).
+        _ = await disableSmartPricing()
+
+        // Brand (re-run: idempotent, confirms or sets the brand chip).
+        let brandResult = await selectBrand(suggestedBrand: suggestedBrand)
+        print("[MercariPostingState] Brand resume: \(brandResult)")
+
+        // Shipping — only run if the carrier isn't set yet.
+        if !probe.shippingFullySet {
+            injectionStep = "Setting up shipping…"
+            let shippingResult = await completeShipping(
+                weightLbs: weightLbs, lengthIn: lengthIn,
+                widthIn: widthIn, heightIn: heightIn,
+                preferences: preferences
+            )
+            print("[MercariPostingState] Shipping resume: \(shippingResult)")
+        }
+
+        let _ = await selectShippingPayer(buyerPays: buyerPaysShipping)
+
+        injectionStep = "Submitting…"
+        var photoFailed = false
+        for attempt in 0..<3 {
+            photoFailed = await outstandingIssues().contains("photo-upload-error")
+            if !photoFailed { break }
+            if attempt < 2 { try? await Task.sleep(nanoseconds: 1_500_000_000) }
+        }
+        if !photoFailed {
+            let submitResult = await submitListing()
+            print("[MercariPostingState] Submit resume: \(submitResult)")
+            if submitResult.starts(with: "submitted") { latestSubmitResult = submitResult }
+        } else {
+            print("[MercariPostingState] Holding submit — photo upload still failing after resume")
+        }
+
+        Task { await pollForSuccessModal() }
+        isListingComplete = await checkListingButtonEnabled()
+        if status == .injecting { status = .waitingForCategory }
+    }
+
     /// Accepts an already-posted Mercari listing (its ID was captured earlier or linked by hand)
     /// rather than posting again. Prevents duplicate listings.
     func acceptExisting(id: String) {
@@ -2239,10 +2435,9 @@ struct MercariAutoPosterView: View {
                 }
                 Spacer()
                 Button("Retry") {
-                    // Reload the sell page and run the autofill again from a clean slate.
                     hasInjected = false
-                    state.reloadSellPage()
-                    Task { await fetchPhotosAndInject() }
+                    state.prepareForResume()
+                    Task { await fetchPhotosAndResume() }
                 }
                 .font(.subheadline.weight(.semibold))
                 .buttonStyle(.borderedProminent)
@@ -2371,6 +2566,66 @@ struct MercariAutoPosterView: View {
         )
 
         await state.injectFields(
+            title: job.title,
+            description: job.description,
+            price: job.price,
+            photoBase64Strings: photoBase64Strings,
+            condition: job.item?.condition ?? "good",
+            suggestedCategory: job.item?.aiSuggestedCategory,
+            suggestedBrand: job.item?.aiSuggestedBrand,
+            weightLbs: job.item?.weightLbs,
+            lengthIn: job.item?.lengthIn,
+            widthIn: job.item?.widthIn,
+            heightIn: job.item?.heightIn,
+            buyerPaysShipping: job.buyerPaysShipping,
+            preferences: preferences
+        )
+    }
+
+    // Same photo-fetch as fetchPhotosAndInject, but calls resumeInjection instead of injectFields.
+    // Used by Retry so the page isn't reloaded when only a mid-injection step failed.
+    private func fetchPhotosAndResume() async {
+        guard !hasInjected else { return }
+        hasInjected = true
+
+        var photoBase64Strings: [String] = []
+        if let item = job.item {
+            if !item.photosData.isEmpty {
+                photoBase64Strings = item.photosData.map { $0.base64EncodedString() }
+            } else {
+                for identifier in item.sourceAssetIdentifiers {
+                    let assets = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
+                    guard let asset = assets.firstObject else { continue }
+                    let options = PHImageRequestOptions()
+                    options.deliveryMode = .highQualityFormat
+                    options.isNetworkAccessAllowed = true
+                    let data: Data? = await withCheckedContinuation { continuation in
+                        PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
+                            continuation.resume(returning: data)
+                        }
+                    }
+                    if let data { photoBase64Strings.append(data.base64EncodedString()) }
+                }
+            }
+        } else if !job.photoFirebasePaths.isEmpty {
+            for path in job.photoFirebasePaths {
+                let ref = Storage.storage().reference(withPath: path)
+                if let data = try? await ref.data(maxSize: 15 * 1024 * 1024) {
+                    photoBase64Strings.append(data.base64EncodedString())
+                }
+            }
+        }
+
+        let selectedCarriers = Set(
+            selectedCarriersRaw.split(separator: ",").compactMap { Carrier(rawValue: String($0)) }
+        )
+        let preferences = ShippingPreferences(
+            acceptSuggestions: acceptSuggestions,
+            mode: ShippingMode(rawValue: shippingModeRaw) ?? .cheapestPrepaid,
+            selectedCarriers: selectedCarriers.isEmpty ? [.usps] : selectedCarriers
+        )
+
+        await state.resumeInjection(
             title: job.title,
             description: job.description,
             price: job.price,
@@ -3341,19 +3596,23 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
     let listingDescription: String
     let price: Double
     let condition: String
+    // When set, skips headless autofill and opens the webview directly so the user can edit manually.
+    let manualReason: String?
 
-    init(mercariItemId: String, title: String, listingDescription: String, price: Double, condition: String) {
+    init(mercariItemId: String, title: String, listingDescription: String, price: Double, condition: String, manualReason: String? = nil) {
         self.mercariItemId = mercariItemId
         self.title = title
         self.listingDescription = listingDescription
         self.price = price
         self.condition = condition
+        self.manualReason = manualReason
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.default()
         webView = WKWebView(frame: .zero, configuration: config)
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         super.init()
         webView.navigationDelegate = self
+        if manualReason != nil { isWebViewVisible = true }
     }
 
     func start() {
@@ -3378,6 +3637,8 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
     }
 
     private func runEditAutofill() async {
+        // Manual-only mode: webview is already visible; nothing to autofill.
+        if manualReason != nil { return }
         guard case .navigating = phase else { return }
         phase = .injecting
 
@@ -3564,7 +3825,7 @@ struct MercariAutoEditSheet: View {
     @StateObject private var state: MercariAutoEditState
     @Environment(\.dismiss) private var dismiss
 
-    init(listing: UserListing, mercariId: String, onDone: @escaping () -> Void) {
+    init(listing: UserListing, mercariId: String, photosWereUpdated: Bool = false, onDone: @escaping () -> Void) {
         self.listing = listing
         self.mercariId = mercariId
         self.onDone = onDone
@@ -3573,7 +3834,8 @@ struct MercariAutoEditSheet: View {
             title: listing.customTitle ?? "",
             listingDescription: listing.customDescription ?? "",
             price: listing.price ?? 0,
-            condition: listing.condition .rawValue
+            condition: listing.condition.rawValue,
+            manualReason: photosWereUpdated ? "Photos were updated — add them to Mercari below" : nil
         ))
     }
 
@@ -3772,15 +4034,16 @@ struct MercariSyncResult {
 class MercariSyncManager: ObservableObject {
     @Published var isPillVisible = false
     @Published var showProgressSheet = false
-    
+
     @Published var currentIndex = 0
     @Published var totalCount = 0
     @Published var jobs: [UserListing] = []
-    
+
     @Published var syncResults: [String: MercariSyncResult] = [:]
     @Published var isFinished = false
-    
+
     let loader = MercariItemLoader()
+    private var syncTaskId = UUID()
     
     var progress: Double {
         guard totalCount > 0 else { return 0 }
@@ -3794,6 +4057,14 @@ class MercariSyncManager: ObservableObject {
         self.isPillVisible = true
         self.syncResults = [:]
         self.isFinished = false
+        syncTaskId = UUID()
+        AppTaskQueue.shared.begin(
+            id: syncTaskId,
+            label: "Syncing with Mercari",
+            detail: "0 of \(listings.count)",
+            progress: 0,
+            onTap: { [weak self] in self?.showProgressSheet = true }
+        )
         
         Task {
             await processQueue()
@@ -3802,6 +4073,7 @@ class MercariSyncManager: ObservableObject {
                 withAnimation {
                     self.isPillVisible = false
                 }
+                AppTaskQueue.shared.complete(id: self.syncTaskId)
             }
             onComplete()
         }
@@ -3811,8 +4083,13 @@ class MercariSyncManager: ObservableObject {
         for (index, listing) in jobs.enumerated() {
             guard let mercariId = listing.crossPostListingIds?["mercari"],
                   let listingId = listing.id else { continue }
-            
+
             self.currentIndex = index + 1
+            AppTaskQueue.shared.update(
+                id: syncTaskId,
+                detail: "\(index + 1) of \(totalCount)",
+                progress: Double(index + 1) / Double(max(totalCount, 1))
+            )
             await loader.load(itemId: mercariId)
             guard loader.phase == .loaded else { continue }
 
@@ -3895,9 +4172,10 @@ final class MercariSaleSyncManager: ObservableObject {
     @Published var currentIndex = 0
     @Published var totalCount = 0
     @Published var currentStatus = ""
-    
+
     let webView: WKWebView
     private let navDelegate = SaleNavDelegate()
+    private var saleTaskId = UUID()
     
     init() {
         let config = WKWebViewConfiguration()
@@ -3919,16 +4197,28 @@ final class MercariSaleSyncManager: ObservableObject {
         isRunning = true
         totalCount = mercariSales.count
         currentIndex = 0
-        
+        saleTaskId = UUID()
+        AppTaskQueue.shared.begin(
+            id: saleTaskId,
+            label: "Syncing Mercari sales",
+            detail: "0 of \(mercariSales.count)",
+            progress: 0
+        )
+
         print("[MercariSaleSync] Starting headless sync for \(mercariSales.count) sales")
         
         for (i, sale) in mercariSales.enumerated() {
             currentIndex = i + 1
+            AppTaskQueue.shared.update(
+                id: saleTaskId,
+                detail: "\(i + 1) of \(mercariSales.count)",
+                progress: Double(i + 1) / Double(max(mercariSales.count, 1))
+            )
             guard let platformOrderId = sale.platformOrderId, !platformOrderId.isEmpty else {
                 print("[MercariSaleSync] Skipping sale \(sale.id ?? "?") - no platformOrderId")
                 continue
             }
-            
+
             currentStatus = "Syncing \(i + 1)/\(mercariSales.count)..."
             print("[MercariSaleSync] Loading order page for item \(platformOrderId)")
             
@@ -3959,6 +4249,7 @@ final class MercariSaleSyncManager: ObservableObject {
         currentStatus = "Done"
         print("[MercariSaleSync] Sync complete")
         isRunning = false
+        AppTaskQueue.shared.complete(id: saleTaskId)
     }
     
     private func loadSaleData(itemId: String) async -> MercariSaleResult? {
