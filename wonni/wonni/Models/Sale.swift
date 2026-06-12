@@ -41,8 +41,10 @@ struct Sale: Identifiable, Codable {
     var platform: String               // "ebay" | "mercari" | "etsy"
     var platformOrderId: String?
 
-    var priceSoldFor: Double
-    var takeHome: Double?              // as reported by the platform (eBay/Etsy/Mercari show this)
+    var priceSoldFor: Double           // item price only, excluding shipping
+    var shippingRevenue: Double?       // shipping charged to buyer
+    var takeHome: Double?              // net after platform fees and shipping label cost
+    var shippingLabelCost: Double?     // eBay shipping label cost
 
     var buyerAddress: SaleAddress?
     var trackingNumber: String?
@@ -65,7 +67,9 @@ struct Sale: Identifiable, Codable {
         platform: String,
         platformOrderId: String? = nil,
         priceSoldFor: Double,
+        shippingRevenue: Double? = nil,
         takeHome: Double? = nil,
+        shippingLabelCost: Double? = nil,
         buyerAddress: SaleAddress? = nil,
         trackingNumber: String? = nil,
         carrier: String? = nil,
@@ -83,7 +87,9 @@ struct Sale: Identifiable, Codable {
         self.platform = platform
         self.platformOrderId = platformOrderId
         self.priceSoldFor = priceSoldFor
+        self.shippingRevenue = shippingRevenue
         self.takeHome = takeHome
+        self.shippingLabelCost = shippingLabelCost
         self.buyerAddress = buyerAddress
         self.trackingNumber = trackingNumber
         self.carrier = carrier

@@ -12,8 +12,14 @@ struct CameraView: View {
     @Query private var allItems: [Item]
 
     @State private var isFlashing = false
-    @State private var showingPicker = false
-    @State private var navigatingToDrafts = false
+    /// Single source of truth for camera-tab navigation. Two separate
+    /// `navigationDestination(isPresented:)` modifiers on the same NavigationStack
+    /// collide and wedge the UI, so we drive one destination off this enum instead.
+    private enum CameraRoute: Hashable {
+        case picker
+        case drafts
+    }
+    @State private var route: CameraRoute?
     @State private var showingExitAlert = false
     @AppStorage("showCameraGrid") private var showGrid: Bool = false
 
@@ -107,19 +113,21 @@ struct CameraView: View {
             await model.loadPhotos()
             await model.loadThumbnail()
         }
-        .navigationDestination(isPresented: $showingPicker) {
-            CustomPhotoPickerView()
-                .onAppear  { model.camera.isPreviewPaused = true }
-                .onDisappear { model.camera.isPreviewPaused = false }
-        }
-        .navigationDestination(isPresented: $navigatingToDrafts) {
-            BulkListingOverviewView(sessionDraftIDs: uploadManager.sessionDraftIDs)
-                .onAppear  { model.camera.isPreviewPaused = true }
-                .onDisappear { model.camera.isPreviewPaused = false }
+        .navigationDestination(item: $route) { route in
+            switch route {
+            case .picker:
+                CustomPhotoPickerView()
+                    .onAppear  { model.camera.isPreviewPaused = true }
+                    .onDisappear { model.camera.isPreviewPaused = false }
+            case .drafts:
+                BulkListingOverviewView(sessionDraftIDs: uploadManager.sessionDraftIDs)
+                    .onAppear  { model.camera.isPreviewPaused = true }
+                    .onDisappear { model.camera.isPreviewPaused = false }
+            }
         }
         .onChange(of: uploadManager.shouldReturnToRoot) { _, should in
             if should {
-                navigatingToDrafts = false
+                route = nil
                 uploadManager.shouldReturnToRoot = false
                 uploadManager.selectedTab = 4
             }
@@ -160,7 +168,7 @@ struct CameraView: View {
                     if hasActiveDraft {
                         uploadManager.commitActiveDraft(modelContext: modelContext)
                     }
-                    navigatingToDrafts = true
+                    route = .drafts
                 } label: {
                     HStack(spacing: 6) {
                         Text("Proceed")
@@ -187,7 +195,7 @@ struct CameraView: View {
         HStack(spacing: 0) {
             // Gallery button
             Button {
-                showingPicker = true
+                route = .picker
             } label: {
                 ThumbnailView(image: model.thumbnailImage)
                     .frame(width: 46, height: 46)
@@ -195,7 +203,7 @@ struct CameraView: View {
             }
             .onChange(of: uploadManager.shouldReturnToRoot) { _, should in
                 if should {
-                    showingPicker = false
+                    route = nil
                     uploadManager.shouldReturnToRoot = false
                     uploadManager.selectedTab = 4
                 }

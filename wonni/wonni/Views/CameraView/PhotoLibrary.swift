@@ -19,8 +19,11 @@ class PhotoLibrary {
             logger.debug("Photo library access denied.")
             return false
         case .limited:
+            // Limited access still lets us read the user's selected photos, so
+            // treat it as authorized. Users can expand the selection later via
+            // PHPhotoLibrary.presentLimitedLibraryPicker.
             logger.debug("Photo library access limited.")
-            return false
+            return true
         case .restricted:
             logger.debug("Photo library access restricted.")
             return false

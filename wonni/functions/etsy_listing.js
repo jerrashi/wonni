@@ -10,13 +10,11 @@ const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const https = require("https");
 const http = require("http");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { refreshEtsyToken } = require("./etsy_auth");
 
 if (admin.apps.length === 0) admin.initializeApp();
 
 const etsyClientId = defineSecret("ETSY_CLIENT_ID");
-const geminiApiKey = defineSecret("GEMINI_API_KEY");
 
 // Module-level taxonomy cache (lives for the function instance lifetime ~15 min)
 let taxonomyCache = null;
@@ -166,63 +164,64 @@ async function getTaxonomyLeafNodes(clientId) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Gemini — fills when_made, taxonomy_id, who_made
+// Category resolution — deterministic, no LLM
+//
+// The single listing-flow Gemini call already produced `listing.category` (a path like
+// "Electronics > Audio > Headphones"). Rather than spend a second Gemini call here, we
+// fuzzy-match that path against Etsy's live taxonomy leaf nodes. when_made / who_made are
+// defaulted for resale (Wonni is a reselling app), so they never needed an LLM.
 // ─────────────────────────────────────────────────────────────
 
-const WHEN_MADE_VALUES = [
-  "made_to_order",
-  "2020_2024", "2010_2019", "2000_2009",
-  "1990s", "1980s", "1970s", "1960s", "1950s", "before_1950",
-];
+const ETSY_FALLBACK_TAXONOMY_ID = 69150398; // Accessories
 
-async function getEtsyFieldsFromGemini(geminiKey, clientId, title, description, category) {
+/** Lowercase a string into a deduped-friendly word array. */
+function categoryWords(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+/**
+ * Picks the best Etsy taxonomy leaf id for a Wonni category path by weighted word overlap
+ * against each node's full taxonomy path. The category leaf (most specific segment) is
+ * weighted highest, then the rest of the path, then the title as a weak tiebreaker.
+ */
+function matchEtsyTaxonomyId(nodes, title, category) {
+  if (!Array.isArray(nodes) || nodes.length === 0) return ETSY_FALLBACK_TAXONOMY_ID;
+
+  const path = String(category || "").split(">").map((s) => s.trim()).filter(Boolean);
+  const leaf = path.length ? path[path.length - 1] : "";
+
+  const weights = new Map();
+  const add = (text, w) => {
+    for (const word of categoryWords(text)) weights.set(word, (weights.get(word) || 0) + w);
+  };
+  add(leaf, 3);
+  add(path.join(" "), 1);
+  add(title, 0.5);
+  if (weights.size === 0) return ETSY_FALLBACK_TAXONOMY_ID;
+
+  let bestId = ETSY_FALLBACK_TAXONOMY_ID;
+  let bestScore = 0;
+  for (const n of nodes) {
+    const nameWords = new Set(categoryWords(n.name));
+    let score = 0;
+    for (const [word, w] of weights) { if (nameWords.has(word)) score += w; }
+    if (score > bestScore) { bestScore = score; bestId = n.id; }
+  }
+  return bestScore > 0 ? bestId : ETSY_FALLBACK_TAXONOMY_ID;
+}
+
+async function resolveEtsyFields(clientId, title, category) {
   const nodes = await getTaxonomyLeafNodes(clientId);
-
-  // Pass at most 400 nodes — enough coverage without blowing the context window
-  const taxonomyList = nodes.slice(0, 400)
-    .map((n) => `${n.id}: ${n.name}`)
-    .join("\n");
-
-  const genAI = new GoogleGenerativeAI(geminiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" });
-
-  const prompt = `
-You are helping create an Etsy listing. Based on the listing details below, return a JSON object
-with exactly three fields:
-
-1. taxonomy_id (integer): The best matching Etsy taxonomy leaf node ID from the list below.
-   Choose the most specific match. If nothing fits well, use 69150398 (Accessories).
-
-2. when_made (string): When the item was made. Must be one of:
-   ${WHEN_MADE_VALUES.join(", ")}
-   For modern K-pop / entertainment merchandise, use "2020_2024" or "2010_2019" as appropriate.
-   Use "made_to_order" only for custom/handmade items.
-
-3. who_made (string): Must be one of: "i_did", "someone_else", "collective".
-   For resale of existing products, use "someone_else".
-   Use "i_did" only if the item is handmade by the seller.
-
-Listing details:
-- Title: ${title}
-- Description: ${description || "(none)"}
-- Category hint: ${category || "(none)"}
-
-Available Etsy taxonomy leaf nodes (id: full path):
-${taxonomyList}
-
-Return ONLY a JSON object like: {"taxonomy_id": 1234, "when_made": "2020_2024", "who_made": "someone_else"}
-`.trim();
-
-  const result = await model.generateContent(prompt);
-  const raw = result.response.text()
-    .replace(/```json/g, "").replace(/```/g, "").trim();
-
-  const parsed = JSON.parse(raw);
+  const taxonomy_id = matchEtsyTaxonomyId(nodes, title, category);
+  console.log(`[etsy] taxonomy "${category || "(none)"}" -> ${taxonomy_id}`);
   return {
-    taxonomy_id: Number(parsed.taxonomy_id) || 69150398,
-    when_made: WHEN_MADE_VALUES.includes(parsed.when_made) ? parsed.when_made : "2020_2024",
-    who_made: ["i_did", "someone_else", "collective"].includes(parsed.who_made)
-      ? parsed.who_made : "someone_else",
+    taxonomy_id,
+    when_made: "2020_2024",   // resale of modern merch; Etsy requires a value
+    who_made: "someone_else", // Wonni resells existing products
   };
 }
 
@@ -345,7 +344,7 @@ exports.etsyCheckShopSetup = onCall(
  * etsyCreateListing — creates a new Etsy listing from a Wonni listing document.
  */
 exports.etsyCreateListing = onCall(
-  { secrets: [etsyClientId, geminiApiKey], timeoutSeconds: 120, memory: "512MiB" },
+  { secrets: [etsyClientId], timeoutSeconds: 120, memory: "512MiB" },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Sign in required.");
     const uid = request.auth.uid;
@@ -394,9 +393,10 @@ exports.etsyCreateListing = onCall(
       const title = (listing.customTitle || "").slice(0, 140);
       const description = listing.customDescription || "";
 
-      // Gemini fills taxonomy_id, when_made, who_made
-      const { taxonomy_id, when_made, who_made } = await getEtsyFieldsFromGemini(
-        geminiApiKey.value(), clientId, title, description, listing.category
+      // Resolve taxonomy_id from the listing's existing category (no second Gemini call);
+      // when_made / who_made default for resale.
+      const { taxonomy_id, when_made, who_made } = await resolveEtsyFields(
+        clientId, title, listing.category
       );
 
       const priceAmount = Math.max(0.20, Math.round((listing.price ?? 0) * 100) / 100);
@@ -438,6 +438,12 @@ exports.etsyCreateListing = onCall(
 
       return { success: true, listingId: etsyListingId };
     } catch (err) {
+      // Log the real reason server-side. HttpsError text is otherwise only returned to the
+      // client and never appears in Cloud Logging, which makes failures undiagnosable.
+      console.error(
+        `[etsyCreateListing] failed for listing ${listingId}:`,
+        err instanceof HttpsError ? `${err.code}: ${err.message}` : (err && err.stack ? err.stack : err)
+      );
       await listingRef.set({ crossPostStatus: { etsy: "failed" } }, { merge: true });
       if (err instanceof HttpsError) throw err;
       throw new HttpsError("internal", `Etsy listing failed: ${err.message}`);

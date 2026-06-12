@@ -88,6 +88,10 @@ exports.setupEbayNotifications = setupEbayNotifications;
 const { ebayExchangeToken } = require("./ebay_auth");
 exports.ebayExchangeToken = ebayExchangeToken;
 
+// eBay Import
+const { ebayImportListing } = require("./ebay_import");
+exports.ebayImportListing = ebayImportListing;
+
 // Etsy Token Exchange
 const { etsyExchangeToken } = require("./etsy_auth");
 exports.etsyExchangeToken = etsyExchangeToken;
@@ -106,8 +110,10 @@ exports.ebayUpdateListing = ebayUpdateListing;
 exports.ebayDeleteListing = ebayDeleteListing;
 
 // Sale cascade — decrements quantity across all platforms when a sale occurs
-const { decrementAndCascade } = require("./sale_sync");
+const { decrementAndCascade, restockAndCascade, markSoldOutAndCascade } = require("./sale_sync");
 exports.decrementAndCascade = decrementAndCascade;
+exports.restockAndCascade = restockAndCascade;
+exports.markSoldOutAndCascade = markSoldOutAndCascade;
 
 // Sale take-home fetch — retrieves platform-provided net payout per order
 const { ebayGetOrderTakeHome, etsyGetReceiptTakeHome } = require("./sale_fetch");

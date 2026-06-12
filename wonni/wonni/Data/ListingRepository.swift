@@ -93,6 +93,34 @@ class ListingRepository: ObservableObject {
             .sorted { ($0.updatedAt?.dateValue() ?? .distantPast) > ($1.updatedAt?.dateValue() ?? .distantPast) }
     }
 
+    /// Fetches all sold-out listings (status == .sold) for the current user, sorted by soldAt desc.
+    func fetchSoldListings() async throws -> [UserListing] {
+        guard let userId = Auth.auth().currentUser?.uid else {
+            throw NSError(domain: "ListingRepository", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
+        }
+        let snapshot = try await db.collection(listingsCollection)
+            .whereField("userId", isEqualTo: userId)
+            .whereField("status", isEqualTo: ListingStatus.sold.rawValue)
+            .getDocuments()
+        return snapshot.documents
+            .compactMap { try? $0.data(as: UserListing.self) }
+            .sorted { ($0.soldAt?.dateValue() ?? .distantPast) > ($1.soldAt?.dateValue() ?? .distantPast) }
+    }
+
+    /// Restocks a sold-out listing: sets quantity and status back to active.
+    /// Cross-platform quantity update is handled by the restockAndCascade cloud function.
+    func restockListing(id: String, quantity: Int) async throws {
+        var data: [String: Any] = [
+            "quantity": quantity,
+            "status": ListingStatus.active.rawValue,
+            "updatedAt": Timestamp(date: Date())
+        ]
+        data["soldAt"] = FieldValue.delete()
+        data["pendingMercariDeactivation"] = FieldValue.delete()
+        data["pendingMercariRelist"] = FieldValue.delete()
+        try await db.collection(listingsCollection).document(id).updateData(data)
+    }
+
     /// Fetches all draft listings for the current user.
     func fetchDrafts() async throws -> [UserListing] {
         guard let userId = Auth.auth().currentUser?.uid else {

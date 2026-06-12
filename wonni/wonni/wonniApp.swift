@@ -13,11 +13,12 @@ import FirebaseCore
 struct wonniApp: App {
     @StateObject private var uploadManager = UploadManager()
     @StateObject private var authManager = AuthManager()
+    @StateObject private var bulkImportManager = BulkImportManager()
+    @StateObject private var mercariSyncManager = MercariSyncManager()
 
     init() {
         FirebaseApp.configure()
         Task {
-            await CategoryMappingRepository.shared.fetchIfNeeded()
             await MercariObservedDataRepository.shared.fetchBrandsIfNeeded()
         }
     }
@@ -27,6 +28,8 @@ struct wonniApp: App {
             MainView()
                 .environmentObject(uploadManager)
                 .environmentObject(authManager)
+                .environmentObject(bulkImportManager)
+                .environmentObject(mercariSyncManager)
                 .onOpenURL { url in
                     print("[wonniApp] onOpenURL received URL: \(url.absoluteString)")
                     guard url.scheme == "wonni" else {

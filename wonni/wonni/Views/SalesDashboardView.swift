@@ -7,6 +7,7 @@ import SwiftUI
 import FirebaseFirestore
 import FirebaseFunctions
 import FirebaseStorage
+import WebKit
 
 private let syncCooldown: TimeInterval = 5 * 60  // 5 minutes
 
@@ -20,6 +21,8 @@ struct SalesDashboardView: View {
     @State private var filterPlatform: String? = nil
     @State private var showMercariSync = false
     @AppStorage("lastSalesSyncDate") private var lastSyncTimestamp: Double = 0
+    
+    @StateObject private var mercariSaleSyncManager = MercariSaleSyncManager()
 
     private var secondsUntilNextSync: Int {
         let elapsed = Date().timeIntervalSince1970 - lastSyncTimestamp
@@ -46,6 +49,7 @@ struct SalesDashboardView: View {
                     salesList
                 }
             }
+
             .navigationTitle("Sales")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -78,6 +82,9 @@ struct SalesDashboardView: View {
                 MercariProfileSyncSheet {
                     Task { await reload() }
                 }
+            }
+            .sheet(isPresented: $mercariSaleSyncManager.showSheet) {
+                MercariSaleSyncSheet(manager: mercariSaleSyncManager)
             }
         }
         .task { await reload() }
@@ -167,19 +174,21 @@ struct SalesDashboardView: View {
         if isSyncing {
             ProgressView().scaleEffect(0.85)
         } else {
-            Menu {
-                Button("Sync now") {
-                    Task { await syncSales() }
-                }
-                Button("Rescan last 30 days") {
-                    Task { await syncSales(force: true) }
-                }
-                Button("Check Mercari listings") {
-                    showMercariSync = true
-                }
+            Button {
+                Task { await syncSales() }
             } label: {
                 Image(systemName: "arrow.triangle.2.circlepath")
                     .foregroundStyle(secondsUntilNextSync > 0 ? .tertiary : .primary)
+            }
+            .simultaneousGesture(
+                LongPressGesture().onEnded { _ in
+                    Task { await syncSales(force: true) }
+                }
+            )
+            .contextMenu {
+                Button("Check Mercari listings") {
+                    showMercariSync = true
+                }
             }
         }
     }
@@ -258,6 +267,13 @@ struct SalesDashboardView: View {
             if !force { lastSyncTimestamp = 0 }
             showToast("Sync failed: \(error.localizedDescription)")
         }
+        
+        let mercariSales = sales.filter { $0.platform == "mercari" && ($0.takeHome == nil || $0.trackingNumber == nil) }
+        if !mercariSales.isEmpty {
+            await mercariSaleSyncManager.sync(sales: mercariSales)
+            await reload()
+        }
+        
         isSyncing = false
     }
 
@@ -362,6 +378,7 @@ struct SaleDetailSheet: View {
     @State private var trackingNumber: String
     @State private var carrier: String
     @State private var status: SaleStatus
+    @State private var takeHomeString: String
     @State private var isSaving = false
 
     init(sale: Sale, onUpdated: @escaping () -> Void) {
@@ -370,6 +387,11 @@ struct SaleDetailSheet: View {
         _trackingNumber = State(initialValue: sale.trackingNumber ?? "")
         _carrier = State(initialValue: sale.carrier ?? "USPS")
         _status = State(initialValue: sale.status)
+        if let take = sale.takeHome {
+            _takeHomeString = State(initialValue: String(format: "%.2f", take))
+        } else {
+            _takeHomeString = State(initialValue: "")
+        }
     }
 
     var body: some View {
@@ -378,9 +400,19 @@ struct SaleDetailSheet: View {
                 Section("Listing") {
                     LabeledContent("Title", value: sale.listingTitle ?? "—")
                     LabeledContent("Platform", value: Sale.platformDisplayName(sale.platform))
-                    LabeledContent("Sale price", value: String(format: "$%.2f", sale.priceSoldFor))
-                    if let take = sale.takeHome {
-                        LabeledContent("Est. take-home", value: String(format: "$%.2f", take))
+                    LabeledContent("Item price", value: String(format: "$%.2f", sale.priceSoldFor))
+                    if let shipping = sale.shippingRevenue {
+                        LabeledContent("Shipping charged", value: String(format: "$%.2f", shipping))
+                    }
+                    if let labelCost = sale.shippingLabelCost {
+                        LabeledContent("Shipping label", value: String(format: "-$%.2f", labelCost))
+                    }
+                    HStack {
+                        Text("Take-home")
+                        Spacer()
+                        TextField("Amount", text: $takeHomeString)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
                     }
                     if let orderId = sale.platformOrderId {
                         LabeledContent("Order ID", value: orderId)
@@ -443,6 +475,12 @@ struct SaleDetailSheet: View {
         guard let id = sale.id else { return }
         isSaving = true
         var data: [String: Any] = ["status": status.rawValue]
+        
+        let cleanedTh = takeHomeString.replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if let th = Double(cleanedTh) {
+            data["takeHome"] = th
+        }
+        
         if !trackingNumber.isEmpty {
             data["trackingNumber"] = trackingNumber
             data["carrier"] = carrier
@@ -481,3 +519,5 @@ private struct AsyncFirebaseImage: View {
         }
     }
 }
+
+
