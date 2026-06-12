@@ -24,6 +24,13 @@ struct SalesDashboardView: View {
     
     @StateObject private var mercariSaleSyncManager = MercariSaleSyncManager()
 
+    @State private var deletedSales: [Sale] = []
+    @State private var isDeletedSectionExpanded = false
+    @State private var isSelectMode = false
+    @State private var selectedSaleIds: Set<String> = []
+    @State private var saleToDelete: Sale? = nil
+    @State private var showBulkDeleteConfirmation = false
+
     private var secondsUntilNextSync: Int {
         let elapsed = Date().timeIntervalSince1970 - lastSyncTimestamp
         let remaining = syncCooldown - elapsed
@@ -78,6 +85,22 @@ struct SalesDashboardView: View {
                 }
             }
             .animation(.spring(duration: 0.3), value: syncToast)
+            .safeAreaInset(edge: .bottom) {
+                if isSelectMode && !selectedSaleIds.isEmpty {
+                    Button(role: .destructive) {
+                        showBulkDeleteConfirmation = true
+                    } label: {
+                        Text("Delete \(selectedSaleIds.count) sale\(selectedSaleIds.count == 1 ? "" : "s")")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(duration: 0.25), value: selectedSaleIds.isEmpty)
             .sheet(item: $selectedSale) { sale in
                 SaleDetailSheet(sale: sale) {
                     Task { await reload() }
@@ -87,6 +110,37 @@ struct SalesDashboardView: View {
                 MercariProfileSyncSheet {
                     Task { await reload() }
                 }
+            }
+            .confirmationDialog(
+                "Delete this sale?",
+                isPresented: Binding(
+                    get: { saleToDelete != nil },
+                    set: { if !$0 { saleToDelete = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    Task {
+                        if let id = saleToDelete?.id {
+                            try? await SaleRepository.shared.deleteSale(id: id)
+                            await reload()
+                        }
+                        saleToDelete = nil
+                    }
+                }
+            } message: {
+                Text("This sale record will be permanently deleted.")
+            }
+            .confirmationDialog(
+                "Delete \(selectedSaleIds.count) sale\(selectedSaleIds.count == 1 ? "" : "s")?",
+                isPresented: $showBulkDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    Task { await bulkDelete() }
+                }
+            } message: {
+                Text("These sale records will be permanently deleted.")
             }
 
         }
@@ -145,28 +199,112 @@ struct SalesDashboardView: View {
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
             }
 
+            // Recently deleted sales (soft-deleted within 30 days)
+            if !deletedSales.isEmpty {
+                Section {
+                    if isDeletedSectionExpanded {
+                        ForEach(deletedSales) { sale in
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(sale.listingTitle ?? "Untitled")
+                                        .font(.subheadline).lineLimit(1)
+                                    HStack(spacing: 6) {
+                                        Text(Sale.platformDisplayName(sale.platform))
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundStyle(.white)
+                                            .padding(.horizontal, 6).padding(.vertical, 2)
+                                            .background(Color.secondary)
+                                            .clipShape(Capsule())
+                                        Text(sale.soldAt.dateValue().formatted(.dateTime.month(.abbreviated).day()))
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                Text(String(format: "$%.2f", sale.priceSoldFor))
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Button("Restore") {
+                                    Task {
+                                        if let id = sale.id {
+                                            try? await SaleRepository.shared.restoreSale(id: id)
+                                            await reload()
+                                        }
+                                    }
+                                }
+                                .font(.caption.weight(.semibold))
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                                .tint(Color.accentColor)
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                } header: {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { isDeletedSectionExpanded.toggle() }
+                    } label: {
+                        HStack {
+                            Text("Recently Deleted (\(deletedSales.count))")
+                            Spacer()
+                            Image(systemName: isDeletedSectionExpanded ? "chevron.up" : "chevron.down")
+                                .font(.caption.weight(.bold))
+                        }
+                        .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .textCase(nil)
+                }
+            }
+
             // Individual sales
-            Section("\(filteredSales.count) sale\(filteredSales.count == 1 ? "" : "s")") {
+            Section {
                 ForEach(filteredSales) { sale in
                     Button {
-                        selectedSale = sale
+                        if isSelectMode {
+                            guard let id = sale.id else { return }
+                            if selectedSaleIds.contains(id) {
+                                selectedSaleIds.remove(id)
+                            } else {
+                                selectedSaleIds.insert(id)
+                            }
+                        } else {
+                            selectedSale = sale
+                        }
                     } label: {
-                        SaleRow(sale: sale)
+                        HStack(spacing: 12) {
+                            if isSelectMode {
+                                let id = sale.id ?? ""
+                                Image(systemName: selectedSaleIds.contains(id) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(selectedSaleIds.contains(id) ? Color.accentColor : Color.secondary)
+                                    .font(.title3)
+                            }
+                            SaleRow(sale: sale)
+                        }
                     }
                     .foregroundStyle(.primary)
                     .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            Task {
-                                if let id = sale.id {
-                                    try? await SaleRepository.shared.deleteSale(id: id)
-                                    await reload()
-                                }
+                        if !isSelectMode {
+                            Button(role: .destructive) {
+                                saleToDelete = sale
+                            } label: {
+                                Label("Delete", systemImage: "trash")
                             }
-                        } label: {
-                            Label("Delete", systemImage: "trash")
                         }
                     }
                 }
+            } header: {
+                HStack {
+                    Text("\(filteredSales.count) sale\(filteredSales.count == 1 ? "" : "s")")
+                    Spacer()
+                    Button(isSelectMode ? "Cancel" : "Select") {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isSelectMode.toggle()
+                            if !isSelectMode { selectedSaleIds.removeAll() }
+                        }
+                    }
+                    .font(.subheadline.weight(.medium))
+                }
+                .textCase(nil)
             }
         }
         .listStyle(.plain)
@@ -235,7 +373,10 @@ struct SalesDashboardView: View {
 
     private func reload() async {
         isLoading = true
-        sales = (try? await SaleRepository.shared.fetchSales()) ?? []
+        async let fetchSales = SaleRepository.shared.fetchSales()
+        async let fetchDeleted = SaleRepository.shared.fetchDeletedSales()
+        sales = (try? await fetchSales) ?? []
+        deletedSales = (try? await fetchDeleted) ?? []
         isLoading = false
     }
 
@@ -278,6 +419,16 @@ struct SalesDashboardView: View {
         }
         
         isSyncing = false
+    }
+
+    private func bulkDelete() async {
+        let ids = selectedSaleIds
+        for id in ids {
+            try? await SaleRepository.shared.deleteSale(id: id)
+        }
+        selectedSaleIds.removeAll()
+        isSelectMode = false
+        await reload()
     }
 
     private func showToast(_ message: String) {

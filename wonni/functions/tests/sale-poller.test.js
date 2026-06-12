@@ -55,7 +55,7 @@ jest.mock("firebase-admin", () => ({
   firestore: Object.assign(
     jest.fn(() => mockDb),
     {
-      FieldValue: { serverTimestamp: jest.fn(() => "SERVER_TS") },
+      FieldValue: { serverTimestamp: jest.fn(() => "SERVER_TS"), delete: jest.fn(() => "DELETE_SENTINEL") },
       Timestamp: {
         fromMillis: jest.fn((ms) => ({ toDate: () => new Date(ms) })),
         fromDate:   jest.fn((d)  => ({ toDate: () => d })),
@@ -293,6 +293,99 @@ describe("deduplication", () => {
       expect.objectContaining({
         trackingNumber: "TRACK999",
         carrier: "USPS",
+        status: "shipped",
+      })
+    );
+  });
+});
+
+// ── Soft-delete restore ───────────────────────────────────────────────────────
+
+describe("soft-delete restore", () => {
+  it("clears isDeleted and deletedAt when a soft-deleted sale reappears in sync", async () => {
+    mockSaleGet.mockResolvedValueOnce({
+      empty: false,
+      docs: [{
+        data: () => ({
+          isDeleted: true,
+          deletedAt: "2026-06-01",
+          trackingNumber: null,
+          priceSoldFor: 29.99,
+          shippingRevenue: null,
+          buyerAddress: { line1: null },
+        }),
+        ref: { update: mockDocUpdate },
+      }],
+    });
+
+    const result = await processSingleEbayOrder(
+      makeOrder(), "uid1", "tok", false, mockDb, "cid", "cert", "etsy"
+    );
+    expect(result).toEqual({ isNew: false });
+    expect(mockSaleAdd).not.toHaveBeenCalled();
+    expect(mockDocUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isDeleted: "DELETE_SENTINEL",
+        deletedAt: "DELETE_SENTINEL",
+      })
+    );
+  });
+
+  it("does not add restore fields when existing sale was never deleted", async () => {
+    mockSaleGet.mockResolvedValueOnce({
+      empty: false,
+      docs: [{
+        data: () => ({
+          trackingNumber: "EXISTING-TRACK",
+          priceSoldFor: 29.99,
+          shippingRevenue: null,
+          buyerAddress: { line1: "123 Main St" },
+        }),
+        ref: { update: mockDocUpdate },
+      }],
+    });
+
+    await processSingleEbayOrder(
+      makeOrder(), "uid1", "tok", false, mockDb, "cid", "cert", "etsy"
+    );
+    const allUpdateCalls = mockDocUpdate.mock.calls.flatMap(c => Object.keys(c[0] ?? {}));
+    expect(allUpdateCalls).not.toContain("isDeleted");
+    expect(allUpdateCalls).not.toContain("deletedAt");
+  });
+
+  it("combines restore fields with backfilled tracking in a single update", async () => {
+    setupHttpsMock({
+      fulfillments: [{
+        fulfillmentId: "f1",
+        shipmentTrackingNumber: "RESTORE-TRACK",
+        shippingCarrierCode: "USPS",
+        shippedDate: "2026-06-10T15:00:00.000Z",
+      }],
+    });
+
+    mockSaleGet.mockResolvedValueOnce({
+      empty: false,
+      docs: [{
+        data: () => ({
+          isDeleted: true,
+          deletedAt: "2026-06-01",
+          trackingNumber: null,
+          priceSoldFor: 29.99,
+          shippingRevenue: null,
+          buyerAddress: { line1: null },
+        }),
+        ref: { update: mockDocUpdate },
+      }],
+    });
+
+    await processSingleEbayOrder(
+      makeOrder(), "uid1", "tok", false, mockDb, "cid", "cert", "etsy"
+    );
+    expect(mockDocUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isDeleted: "DELETE_SENTINEL",
+        deletedAt: "DELETE_SENTINEL",
+        trackingNumber: "RESTORE-TRACK",
         status: "shipped",
       })
     );

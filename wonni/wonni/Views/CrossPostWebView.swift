@@ -3719,10 +3719,8 @@ final class MercariItemLoader: ObservableObject {
                 var bm = body.match(/\$\s?([0-9,]+(?:\.[0-9]{2})?)/);
                 if (bm) out.price = parseFloat(bm[1].replace(/,/g, ''));
             }
-            if (!out.status) {
-                var b2 = (document.body && document.body.innerText) || '';
-                if (/\bsold\b/i.test(b2) || /sold out/i.test(b2)) out.status = 'sold_out';
-            }
+            // Body-text status fallback intentionally omitted — too many false positives
+            // (e.g. "47 items sold" in seller stats). Trust __NEXT_DATA__ status only.
             return JSON.stringify(out);
         })();
         """#
@@ -3740,7 +3738,9 @@ final class MercariItemLoader: ObservableObject {
                     name = obj["name"] as? String
                     descriptionText = obj["description"] as? String
                     let s = (status ?? "").lowercased()
-                    isSold = s.contains("sold") || s == "trading"
+                    // Match exact Mercari status strings; contains("sold") was triggering on
+                    // seller-stats text ("47 items sold") when the body fallback ran.
+                    isSold = s == "sold_out" || s.hasSuffix("sold_out") || s == "trading"
                     phase = .loaded
                     return
                 }

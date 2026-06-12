@@ -978,6 +978,10 @@ struct EditListingSheet: View {
     @State private var showDeleteMercariConfirm = false
     @State private var isSavingMercariId = false
 
+    // Mark as Sold Out
+    @State private var showMarkSoldOutConfirm = false
+    @State private var isMarkingAsSoldOut = false
+
     // Photo Editing
     @State private var editPhotos: [EditPhotoItem]
     @State private var isSelectionMode = false
@@ -1025,6 +1029,7 @@ struct EditListingSheet: View {
                 shippingSection
                 marketplacesSection
                 crossPostStatusSection
+                markSoldOutSection
             }
             .task {
                 await integrationRepo.loadIntegrations()
@@ -1107,6 +1112,20 @@ struct EditListingSheet: View {
             } message: {
                 Text("This removes the Mercari link. The listing stays live on Mercari but won't be tracked here.")
             }
+            .confirmationDialog(
+                "Mark as Sold Out?",
+                isPresented: $showMarkSoldOutConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Mark Sold Out", role: .destructive) {
+                    Task { await markAsSoldOut() }
+                }
+            } message: {
+                let hasCrossPosts = listing.crossPostStatus?.values.contains("posted") == true
+                Text(hasCrossPosts
+                    ? "This listing will be marked sold out and deactivated on all connected platforms."
+                    : "This listing will be marked as sold out.")
+            }
             .alert("Shipping Profile", isPresented: $showShippingProfileAlert) {
                 Button("Got it", role: .cancel) {}
             } message: {
@@ -1129,6 +1148,39 @@ struct EditListingSheet: View {
         }
     }
     
+    // MARK: - Mark as Sold Out
+
+    @ViewBuilder private var markSoldOutSection: some View {
+        Section {
+            Button {
+                showMarkSoldOutConfirm = true
+            } label: {
+                HStack {
+                    if isMarkingAsSoldOut {
+                        ProgressView().scaleEffect(0.85)
+                    } else {
+                        Image(systemName: "xmark.circle")
+                    }
+                    Text(isMarkingAsSoldOut ? "Marking as sold out…" : "Mark as Sold Out")
+                }
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
+            .disabled(isMarkingAsSoldOut)
+        } footer: {
+            Text("Deactivates this listing on all connected platforms and moves it to the Sold Out section.")
+                .font(.caption)
+        }
+    }
+
+    private func markAsSoldOut() async {
+        guard let id = listing.id else { return }
+        isMarkingAsSoldOut = true
+        _ = try? await callCloudFunction("markSoldOutAndCascade", ["listingId": id])
+        isMarkingAsSoldOut = false
+        dismiss()
+    }
+
     // MARK: Cross-post status + manual Mercari linking
 
     @ViewBuilder private var crossPostStatusSection: some View {
