@@ -113,10 +113,10 @@ struct CameraView: View {
             await model.loadPhotos()
             await model.loadThumbnail()
         }
-        .navigationDestination(item: $route) { route in
-            switch route {
+        .navigationDestination(item: $route) { destination in
+            switch destination {
             case .picker:
-                CustomPhotoPickerView()
+                CustomPhotoPickerView(onProceed: { route = .drafts })
                     .onAppear  { model.camera.isPreviewPaused = true }
                     .onDisappear { model.camera.isPreviewPaused = false }
             case .drafts:
