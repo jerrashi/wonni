@@ -69,6 +69,12 @@ struct ImportListingSheet: View {
                     self.importStatus = status
                 }
             }
+            .background(
+                MercariSheetWebView(webView: urlExtractor.webView)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .opacity(0.01)
+                    .allowsHitTesting(false)
+            )
         }
     }
     

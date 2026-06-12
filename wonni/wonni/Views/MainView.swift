@@ -119,6 +119,12 @@ private extension View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .background(
+            MercariSheetWebView(webView: bulkImportManager.urlExtractor.webView)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(0.01)
+                .allowsHitTesting(false)
+        )
         .animation(.spring(response: 0.35, dampingFraction: 0.8),
                    value: bulkImportManager.isPillVisible)
     }
