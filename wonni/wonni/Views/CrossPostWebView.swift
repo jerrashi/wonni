@@ -3721,6 +3721,15 @@ final class MercariItemLoader: ObservableObject {
             }
             // Body-text status fallback intentionally omitted — too many false positives
             // (e.g. "47 items sold" in seller stats). Trust __NEXT_DATA__ status only.
+            // CTA button fallback: "item sold" (not logged in) or "view order" (seller
+            // logged in) are exact button labels only present when the item is sold.
+            if (!out.status) {
+                var btns = Array.from(document.querySelectorAll('button'));
+                for (var b of btns) {
+                    var t = (b.innerText || b.textContent || '').trim().toLowerCase();
+                    if (t === 'item sold' || t === 'view order') { out.status = 'sold_out'; break; }
+                }
+            }
             return JSON.stringify(out);
         })();
         """#

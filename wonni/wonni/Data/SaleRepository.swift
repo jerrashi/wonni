@@ -40,14 +40,20 @@ class SaleRepository: ObservableObject {
 
     func fetchDeletedSales() async throws -> [Sale] {
         guard let userId = Auth.auth().currentUser?.uid else { return [] }
-        let thirtyDaysAgo = Timestamp(date: Date().addingTimeInterval(-30 * 24 * 60 * 60))
+        let thirtyDaysAgo = Date().addingTimeInterval(-30 * 24 * 60 * 60)
+        // Single-field equality query avoids a composite index requirement.
+        // isDeleted and deletedAt age are filtered client-side.
         let snap = try await db.collection(col)
             .whereField("userId", isEqualTo: userId)
-            .whereField("isDeleted", isEqualTo: true)
-            .whereField("deletedAt", isGreaterThan: thirtyDaysAgo)
-            .order(by: "deletedAt", descending: true)
             .getDocuments()
-        return snap.documents.compactMap { try? $0.data(as: Sale.self) }
+        let all: [Sale] = snap.documents.compactMap { try? $0.data(as: Sale.self) }
+        var deleted: [Sale] = []
+        for sale in all {
+            guard sale.isDeleted == true else { continue }
+            let deletedDate = sale.deletedAt?.dateValue() ?? .distantPast
+            if deletedDate > thirtyDaysAgo { deleted.append(sale) }
+        }
+        return deleted.sorted { ($0.deletedAt?.dateValue() ?? .distantPast) > ($1.deletedAt?.dateValue() ?? .distantPast) }
     }
 
     func updateSale(id: String, data: [String: Any]) async throws {
