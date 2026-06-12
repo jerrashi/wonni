@@ -24,12 +24,13 @@ struct SalesDashboardView: View {
     
     @StateObject private var mercariSaleSyncManager = MercariSaleSyncManager()
 
-    @State private var deletedSales: [Sale] = []
-    @State private var isDeletedSectionExpanded = false
+    @State private var hiddenSales: [Sale] = []
+    @State private var isHiddenSectionExpanded = false
     @State private var isSelectMode = false
     @State private var selectedSaleIds: Set<String> = []
-    @State private var saleToDelete: Sale? = nil
-    @State private var showBulkDeleteConfirmation = false
+    @State private var saleToHide: Sale? = nil
+    @State private var showBulkHideConfirmation = false
+    @State private var showAddSale = false
 
     private var secondsUntilNextSync: Int {
         let elapsed = Date().timeIntervalSince1970 - lastSyncTimestamp
@@ -71,6 +72,11 @@ struct SalesDashboardView: View {
                 ToolbarItem(placement: .primaryAction) {
                     syncButton
                 }
+                ToolbarItem(placement: .secondaryAction) {
+                    Button { showAddSale = true } label: {
+                        Label("Add Sale", systemImage: "plus")
+                    }
+                }
             }
             .safeAreaInset(edge: .bottom) {
                 if let toast = syncToast {
@@ -87,14 +93,14 @@ struct SalesDashboardView: View {
             .animation(.spring(duration: 0.3), value: syncToast)
             .safeAreaInset(edge: .bottom) {
                 if isSelectMode && !selectedSaleIds.isEmpty {
-                    Button(role: .destructive) {
-                        showBulkDeleteConfirmation = true
+                    Button {
+                        showBulkHideConfirmation = true
                     } label: {
-                        Text("Delete \(selectedSaleIds.count) sale\(selectedSaleIds.count == 1 ? "" : "s")")
+                        Text("Hide \(selectedSaleIds.count) sale\(selectedSaleIds.count == 1 ? "" : "s")")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(.red)
+                    .tint(.secondary)
                     .padding(.horizontal)
                     .padding(.bottom, 8)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -111,36 +117,39 @@ struct SalesDashboardView: View {
                     Task { await reload() }
                 }
             }
+            .sheet(isPresented: $showAddSale) {
+                AddSaleSheet { Task { await reload() } }
+            }
             .confirmationDialog(
-                "Delete this sale?",
+                "Hide this sale?",
                 isPresented: Binding(
-                    get: { saleToDelete != nil },
-                    set: { if !$0 { saleToDelete = nil } }
+                    get: { saleToHide != nil },
+                    set: { if !$0 { saleToHide = nil } }
                 ),
                 titleVisibility: .visible
             ) {
-                Button("Delete", role: .destructive) {
+                Button("Hide") {
                     Task {
-                        if let id = saleToDelete?.id {
-                            try? await SaleRepository.shared.deleteSale(id: id)
+                        if let id = saleToHide?.id {
+                            try? await SaleRepository.shared.hideSale(id: id)
                             await reload()
                         }
-                        saleToDelete = nil
+                        saleToHide = nil
                     }
                 }
             } message: {
-                Text("This sale record will be permanently deleted.")
+                Text("The sale will be hidden. You can restore it from the Hidden section.")
             }
             .confirmationDialog(
-                "Delete \(selectedSaleIds.count) sale\(selectedSaleIds.count == 1 ? "" : "s")?",
-                isPresented: $showBulkDeleteConfirmation,
+                "Hide \(selectedSaleIds.count) sale\(selectedSaleIds.count == 1 ? "" : "s")?",
+                isPresented: $showBulkHideConfirmation,
                 titleVisibility: .visible
             ) {
-                Button("Delete", role: .destructive) {
-                    Task { await bulkDelete() }
+                Button("Hide") {
+                    Task { await bulkHide() }
                 }
             } message: {
-                Text("These sale records will be permanently deleted.")
+                Text("These sales will be hidden. You can restore them from the Hidden section.")
             }
 
         }
@@ -199,11 +208,11 @@ struct SalesDashboardView: View {
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
             }
 
-            // Recently deleted sales (soft-deleted within 30 days)
-            if !deletedSales.isEmpty {
+            // Hidden sales
+            if !hiddenSales.isEmpty {
                 Section {
-                    if isDeletedSectionExpanded {
-                        ForEach(deletedSales) { sale in
+                    if isHiddenSectionExpanded {
+                        ForEach(hiddenSales) { sale in
                             HStack(spacing: 12) {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(sale.listingTitle ?? "Untitled")
@@ -241,12 +250,12 @@ struct SalesDashboardView: View {
                     }
                 } header: {
                     Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { isDeletedSectionExpanded.toggle() }
+                        withAnimation(.easeInOut(duration: 0.2)) { isHiddenSectionExpanded.toggle() }
                     } label: {
                         HStack {
-                            Text("Recently Deleted (\(deletedSales.count))")
+                            Text("Hidden (\(hiddenSales.count))")
                             Spacer()
-                            Image(systemName: isDeletedSectionExpanded ? "chevron.up" : "chevron.down")
+                            Image(systemName: isHiddenSectionExpanded ? "chevron.up" : "chevron.down")
                                 .font(.caption.weight(.bold))
                         }
                         .foregroundStyle(.secondary)
@@ -284,11 +293,12 @@ struct SalesDashboardView: View {
                     .foregroundStyle(.primary)
                     .swipeActions(edge: .trailing) {
                         if !isSelectMode {
-                            Button(role: .destructive) {
-                                saleToDelete = sale
+                            Button {
+                                saleToHide = sale
                             } label: {
-                                Label("Delete", systemImage: "trash")
+                                Label("Hide", systemImage: "eye.slash")
                             }
+                            .tint(.secondary)
                         }
                     }
                 }
@@ -340,7 +350,7 @@ struct SalesDashboardView: View {
                 .font(.system(size: 56))
                 .foregroundStyle(.secondary)
             Text("No sales yet").font(.title3.weight(.semibold))
-            Text("Tap \u{21BA} to sync from eBay and Etsy, use \u{21BA} > Check Mercari listings for Mercari, or swipe left on a listing in your Profile to record one manually.")
+            Text("Tap \u{21BA} to sync from eBay and Etsy, use \u{21BA} > Check Mercari listings for Mercari, or tap + to add a sale manually.")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
@@ -374,9 +384,9 @@ struct SalesDashboardView: View {
     private func reload() async {
         isLoading = true
         async let fetchSales = SaleRepository.shared.fetchSales()
-        async let fetchDeleted = SaleRepository.shared.fetchDeletedSales()
+        async let fetchHidden = SaleRepository.shared.fetchHiddenSales()
         sales = (try? await fetchSales) ?? []
-        deletedSales = (try? await fetchDeleted) ?? []
+        hiddenSales = (try? await fetchHidden) ?? []
         isLoading = false
     }
 
@@ -421,10 +431,10 @@ struct SalesDashboardView: View {
         isSyncing = false
     }
 
-    private func bulkDelete() async {
+    private func bulkHide() async {
         let ids = selectedSaleIds
         for id in ids {
-            try? await SaleRepository.shared.deleteSale(id: id)
+            try? await SaleRepository.shared.hideSale(id: id)
         }
         selectedSaleIds.removeAll()
         isSelectMode = false
@@ -645,6 +655,78 @@ struct SaleDetailSheet: View {
         }
         try? await SaleRepository.shared.updateSale(id: id, data: data)
         onUpdated()
+        dismiss()
+        isSaving = false
+    }
+}
+
+// MARK: - Add Sale Sheet
+
+struct AddSaleSheet: View {
+    var onSaved: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var platform = "mercari"
+    @State private var title = ""
+    @State private var priceString = ""
+    @State private var soldAt = Date()
+    @State private var isSaving = false
+
+    private let platforms = ["ebay", "mercari", "etsy"]
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Sale details") {
+                    Picker("Platform", selection: $platform) {
+                        ForEach(platforms, id: \.self) { p in
+                            Text(Sale.platformDisplayName(p)).tag(p)
+                        }
+                    }
+                    TextField("Item title", text: $title)
+                    HStack {
+                        Text("Price sold for")
+                        Spacer()
+                        TextField("0.00", text: $priceString)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    DatePicker("Date sold", selection: $soldAt, displayedComponents: .date)
+                }
+            }
+            .navigationTitle("Add Sale")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if isSaving {
+                        ProgressView()
+                    } else {
+                        Button("Save") {
+                            Task { await save() }
+                        }
+                        .disabled(title.isEmpty || Double(priceString) == nil)
+                    }
+                }
+            }
+        }
+    }
+
+    private func save() async {
+        guard let price = Double(priceString.replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
+        isSaving = true
+        let sale = Sale(
+            platform: platform,
+            priceSoldFor: price,
+            status: .complete,
+            soldAt: Timestamp(date: soldAt)
+        )
+        var s = sale
+        s.listingTitle = title.isEmpty ? nil : title
+        try? await SaleRepository.shared.addSale(s)
+        onSaved()
         dismiss()
         isSaving = false
     }
