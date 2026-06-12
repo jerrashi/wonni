@@ -36,7 +36,8 @@ struct Sale: Identifiable, Codable {
     var userId: String
     var listingId: String?
     var listingTitle: String?          // snapshot at time of sale
-    var coverPhotoPath: String?        // snapshot
+    var coverPhotoPath: String?        // Firebase Storage path snapshot
+    var thumbnailUrl: String?          // external CDN URL (set when no Storage path is available)
 
     var platform: String               // "ebay" | "mercari" | "etsy"
     var platformOrderId: String?
@@ -67,6 +68,7 @@ struct Sale: Identifiable, Codable {
         listingId: String? = nil,
         listingTitle: String? = nil,
         coverPhotoPath: String? = nil,
+        thumbnailUrl: String? = nil,
         platform: String,
         platformOrderId: String? = nil,
         priceSoldFor: Double,
@@ -87,6 +89,7 @@ struct Sale: Identifiable, Codable {
         self.listingId = listingId
         self.listingTitle = listingTitle
         self.coverPhotoPath = coverPhotoPath
+        self.thumbnailUrl = thumbnailUrl
         self.platform = platform
         self.platformOrderId = platformOrderId
         self.priceSoldFor = priceSoldFor

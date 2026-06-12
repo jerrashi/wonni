@@ -479,6 +479,19 @@ private struct SaleRow: View {
                         .scaledToFill()
                         .frame(width: 52, height: 52)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
+                } else if let urlStr = sale.thumbnailUrl, let url = URL(string: urlStr) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let img):
+                            img.resizable().scaledToFill()
+                                .frame(width: 52, height: 52)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        default:
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color(.systemGray5))
+                                .frame(width: 52, height: 52)
+                        }
+                    }
                 } else {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(Color(.systemGray5))
@@ -841,6 +854,7 @@ struct AddSaleSheet: View {
             listingId: matchedListingId,
             listingTitle: title.isEmpty ? nil : title,
             coverPhotoPath: matchedCoverPhotoPath,
+            thumbnailUrl: matchedCoverPhotoPath == nil ? loader.thumbnailUrl : nil,
             platform: platform,
             platformOrderId: platformOrderId.isEmpty ? nil : platformOrderId,
             priceSoldFor: price,
