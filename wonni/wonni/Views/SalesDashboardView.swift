@@ -857,6 +857,7 @@ struct MercariFoundSaleItem: Identifiable {
 @MainActor
 final class MercariSalesPageImporter: ObservableObject {
     @Published var isScanning = false
+    @Published var scanStatus = ""
     @Published var foundItems: [MercariFoundSaleItem] = []
     @Published var scanError: String? = nil
 
@@ -874,6 +875,12 @@ final class MercariSalesPageImporter: ObservableObject {
 
     func scanCurrentPage() async {
         isScanning = true; scanError = nil; foundItems = []
+
+        // Phase 1: scroll to bottom repeatedly to trigger infinite-scroll loading
+        await scrollToLoadAll()
+
+        // Phase 2: extract all items now present in the DOM
+        scanStatus = "Extracting items…"
 
         let js = #"""
         return (function() {
@@ -924,12 +931,39 @@ final class MercariSalesPageImporter: ObservableObject {
                 )
             }
             if foundItems.isEmpty {
-                scanError = "No items found on this page. Navigate to your Sold Items tab first."
+                scanError = "No items found. Navigate to your Sold Items tab first."
             }
         } else {
             scanError = "Couldn't scan — make sure you're on a Mercari page."
         }
+        scanStatus = ""
         isScanning = false
+    }
+
+    private func scrollToLoadAll() async {
+        // Count how many item links are currently in the DOM
+        let countJS = #"return document.querySelectorAll('a[href*="/us/item/m"]').length;"#
+        let scrollJS = "window.scrollTo(0, document.body.scrollHeight); return document.body.scrollHeight;"
+
+        var lastCount = 0
+        var sameStreak = 0
+
+        for _ in 0..<50 {
+            _ = try? await webView.callJS(scrollJS)
+            // Wait for the new batch of items to render
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+
+            let count = (try? await webView.callJS(countJS)) as? Int ?? 0
+            scanStatus = "Loading items… (\(count) found)"
+
+            if count == lastCount {
+                sameStreak += 1
+                if sameStreak >= 2 { break } // two consecutive scrolls with no new items = end of list
+            } else {
+                sameStreak = 0
+                lastCount = count
+            }
+        }
     }
 }
 
@@ -961,17 +995,22 @@ struct MercariSalesImportSheet: View {
                         .foregroundStyle(importer.webView.canGoBack ? .primary : .tertiary)
                 }
                 Spacer()
-                Text("Navigate to your Sold Items, then tap Scan")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                Spacer()
                 if importer.isScanning {
-                    ProgressView().scaleEffect(0.85)
+                    HStack(spacing: 6) {
+                        ProgressView().scaleEffect(0.75)
+                        Text(importer.scanStatus)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 } else {
-                    Button("Scan Page") { Task { await importer.scanCurrentPage() } }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
+                    Text("Go to Sold Items, then tap Scan")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
+                Spacer()
+                Button("Scan") { Task { await importer.scanCurrentPage() } }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(importer.isScanning)
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
             .background(Color(.systemGroupedBackground))
