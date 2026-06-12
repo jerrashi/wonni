@@ -31,6 +31,7 @@ struct SalesDashboardView: View {
     @State private var saleToHide: Sale? = nil
     @State private var showBulkHideConfirmation = false
     @State private var showAddSale = false
+    @State private var showImportSales = false
 
     private var secondsUntilNextSync: Int {
         let elapsed = Date().timeIntervalSince1970 - lastSyncTimestamp
@@ -73,8 +74,15 @@ struct SalesDashboardView: View {
                     syncButton
                 }
                 ToolbarItem(placement: .secondaryAction) {
-                    Button { showAddSale = true } label: {
-                        Label("Add Sale", systemImage: "plus")
+                    Menu {
+                        Button { showAddSale = true } label: {
+                            Label("Add by URL", systemImage: "link")
+                        }
+                        Button { showImportSales = true } label: {
+                            Label("Import from profile", systemImage: "square.and.arrow.down.on.square")
+                        }
+                    } label: {
+                        Label("Add", systemImage: "plus")
                     }
                 }
             }
@@ -119,6 +127,9 @@ struct SalesDashboardView: View {
             }
             .sheet(isPresented: $showAddSale) {
                 AddSaleSheet { Task { await reload() } }
+            }
+            .sheet(isPresented: $showImportSales) {
+                MercariSalesImportSheet { Task { await reload() } }
             }
             .confirmationDialog(
                 "Hide this sale?",
@@ -660,26 +671,62 @@ struct SaleDetailSheet: View {
     }
 }
 
-// MARK: - Add Sale Sheet
+// MARK: - Add Sale Sheet (URL-based scrape + manual fields)
 
 struct AddSaleSheet: View {
     var onSaved: () -> Void
     @Environment(\.dismiss) private var dismiss
 
+    @State private var urlString = ""
+    @State private var isFetching = false
+    @State private var fetchError: String? = nil
+
     @State private var platform = "mercari"
     @State private var title = ""
     @State private var priceString = ""
+    @State private var platformOrderId = ""
     @State private var soldAt = Date()
+    @State private var takeHomeString = ""
+    @State private var trackingNumber = ""
+    @State private var carrier = "USPS"
     @State private var isSaving = false
 
-    private let platforms = ["ebay", "mercari", "etsy"]
+    @StateObject private var loader = MercariItemLoader()
+
+    private var canSave: Bool {
+        !title.isEmpty && Double(priceString.replacingOccurrences(of: "$", with: "")) != nil
+    }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Sale details") {
+                Section {
+                    HStack(spacing: 8) {
+                        TextField("Paste Mercari item URL", text: $urlString)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.URL)
+                        if isFetching {
+                            ProgressView().scaleEffect(0.8)
+                        } else {
+                            Button("Fetch") { Task { await fetchFromURL() } }
+                                .disabled(urlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                        }
+                    }
+                    if let err = fetchError {
+                        Text(err).font(.caption).foregroundStyle(.red)
+                    }
+                } header: {
+                    Text("Import from URL")
+                } footer: {
+                    Text("Paste a Mercari listing URL to auto-fill title and price.")
+                }
+
+                Section("Details") {
                     Picker("Platform", selection: $platform) {
-                        ForEach(platforms, id: \.self) { p in
+                        ForEach(["ebay", "mercari", "etsy"], id: \.self) { p in
                             Text(Sale.platformDisplayName(p)).tag(p)
                         }
                     }
@@ -692,8 +739,34 @@ struct AddSaleSheet: View {
                             .multilineTextAlignment(.trailing)
                     }
                     DatePicker("Date sold", selection: $soldAt, displayedComponents: .date)
+                    if !platformOrderId.isEmpty {
+                        LabeledContent("Item ID", value: platformOrderId)
+                    }
+                }
+
+                Section("Financials") {
+                    HStack {
+                        Text("Take-home")
+                        Spacer()
+                        TextField("Optional", text: $takeHomeString)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+
+                Section("Shipping") {
+                    Picker("Carrier", selection: $carrier) {
+                        ForEach(["USPS", "UPS", "FedEx", "Other"], id: \.self) { Text($0) }
+                    }
+                    TextField("Tracking number (optional)", text: $trackingNumber)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
                 }
             }
+            .background(
+                MercariSheetWebView(webView: loader.webView)
+                    .frame(width: 1, height: 1).opacity(0).allowsHitTesting(false)
+            )
             .navigationTitle("Add Sale")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -704,31 +777,290 @@ struct AddSaleSheet: View {
                     if isSaving {
                         ProgressView()
                     } else {
-                        Button("Save") {
-                            Task { await save() }
-                        }
-                        .disabled(title.isEmpty || Double(priceString) == nil)
+                        Button("Save") { Task { await save() } }
+                            .disabled(!canSave)
                     }
                 }
             }
         }
     }
 
+    private func fetchFromURL() async {
+        let url = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        isFetching = true; fetchError = nil
+
+        if url.contains("mercari.com") {
+            platform = "mercari"
+            let pattern = #"/item/(m[a-zA-Z0-9]+)"#
+            if let range = url.range(of: pattern, options: .regularExpression),
+               let idRange = url[range].range(of: #"m[a-zA-Z0-9]+"#, options: .regularExpression) {
+                let itemId = String(url[range][idRange])
+                platformOrderId = itemId
+                await loader.load(itemId: itemId)
+                if loader.phase == .loaded {
+                    if let n = loader.name, !n.isEmpty { title = n }
+                    if let p = loader.priceDollars { priceString = String(format: "%.2f", p) }
+                } else {
+                    fetchError = "Couldn't load item — make sure you're logged in to Mercari."
+                }
+            } else {
+                fetchError = "Couldn't find an item ID in that URL."
+            }
+        } else if url.contains("ebay.com") {
+            platform = "ebay"
+            if let range = url.range(of: #"\d{10,}"#, options: .regularExpression) {
+                platformOrderId = String(url[range])
+            }
+            fetchError = "eBay details can't be scraped — fill in the fields manually."
+        } else if url.contains("etsy.com") {
+            platform = "etsy"
+            fetchError = "Etsy details can't be scraped — fill in the fields manually."
+        } else {
+            fetchError = "Paste a Mercari, eBay, or Etsy URL."
+        }
+        isFetching = false
+    }
+
     private func save() async {
-        guard let price = Double(priceString.replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
+        let cleanPrice = priceString.replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let price = Double(cleanPrice) else { return }
         isSaving = true
+        let cleanTH = takeHomeString.replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let takeHome = Double(cleanTH)
+        let tracking = trackingNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         let sale = Sale(
+            listingTitle: title.isEmpty ? nil : title,
             platform: platform,
+            platformOrderId: platformOrderId.isEmpty ? nil : platformOrderId,
             priceSoldFor: price,
-            status: .complete,
+            takeHome: takeHome,
+            trackingNumber: tracking.isEmpty ? nil : tracking,
+            carrier: tracking.isEmpty ? nil : carrier,
+            status: tracking.isEmpty ? .pending : .shipped,
             soldAt: Timestamp(date: soldAt)
         )
-        var s = sale
-        s.listingTitle = title.isEmpty ? nil : title
-        try? await SaleRepository.shared.addSale(s)
+        try? await SaleRepository.shared.addSale(sale)
         onSaved()
         dismiss()
         isSaving = false
+    }
+}
+
+// MARK: - Mercari Profile Import Sheet
+
+struct MercariFoundSaleItem: Identifiable {
+    let id: String
+    let name: String?
+    let price: Double?
+}
+
+@MainActor
+final class MercariSalesPageImporter: ObservableObject {
+    @Published var isScanning = false
+    @Published var foundItems: [MercariFoundSaleItem] = []
+    @Published var scanError: String? = nil
+
+    let webView: WKWebView
+
+    init() {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = WKWebsiteDataStore.default()
+        config.processPool = mercariProcessPool
+        let wv = WKWebView(frame: .zero, configuration: config)
+        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        self.webView = wv
+        wv.load(URLRequest(url: URL(string: "https://www.mercari.com/mypage/")!))
+    }
+
+    func scanCurrentPage() async {
+        isScanning = true; scanError = nil; foundItems = []
+
+        let js = #"""
+        return (function() {
+            var results = [];
+            var seen = new Set();
+            var nd = document.getElementById('__NEXT_DATA__');
+            if (nd) {
+                try {
+                    var data = JSON.parse(nd.textContent || '');
+                    var pp = data.props && data.props.pageProps;
+                    var items = (pp && (pp.items || (pp.data && pp.data.items) ||
+                                 (pp.seller && pp.seller.items))) || [];
+                    for (var item of items) {
+                        var sid = String(item.id || '');
+                        if (sid && !seen.has(sid)) {
+                            seen.add(sid);
+                            results.push({ id: sid, name: item.name || null,
+                                           price: item.price ? item.price / 100 : null });
+                        }
+                    }
+                } catch(e) {}
+            }
+            // DOM fallback: any link pointing to /us/item/m...
+            var links = Array.from(document.querySelectorAll('a[href*="/us/item/m"]'));
+            for (var link of links) {
+                var m = link.href.match(/\/us\/item\/(m[a-zA-Z0-9]+)/);
+                if (!m || seen.has(m[1])) continue;
+                seen.add(m[1]);
+                var nameEl = link.querySelector('[data-testid="ItemName"],[data-testid="item-name"],p');
+                var priceEl = link.querySelector('[data-testid="ItemPrice"],[data-testid="item-price"],span');
+                var name = nameEl ? nameEl.innerText.trim() : null;
+                var priceStr = priceEl ? priceEl.innerText.replace(/[^0-9.]/g,'') : null;
+                results.push({ id: m[1], name: name||null, price: priceStr?parseFloat(priceStr):null });
+            }
+            return JSON.stringify(results);
+        })();
+        """#
+
+        if let json = (try? await webView.callJS(js)) as? String,
+           let data = json.data(using: .utf8),
+           let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            foundItems = arr.compactMap { dict in
+                guard let id = dict["id"] as? String, !id.isEmpty else { return nil }
+                return MercariFoundSaleItem(
+                    id: id,
+                    name: dict["name"] as? String,
+                    price: (dict["price"] as? NSNumber)?.doubleValue
+                )
+            }
+            if foundItems.isEmpty {
+                scanError = "No items found on this page. Navigate to your Sold Items tab first."
+            }
+        } else {
+            scanError = "Couldn't scan — make sure you're on a Mercari page."
+        }
+        isScanning = false
+    }
+}
+
+struct MercariSalesImportSheet: View {
+    var onImported: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @StateObject private var importer = MercariSalesPageImporter()
+    @State private var selectedIds: Set<String> = []
+    @State private var isImporting = false
+    @State private var soldAt = Date()
+    @State private var showDatePicker = false
+
+    var body: some View {
+        NavigationStack {
+            if importer.foundItems.isEmpty {
+                browserView
+            } else {
+                resultsView
+            }
+        }
+    }
+
+    private var browserView: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Button { importer.webView.goBack() } label: {
+                    Image(systemName: "chevron.left")
+                        .foregroundStyle(importer.webView.canGoBack ? .primary : .tertiary)
+                }
+                Spacer()
+                Text("Navigate to your Sold Items, then tap Scan")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Spacer()
+                if importer.isScanning {
+                    ProgressView().scaleEffect(0.85)
+                } else {
+                    Button("Scan Page") { Task { await importer.scanCurrentPage() } }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(Color(.systemGroupedBackground))
+
+            if let err = importer.scanError {
+                Text(err).font(.caption).foregroundStyle(.red)
+                    .padding(.horizontal, 16).padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.systemGroupedBackground))
+            }
+
+            MercariSheetWebView(webView: importer.webView)
+                .ignoresSafeArea(edges: .bottom)
+        }
+        .navigationTitle("Import Mercari Sales")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+            }
+        }
+    }
+
+    private var resultsView: some View {
+        VStack(spacing: 0) {
+            DatePicker("Date sold", selection: $soldAt, displayedComponents: .date)
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(Color(.systemGroupedBackground))
+
+            List(importer.foundItems) { item in
+                Button {
+                    if selectedIds.contains(item.id) { selectedIds.remove(item.id) }
+                    else { selectedIds.insert(item.id) }
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: selectedIds.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(selectedIds.contains(item.id) ? Color.accentColor : Color.secondary)
+                            .font(.title3)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.name ?? item.id).font(.subheadline).lineLimit(2)
+                            Text(item.id).font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if let price = item.price {
+                            Text(String(format: "$%.2f", price))
+                                .font(.subheadline.weight(.semibold))
+                        }
+                    }
+                }
+                .foregroundStyle(.primary)
+            }
+        }
+        .navigationTitle("\(importer.foundItems.count) items found")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Back") { importer.foundItems = []; selectedIds.removeAll() }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("All") { selectedIds = Set(importer.foundItems.map { $0.id }) }
+                    .disabled(selectedIds.count == importer.foundItems.count)
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                if isImporting {
+                    ProgressView()
+                } else {
+                    Button("Import (\(selectedIds.count))") { Task { await importSelected() } }
+                        .disabled(selectedIds.isEmpty)
+                }
+            }
+        }
+    }
+
+    private func importSelected() async {
+        isImporting = true
+        for item in importer.foundItems where selectedIds.contains(item.id) {
+            let sale = Sale(
+                listingTitle: item.name,
+                platform: "mercari",
+                platformOrderId: item.id,
+                priceSoldFor: item.price ?? 0,
+                status: .pending,
+                soldAt: Timestamp(date: soldAt)
+            )
+            try? await SaleRepository.shared.addSale(sale)
+        }
+        onImported()
+        dismiss()
+        isImporting = false
     }
 }
 

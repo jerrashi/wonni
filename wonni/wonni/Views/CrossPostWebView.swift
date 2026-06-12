@@ -339,7 +339,7 @@ public struct CrossPostContainerView: View {
 // MARK: - WKWebView JS helper
 
 @MainActor
-private extension WKWebView {
+extension WKWebView {
     /// Wraps callAsyncJavaScript — passing a real closure forces the correct overload
     /// so JS actually executes (the ambiguous void overload silently drops execution).
     func callJS(_ body: String, args: [String: Any] = [:], world: WKContentWorld? = nil) async throws -> Any? {
