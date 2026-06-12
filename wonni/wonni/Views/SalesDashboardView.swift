@@ -16,6 +16,7 @@ struct SalesDashboardView: View {
     @State private var sales: [Sale] = []
     @State private var isLoading = true
     @State private var isSyncing = false
+    @State private var salesSyncTaskId = UUID()
     @State private var syncToast: String?
     @State private var selectedSale: Sale?
     @State private var filterPlatform: String? = nil
@@ -409,6 +410,8 @@ struct SalesDashboardView: View {
             return
         }
         isSyncing = true
+        salesSyncTaskId = UUID()
+        AppTaskQueue.shared.begin(id: salesSyncTaskId, label: "Syncing sales")
         if !force { lastSyncTimestamp = Date().timeIntervalSince1970 }
         do {
             let result = try await Functions.functions()
@@ -439,6 +442,7 @@ struct SalesDashboardView: View {
             await reload()
         }
         
+        AppTaskQueue.shared.complete(id: salesSyncTaskId)
         isSyncing = false
     }
 
@@ -692,6 +696,8 @@ struct AddSaleSheet: View {
     @State private var isSaving = false
 
     @StateObject private var loader = MercariItemLoader()
+    @State private var matchedListingId: String? = nil
+    @State private var matchedCoverPhotoPath: String? = nil
 
     private var canSave: Bool {
         !title.isEmpty && Double(priceString.replacingOccurrences(of: "$", with: "")) != nil
@@ -800,6 +806,9 @@ struct AddSaleSheet: View {
                 if loader.phase == .loaded {
                     if let n = loader.name, !n.isEmpty { title = n }
                     if let p = loader.priceDollars { priceString = String(format: "%.2f", p) }
+                    let match = await ListingRepository.shared.findListingByMercariId(itemId)
+                    matchedListingId = match?.listingId
+                    matchedCoverPhotoPath = match?.coverPhotoPath
                 } else {
                     fetchError = "Couldn't load item — make sure you're logged in to Mercari."
                 }
@@ -829,7 +838,9 @@ struct AddSaleSheet: View {
         let takeHome = Double(cleanTH)
         let tracking = trackingNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         let sale = Sale(
+            listingId: matchedListingId,
             listingTitle: title.isEmpty ? nil : title,
+            coverPhotoPath: matchedCoverPhotoPath,
             platform: platform,
             platformOrderId: platformOrderId.isEmpty ? nil : platformOrderId,
             priceSoldFor: price,

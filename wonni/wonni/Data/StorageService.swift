@@ -51,6 +51,24 @@ class StorageService: ObservableObject {
         return path
     }
 
+    func uploadTemplateImage(image: UIImage, index: Int, userId: String, templateId: String) async throws -> String {
+        let resized = ImageCompressor.resize(image: image, maxDimension: 1200)
+        guard let data = ImageCompressor.compress(image: resized, targetSizeInBytes: 180 * 1024) else {
+            throw NSError(domain: "StorageService", code: 500, userInfo: [NSLocalizedDescriptionKey: "Failed to compress image"])
+        }
+        let path = "users/\(userId)/templates/\(templateId)/\(index).jpg"
+        let ref = storage.child(path)
+        let metadata = StorageMetadata()
+        metadata.contentType = "image/jpeg"
+        metadata.customMetadata = ["userId": userId]
+        _ = try await ref.putDataAsync(data, metadata: metadata)
+        return path
+    }
+
+    func downloadImageData(path: String) async throws -> Data {
+        return try await storage.child(path).data(maxSize: 10 * 1024 * 1024)
+    }
+
     /// Deletes all images for a listing.
     func deleteListingImages(userId: String, listingId: String) async throws {
         let listRef = storage.child("users/\(userId)/\(listingId)")

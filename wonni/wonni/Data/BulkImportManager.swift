@@ -5,7 +5,8 @@
 
 import SwiftUI
 import Combine
-import SwiftData
+import FirebaseAuth
+import FirebaseFirestore
 
 enum BulkImportStatus {
     case pending
@@ -25,100 +26,124 @@ class BulkImportManager: ObservableObject {
     @Published var jobs: [BulkImportJob] = []
     @Published var isPillVisible = false
     @Published var showProgressSheet = false
-    
+
     @Published var currentIndex = 0
     @Published var totalCount = 0
-    
+
     @Published var urlExtractor = URLExtractor()
-    private var modelContext: SwiftData.ModelContext?
-    
-    func startImporting(previews: [ListingPreview], context: SwiftData.ModelContext) {
+    private var importTaskId = UUID()
+
+    func startImporting(previews: [ListingPreview]) {
         self.jobs = previews.map { BulkImportJob(preview: $0) }
-        self.modelContext = context
         self.totalCount = previews.count
         self.currentIndex = 0
         self.isPillVisible = true
-        
+        importTaskId = UUID()
+        AppTaskQueue.shared.begin(
+            id: importTaskId,
+            label: "Importing items",
+            detail: "0 of \(previews.count)",
+            progress: 0,
+            accentColor: Color(red: 0, green: 0.3, blue: 0.1),
+            onTap: { [weak self] in self?.showProgressSheet = true }
+        )
+
         Task {
             await processQueue()
         }
     }
-    
+
     private func processQueue() async {
         for (index, job) in jobs.enumerated() {
             guard jobs[index].status == .pending else { continue }
-            
+
             self.currentIndex = index + 1
+            AppTaskQueue.shared.update(
+                id: importTaskId,
+                detail: "\(index + 1) of \(totalCount)",
+                progress: Double(index + 1) / Double(max(totalCount, 1))
+            )
             jobs[index].status = .extracting
-            
+
             do {
-                guard let ctx = modelContext else { break }
                 let extracted = try await urlExtractor.extract(from: job.preview.url)
-                
-                // Download images and create draft
-                try await createDraft(from: extracted, context: ctx)
-                
+                try await createListing(from: extracted, preview: job.preview)
                 jobs[index].status = .done
             } catch {
                 print("Failed to bulk import \(job.preview.title): \(error)")
                 jobs[index].status = .failed
             }
         }
-        
-        // Hide pill after a few seconds when done
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
             if self.jobs.allSatisfy({ $0.status == .done || $0.status == .failed }) {
-                withAnimation {
-                    self.isPillVisible = false
-                }
+                withAnimation { self.isPillVisible = false }
+                AppTaskQueue.shared.complete(id: self.importTaskId)
             }
         }
     }
-    
-    private func createDraft(from extracted: ExtractedListing, context: SwiftData.ModelContext) async throws {
-        var dataArray: [Data] = []
-        for urlStr in extracted.imageUrls.prefix(12) {
-            if let url = URL(string: urlStr) {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                dataArray.append(data)
-            }
+
+    private func createListing(from extracted: ExtractedListing, preview: ListingPreview) async throws {
+        guard let userId = Auth.auth().currentUser?.uid else { return }
+
+        // Pre-generate a listing ID so we can use it for Storage paths
+        let listingId = UUID().uuidString
+
+        // Download and upload photos
+        var photoPaths: [String] = []
+        let imageUrls = extracted.imageUrls.isEmpty ? [preview.thumbnailUrl] : extracted.imageUrls
+        for (i, urlStr) in imageUrls.prefix(12).enumerated() {
+            guard let url = URL(string: urlStr),
+                  let (data, _) = try? await URLSession.shared.data(from: url),
+                  let image = UIImage(data: data),
+                  let path = try? await StorageService.shared.uploadListingImage(
+                      image: image, index: i, userId: userId, listingId: listingId
+                  ) else { continue }
+            photoPaths.append(path)
         }
-        
-        let draft = Item(
-            photosData: dataArray,
-            buyerPaysShipping: true,
-            handlingFee: 0.0,
-            estimatedShippingDays: 3,
-            isDraft: true,
-            sourceAssetIdentifiers: [],
-            isLocalPhotoOnly: true,
-            originalUserTitleBeforeAI: extracted.title,
-            originalUserDescriptionBeforeAI: extracted.description
+
+        // Extract Mercari item ID from URL
+        var crossPostIds: [String: String]? = nil
+        if let range = preview.url.range(of: #"m[a-zA-Z0-9]+"#, options: .regularExpression) {
+            let mercariId = String(preview.url[range])
+            crossPostIds = ["mercari": mercariId]
+        }
+
+        let condition = mapCondition(extracted.condition) ?? .good
+
+        var listing = UserListing(
+            id: listingId,
+            userId: userId,
+            catalogItemId: "",
+            customTitle: extracted.title.isEmpty ? nil : extracted.title,
+            customDescription: extracted.description.isEmpty ? nil : extracted.description,
+            price: extracted.price,
+            currency: "USD",
+            quantity: 1,
+            condition: condition,
+            photoPaths: photoPaths,
+            coverPhotoPath: photoPaths.first,
+            status: .active,
+            createdAt: Timestamp(date: Date()),
+            updatedAt: Timestamp(date: Date()),
+            publishedAt: Timestamp(date: Date()),
+            crossPostListingIds: crossPostIds
         )
-        
-        draft.userEditedTitle = extracted.title
-        draft.userEditedPrice = extracted.price
-        draft.userEditedDescription = extracted.description
-        if !extracted.condition.isEmpty {
-            draft.condition = mapCondition(extracted.condition)
-        }
-        
-        context.insert(draft)
-        try context.save()
+        _ = try await ListingRepository.shared.saveDraft(listing)
     }
-    
-    private func mapCondition(_ text: String) -> String? {
+
+    private func mapCondition(_ text: String) -> ItemCondition? {
         let lower = text.lowercased()
         if lower.contains("new") && !lower.contains("other") && !lower.contains("without tags") {
-            return "new"
+            return .new
         } else if lower.contains("like new") || lower.contains("excellent") {
-            return "likeNew"
+            return .likeNew
         } else if lower.contains("good") {
-            return "good"
+            return .good
         } else if lower.contains("fair") {
-            return "fair"
+            return .fair
         } else if lower.contains("poor") || lower.contains("parts") {
-            return "poor"
+            return .poor
         }
         return nil
     }

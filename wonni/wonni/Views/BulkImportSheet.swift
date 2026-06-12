@@ -178,13 +178,9 @@ struct BulkImportSheet: View {
         isAnalyzing = false
     }
     
-    @Environment(\.modelContext) private var modelContext
-    
     private func startImport() {
         let itemsToImport = availableItems.filter { selectedItemUrls.contains($0.url) }
-        
-        // BulkImportManager now owns its own URLExtractor instance
-        importManager.startImporting(previews: itemsToImport, context: modelContext)
+        importManager.startImporting(previews: itemsToImport)
         dismiss()
     }
 }

@@ -71,10 +71,12 @@ class UploadManager: ObservableObject {
     // ── Legacy / Pill visibility ─────────────────────────────────────────────
     @Published var isPillVisible = false
     @Published var isProcessPillVisible = false
+    @Published var showProgressSheet = false
 
     // ── Internal tracking ───────────────────────────────────────────────────
     private var activeUploadCount = 0
     private var processTask: Task<Void, Never>?
+    private var processingTaskId = UUID()
 
     // ── ETA helper ─────────────────────────────────────────────────────────
     var uploadEtaString: String? {
@@ -283,6 +285,15 @@ class UploadManager: ObservableObject {
         processProgress = 0
         processCurrentIndex = 0
         processTotalCount = drafts.count
+        processingTaskId = UUID()
+        AppTaskQueue.shared.begin(
+            id: processingTaskId,
+            label: "Processing with AI",
+            detail: "0 of \(drafts.count)",
+            progress: 0,
+            accentColor: Color(red: 0.1, green: 0, blue: 0.35),
+            onTap: { [weak self] in self?.showProgressSheet = true }
+        )
         processStatuses = [:]
         processedItemIDs = []
         processingFailedIDs = []
@@ -295,6 +306,10 @@ class UploadManager: ObservableObject {
                 guard !Task.isCancelled else { break }
 
                 processCurrentIndex = index + 1
+                AppTaskQueue.shared.update(
+                    id: processingTaskId,
+                    detail: "\(index + 1) of \(processTotalCount)"
+                )
 
                 // Skip Gemini if this draft was already processed in a prior run
                 if draft.processedAt != nil {
@@ -302,6 +317,7 @@ class UploadManager: ObservableObject {
                     processedItemIDs.append(draft.id)
                     processStatuses[draft.id] = .done
                     processProgress = Double(index + 1) / Double(processTotalCount)
+                    AppTaskQueue.shared.update(id: processingTaskId, progress: processProgress)
                     await MainActor.run { try? modelContext.save() }
                     continue
                 }
@@ -391,12 +407,14 @@ class UploadManager: ObservableObject {
                 }
 
                 processProgress = Double(index + 1) / Double(processTotalCount)
+                AppTaskQueue.shared.update(id: processingTaskId, progress: processProgress)
                 await MainActor.run { try? modelContext.save() }
             }
 
             isProcessing = false
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             isProcessPillVisible = false
+            AppTaskQueue.shared.complete(id: processingTaskId)
             showProcessResults = true
         }
     }
@@ -598,6 +616,7 @@ class UploadManager: ObservableObject {
         processTask = nil
         isProcessing = false
         isProcessPillVisible = false
+        AppTaskQueue.shared.complete(id: processingTaskId)
         processStatuses.removeAll()
         processedItemIDs.removeAll()
         processingFailedIDs.removeAll()
@@ -609,6 +628,7 @@ class UploadManager: ObservableObject {
         isUploadingPhotos = false
         isPillVisible = false
         isProcessPillVisible = false
+        AppTaskQueue.shared.complete(id: processingTaskId)
         isProcessing = false
         isPublishing = false
         showProcessResults = false
