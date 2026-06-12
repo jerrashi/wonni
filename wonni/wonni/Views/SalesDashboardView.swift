@@ -49,7 +49,12 @@ struct SalesDashboardView: View {
                     salesList
                 }
             }
-
+            .background(
+                MercariSheetWebView(webView: mercariSaleSyncManager.webView)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .opacity(0.01)
+                    .allowsHitTesting(false)
+            )
             .navigationTitle("Sales")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -83,9 +88,7 @@ struct SalesDashboardView: View {
                     Task { await reload() }
                 }
             }
-            .sheet(isPresented: $mercariSaleSyncManager.showSheet) {
-                MercariSaleSyncSheet(manager: mercariSaleSyncManager)
-            }
+
         }
         .task { await reload() }
     }

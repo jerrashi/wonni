@@ -3883,11 +3883,9 @@ struct MercariSaleResult {
 @MainActor
 final class MercariSaleSyncManager: ObservableObject {
     @Published var isRunning = false
-    @Published var showSheet = false
     @Published var currentIndex = 0
     @Published var totalCount = 0
-    @Published var currentStatus = "Starting..."
-    @Published var results: [(sale: Sale, result: MercariSaleResult?)] = []
+    @Published var currentStatus = ""
     
     let webView: WKWebView
     private let navDelegate = SaleNavDelegate()
@@ -3910,38 +3908,30 @@ final class MercariSaleSyncManager: ObservableObject {
         }
         
         isRunning = true
-        showSheet = true
         totalCount = mercariSales.count
         currentIndex = 0
-        results = []
         
-        print("[MercariSaleSync] Starting sync for \(mercariSales.count) sales")
+        print("[MercariSaleSync] Starting headless sync for \(mercariSales.count) sales")
         
         for (i, sale) in mercariSales.enumerated() {
             currentIndex = i + 1
             guard let platformOrderId = sale.platformOrderId, !platformOrderId.isEmpty else {
-                currentStatus = "Skipping (no order ID)..."
                 print("[MercariSaleSync] Skipping sale \(sale.id ?? "?") - no platformOrderId")
-                results.append((sale: sale, result: nil))
                 continue
             }
             
-            currentStatus = "Loading order \(i + 1)/\(mercariSales.count)..."
+            currentStatus = "Syncing \(i + 1)/\(mercariSales.count)..."
             print("[MercariSaleSync] Loading order page for item \(platformOrderId)")
             
-            let result = await loadSaleData(itemId: platformOrderId)
-            results.append((sale: sale, result: result))
-            
-            // Update Firestore
-            if let result = result {
+            if let result = await loadSaleData(itemId: platformOrderId) {
                 var update: [String: Any] = [:]
                 if let th = result.takeHome, sale.takeHome != th {
                     update["takeHome"] = th
-                    print("[MercariSaleSync] Updating takeHome to \(th) for \(platformOrderId)")
+                    print("[MercariSaleSync] takeHome = \(th) for \(platformOrderId)")
                 }
                 if let tr = result.trackingNumber, sale.trackingNumber != tr {
                     update["trackingNumber"] = tr
-                    print("[MercariSaleSync] Updating tracking to \(tr) for \(platformOrderId)")
+                    print("[MercariSaleSync] tracking = \(tr) for \(platformOrderId)")
                 }
                 if let c = result.carrier, sale.carrier != c {
                     update["carrier"] = c
@@ -3957,28 +3947,23 @@ final class MercariSaleSyncManager: ObservableObject {
             }
         }
         
-        currentStatus = "Done!"
+        currentStatus = "Done"
         print("[MercariSaleSync] Sync complete")
         isRunning = false
     }
     
     private func loadSaleData(itemId: String) async -> MercariSaleResult? {
         guard let url = URL(string: "https://www.mercari.com/transaction/order_status/\(itemId)/") else {
-            print("[MercariSaleSync] Invalid URL for \(itemId)")
             return nil
         }
         
-        // Navigate and wait for page load
         navDelegate.reset()
         webView.load(URLRequest(url: url))
         
-        print("[MercariSaleSync] Waiting for order page to load...")
         let loaded = await navDelegate.waitForLoad(timeout: 15)
-        if !loaded {
-            print("[MercariSaleSync] Page load timed out for \(itemId)")
-        }
+        if !loaded { print("[MercariSaleSync] Order page timed out for \(itemId)") }
         
-        // Extra wait for React/Next.js hydration
+        // Wait for React/Next.js hydration
         try? await Task.sleep(nanoseconds: 3_000_000_000)
         
         var result = MercariSaleResult()
@@ -3988,82 +3973,60 @@ final class MercariSaleSyncManager: ObservableObject {
             var out = { takeHome: null, hasTracking: false, debug: '' };
             var takeHomeEl = document.querySelector('p[data-testid="You-made-value"]');
             if (takeHomeEl) {
-                out.debug += 'Found takeHome el: ' + takeHomeEl.innerText + '; ';
+                out.debug += 'Found takeHome: ' + takeHomeEl.innerText + '; ';
                 var text = takeHomeEl.innerText.replace(/[^0-9.]/g, '');
                 if (text) out.takeHome = parseFloat(text);
             } else {
-                out.debug += 'No takeHome el found; ';
-                var allPs = document.querySelectorAll('p');
-                for (var i = 0; i < allPs.length; i++) {
-                    if (allPs[i].innerText && allPs[i].innerText.indexOf('$') >= 0) {
-                        out.debug += 'p[' + i + ']: ' + allPs[i].innerText + '; ';
-                    }
-                }
+                out.debug += 'No takeHome el; ';
             }
             var trackingBtn = document.querySelector('a[data-testid="ShippingCTAButton"]');
-            if (trackingBtn) {
-                out.hasTracking = true;
-                out.debug += 'Found tracking btn; ';
-            }
-            out.debug += 'title: ' + document.title + '; url: ' + window.location.href;
+            if (trackingBtn) { out.hasTracking = true; }
+            out.debug += 'url: ' + window.location.href;
             return JSON.stringify(out);
         })();
         """
         
-        // Poll for data with retries
         var hasTracking = false
         let deadline = Date().addingTimeInterval(15)
         while Date() < deadline {
             do {
                 if let jsResult = try await webView.evaluateJavaScript(jsOrder) as? String {
-                    print("[MercariSaleSync] JS result: \(jsResult)")
+                    print("[MercariSaleSync] JS: \(jsResult)")
                     if let data = jsResult.data(using: .utf8),
                        let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
                         if dict["takeHome"] != nil || dict["hasTracking"] as? Bool == true {
                             result.takeHome = dict["takeHome"] as? Double
                             hasTracking = dict["hasTracking"] as? Bool ?? false
-                            print("[MercariSaleSync] Got takeHome: \(result.takeHome as Any), hasTracking: \(hasTracking)")
                             break
                         }
-                        let debug = dict["debug"] as? String ?? ""
-                        print("[MercariSaleSync] Debug: \(debug)")
                     }
                 }
             } catch {
-                print("[MercariSaleSync] JS error on order page: \(error.localizedDescription)")
+                print("[MercariSaleSync] JS error (order): \(error.localizedDescription)")
             }
             try? await Task.sleep(nanoseconds: 1_500_000_000)
         }
         
-        // If tracking is available, navigate to tracking page
         if hasTracking {
-            currentStatus = "Loading tracking for \(currentIndex)/\(totalCount)..."
+            currentStatus = "Loading tracking..."
             guard let trackingUrl = URL(string: "https://www.mercari.com/us/help_center/tracking/\(itemId)") else {
                 return result
             }
             
             navDelegate.reset()
             webView.load(URLRequest(url: trackingUrl))
-            print("[MercariSaleSync] Waiting for tracking page to load...")
             let trackingLoaded = await navDelegate.waitForLoad(timeout: 15)
-            if !trackingLoaded {
-                print("[MercariSaleSync] Tracking page timed out")
-            }
+            if !trackingLoaded { print("[MercariSaleSync] Tracking page timed out") }
             
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             
             let jsTracking = """
             (function() {
-                var out = { trackingNumber: null, carrier: null, debug: '' };
+                var out = { trackingNumber: null, carrier: null };
                 var numEl = document.querySelector('span[data-testid="Tracking-TrackingNumber"]');
-                if (numEl && numEl.innerText) {
-                    out.trackingNumber = numEl.innerText.trim();
-                }
+                if (numEl && numEl.innerText) { out.trackingNumber = numEl.innerText.trim(); }
                 var carrierEl = document.querySelector('img[data-testid="Tracking-CarrierLogo"]');
-                if (carrierEl && carrierEl.alt) {
-                    out.carrier = carrierEl.alt.trim().toUpperCase();
-                }
-                out.debug = 'title: ' + document.title + '; url: ' + window.location.href;
+                if (carrierEl && carrierEl.alt) { out.carrier = carrierEl.alt.trim().toUpperCase(); }
                 return JSON.stringify(out);
             })();
             """
@@ -4072,7 +4035,7 @@ final class MercariSaleSyncManager: ObservableObject {
             while Date() < trackingDeadline {
                 do {
                     if let jsResult = try await webView.evaluateJavaScript(jsTracking) as? String {
-                        print("[MercariSaleSync] Tracking JS result: \(jsResult)")
+                        print("[MercariSaleSync] Tracking JS: \(jsResult)")
                         if let data = jsResult.data(using: .utf8),
                            let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
                             if dict["trackingNumber"] != nil {
@@ -4083,7 +4046,7 @@ final class MercariSaleSyncManager: ObservableObject {
                         }
                     }
                 } catch {
-                    print("[MercariSaleSync] JS error on tracking page: \(error.localizedDescription)")
+                    print("[MercariSaleSync] JS error (tracking): \(error.localizedDescription)")
                 }
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
             }
@@ -4119,7 +4082,7 @@ private class SaleNavDelegate: NSObject, WKNavigationDelegate {
     }
     
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        print("[MercariSaleSync] Page finished loading: \(webView.url?.absoluteString ?? "?")")
+        print("[MercariSaleSync] Page loaded: \(webView.url?.absoluteString ?? "?")")
         didFinish = true
         if let c = continuation {
             continuation = nil
@@ -4128,72 +4091,12 @@ private class SaleNavDelegate: NSObject, WKNavigationDelegate {
     }
     
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        print("[MercariSaleSync] Page load failed: \(error.localizedDescription)")
+        print("[MercariSaleSync] Page failed: \(error.localizedDescription)")
         didFinish = true
         if let c = continuation {
             continuation = nil
             c.resume(returning: false)
         }
     }
-}
-
-// MARK: - Full Screen Sale Sync Sheet
-
-struct MercariSaleSyncSheet: View {
-    @ObservedObject var manager: MercariSaleSyncManager
-    @Environment(\.dismiss) private var dismiss
-    
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                // Status bar
-                VStack(spacing: 8) {
-                    if manager.isRunning {
-                        ProgressView(value: Double(manager.currentIndex), total: max(Double(manager.totalCount), 1))
-                            .tint(.accentColor)
-                        Text(manager.currentStatus)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        Text("\(manager.currentIndex) of \(manager.totalCount)")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    } else if !manager.results.isEmpty {
-                        let synced = manager.results.compactMap(\.result).filter({ $0.takeHome != nil }).count
-                        Label("\(synced) sale\(synced == 1 ? "" : "s") updated", systemImage: "checkmark.circle.fill")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.green)
-                    }
-                }
-                .padding()
-                .frame(maxWidth: .infinity)
-                .background(Color(.secondarySystemGroupedBackground))
-                
-                // WebView
-                SaleSyncWebViewContainer(webView: manager.webView)
-            }
-            .navigationTitle("Mercari Sale Sync")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(manager.isRunning ? "Running..." : "Close") {
-                        if !manager.isRunning {
-                            dismiss()
-                        }
-                    }
-                    .disabled(manager.isRunning)
-                }
-            }
-        }
-    }
-}
-
-struct SaleSyncWebViewContainer: UIViewRepresentable {
-    let webView: WKWebView
-    
-    func makeUIView(context: Context) -> WKWebView {
-        webView
-    }
-    
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
 }
 
