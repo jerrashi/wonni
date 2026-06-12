@@ -3917,6 +3917,7 @@ final class MercariItemLoader: ObservableObject {
     @Published var statusRaw: String?
     @Published var name: String?
     @Published var descriptionText: String?
+    @Published var thumbnailUrl: String?
 
     let webView: WKWebView
 
@@ -3930,7 +3931,7 @@ final class MercariItemLoader: ObservableObject {
 
     func load(itemId: String) async {
         phase = .loading
-        priceDollars = nil; isSold = false; statusRaw = nil; name = nil; descriptionText = nil
+        priceDollars = nil; isSold = false; statusRaw = nil; name = nil; descriptionText = nil; thumbnailUrl = nil
         guard let url = URL(string: "https://www.mercari.com/us/item/\(itemId)/") else {
             phase = .failed; return
         }
@@ -3938,7 +3939,7 @@ final class MercariItemLoader: ObservableObject {
 
         let js = #"""
         return (function() {
-            var out = { price: null, status: null, name: null, description: null };
+            var out = { price: null, status: null, name: null, description: null, photo: null };
             var nd = document.getElementById('__NEXT_DATA__');
             var text = nd ? (nd.textContent || '') : '';
             if (text) {
@@ -3952,6 +3953,13 @@ final class MercariItemLoader: ObservableObject {
                         if (item.description) out.description = item.description;
                         if (item.price != null) out.price = item.price / 100;
                         if (item.status) out.status = item.status.toLowerCase();
+                        // Extract first photo URL from photos array
+                        var photos = item.photos || [];
+                        if (photos.length > 0) {
+                            out.photo = photos[0].thumbnailUrl || photos[0].url || null;
+                        }
+                        if (!out.photo && item.thumbnailUrl) out.photo = item.thumbnailUrl;
+                        if (!out.photo && item.photo_url) out.photo = item.photo_url;
                     }
                 } catch(e) {}
                 if (!out.status) {
@@ -3962,6 +3970,11 @@ final class MercariItemLoader: ObservableObject {
                     var pm = text.match(/"price"\s*:\s*(\d+(?:\.\d+)?)/);
                     if (pm) out.price = parseFloat(pm[1]) / 100;
                 }
+            }
+            // og:image is a reliable first-photo fallback when __NEXT_DATA__ has no photos array
+            if (!out.photo) {
+                var og = document.querySelector('meta[property="og:image"]');
+                if (og && og.content) out.photo = og.content;
             }
             // DOM query for title is more reliable than NEXT_DATA which often contains the seller name
             var nameEl = document.querySelector('[data-testid="ItemName"]');
@@ -4008,6 +4021,7 @@ final class MercariItemLoader: ObservableObject {
                     statusRaw = status
                     name = obj["name"] as? String
                     descriptionText = obj["description"] as? String
+                    thumbnailUrl = obj["photo"] as? String
                     let s = (status ?? "").lowercased()
                     // Match exact Mercari status strings; contains("sold") was triggering on
                     // seller-stats text ("47 items sold") when the body fallback ran.
