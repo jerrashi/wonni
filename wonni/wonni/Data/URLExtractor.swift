@@ -221,94 +221,139 @@ class URLExtractor: NSObject, ObservableObject {
         try? await Task.sleep(nanoseconds: 3_000_000_000)
         
         let script = """
-        (function() {
+        return await new Promise((resolve) => {
             try {
-                let items = [];
-                let links = document.querySelectorAll('a[href*="/item/m"]');
-                for (let link of links) {
-                    let url = link.href;
+                let forSaleBtn = Array.from(document.querySelectorAll('a, button, div')).find(el => 
+                    el.innerText && el.innerText.trim().toLowerCase() === 'for sale' && el.offsetHeight > 0
+                );
+                
+                if (forSaleBtn) {
+                    forSaleBtn.click();
+                }
+
+                setTimeout(() => {
+                    let lastHeight = 0;
+                    let attempts = 0;
+                    let scrollLimit = 50; // max scrolls to prevent infinite loop
+                    let scrolls = 0;
                     
-                    let imgs = link.querySelectorAll('img');
-                    let itemImg = null;
-                    for (let i of imgs) {
-                        if (i.src && !i.src.includes('avatar') && !i.src.includes('profile')) {
-                            itemImg = i;
-                            break;
+                    let scrollInterval = setInterval(() => {
+                        window.scrollTo(0, document.body.scrollHeight);
+                        let newHeight = document.body.scrollHeight;
+                        scrolls++;
+                        
+                        if (newHeight === lastHeight || scrolls > scrollLimit) {
+                            attempts++;
+                            if (attempts >= 6 || scrolls > scrollLimit) { 
+                                clearInterval(scrollInterval);
+                                extractItems();
+                            }
+                        } else {
+                            lastHeight = newHeight;
+                            attempts = 0;
                         }
-                    }
-                    if (!itemImg && imgs.length > 0) itemImg = imgs[0];
-                    let thumbnailUrl = itemImg ? itemImg.src : "";
-                    
-                    let text = link.innerText || "";
-                    let priceMatch = text.match(/\\$\\s*([0-9,.]+)/);
-                    let priceText = priceMatch ? priceMatch[0] : "$0";
-                    
-                    let title = "";
-                    let nameNode = link.querySelector('[data-testid="ItemName"]');
-                    if (nameNode && nameNode.innerText) {
-                        title = nameNode.innerText.trim();
-                    }
-                    
-                    if (!title) {
-                        let lines = text.split('\\n')
-                            .map(s => s.trim())
-                            .filter(s => s.length > 0 
-                                      && !s.startsWith('$') 
-                                      && !s.match(/^[0-9,.]+$/) 
-                                      && s.toLowerCase() !== "free shipping"
-                                      && s.toLowerCase() !== "sold"
-                                      && !s.toLowerCase().includes(" % off")
-                            );
-                        let longestLine = "";
-                        for (let line of lines) {
-                            if (line.length > longestLine.length) {
-                                longestLine = line;
+                    }, 500);
+
+                    function extractItems() {
+                        let items = [];
+                        let links = document.querySelectorAll('a[href*="/item/m"]');
+                        for (let link of links) {
+                            let isSold = false;
+                            let textNodes = [...link.querySelectorAll('*')].map(n => n.innerText);
+                            for (let text of textNodes) {
+                                if (text && text.trim().toUpperCase() === 'SOLD') {
+                                    isSold = true;
+                                    break;
+                                }
+                            }
+                            if (isSold) continue;
+                            
+                            let url = link.href;
+                            
+                            let imgs = link.querySelectorAll('img');
+                            let itemImg = null;
+                            for (let i of imgs) {
+                                if (i.src && !i.src.includes('avatar') && !i.src.includes('profile')) {
+                                    itemImg = i;
+                                    break;
+                                }
+                            }
+                            if (!itemImg && imgs.length > 0) itemImg = imgs[0];
+                            let thumbnailUrl = itemImg ? itemImg.src : "";
+                            
+                            let text = link.innerText || "";
+                            let priceMatch = text.match(/\\$\\s*([0-9,.]+)/);
+                            let priceText = priceMatch ? priceMatch[0] : "$0";
+                            
+                            let title = "";
+                            let nameNode = link.querySelector('[data-testid="ItemName"]');
+                            if (nameNode && nameNode.innerText) {
+                                title = nameNode.innerText.trim();
+                            }
+                            
+                            if (!title) {
+                                let lines = text.split('\\n')
+                                    .map(s => s.trim())
+                                    .filter(s => s.length > 0 
+                                              && !s.startsWith('$') 
+                                              && !s.match(/^[0-9,.]+$/) 
+                                              && s.toLowerCase() !== "free shipping"
+                                              && s.toLowerCase() !== "sold"
+                                              && !s.toLowerCase().includes(" % off")
+                                    );
+                                let longestLine = "";
+                                for (let line of lines) {
+                                    if (line.length > longestLine.length) {
+                                        longestLine = line;
+                                    }
+                                }
+                                if (longestLine) {
+                                    title = longestLine;
+                                }
+                            }
+                            
+                            if (!title && itemImg && itemImg.alt) {
+                                title = itemImg.alt;
+                            }
+                            
+                            if (!title) {
+                                title = "Mercari Item";
+                            }
+                            
+                            if (url && thumbnailUrl) {
+                                items.push({
+                                    url: url,
+                                    thumbnailUrl: thumbnailUrl,
+                                    title: title,
+                                    priceText: priceText
+                                });
                             }
                         }
-                        if (longestLine) {
-                            title = longestLine;
+                        
+                        let uniqueItems = [];
+                        let urls = new Set();
+                        for (let item of items) {
+                            if (!urls.has(item.url)) {
+                                urls.add(item.url);
+                                uniqueItems.push(item);
+                            }
                         }
+                        
+                        resolve({ items: uniqueItems, debug: 'found ' + uniqueItems.length + ' items, url: ' + window.location.href });
                     }
-                    
-                    if (!title && itemImg && itemImg.alt) {
-                        title = itemImg.alt;
-                    }
-                    
-                    if (!title) {
-                        title = "Mercari Item";
-                    }
-                    
-                    if (url && thumbnailUrl) {
-                        items.push({
-                            url: url,
-                            thumbnailUrl: thumbnailUrl,
-                            title: title,
-                            priceText: priceText
-                        });
-                    }
-                }
-                
-                let uniqueItems = [];
-                let urls = new Set();
-                for (let item of items) {
-                    if (!urls.has(item.url)) {
-                        urls.add(item.url);
-                        uniqueItems.push(item);
-                    }
-                }
-                
-                return { items: uniqueItems, debug: 'found ' + uniqueItems.length + ' items, url: ' + window.location.href };
+                }, 1500);
             } catch (e) {
-                return { error: e.toString() };
+                resolve({ error: e.toString() });
             }
-        })();
+        });
         """
         
-        // Poll with retries
-        let deadline = Date().addingTimeInterval(15)
+        // Poll with retries. Since scrolling might take up to 25 seconds, we give it a 45 second deadline
+        let deadline = Date().addingTimeInterval(45)
         while Date() < deadline {
             do {
-                let result = try await webView.evaluateJavaScript(script)
+                // Using callAsyncJavaScript which awaits the Promise implicitly
+                let result = try await webView.callAsyncJavaScript(script, arguments: [:], in: nil, in: .page)
                 if let dict = result as? [String: Any] {
                     if let errStr = dict["error"] as? String {
                         print("[URLExtractor] Profile JS error: \(errStr)")
