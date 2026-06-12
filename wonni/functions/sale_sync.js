@@ -272,6 +272,124 @@ async function decrementAndCascadeInternal(listingId, soldOnPlatform, db, ebayId
 exports.decrementAndCascadeInternal = decrementAndCascadeInternal;
 
 // ─────────────────────────────────────────────────────────────
+// Callable: iOS app calls this when restocking a sold-out listing
+// ─────────────────────────────────────────────────────────────
+
+exports.restockAndCascade = onCall(
+  { secrets: [ebayClientId, ebayCertId, etsyClientId] },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Sign in required.");
+    const { listingId, quantity } = request.data;
+    if (!listingId) throw new HttpsError("invalid-argument", "listingId is required.");
+    const qty = parseInt(String(quantity), 10);
+    if (isNaN(qty) || qty < 1) throw new HttpsError("invalid-argument", "quantity must be >= 1.");
+
+    const db = admin.firestore();
+    const listingRef = db.collection("listings").doc(listingId);
+    const listingDoc = await listingRef.get();
+    if (!listingDoc.exists) throw new HttpsError("not-found", "Listing not found.");
+    const listing = listingDoc.data();
+    if (listing.userId !== request.auth.uid) throw new HttpsError("permission-denied", "Access denied.");
+
+    const uid = listing.userId;
+    const clientId = etsyClientId.value();
+
+    // eBay cascade
+    const ebayListingId = listing.crossPostListingIds?.ebay;
+    if (ebayListingId && listing.crossPostStatus?.ebay === "posted") {
+      try {
+        await updateEbayQty(listingId, qty, uid, ebayClientId.value(), ebayCertId.value(), db);
+        console.log(`[restockAndCascade] eBay qty=${qty} for listing ${listingId}`);
+      } catch (e) {
+        console.error(`[restockAndCascade] eBay cascade error:`, e.message);
+      }
+    }
+
+    // Etsy cascade
+    const etsyListingId = listing.crossPostListingIds?.etsy;
+    if (etsyListingId && listing.crossPostStatus?.etsy === "posted") {
+      try {
+        await updateEtsyQty(listingId, qty, etsyListingId, uid, clientId, db);
+        console.log(`[restockAndCascade] Etsy qty=${qty} for listing ${listingId}`);
+      } catch (e) {
+        console.error(`[restockAndCascade] Etsy cascade error:`, e.message);
+      }
+    }
+
+    // Clear any pending Mercari action flags — the listing is active again, no deactivation needed.
+    await listingRef.update({
+      pendingMercariDeactivation: admin.firestore.FieldValue.delete(),
+      pendingMercariRelist: admin.firestore.FieldValue.delete(),
+    });
+
+    console.log(`[restockAndCascade] listing ${listingId} restocked to qty=${qty}`);
+    return { success: true };
+  }
+);
+
+// ─────────────────────────────────────────────────────────────
+// Callable: iOS app calls this to manually mark a listing sold out
+// Forces qty=0, status=sold, and cascades deactivation to all platforms.
+// ─────────────────────────────────────────────────────────────
+
+exports.markSoldOutAndCascade = onCall(
+  { secrets: [ebayClientId, ebayCertId, etsyClientId] },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Sign in required.");
+    const { listingId } = request.data;
+    if (!listingId) throw new HttpsError("invalid-argument", "listingId is required.");
+
+    const db = admin.firestore();
+    const listingRef = db.collection("listings").doc(listingId);
+    const listingDoc = await listingRef.get();
+    if (!listingDoc.exists) throw new HttpsError("not-found", "Listing not found.");
+    const listing = listingDoc.data();
+    if (listing.userId !== request.auth.uid) throw new HttpsError("permission-denied", "Access denied.");
+
+    const uid = listing.userId;
+    const ebayId = ebayClientId.value();
+    const certId = ebayCertId.value();
+    const etsyId = etsyClientId.value();
+
+    const update = {
+      quantity: 0,
+      status: "sold",
+      soldAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    if (listing.crossPostListingIds?.mercari) {
+      update.pendingMercariDeactivation = true;
+    }
+
+    await listingRef.update(update);
+    console.log(`[markSoldOutAndCascade] ${listingId} force-sold for uid=${uid}`);
+
+    // eBay cascade
+    const ebayListingId = listing.crossPostListingIds?.ebay;
+    if (ebayListingId && listing.crossPostStatus?.ebay === "posted") {
+      try {
+        await updateEbayQty(listingId, 0, uid, ebayId, certId, db);
+      } catch (e) {
+        console.error(`[markSoldOutAndCascade] eBay cascade error:`, e.message);
+      }
+    }
+
+    // Etsy cascade
+    const etsyListingId = listing.crossPostListingIds?.etsy;
+    if (etsyListingId && listing.crossPostStatus?.etsy === "posted") {
+      try {
+        await updateEtsyQty(listingId, 0, etsyListingId, uid, etsyId, db);
+      } catch (e) {
+        console.error(`[markSoldOutAndCascade] Etsy cascade error:`, e.message);
+      }
+    }
+
+    return { success: true };
+  }
+);
+
+// ─────────────────────────────────────────────────────────────
 // Callable: iOS app calls this when it detects a Mercari sale
 // ─────────────────────────────────────────────────────────────
 

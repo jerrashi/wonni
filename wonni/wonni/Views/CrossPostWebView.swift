@@ -355,6 +355,10 @@ private extension WKWebView {
     }
 }
 
+// Shared WKProcessPool for all Mercari WebViews — reusing the same web process within an
+// app launch helps stabilise Mercari's device fingerprint across consecutive auto-poster sessions.
+private let mercariProcessPool = WKProcessPool()
+
 // MARK: - MercariPostingState
 
 /// Per-session state for one Mercari cross-post. Created fresh each time the sheet opens —
@@ -386,6 +390,11 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
     /// Observed by MercariAutoPosterView to write a Firestore "pending" record immediately —
     /// Mercari is a React SPA so the navigation delegate may not fire after a route change.
     @Published var latestSubmitResult: String?
+    /// Fires when the user successfully logs in via the inline WebView (not a separate sheet).
+    /// MercariAutoPosterView watches this to reload the sell page and restart injection.
+    @Published var loginJustCompleted = false
+    /// Fine-grained step label updated throughout injectFields — drives the posting pill bar.
+    @Published var injectionStep: String = ""
 
     let webView: WKWebView
     private var hasDetectedSuccess = false
@@ -399,6 +408,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         let config = WKWebViewConfiguration()
         // Shares cookies with MercariLoginView (both use WKWebsiteDataStore.default())
         config.websiteDataStore = WKWebsiteDataStore.default()
+        config.processPool = mercariProcessPool
         config.allowsInlineMediaPlayback = true
         webView = WKWebView(frame: .zero, configuration: config)
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
@@ -433,6 +443,24 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         Task { @MainActor in
             guard !self.hasDetectedSuccess else { return }
             let url = webView.url?.absoluteString ?? ""
+            // A redirect to Mercari's login/auth page means the user isn't signed in — NOT a
+            // successful listing. Without this guard the generic "navigated away from /sell/"
+            // heuristic below mistook the login redirect for success, marked the item listed,
+            // and auto-dismissed the login sheet before the user could sign in.
+            let lower = url.lowercased()
+            let isAuthRedirect = lower.contains("/login") || lower.contains("/signin")
+                || lower.contains("/oauth") || lower.contains("auth") || lower.contains("identity")
+            if url.contains("mercari.com") && isAuthRedirect {
+                self.status = .loginRequired
+                return
+            }
+            // User was on the login screen and successfully navigated to a non-auth Mercari page.
+            // Signal the view to reload the sell page and restart injection rather than treating
+            // this navigation as a successful listing submission.
+            if self.status == .loginRequired && url.contains("mercari.com") {
+                self.loginJustCompleted = true
+                return
+            }
             // Navigated away from /sell/ = user submitted the listing
             if url.contains("mercari.com") && !url.contains("mercari.com/sell/") && !url.isEmpty {
                 self.hasDetectedSuccess = true
@@ -553,6 +581,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         case .ready:
             break
         }
+        injectionStep = "Filling out form…"
 
         let jsScript = """
             function setReactInput(el, value) {
@@ -658,6 +687,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         //     "Something wrong happened" toast. Re-attaching almost always fixes it, so attach,
         //     wait for the upload to settle, and retry several times before giving up.
         if !photoBase64Strings.isEmpty {
+            injectionStep = "Uploading photos…"
             var photosOK = false
             for attempt in 1...4 {
                 let attachResult = await attachPhotos(photoBase64Strings)
@@ -677,6 +707,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         //    ("Add title and category to enable shipping") until a category is set.
         //    Tier 1: Mercari's suggested categories. Tier 2: fuzzy-match the AI category
         //    against the live dropdowns. Tier 3: fall back to "Other".
+        injectionStep = "Selecting category…"
         let categoryResult = await selectCategory(suggestedCategory: suggestedCategory)
         print("[MercariPostingState] Category: \(categoryResult)")
 
@@ -696,6 +727,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
 
         // 5. Shipping — walk the multi-step carrier modal. Each step is polled, not timed,
         //    because the carrier list is fetched live from Mercari after a weight is entered.
+        injectionStep = "Setting up shipping…"
         let shippingResult = await completeShipping(
             weightLbs: weightLbs, lengthIn: lengthIn, widthIn: widthIn, heightIn: heightIn,
             preferences: preferences
@@ -719,6 +751,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         // carrier saves) would needlessly hold a submittable listing. The only failure the button
         // wouldn't catch is a photo-upload error, so that's the sole hold — and it's re-checked,
         // because Mercari shows a transient "Something wrong happened" that resolves on upload retry.
+        injectionStep = "Submitting…"
         var photoFailed = false
         for attempt in 0..<3 {
             photoFailed = await outstandingIssues().contains("photo-upload-error")
@@ -1770,6 +1803,7 @@ struct MercariLoginView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = WKWebsiteDataStore.default()
+        configuration.processPool = mercariProcessPool
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         webView.navigationDelegate = context.coordinator
@@ -1917,9 +1951,8 @@ struct MercariShippingPreferencesView: View {
 
 struct MercariAutoPosterView: View {
     let job: CrossPostJob
-    @Environment(\.dismiss) private var dismiss
+    var onDismiss: () -> Void = {}
     @StateObject private var state = MercariPostingState()
-    @State private var showLogin = false
     @State private var hasInjected = false
 
     // Seller shipping preferences. Synced to Firestore so they persist across devices; the
@@ -1931,84 +1964,168 @@ struct MercariAutoPosterView: View {
     /// Set once the seller has chosen their shipping preferences (collected on first cross-post).
     @AppStorage("mercariPrefsConfigured") private var prefsConfigured = false
     @State private var showPrefSetup = false
+    @State private var showCloseWithoutIdConfirm = false
+
+    // Pill is always visible; isExpanded drives a fullScreenCover for the live WebView.
+    @State private var isExpanded = false
 
     // True when the user must see and interact with the live Mercari page.
-    // In all other states (loading, injecting, success, loginRequired) we hide the WebView
-    // behind a clean progress UI — the WebView stays mounted so JS keeps running.
+    // loginRequired is included so anti-bot checks and the login form are always visible
+    // rather than hidden behind a headless overlay.
     private var requiresUserInteraction: Bool {
         switch state.status {
-        case .waitingForCategory, .failed: return true
+        case .waitingForCategory, .failed, .loginRequired: return true
         default: return false
         }
     }
 
-    @ViewBuilder private var headlessOverlay: some View {
-        VStack(spacing: 20) {
-            Spacer()
-            switch state.status {
-            case .loading:
-                ProgressView().scaleEffect(1.2)
-                Text("Connecting to Mercari…")
-                    .font(.subheadline).foregroundStyle(.secondary)
-            case .injecting:
-                ProgressView().scaleEffect(1.2)
-                VStack(spacing: 10) {
-                    Text("Posting your listing…")
-                        .font(.headline)
-                    Text("Autofilling photos, title, price, category, and shipping.\nThis takes about 30–60 seconds.")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 40)
-                }
-            case .success:
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 52)).foregroundStyle(.green)
-                Text("Listed on Mercari!")
-                    .font(.title2.weight(.semibold))
-            default:
-                EmptyView()
-            }
-            Spacer()
+    // Step label shown in the compact pill. Falls back to status-based text before injection starts.
+    private var pillStepText: String {
+        if !state.injectionStep.isEmpty { return state.injectionStep }
+        switch state.status {
+        case .loading:            return "Connecting to Mercari…"
+        case .injecting:          return "Posting your listing…"
+        case .waitingForCategory: return "Review needed"
+        case .loginRequired:      return "Login required"
+        case .failed:             return "Something went wrong"
+        case .success:            return "Listed on Mercari!"
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemBackground))
+    }
+
+    // MARK: Pill view (compact non-blocking mode)
+
+    private var pillView: some View {
+        HStack(spacing: 12) {
+            if state.status == .success {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.green)
+            } else {
+                ZStack {
+                    Circle()
+                        .stroke(Color.white.opacity(0.25), lineWidth: 2.5)
+                    Circle()
+                        .trim(from: 0, to: 0.75)
+                        .stroke(Color.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .animation(.linear(duration: 1).repeatForever(autoreverses: false),
+                                   value: state.injectionStep)
+                }
+                .frame(width: 20, height: 20)
+            }
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(pillStepText)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text(job.title)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.65))
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    isExpanded = true
+                }
+            } label: {
+                Image(systemName: "chevron.up")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .overlay(Capsule().fill(Color(red: 0.1, green: 0.0, blue: 0.35).opacity(0.85)))
+                .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
+        )
+        .padding(.horizontal, 20)
+        .padding(.bottom, 4)
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack(alignment: .top) {
-                // WebView always mounted — JS execution stops if it leaves the hierarchy.
-                MercariSheetWebView(webView: state.webView)
+        // Pill is always shown inline (via safeAreaInset in ProfileView) — sits above the tab bar.
+        // The WebView runs headlessly behind it. isExpanded drives a fullScreenCover for the
+        // live editing experience when user interaction is required.
+        pillView
+            .background(
+                Group {
+                    if !isExpanded {
+                        MercariSheetWebView(webView: state.webView)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .opacity(0.01)
+                            .allowsHitTesting(false)
+                    }
+                }
+            )
+            .fullScreenCover(isPresented: $isExpanded) {
+                NavigationStack {
+                    ZStack(alignment: .top) {
+                        MercariSheetWebView(webView: state.webView)
 
-                if requiresUserInteraction {
-                    // Show the live page with interactive status banners.
-                    VStack(spacing: 0) {
-                        statusBanner
-                        if let warning = state.warning {
-                            warningBanner(warning)
+                        if requiresUserInteraction {
+                            VStack(spacing: 0) {
+                                statusBanner
+                                if let warning = state.warning {
+                                    warningBanner(warning)
+                                }
+                            }
+                        } else if state.status == .success {
+                            VStack(spacing: 20) {
+                                Spacer()
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 52)).foregroundStyle(.green)
+                                Text("Listed on Mercari!")
+                                    .font(.title2.weight(.semibold))
+                                Spacer()
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color(.systemBackground))
                         }
                     }
-                } else {
-                    // Cover the WebView with a clean progress/result UI.
-                    headlessOverlay
+                    .navigationTitle("Post to Mercari")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") {
+                                if state.mercariItemId?.isEmpty == false {
+                                    isExpanded = false
+                                    onDismiss()
+                                } else {
+                                    showCloseWithoutIdConfirm = true
+                                }
+                            }
+                        }
+                        if !requiresUserInteraction && state.status != .success {
+                            ToolbarItem(placement: .primaryAction) {
+                                Button {
+                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                        isExpanded = false
+                                    }
+                                } label: {
+                                    Image(systemName: "chevron.down")
+                                }
+                            }
+                        }
+                    }
                 }
-            }
-            .navigationTitle("Post to Mercari")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
+                .confirmationDialog(
+                    "Close without confirming listing?",
+                    isPresented: $showCloseWithoutIdConfirm,
+                    titleVisibility: .visible
+                ) {
+                    Button("Close anyway", role: .destructive) { isExpanded = false; onDismiss() }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("The listing may not have been created on Mercari. Close anyway and manually verify?")
                 }
-            }
-            .sheet(isPresented: $showLogin, onDismiss: {
-                hasInjected = false
-                state.reloadSellPage()
-                Task { await fetchPhotosAndInject() }
-            }) {
-                MercariConnectSheet()
             }
             .sheet(isPresented: $showPrefSetup) {
-                // First-time setup: collect shipping preferences before the autofill runs.
                 NavigationStack {
                     MercariShippingPreferencesView(isFirstTimeSetup: true, onSaved: {
                         Task { await fetchPhotosAndInject() }
@@ -2016,30 +2133,61 @@ struct MercariAutoPosterView: View {
                 }
                 .interactiveDismissDisabled(true)
             }
-        }
-        .task { await loadPreferencesThenStart() }
-        .onChange(of: state.status) { _, newStatus in
-            switch newStatus {
-            case .success:
-                Task { await updateFirestore() }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { dismiss() }
-            case .loginRequired:
-                showLogin = true
-            default: break
+            .task { await loadPreferencesThenStart() }
+            .onChange(of: state.status) { _, newStatus in
+                switch newStatus {
+                case .success:
+                    Task {
+                        await updateFirestore()
+                        guard state.mercariItemId?.isEmpty == false else {
+                            await MainActor.run { state.status = .failed("Listing ID not confirmed — verify on Mercari") }
+                            return
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                            isExpanded = false
+                            onDismiss()
+                        }
+                    }
+                default: break
+                }
             }
-        }
-        .onChange(of: state.latestSubmitResult) { _, result in
-            guard result != nil else { return }
-            Task {
-                await writeMercariPending()
-                // Give pollForSuccessModal a window to detect the success screen and set status.
-                // If it doesn't fire (Mercari DOM change or unexpected modal text), force-close.
-                try? await Task.sleep(nanoseconds: 8_000_000_000)
-                guard state.status != .success else { return }
-                await updateFirestore()
-                dismiss()
+            .onChange(of: requiresUserInteraction) { _, needs in
+                guard needs, !isExpanded else { return }
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    isExpanded = true
+                }
             }
-        }
+            .onChange(of: state.loginJustCompleted) { _, completed in
+                guard completed else { return }
+                state.loginJustCompleted = false
+                hasInjected = false
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    isExpanded = false
+                }
+                state.reloadSellPage()
+                Task { await fetchPhotosAndInject() }
+            }
+            .onChange(of: state.latestSubmitResult) { _, result in
+                guard result != nil else { return }
+                Task {
+                    await writeMercariPending()
+                    try? await Task.sleep(nanoseconds: 8_000_000_000)
+                    guard state.status != .success else { return }
+                    await updateFirestore()
+                    if state.mercariItemId?.isEmpty != false {
+                        await MainActor.run {
+                            state.injectionStep = ""
+                            state.status = .failed("Submission not confirmed — verify your listing on Mercari")
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                isExpanded = true
+                            }
+                        }
+                    } else {
+                        isExpanded = false
+                        onDismiss()
+                    }
+                }
+            }
     }
 
     // MARK: Banners
@@ -2104,7 +2252,21 @@ struct MercariAutoPosterView: View {
             .background(.ultraThinMaterial)
             .overlay(Rectangle().frame(height: 1).foregroundStyle(Color(.separator)), alignment: .bottom)
         case .loginRequired:
-            EmptyView()
+            HStack(spacing: 10) {
+                Image(systemName: "lock.circle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.title3)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Log in to Mercari below")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Complete any verification, then autofill resumes automatically")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background(.ultraThinMaterial)
+            .overlay(Rectangle().frame(height: 1).foregroundStyle(Color(.separator)), alignment: .bottom)
         }
     }
 
@@ -2227,16 +2389,20 @@ struct MercariAutoPosterView: View {
 
     private func updateFirestore() async {
         guard let listingId = job.listingId else { return }
-        var update: [String: Any] = [
+        // Only mark Mercari as "posted" when we actually captured a valid listing ID/URL.
+        // Without one we can't prove the item went live, and a false "posted" both lies to the
+        // user and blocks re-posting. Leave the status as "pending" so the user can retry.
+        guard let mercariId = state.mercariItemId, !mercariId.isEmpty else {
+            print("[MercariAutoPosterView] No Mercari item ID captured — not marking posted")
+            return
+        }
+        let update: [String: Any] = [
             "crossPostStatus.mercari": "posted",
+            "crossPostListingIds.mercari": mercariId,
             "updatedAt": Timestamp(date: Date())
         ]
-        if let mercariId = state.mercariItemId {
-            update["crossPostListingIds.mercari"] = mercariId
-            print("[MercariAutoPosterView] Storing Mercari item ID: \(mercariId)")
-        }
         try? await Firestore.firestore().collection("listings").document(listingId).updateData(update)
-        print("[MercariAutoPosterView] Firestore updated for listing \(listingId)")
+        print("[MercariAutoPosterView] Firestore updated for listing \(listingId) with Mercari ID \(mercariId)")
     }
 
     /// Writes "pending" to Firestore as soon as the List button click succeeds.
@@ -2244,6 +2410,8 @@ struct MercariAutoPosterView: View {
     /// this ensures the badge appears even when URL-change detection is unreliable.
     private func writeMercariPending() async {
         guard let listingId = job.listingId else { return }
+        // Store start time locally so the timeout check (EditListingSheet) needs zero extra reads.
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "mercariPendingStart_\(listingId)")
         // Don't overwrite a confirmed "posted" status that arrived first.
         try? await Firestore.firestore().collection("listings").document(listingId).updateData([
             "crossPostStatus.mercari": "pending",
@@ -2274,6 +2442,7 @@ struct MercariListingEditSheet: View {
     @State private var webView: WKWebView = {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.default()
+        config.processPool = mercariProcessPool
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         return wv
@@ -2356,84 +2525,7 @@ struct MercariListingEditSheet: View {
 
 // MARK: - Mercari Sync (Level 1)
 
-/// Loads a Mercari item page in a headless WKWebView and scrapes its current price + availability.
-/// Mercari is a Next.js app, so the item data is embedded in the `__NEXT_DATA__` script — the most
-/// reliable source. Visible-DOM fallbacks cover layout the JSON shape doesn't.
-@MainActor
-final class MercariItemLoader: ObservableObject {
-    enum Phase: Equatable { case loading, loaded, failed }
 
-    @Published var phase: Phase = .loading
-    @Published var priceDollars: Double?
-    @Published var isSold: Bool = false
-    @Published var statusRaw: String?
-    @Published var name: String?
-
-    let webView: WKWebView
-
-    init() {
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = WKWebsiteDataStore.default()   // share Mercari login cookies
-        webView = WKWebView(frame: .zero, configuration: config)
-        webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-    }
-
-    func load(itemId: String) async {
-        phase = .loading
-        guard let url = URL(string: "https://www.mercari.com/us/item/\(itemId)/") else {
-            phase = .failed; return
-        }
-        webView.load(URLRequest(url: url))
-
-        let js = #"""
-        return (function() {
-            var out = { price: null, status: null, name: null };
-            var nd = document.getElementById('__NEXT_DATA__');
-            var text = nd ? (nd.textContent || '') : '';
-            if (text) {
-                var pm = text.match(/"price":\s*(\d+(?:\.\d+)?)/);
-                // Mercari stores the price in cents (e.g. 7000 = $70.00) — convert to dollars.
-                if (pm) out.price = parseFloat(pm[1]) / 100;
-                var sm = text.match(/"status":\s*"([a-zA-Z_]+)"/);
-                if (sm) out.status = sm[1];
-                var nm = text.match(/"name":\s*"([^"]+)"/);
-                if (nm) out.name = nm[1];
-            }
-            if (out.price === null) {
-                var body = (document.body && document.body.innerText) || '';
-                var bm = body.match(/\$\s?([0-9,]+(?:\.[0-9]{2})?)/);
-                if (bm) out.price = parseFloat(bm[1].replace(/,/g, ''));
-            }
-            if (!out.status) {
-                var b2 = (document.body && document.body.innerText) || '';
-                if (/\bsold\b/i.test(b2)) out.status = 'sold_out';
-            }
-            return JSON.stringify(out);
-        })();
-        """#
-
-        // Poll until the SPA hydrates and the scrape yields something usable (or we time out).
-        let deadline = Date().addingTimeInterval(30)
-        while Date() < deadline {
-            if let json = (try? await webView.callJS(js)) as? String,
-               let data = json.data(using: .utf8),
-               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                let price = (obj["price"] as? NSNumber)?.doubleValue
-                let status = obj["status"] as? String
-                if price != nil || status != nil {
-                    priceDollars = price
-                    statusRaw = status
-                    name = obj["name"] as? String
-                    isSold = ["sold_out", "sold", "trading"].contains(status ?? "")
-                    phase = .loaded
-                    return
-                }
-            }
-            try? await Task.sleep(nanoseconds: 700_000_000)
-        }
-        phase = .failed
-    }
-}
 
 /// Sync Level 1 UI: pulls the Mercari item's current price/availability, diffs it against the
 /// Wonni listing, and offers to apply the changes. Declining just closes — the diff is shown again
@@ -2449,13 +2541,26 @@ struct MercariSyncSheet: View {
     @State private var applyError: String?
     @State private var isApplying = false
 
+    @State private var applyPrice = true
+    @State private var applyTitle = false
+    @State private var applyDescription = false
+
     private var listingPrice: Double { listing.price ?? 0 }
     private var priceDiffers: Bool {
         guard let m = loader.priceDollars else { return false }
         return abs(m - listingPrice) >= 0.01
     }
     private var soldDiffers: Bool { loader.isSold && listing.status != .sold }
-    private var hasChanges: Bool { priceDiffers || soldDiffers }
+    private var titleDiffers: Bool {
+        guard let m = loader.name, !m.isEmpty else { return false }
+        return m != listing.customTitle
+    }
+    private var descriptionDiffers: Bool {
+        guard let m = loader.descriptionText, !m.isEmpty else { return false }
+        return m != listing.customDescription
+    }
+    private var hasChanges: Bool { priceDiffers || soldDiffers || titleDiffers || descriptionDiffers }
+
 
     var body: some View {
         NavigationStack {
@@ -2486,11 +2591,11 @@ struct MercariSyncSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
             }
-            // Mount the scraping webview (1×1, effectively invisible) so it reliably loads and
-            // hydrates — off-screen WKWebViews can otherwise be throttled and never run the JS.
+            // Full-frame background so iOS doesn't throttle JS on the webview.
+            // A 1×1 frame is treated as off-screen and pauses callAsyncJavaScript.
             .background(
                 MercariSheetWebView(webView: loader.webView)
-                    .frame(width: 1, height: 1)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .opacity(0.01)
                     .allowsHitTesting(false)
             )
@@ -2502,12 +2607,28 @@ struct MercariSyncSheet: View {
         List {
             Section("Price") {
                 row(label: "Wonni", value: money(listingPrice))
-                row(label: "Mercari", value: loader.priceDollars.map(money) ?? "—",
-                    highlight: priceDiffers)
+                row(label: "Mercari", value: loader.priceDollars.map(money) ?? "—", highlight: priceDiffers)
+                if priceDiffers {
+                    Toggle("Update Price", isOn: $applyPrice)
+                }
             }
             Section("Availability") {
                 row(label: "Wonni", value: listing.status == .sold ? "Sold" : "Active")
                 row(label: "Mercari", value: loader.isSold ? "Sold" : "Active", highlight: soldDiffers)
+            }
+            if titleDiffers {
+                Section("Title") {
+                    row(label: "Wonni", value: listing.customTitle ?? "—")
+                    row(label: "Mercari", value: loader.name ?? "—", highlight: true)
+                    Toggle("Update Title", isOn: $applyTitle)
+                }
+            }
+            if descriptionDiffers {
+                Section("Description") {
+                    row(label: "Wonni", value: String((listing.customDescription ?? "—").prefix(80)))
+                    row(label: "Mercari", value: String((loader.descriptionText ?? "—").prefix(80)), highlight: true)
+                    Toggle("Update Description", isOn: $applyDescription)
+                }
             }
             Section {
                 if hasChanges {
@@ -2529,7 +2650,7 @@ struct MercariSyncSheet: View {
                 }
             } footer: {
                 if hasChanges {
-                    Text("Applies Mercari's price and sold status to your Wonni listing. eBay isn't changed automatically yet.")
+                    Text("Changes will be applied to Wonni and cascaded to eBay automatically.")
                 }
             }
         }
@@ -2552,11 +2673,15 @@ struct MercariSyncSheet: View {
         isApplying = true
         applyError = nil
         var update: [String: Any] = ["updatedAt": Timestamp(date: Date())]
-        if priceDiffers, let m = loader.priceDollars { update["price"] = m }
+        if priceDiffers && applyPrice, let m = loader.priceDollars { update["price"] = m }
+        if titleDiffers && applyTitle, let t = loader.name { update["customTitle"] = t }
+        if descriptionDiffers && applyDescription, let d = loader.descriptionText { update["customDescription"] = d }
         do {
             try await Firestore.firestore().collection("listings").document(listingId).updateData(update)
-            if priceDiffers && listing.crossPostStatus?["ebay"] == "posted" {
-                Task { try? await Functions.functions().httpsCallable("ebayUpdateListing").call(["listingId": listingId]) }
+            // Cascade any field changes to eBay in one call
+            let anyFieldChanged = priceDiffers || titleDiffers || descriptionDiffers
+            if anyFieldChanged && listing.crossPostStatus?["ebay"] == "posted" {
+                Task { _ = try? await callCloudFunction("ebayUpdateListing", ["listingId": listingId]) }
             }
             if soldDiffers {
                 // Record the sale — take-home will be backfilled async by the transaction loader
@@ -2575,7 +2700,7 @@ struct MercariSyncSheet: View {
                 let saleId = try? await SaleRepository.shared.recordSale(sale)
 
                 // Cascade quantity decrement
-                try? await Functions.functions().httpsCallable("decrementAndCascade").call([
+                _ = try? await callCloudFunction("decrementAndCascade", [
                     "listingId": listingId,
                     "platform": "mercari"
                 ])
@@ -2586,6 +2711,18 @@ struct MercariSyncSheet: View {
                         await fetchAndBackfillMercariTakeHome(saleId: sid, mercariId: mercariId)
                     }
                 }
+            } else if loader.isSold && listing.pendingMercariDeactivation == true {
+                // Mercari is already sold and there's a stale deactivation flag — the listing sold
+                // ON Mercari (not elsewhere), so clear the flag and cascade eBay if still posted.
+                try? await Firestore.firestore().collection("listings").document(listingId)
+                    .updateData(["pendingMercariDeactivation": FieldValue.delete(),
+                                 "updatedAt": Timestamp(date: Date())])
+                if listing.crossPostStatus?["ebay"] == "posted" {
+                    _ = try? await callCloudFunction("decrementAndCascade", [
+                        "listingId": listingId,
+                        "platform": "mercari"
+                    ])
+                }
             }
             onApplied()
             dismiss()
@@ -2595,17 +2732,17 @@ struct MercariSyncSheet: View {
         isApplying = false
     }
 
-    // Loads the Mercari transaction page in background and updates the Sale's takeHome field.
+    // Loads the Mercari transaction/order_status page and backfills takeHome + tracking on the Sale.
     private func fetchAndBackfillMercariTakeHome(saleId: String, mercariId: String) async {
         await withCheckedContinuation { continuation in
             DispatchQueue.main.async {
-                // MercariTakeHomeScraper retains itself via retainCycle until a callback fires.
-                MercariTakeHomeScraper(mercariId: mercariId) { takeHome in
+                MercariTakeHomeScraper(mercariId: mercariId) { data in
                     Task {
-                        try? await SaleRepository.shared.updateSale(
-                            id: saleId,
-                            data: ["takeHome": takeHome, "updatedAt": Timestamp(date: Date())]
-                        )
+                        var update: [String: Any] = ["updatedAt": Timestamp(date: Date())]
+                        if let th = data.takeHome { update["takeHome"] = th }
+                        if let tn = data.trackingNumber { update["trackingNumber"] = tn }
+                        if let c = data.carrier { update["carrier"] = c }
+                        try? await SaleRepository.shared.updateSale(id: saleId, data: update)
                         continuation.resume()
                     }
                 } onFail: {
@@ -2624,6 +2761,8 @@ struct MercariProfileSyncSheet: View {
     var onComplete: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var syncManager: MercariSyncManager
+    
     @State private var listings: [UserListing] = []
     @State private var isLoading = true
     @State private var listingToSync: UserListing?
@@ -2696,12 +2835,19 @@ struct MercariProfileSyncSheet: View {
                     Button("Close") { dismiss() }
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        Task { await reload() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
+                    if syncManager.isPillVisible || isLoading {
+                        ProgressView().scaleEffect(0.8)
+                    } else {
+                        Button("Sync All") {
+                            let toSync = normalListings + pendingListings
+                            dismiss()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                syncManager.startSyncAll(listings: toSync, onComplete: onComplete)
+                                syncManager.showProgressSheet = true
+                            }
+                        }
+                        .disabled(normalListings.isEmpty)
                     }
-                    .disabled(isLoading)
                 }
             }
             .sheet(item: $listingToSync) { listing in
@@ -2741,6 +2887,8 @@ struct MercariProfileSyncSheet: View {
         }
         .task { await reload() }
     }
+
+
 
     @ViewBuilder private func pendingRow(_ listing: UserListing) -> some View {
         let isDeactivate = listing.pendingMercariDeactivation == true
@@ -2823,15 +2971,26 @@ struct MercariProfileSyncSheet: View {
 
 /// Presents the Mercari listing in a web view with a "Mark as handled" toolbar button.
 /// The user manually deactivates/marks the item as sold on Mercari, then confirms.
+
+// ─────────────────────────────────────────────────────────────
+// MercariTransactionData
+// ─────────────────────────────────────────────────────────────
+
+struct MercariTransactionData {
+    let takeHome: Double?
+    let trackingNumber: String?
+    let carrier: String?
+}
+
 // ─────────────────────────────────────────────────────────────
 // MercariTransactionLoader
 // Loads the Mercari transaction page for a listing and extracts
-// the "You made" take-home value shown by the platform.
+// the "You made" take-home value and optional shipping tracking info.
 // ─────────────────────────────────────────────────────────────
 
 struct MercariTransactionLoader: UIViewRepresentable {
-    let listingId: String
-    var onTakeHomeFound: (Double) -> Void
+    let mercariId: String
+    var onDataFound: (MercariTransactionData) -> Void
     var onError: ((String) -> Void)?
 
     func makeUIView(context: Context) -> WKWebView {
@@ -2845,73 +3004,111 @@ struct MercariTransactionLoader: UIViewRepresentable {
     }
 
     func updateUIView(_ wv: WKWebView, context: Context) {
-        guard context.coordinator.listingId != listingId else { return }
-        context.coordinator.listingId = listingId
-        let url = URL(string: "https://www.mercari.com/us/item/\(listingId)/")!
+        guard context.coordinator.mercariId != mercariId else { return }
+        context.coordinator.mercariId = mercariId
+        let url = URL(string: "https://www.mercari.com/transaction/order_status/\(mercariId)")!
         wv.load(URLRequest(url: url))
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onTakeHomeFound: onTakeHomeFound, onError: onError)
+        Coordinator(onDataFound: onDataFound, onError: onError)
     }
 
     class Coordinator: NSObject, WKNavigationDelegate {
-        var listingId: String = ""
-        var onTakeHomeFound: (Double) -> Void
+        var mercariId: String = ""
+        var onDataFound: (MercariTransactionData) -> Void
         var onError: ((String) -> Void)?
+        private var phase: Phase = .transactionPage
+        private var pendingTakeHome: Double?
         private var extracted = false
 
-        init(onTakeHomeFound: @escaping (Double) -> Void, onError: ((String) -> Void)?) {
-            self.onTakeHomeFound = onTakeHomeFound
+        enum Phase { case transactionPage, trackingPage }
+
+        init(onDataFound: @escaping (MercariTransactionData) -> Void, onError: ((String) -> Void)?) {
+            self.onDataFound = onDataFound
             self.onError = onError
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard !extracted else { return }
-            // Give React/SPA a moment to render the value
+            switch phase {
+            case .transactionPage:
+                extractTransactionData(webView: webView, attempt: 0)
+            case .trackingPage:
+                extractTrackingData(webView: webView, attempt: 0)
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            onError?("Failed to load Mercari page: \(error.localizedDescription)")
+        }
+
+        private func extractTransactionData(webView: WKWebView, attempt: Int) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak webView] in
-                guard let self, let webView else { return }
+                guard let self, let webView, !self.extracted else { return }
                 let js = """
                     (function() {
                         var el = document.querySelector('[data-testid="You-made-value"]');
-                        return el ? el.textContent : null;
+                        var takeHome = el ? el.textContent : null;
+                        var btn = document.querySelector('[data-testid="ShippingCTAButton"]');
+                        var trackingHref = btn ? btn.getAttribute('href') : null;
+                        return { takeHome: takeHome, trackingHref: trackingHref };
                     })()
                     """
-                webView.evaluateJavaScript(js) { result, error in
-                    if let text = result as? String {
-                        // Strip "$", commas, whitespace and parse
-                        let cleaned = text.trimmingCharacters(in: .whitespaces)
-                            .replacingOccurrences(of: "$", with: "")
-                            .replacingOccurrences(of: ",", with: "")
-                        if let value = Double(cleaned), value > 0 {
-                            self.extracted = true
-                            DispatchQueue.main.async { self.onTakeHomeFound(value) }
-                            return
+                webView.evaluateJavaScript(js) { [weak self, weak webView] result, _ in
+                    guard let self, let webView else { return }
+                    var takeHome: Double? = nil
+                    var trackingHref: String? = nil
+                    if let dict = result as? [String: Any] {
+                        if let text = dict["takeHome"] as? String {
+                            let cleaned = text.trimmingCharacters(in: .whitespaces)
+                                .replacingOccurrences(of: "$", with: "")
+                                .replacingOccurrences(of: ",", with: "")
+                            takeHome = Double(cleaned).flatMap { $0 > 0 ? $0 : nil }
                         }
+                        trackingHref = dict["trackingHref"] as? String
                     }
-                    // Element not yet rendered — retry once more after another second
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak webView] in
-                        guard let self, let webView, !self.extracted else { return }
-                        webView.evaluateJavaScript(js) { result, _ in
-                            if let text = result as? String {
-                                let cleaned = text.trimmingCharacters(in: .whitespaces)
-                                    .replacingOccurrences(of: "$", with: "")
-                                    .replacingOccurrences(of: ",", with: "")
-                                if let value = Double(cleaned), value > 0 {
-                                    self.extracted = true
-                                    DispatchQueue.main.async { self.onTakeHomeFound(value) }
-                                    return
-                                }
-                            }
-                            self.onError?("Could not find take-home value on Mercari transaction page.")
+                    if takeHome != nil || trackingHref != nil {
+                        self.pendingTakeHome = takeHome
+                        if let href = trackingHref, let url = URL(string: href.hasPrefix("http") ? href : "https://www.mercari.com\(href)") {
+                            self.phase = .trackingPage
+                            webView.load(URLRequest(url: url))
+                        } else {
+                            self.extracted = true
+                            self.onDataFound(MercariTransactionData(takeHome: takeHome, trackingNumber: nil, carrier: nil))
                         }
+                    } else if attempt < 1 {
+                        self.extractTransactionData(webView: webView, attempt: attempt + 1)
+                    } else {
+                        self.onError?("Could not find transaction data on Mercari page.")
                     }
                 }
             }
         }
 
-        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            onError?("Failed to load Mercari transaction page: \(error.localizedDescription)")
+        private func extractTrackingData(webView: WKWebView, attempt: Int) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self, weak webView] in
+                guard let self, let webView, !self.extracted else { return }
+                webView.evaluateJavaScript(MercariTakeHomeScraper.trackingPageJS) { [weak self] result, _ in
+                    guard let self else { return }
+                    var trackingNumber: String? = nil
+                    var carrier: String? = nil
+                    if let dict = result as? [String: Any] {
+                        trackingNumber = dict["trackingNumber"] as? String
+                        carrier = dict["carrier"] as? String
+                    }
+                    if trackingNumber != nil || carrier != nil || attempt >= 1 {
+                        self.extracted = true
+                        self.onDataFound(MercariTransactionData(
+                            takeHome: self.pendingTakeHome,
+                            trackingNumber: trackingNumber,
+                            carrier: carrier
+                        ))
+                    } else {
+                        self.extractTrackingData(webView: webView, attempt: attempt + 1)
+                    }
+                }
+            }
         }
     }
 }
@@ -2919,20 +3116,62 @@ struct MercariTransactionLoader: UIViewRepresentable {
 // ─────────────────────────────────────────────────────────────
 // MercariTakeHomeScraper
 // Standalone (non-SwiftUI) WKWebView scraper for background use.
-// Used by MercariSyncSheet to backfill takeHome on a Sale after apply().
+// Used by MercariSyncSheet to backfill takeHome + tracking on a Sale after apply().
+// Two-phase: (1) transaction/order_status page → take-home + shipping button check,
+//            (2) if shipped, tracking page → tracking number + carrier.
 // ─────────────────────────────────────────────────────────────
 
 final class MercariTakeHomeScraper: NSObject, WKNavigationDelegate {
     private let mercariId: String
-    private let onSuccess: (Double) -> Void
+    private let onSuccess: (MercariTransactionData) -> Void
     private let onFail: () -> Void
     private var webView: WKWebView?
+    private var phase: Phase = .transactionPage
+    private var pendingTakeHome: Double?
     private var extracted = false
     // Strong self-reference so ARC doesn't deallocate us before callbacks fire.
-    // Nilled out when a terminal callback fires.
     private var retainCycle: MercariTakeHomeScraper?
 
-    init(mercariId: String, onSuccess: @escaping (Double) -> Void, onFail: @escaping () -> Void) {
+    private enum Phase { case transactionPage, trackingPage }
+
+    // JS to extract tracking number and carrier from Mercari's tracking help page.
+    static let trackingPageJS = """
+        (function() {
+            var allText = document.body ? document.body.innerText : '';
+            var trackingNumber = null;
+            var patterns = [
+                /\\b(9[2-4]\\d{18,20})\\b/,
+                /\\b(1Z[A-Z0-9]{16})\\b/i,
+                /\\b(\\d{15,22})\\b/,
+                /\\b([A-Z]{2}\\d{9}[A-Z]{2})\\b/
+            ];
+            for (var i = 0; i < patterns.length; i++) {
+                var m = allText.match(patterns[i]);
+                if (m) { trackingNumber = m[1]; break; }
+            }
+            var carrier = null;
+            var imgs = document.querySelectorAll('img');
+            var keys = ['usps','ups','fedex','dhl','ontrac','lasership','amazon'];
+            for (var j = 0; j < imgs.length; j++) {
+                var src = (imgs[j].src || '').toLowerCase();
+                var alt = (imgs[j].alt || '').toLowerCase();
+                for (var k = 0; k < keys.length; k++) {
+                    if (src.indexOf(keys[k]) !== -1 || alt.indexOf(keys[k]) !== -1) {
+                        carrier = keys[k] === 'usps' ? 'USPS' :
+                                  keys[k] === 'ups' ? 'UPS' :
+                                  keys[k] === 'fedex' ? 'FedEx' :
+                                  keys[k] === 'dhl' ? 'DHL' :
+                                  keys[k][0].toUpperCase() + keys[k].slice(1);
+                        break;
+                    }
+                }
+                if (carrier) break;
+            }
+            return { trackingNumber: trackingNumber, carrier: carrier };
+        })()
+        """
+
+    init(mercariId: String, onSuccess: @escaping (MercariTransactionData) -> Void, onFail: @escaping () -> Void) {
         self.mercariId = mercariId
         self.onSuccess = onSuccess
         self.onFail = onFail
@@ -2946,42 +3185,60 @@ final class MercariTakeHomeScraper: NSObject, WKNavigationDelegate {
         wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         wv.navigationDelegate = self
         webView = wv
-        let url = URL(string: "https://www.mercari.com/us/item/\(mercariId)/")!
+        let url = URL(string: "https://www.mercari.com/transaction/order_status/\(mercariId)")!
         wv.load(URLRequest(url: url))
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard !extracted else { return }
-        extractValue(webView: webView, attempt: 0)
+        switch phase {
+        case .transactionPage:
+            extractTransactionData(webView: webView, attempt: 0)
+        case .trackingPage:
+            extractTrackingData(webView: webView, attempt: 0)
+        }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         finish { self.onFail() }
     }
 
-    private func extractValue(webView: WKWebView, attempt: Int) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self, !self.extracted else { return }
+    private func extractTransactionData(webView: WKWebView, attempt: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak webView] in
+            guard let self, let webView, !self.extracted else { return }
             let js = """
                 (function() {
                     var el = document.querySelector('[data-testid="You-made-value"]');
-                    return el ? el.textContent : null;
+                    var takeHome = el ? el.textContent : null;
+                    var btn = document.querySelector('[data-testid="ShippingCTAButton"]');
+                    var trackingHref = btn ? btn.getAttribute('href') : null;
+                    return { takeHome: takeHome, trackingHref: trackingHref };
                 })()
                 """
-            webView.evaluateJavaScript(js) { [weak self] result, _ in
-                guard let self else { return }
-                if let text = result as? String {
-                    let cleaned = text.trimmingCharacters(in: .whitespaces)
-                        .replacingOccurrences(of: "$", with: "")
-                        .replacingOccurrences(of: ",", with: "")
-                    if let value = Double(cleaned), value > 0 {
-                        self.extracted = true
-                        self.finish { self.onSuccess(value) }
-                        return
+            webView.evaluateJavaScript(js) { [weak self, weak webView] result, _ in
+                guard let self, let webView else { return }
+                var takeHome: Double? = nil
+                var trackingHref: String? = nil
+                if let dict = result as? [String: Any] {
+                    if let text = dict["takeHome"] as? String {
+                        let cleaned = text.trimmingCharacters(in: .whitespaces)
+                            .replacingOccurrences(of: "$", with: "")
+                            .replacingOccurrences(of: ",", with: "")
+                        takeHome = Double(cleaned).flatMap { $0 > 0 ? $0 : nil }
                     }
+                    trackingHref = dict["trackingHref"] as? String
                 }
-                if attempt < 1 {
-                    self.extractValue(webView: webView, attempt: attempt + 1)
+                if takeHome != nil || trackingHref != nil {
+                    self.pendingTakeHome = takeHome
+                    if let href = trackingHref, let url = URL(string: href.hasPrefix("http") ? href : "https://www.mercari.com\(href)") {
+                        self.phase = .trackingPage
+                        webView.load(URLRequest(url: url))
+                    } else {
+                        self.extracted = true
+                        self.finish { self.onSuccess(MercariTransactionData(takeHome: takeHome, trackingNumber: nil, carrier: nil)) }
+                    }
+                } else if attempt < 1 {
+                    self.extractTransactionData(webView: webView, attempt: attempt + 1)
                 } else {
                     self.finish { self.onFail() }
                 }
@@ -2989,9 +3246,34 @@ final class MercariTakeHomeScraper: NSObject, WKNavigationDelegate {
         }
     }
 
+    private func extractTrackingData(webView: WKWebView, attempt: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self, weak webView] in
+            guard let self, let webView, !self.extracted else { return }
+            webView.evaluateJavaScript(MercariTakeHomeScraper.trackingPageJS) { [weak self] result, _ in
+                guard let self else { return }
+                var trackingNumber: String? = nil
+                var carrier: String? = nil
+                if let dict = result as? [String: Any] {
+                    trackingNumber = dict["trackingNumber"] as? String
+                    carrier = dict["carrier"] as? String
+                }
+                if trackingNumber != nil || carrier != nil || attempt >= 1 {
+                    self.extracted = true
+                    self.finish { self.onSuccess(MercariTransactionData(
+                        takeHome: self.pendingTakeHome,
+                        trackingNumber: trackingNumber,
+                        carrier: carrier
+                    )) }
+                } else {
+                    self.extractTrackingData(webView: webView, attempt: attempt + 1)
+                }
+            }
+        }
+    }
+
     private func finish(callback: () -> Void) {
         callback()
-        retainCycle = nil  // Break the self-retention cycle
+        retainCycle = nil
     }
 }
 
@@ -3356,3 +3638,562 @@ struct MercariAutoEditSheet: View {
         }
     }
 }
+//
+//  MercariSyncManager.swift
+//  wonni
+//
+
+
+
+@MainActor
+final class MercariItemLoader: ObservableObject {
+    enum Phase: Equatable { case loading, loaded, failed }
+
+    @Published var phase: Phase = .loading
+    @Published var priceDollars: Double?
+    @Published var isSold: Bool = false
+    @Published var statusRaw: String?
+    @Published var name: String?
+    @Published var descriptionText: String?
+
+    let webView: WKWebView
+
+    init() {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = WKWebsiteDataStore.default()
+        config.processPool = mercariProcessPool
+        webView = WKWebView(frame: .zero, configuration: config)
+        webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+    }
+
+    func load(itemId: String) async {
+        phase = .loading
+        priceDollars = nil; isSold = false; statusRaw = nil; name = nil; descriptionText = nil
+        guard let url = URL(string: "https://www.mercari.com/us/item/\(itemId)/") else {
+            phase = .failed; return
+        }
+        webView.load(URLRequest(url: url))
+
+        let js = #"""
+        return (function() {
+            var out = { price: null, status: null, name: null, description: null };
+            var nd = document.getElementById('__NEXT_DATA__');
+            var text = nd ? (nd.textContent || '') : '';
+            if (text) {
+                try {
+                    var json = JSON.parse(text);
+                    var pp = json && json.props && json.props.pageProps;
+                    var item = (pp && pp.item) ||
+                               (pp && pp.data && pp.data.item) ||
+                               (pp && pp.meta && pp.meta.item);
+                    if (item) {
+                        if (item.description) out.description = item.description;
+                        if (item.price != null) out.price = item.price / 100;
+                        if (item.status) out.status = item.status.toLowerCase();
+                    }
+                } catch(e) {}
+                if (!out.status) {
+                    var sm = text.match(/"status"\s*:\s*"([^"]+)"/);
+                    if (sm) out.status = sm[1].toLowerCase();
+                }
+                if (out.price === null) {
+                    var pm = text.match(/"price"\s*:\s*(\d+(?:\.\d+)?)/);
+                    if (pm) out.price = parseFloat(pm[1]) / 100;
+                }
+            }
+            // DOM query for title is more reliable than NEXT_DATA which often contains the seller name
+            var nameEl = document.querySelector('[data-testid="ItemName"]');
+            if (nameEl && nameEl.innerText) {
+                out.name = nameEl.innerText.trim();
+            }
+            if (!out.name) {
+                var metaTitle = document.querySelector('meta[property="og:title"]');
+                if (metaTitle && metaTitle.content) {
+                    var c = metaTitle.content;
+                    if (c.endsWith(' - Mercari')) c = c.slice(0, -10);
+                    out.name = c.trim();
+                }
+            }
+            if (out.price === null) {
+                var body = (document.body && document.body.innerText) || '';
+                var bm = body.match(/\$\s?([0-9,]+(?:\.[0-9]{2})?)/);
+                if (bm) out.price = parseFloat(bm[1].replace(/,/g, ''));
+            }
+            if (!out.status) {
+                var b2 = (document.body && document.body.innerText) || '';
+                if (/\bsold\b/i.test(b2) || /sold out/i.test(b2)) out.status = 'sold_out';
+            }
+            return JSON.stringify(out);
+        })();
+        """#
+
+        let deadline = Date().addingTimeInterval(30)
+        while Date() < deadline {
+            if let json = (try? await webView.callJS(js)) as? String,
+               let data = json.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let price = (obj["price"] as? NSNumber)?.doubleValue
+                let status = obj["status"] as? String
+                if price != nil || status != nil {
+                    priceDollars = price
+                    statusRaw = status
+                    name = obj["name"] as? String
+                    descriptionText = obj["description"] as? String
+                    let s = (status ?? "").lowercased()
+                    isSold = s.contains("sold") || s == "trading"
+                    phase = .loaded
+                    return
+                }
+            }
+            try? await Task.sleep(nanoseconds: 700_000_000)
+        }
+        phase = .failed
+    }
+}
+
+struct MercariSyncResult {
+    var title: String?
+    var description: String?
+    var price: Double?
+    var isSold: Bool
+    var statusRaw: String?
+}
+
+@MainActor
+class MercariSyncManager: ObservableObject {
+    @Published var isPillVisible = false
+    @Published var showProgressSheet = false
+    
+    @Published var currentIndex = 0
+    @Published var totalCount = 0
+    @Published var jobs: [UserListing] = []
+    
+    @Published var syncResults: [String: MercariSyncResult] = [:]
+    @Published var isFinished = false
+    
+    let loader = MercariItemLoader()
+    
+    var progress: Double {
+        guard totalCount > 0 else { return 0 }
+        return Double(currentIndex) / Double(totalCount)
+    }
+    
+    func startSyncAll(listings: [UserListing], onComplete: @escaping () -> Void) {
+        self.jobs = listings
+        self.totalCount = listings.count
+        self.currentIndex = 0
+        self.isPillVisible = true
+        self.syncResults = [:]
+        self.isFinished = false
+        
+        Task {
+            await processQueue()
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                withAnimation {
+                    self.isPillVisible = false
+                }
+            }
+            onComplete()
+        }
+    }
+    
+    private func processQueue() async {
+        for (index, listing) in jobs.enumerated() {
+            guard let mercariId = listing.crossPostListingIds?["mercari"],
+                  let listingId = listing.id else { continue }
+            
+            self.currentIndex = index + 1
+            await loader.load(itemId: mercariId)
+            guard loader.phase == .loaded else { continue }
+
+            let result = MercariSyncResult(
+                title: loader.name,
+                description: loader.descriptionText,
+                price: loader.priceDollars,
+                isSold: loader.isSold,
+                statusRaw: loader.statusRaw
+            )
+            self.syncResults[listingId] = result
+        }
+        self.isFinished = true
+    }
+
+    func applyBulkEdits(selectedIds: Set<String>, applyTitle: Bool, applyPrice: Bool, applyDescription: Bool, applyStatus: Bool) async {
+        for listing in jobs where selectedIds.contains(listing.id ?? "") {
+            guard let listingId = listing.id, let result = syncResults[listingId] else { continue }
+            
+            let mercariIsSold = result.isSold
+            let ebayIsPosted = listing.crossPostStatus?["ebay"] == "posted"
+
+            if applyStatus && listing.pendingMercariDeactivation == true && mercariIsSold {
+                try? await Firestore.firestore().collection("listings").document(listingId)
+                    .updateData(["pendingMercariDeactivation": FieldValue.delete(),
+                                 "updatedAt": FieldValue.serverTimestamp()])
+            }
+
+            let priceDiff = result.price.map { abs($0 - (listing.price ?? 0)) >= 0.01 } ?? false
+            let soldDiff = mercariIsSold && listing.status != ListingStatus.sold
+            let titleDiff = result.title != nil && result.title != listing.customTitle
+            let descDiff = result.description != nil && result.description != listing.customDescription
+
+            var update: [String: Any] = ["updatedAt": FieldValue.serverTimestamp()]
+            if applyPrice && priceDiff, let p = result.price { update["price"] = p }
+            if applyTitle && titleDiff, let t = result.title { update["customTitle"] = t }
+            if applyDescription && descDiff, let d = result.description { update["customDescription"] = d }
+
+            if !update.keys.filter({ $0 != "updatedAt" }).isEmpty {
+                try? await Firestore.firestore().collection("listings").document(listingId).updateData(update)
+            }
+
+            if applyPrice && priceDiff && ebayIsPosted {
+                _ = try? await callCloudFunction("ebayUpdateListing", ["listingId": listingId])
+            }
+
+            if applyStatus && mercariIsSold {
+                if ebayIsPosted {
+                    _ = try? await callCloudFunction("decrementAndCascade", ["listingId": listingId, "platform": "mercari"])
+                }
+                if soldDiff {
+                    let sale = Sale(
+                        userId: "",
+                        listingId: listingId,
+                        listingTitle: listing.customTitle,
+                        coverPhotoPath: listing.coverPhotoPath,
+                        platform: "mercari",
+                        platformOrderId: listing.crossPostListingIds?["mercari"] ?? "",
+                        priceSoldFor: result.price ?? listing.price ?? 0,
+                        takeHome: nil,
+                        status: .pending,
+                        soldAt: Timestamp(date: Date())
+                    )
+                    _ = try? await SaleRepository.shared.recordSale(sale)
+                }
+            }
+        }
+    }
+}
+
+struct MercariSaleResult {
+    var takeHome: Double?
+    var trackingNumber: String?
+    var carrier: String?
+}
+
+@MainActor
+final class MercariSaleSyncManager: ObservableObject {
+    @Published var isRunning = false
+    @Published var showSheet = false
+    @Published var currentIndex = 0
+    @Published var totalCount = 0
+    @Published var currentStatus = "Starting..."
+    @Published var results: [(sale: Sale, result: MercariSaleResult?)] = []
+    
+    let webView: WKWebView
+    private let navDelegate = SaleNavDelegate()
+    
+    init() {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = WKWebsiteDataStore.default()
+        config.processPool = mercariProcessPool
+        let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
+        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        wv.navigationDelegate = navDelegate
+        self.webView = wv
+    }
+    
+    func sync(sales: [Sale]) async {
+        let mercariSales = sales.filter { $0.platform == "mercari" && ($0.takeHome == nil || $0.trackingNumber == nil) }
+        guard !mercariSales.isEmpty else {
+            print("[MercariSaleSync] No mercari sales needing sync")
+            return
+        }
+        
+        isRunning = true
+        showSheet = true
+        totalCount = mercariSales.count
+        currentIndex = 0
+        results = []
+        
+        print("[MercariSaleSync] Starting sync for \(mercariSales.count) sales")
+        
+        for (i, sale) in mercariSales.enumerated() {
+            currentIndex = i + 1
+            guard let platformOrderId = sale.platformOrderId, !platformOrderId.isEmpty else {
+                currentStatus = "Skipping (no order ID)..."
+                print("[MercariSaleSync] Skipping sale \(sale.id ?? "?") - no platformOrderId")
+                results.append((sale: sale, result: nil))
+                continue
+            }
+            
+            currentStatus = "Loading order \(i + 1)/\(mercariSales.count)..."
+            print("[MercariSaleSync] Loading order page for item \(platformOrderId)")
+            
+            let result = await loadSaleData(itemId: platformOrderId)
+            results.append((sale: sale, result: result))
+            
+            // Update Firestore
+            if let result = result {
+                var update: [String: Any] = [:]
+                if let th = result.takeHome, sale.takeHome != th {
+                    update["takeHome"] = th
+                    print("[MercariSaleSync] Updating takeHome to \(th) for \(platformOrderId)")
+                }
+                if let tr = result.trackingNumber, sale.trackingNumber != tr {
+                    update["trackingNumber"] = tr
+                    print("[MercariSaleSync] Updating tracking to \(tr) for \(platformOrderId)")
+                }
+                if let c = result.carrier, sale.carrier != c {
+                    update["carrier"] = c
+                }
+                
+                if !update.isEmpty {
+                    update["updatedAt"] = FieldValue.serverTimestamp()
+                    if let id = sale.id {
+                        try? await Firestore.firestore().collection("sales").document(id).updateData(update)
+                        print("[MercariSaleSync] Updated Firestore for sale \(id)")
+                    }
+                }
+            }
+        }
+        
+        currentStatus = "Done!"
+        print("[MercariSaleSync] Sync complete")
+        isRunning = false
+    }
+    
+    private func loadSaleData(itemId: String) async -> MercariSaleResult? {
+        guard let url = URL(string: "https://www.mercari.com/transaction/order_status/\(itemId)/") else {
+            print("[MercariSaleSync] Invalid URL for \(itemId)")
+            return nil
+        }
+        
+        // Navigate and wait for page load
+        navDelegate.reset()
+        webView.load(URLRequest(url: url))
+        
+        print("[MercariSaleSync] Waiting for order page to load...")
+        let loaded = await navDelegate.waitForLoad(timeout: 15)
+        if !loaded {
+            print("[MercariSaleSync] Page load timed out for \(itemId)")
+        }
+        
+        // Extra wait for React/Next.js hydration
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        
+        var result = MercariSaleResult()
+        
+        let jsOrder = """
+        (function() {
+            var out = { takeHome: null, hasTracking: false, debug: '' };
+            var takeHomeEl = document.querySelector('p[data-testid="You-made-value"]');
+            if (takeHomeEl) {
+                out.debug += 'Found takeHome el: ' + takeHomeEl.innerText + '; ';
+                var text = takeHomeEl.innerText.replace(/[^0-9.]/g, '');
+                if (text) out.takeHome = parseFloat(text);
+            } else {
+                out.debug += 'No takeHome el found; ';
+                var allPs = document.querySelectorAll('p');
+                for (var i = 0; i < allPs.length; i++) {
+                    if (allPs[i].innerText && allPs[i].innerText.indexOf('$') >= 0) {
+                        out.debug += 'p[' + i + ']: ' + allPs[i].innerText + '; ';
+                    }
+                }
+            }
+            var trackingBtn = document.querySelector('a[data-testid="ShippingCTAButton"]');
+            if (trackingBtn) {
+                out.hasTracking = true;
+                out.debug += 'Found tracking btn; ';
+            }
+            out.debug += 'title: ' + document.title + '; url: ' + window.location.href;
+            return JSON.stringify(out);
+        })();
+        """
+        
+        // Poll for data with retries
+        var hasTracking = false
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            do {
+                if let jsResult = try await webView.evaluateJavaScript(jsOrder) as? String {
+                    print("[MercariSaleSync] JS result: \(jsResult)")
+                    if let data = jsResult.data(using: .utf8),
+                       let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        if dict["takeHome"] != nil || dict["hasTracking"] as? Bool == true {
+                            result.takeHome = dict["takeHome"] as? Double
+                            hasTracking = dict["hasTracking"] as? Bool ?? false
+                            print("[MercariSaleSync] Got takeHome: \(result.takeHome as Any), hasTracking: \(hasTracking)")
+                            break
+                        }
+                        let debug = dict["debug"] as? String ?? ""
+                        print("[MercariSaleSync] Debug: \(debug)")
+                    }
+                }
+            } catch {
+                print("[MercariSaleSync] JS error on order page: \(error.localizedDescription)")
+            }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+        }
+        
+        // If tracking is available, navigate to tracking page
+        if hasTracking {
+            currentStatus = "Loading tracking for \(currentIndex)/\(totalCount)..."
+            guard let trackingUrl = URL(string: "https://www.mercari.com/us/help_center/tracking/\(itemId)") else {
+                return result
+            }
+            
+            navDelegate.reset()
+            webView.load(URLRequest(url: trackingUrl))
+            print("[MercariSaleSync] Waiting for tracking page to load...")
+            let trackingLoaded = await navDelegate.waitForLoad(timeout: 15)
+            if !trackingLoaded {
+                print("[MercariSaleSync] Tracking page timed out")
+            }
+            
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            
+            let jsTracking = """
+            (function() {
+                var out = { trackingNumber: null, carrier: null, debug: '' };
+                var numEl = document.querySelector('span[data-testid="Tracking-TrackingNumber"]');
+                if (numEl && numEl.innerText) {
+                    out.trackingNumber = numEl.innerText.trim();
+                }
+                var carrierEl = document.querySelector('img[data-testid="Tracking-CarrierLogo"]');
+                if (carrierEl && carrierEl.alt) {
+                    out.carrier = carrierEl.alt.trim().toUpperCase();
+                }
+                out.debug = 'title: ' + document.title + '; url: ' + window.location.href;
+                return JSON.stringify(out);
+            })();
+            """
+            
+            let trackingDeadline = Date().addingTimeInterval(15)
+            while Date() < trackingDeadline {
+                do {
+                    if let jsResult = try await webView.evaluateJavaScript(jsTracking) as? String {
+                        print("[MercariSaleSync] Tracking JS result: \(jsResult)")
+                        if let data = jsResult.data(using: .utf8),
+                           let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            if dict["trackingNumber"] != nil {
+                                result.trackingNumber = dict["trackingNumber"] as? String
+                                result.carrier = dict["carrier"] as? String
+                                break
+                            }
+                        }
+                    }
+                } catch {
+                    print("[MercariSaleSync] JS error on tracking page: \(error.localizedDescription)")
+                }
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+            }
+        }
+        
+        return result
+    }
+}
+
+// MARK: - Navigation Delegate for waiting on page loads
+
+private class SaleNavDelegate: NSObject, WKNavigationDelegate {
+    private var continuation: CheckedContinuation<Bool, Never>?
+    private var didFinish = false
+    
+    func reset() {
+        didFinish = false
+        continuation = nil
+    }
+    
+    func waitForLoad(timeout: TimeInterval) async -> Bool {
+        if didFinish { return true }
+        return await withCheckedContinuation { cont in
+            self.continuation = cont
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                if let c = self.continuation {
+                    self.continuation = nil
+                    c.resume(returning: false)
+                }
+            }
+        }
+    }
+    
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        print("[MercariSaleSync] Page finished loading: \(webView.url?.absoluteString ?? "?")")
+        didFinish = true
+        if let c = continuation {
+            continuation = nil
+            c.resume(returning: true)
+        }
+    }
+    
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        print("[MercariSaleSync] Page load failed: \(error.localizedDescription)")
+        didFinish = true
+        if let c = continuation {
+            continuation = nil
+            c.resume(returning: false)
+        }
+    }
+}
+
+// MARK: - Full Screen Sale Sync Sheet
+
+struct MercariSaleSyncSheet: View {
+    @ObservedObject var manager: MercariSaleSyncManager
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                // Status bar
+                VStack(spacing: 8) {
+                    if manager.isRunning {
+                        ProgressView(value: Double(manager.currentIndex), total: max(Double(manager.totalCount), 1))
+                            .tint(.accentColor)
+                        Text(manager.currentStatus)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Text("\(manager.currentIndex) of \(manager.totalCount)")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    } else if !manager.results.isEmpty {
+                        let synced = manager.results.compactMap(\.result).filter({ $0.takeHome != nil }).count
+                        Label("\(synced) sale\(synced == 1 ? "" : "s") updated", systemImage: "checkmark.circle.fill")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.green)
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity)
+                .background(Color(.secondarySystemGroupedBackground))
+                
+                // WebView
+                SaleSyncWebViewContainer(webView: manager.webView)
+            }
+            .navigationTitle("Mercari Sale Sync")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(manager.isRunning ? "Running..." : "Close") {
+                        if !manager.isRunning {
+                            dismiss()
+                        }
+                    }
+                    .disabled(manager.isRunning)
+                }
+            }
+        }
+    }
+}
+
+struct SaleSyncWebViewContainer: UIViewRepresentable {
+    let webView: WKWebView
+    
+    func makeUIView(context: Context) -> WKWebView {
+        webView
+    }
+    
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
+}
+

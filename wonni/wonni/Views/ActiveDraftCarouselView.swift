@@ -179,68 +179,56 @@ struct DraftsStackIconView: View {
     let cache: CachedImageManager
 
     var body: some View {
-        let recent = Array(drafts.prefix(3))
-        let display = recent.reversed()
-        
+        // Always render a fixed 3-card fan. Slots are ordered back-to-front, so the
+        // newest draft sits on top (front). When there are fewer than 3 committed
+        // drafts the back slots are `nil` and render as placeholder squares.
+        let slotCount = 3
+        let recent = Array(drafts.prefix(slotCount))          // newest first
+        let padCount = slotCount - recent.count
+        let slots: [Item?] = Array(repeating: nil, count: padCount) + recent.reversed().map { Optional($0) }
+
         ZStack {
-            if display.isEmpty {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.gray.opacity(0.35))
-                    .frame(width: 72, height: 72)
-                    .overlay(
-                        Image(systemName: "photo.on.rectangle.angled")
-                            .foregroundColor(.secondary)
-                    )
-            } else {
-                ForEach(Array(display.enumerated()), id: \.element.id) { index, draft in
-                    let count = display.count
-                    let rotation: Double = {
-                        if count <= 1 { return 0 }
-                        let step = 20.0 / Double(count - 1)
-                        return -10.0 + (Double(index) * step)
-                    }()
-                    let xOffset: CGFloat = {
-                        if count <= 1 { return 0 }
-                        let step = 10.0 / CGFloat(count - 1)
-                        return -5.0 + (CGFloat(index) * step)
-                    }()
-                    let yOffset: CGFloat = {
-                        if count <= 1 { return 0 }
-                        let step = 4.0 / CGFloat(count - 1)
-                        return -2.0 + (CGFloat(index) * step)
-                    }()
-                    
-                    Group {
-                        if let assetId = draft.sourceAssetIdentifiers.first {
-                            Group {
-                                if let uiImage = draft.image(for: assetId) {
-                                    Image(uiImage: uiImage)
-                                        .resizable()
-                                        .scaledToFill()
-                                } else {
-                                    PhotoItemView(
-                                        asset: PhotoAsset(identifier: assetId),
-                                        cache: cache,
-                                        imageSize: CGSize(width: 144, height: 144)
-                                    )
-                                }
-                            }
+            ForEach(Array(slots.enumerated()), id: \.offset) { index, draft in
+                let step = 20.0 / Double(slotCount - 1)
+                let rotation = -10.0 + (Double(index) * step)
+                let xOffset = CGFloat(-5.0 + (Double(index) * (10.0 / Double(slotCount - 1))))
+                let yOffset = CGFloat(-2.0 + (Double(index) * (4.0 / Double(slotCount - 1))))
+
+                Group {
+                    if let draft, let assetId = draft.sourceAssetIdentifiers.first {
+                        if let uiImage = draft.image(for: assetId) {
+                            Image(uiImage: uiImage)
+                                .resizable()
+                                .scaledToFill()
                         } else {
-                            Color.gray.opacity(0.35)
+                            PhotoItemView(
+                                asset: PhotoAsset(identifier: assetId),
+                                cache: cache,
+                                imageSize: CGSize(width: 144, height: 144)
+                            )
                         }
-                    }
-                    .frame(width: 72, height: 72)
-                    .cornerRadius(10)
-                    .clipped()
-                    .overlay(
+                    } else {
+                        // Placeholder square for an empty slot
                         RoundedRectangle(cornerRadius: 10)
-                            .stroke(Color.white.opacity(0.9), lineWidth: 1.5)
-                    )
-                    .shadow(color: .black.opacity(0.18), radius: 3, x: 1, y: 2)
-                    .rotationEffect(.degrees(rotation), anchor: .bottom)
-                    .offset(x: xOffset, y: yOffset)
-                    .zIndex(Double(index))
+                            .fill(Color.gray.opacity(0.35))
+                            .overlay(
+                                Image(systemName: "photo")
+                                    .font(.system(size: 18))
+                                    .foregroundColor(.white.opacity(0.6))
+                            )
+                    }
                 }
+                .frame(width: 72, height: 72)
+                .cornerRadius(10)
+                .clipped()
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.white.opacity(0.9), lineWidth: 1.5)
+                )
+                .shadow(color: .black.opacity(0.18), radius: 3, x: 1, y: 2)
+                .rotationEffect(.degrees(rotation), anchor: .bottom)
+                .offset(x: xOffset, y: yOffset)
+                .zIndex(Double(index))
             }
         }
         .frame(width: 82, height: 72)

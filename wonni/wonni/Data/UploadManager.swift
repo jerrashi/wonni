@@ -661,22 +661,35 @@ class UploadManager: ObservableObject {
         try? handler.perform([textReq, classifyReq])
 
         // Prefer OCR text (brand names, model numbers)
-        let topText = textReq.results?
-            .compactMap { $0.topCandidates(1).first }
-            .filter { $0.confidence > 0.7 && $0.string.count > 2 }
-            .first?.string
+        if let topText = textReq.results?
+            .compactMap({ $0.topCandidates(1).first })
+            .filter({ $0.confidence > 0.7 && $0.string.count > 2 })
+            .first?.string, !topText.isEmpty {
+            return topText.capitalized
+        }
 
-        // Fall back to classification category
-        let topCategory = classifyReq.results?
-            .filter { $0.confidence > 0.4 }
-            .prefix(2)
-            .map { $0.identifier }
+        // Fall back to a SINGLE human-readable classification label (e.g. "Butterfly"),
+        // not a concatenation of abstract taxonomy terms ("structure wood person").
+        // Apple recommends filtering VNClassifyImageRequest results by precision/recall rather
+        // than a raw confidence threshold, since the taxonomy is hierarchical; among those that
+        // clear the bar we take the most confident, falling back to the top result overall.
+        let observations = classifyReq.results ?? []
+        guard let best = observations.filter({ $0.hasMinimumRecall(0.01, forPrecision: 0.9) })
+                .max(by: { $0.confidence < $1.confidence })
+                ?? observations.max(by: { $0.confidence < $1.confidence }),
+              best.confidence > 0.4 else {
+            return nil
+        }
+        return humanReadableLabel(best.identifier)
+    }
+
+    /// Turns a Vision taxonomy identifier (lowercase, often underscore-delimited, e.g.
+    /// "hot_air_balloon") into a clean title-cased phrase ("Hot Air Balloon").
+    private nonisolated static func humanReadableLabel(_ identifier: String) -> String {
+        identifier
+            .replacingOccurrences(of: "_", with: " ")
+            .split(separator: " ")
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
             .joined(separator: " ")
-            .trimmingCharacters(in: .whitespaces)
-
-        var parts: [String] = []
-        if let t = topText, !t.isEmpty { parts.append(t) }
-        if let c = topCategory, !c.isEmpty, topText == nil { parts.append(c) }
-        return parts.isEmpty ? nil : parts.joined(separator: " ").capitalized
     }
 }

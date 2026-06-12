@@ -7,8 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1A589EC58F7C4BA78F4A2708 /* SaleRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9C92C11853A41889AB9C925 /* SaleRepository.swift */; };
 		2956025A9AE24C1CB28151E8 /* UploadPillView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00EE85F19AD747589FB21EB0 /* UploadPillView.swift */; };
+		4DE0F3AA27864C66A4EC49AB /* Sale.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7EBEECFD9B24F3D971DDEA2 /* Sale.swift */; };
 		58027310287C4A0F94DF7BCF /* UploadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76A8453ED0904B9D853B98E5 /* UploadManager.swift */; };
+		60A7C95275BB4BCCAA8FA838 /* RecordSaleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */; };
 		6134E14E2FB64DBD007C3979 /* BulkEditSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6134E14D2FB64DBD007C3979 /* BulkEditSheet.swift */; };
 		6134E1502FB76C1A007C3979 /* ProcessProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6134E14F2FB76C1A007C3979 /* ProcessProgressView.swift */; };
 		6134E1532FB77702007C3979 /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = 6134E1522FB77702007C3979 /* FirebaseFunctions */; };
@@ -30,6 +33,7 @@
 		6192AA7D2D7F65DF00EC2EFA /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6192AA6F2D7F65DE00EC2EFA /* CameraView.swift */; };
 		6192AA7E2D7F65DF00EC2EFA /* ThumbnailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6192AA702D7F65DE00EC2EFA /* ThumbnailView.swift */; };
 		61BCCD072D7B9A710037E4B9 /* SearchBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61BCCD062D7B9A710037E4B9 /* SearchBarView.swift */; };
+		61E75A012FC100A000D4B3F1 /* EtsyConnectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61E75A002FC100A000D4B3F1 /* EtsyConnectView.swift */; };
 		61EE00582D763713006063C3 /* wonniApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61EE00572D763713006063C3 /* wonniApp.swift */; };
 		61EE005E2D763717006063C3 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 61EE005D2D763717006063C3 /* Assets.xcassets */; };
 		61EE00612D763717006063C3 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 61EE00602D763717006063C3 /* Preview Assets.xcassets */; };
@@ -38,7 +42,6 @@
 		61EE007D2D778EFA006063C3 /* Listing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61EE007C2D778EFA006063C3 /* Listing.swift */; };
 		61F0F0022FB022A0001C28CE /* IntegrationRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61F0F0012FB022A0001C28CE /* IntegrationRepository.swift */; };
 		61F0F0042FB022A0001C28CE /* CrossPostWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61F0F0032FB022A0001C28CE /* CrossPostWebView.swift */; };
-		61E75A012FC100A000D4B3F1 /* EtsyConnectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61E75A002FC100A000D4B3F1 /* EtsyConnectView.swift */; };
 		61FAA54A2FAA8F80001C28CE /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 61FAA5492FAA8F80001C28CE /* FirebaseAuth */; };
 		61FAA54C2FAA8F80001C28CE /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 61FAA54B2FAA8F80001C28CE /* FirebaseFirestore */; };
 		61FAA54E2FAA8F80001C28CE /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 61FAA54D2FAA8F80001C28CE /* FirebaseStorage */; };
@@ -59,17 +62,20 @@
 		61FAA5882FB022A0001C28CE /* ConversationRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA5892FB022A0001C28CE /* ConversationRepository.swift */; };
 		61FAA58A2FB022A0001C28CE /* ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA58B2FB022A0001C28CE /* ConversationView.swift */; };
 		61FAA58C2FB022A0001C28CE /* SearchRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA58D2FB022A0001C28CE /* SearchRepository.swift */; };
+		9944CB339CA5802F7C51CEEB /* URLExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D58F95FAA23371A58634E74E /* URLExtractor.swift */; };
 		A1B2C3D4E5F6A7B82E9D0001 /* ActiveDraftCarouselView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B82E9D0002 /* ActiveDraftCarouselView.swift */; };
-		AA0011223344556677AABBDD /* CategoryMappingRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0011223344556677AABBCC /* CategoryMappingRepository.swift */; };
 		AA0011223344556677AABBFF /* MercariObservedDataRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0011223344556677AABBEE /* MercariObservedDataRepository.swift */; };
-		4DE0F3AA27864C66A4EC49AB /* Sale.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7EBEECFD9B24F3D971DDEA2 /* Sale.swift */; };
-		1A589EC58F7C4BA78F4A2708 /* SaleRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9C92C11853A41889AB9C925 /* SaleRepository.swift */; };
-		60A7C95275BB4BCCAA8FA838 /* RecordSaleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */; };
+		B02F2E0D8C10F3EFEB9588F2 /* BulkImportPillView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 954511D35EA0839747028ADA /* BulkImportPillView.swift */; };
+		D66414564520B94BD62B1EEE /* BulkImportManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09C400D2D0AB7F825F735BF1 /* BulkImportManager.swift */; };
+		E638B2296070470221FCA204 /* ImportListingSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67BC65BADBDD92E27F2C170A /* ImportListingSheet.swift */; };
 		EC4CE9E74B3D4A44A464E4A6 /* SalesDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */; };
+		FC3EC2E105D97BA997530E74 /* BulkImportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E177FE23B86D196AD7B41F1E /* BulkImportSheet.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		00EE85F19AD747589FB21EB0 /* UploadPillView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadPillView.swift; sourceTree = "<group>"; };
+		09C400D2D0AB7F825F735BF1 /* BulkImportManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BulkImportManager.swift; sourceTree = "<group>"; };
+		209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordSaleSheet.swift; sourceTree = "<group>"; };
 		6134E14C2FB3AF08007C3979 /* wonni.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = wonni.entitlements; sourceTree = "<group>"; };
 		6134E14D2FB64DBD007C3979 /* BulkEditSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkEditSheet.swift; sourceTree = "<group>"; };
 		6134E14F2FB76C1A007C3979 /* ProcessProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessProgressView.swift; sourceTree = "<group>"; };
@@ -92,6 +98,7 @@
 		6192AA702D7F65DE00EC2EFA /* ThumbnailView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ThumbnailView.swift; sourceTree = "<group>"; };
 		6194DC542D7F675E0093079D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		61BCCD062D7B9A710037E4B9 /* SearchBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchBarView.swift; sourceTree = "<group>"; };
+		61E75A002FC100A000D4B3F1 /* EtsyConnectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EtsyConnectView.swift; sourceTree = "<group>"; };
 		61EE00542D763713006063C3 /* wonni.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = wonni.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		61EE00572D763713006063C3 /* wonniApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = wonniApp.swift; sourceTree = "<group>"; };
 		61EE005D2D763717006063C3 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -102,7 +109,6 @@
 		61EE007C2D778EFA006063C3 /* Listing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Listing.swift; sourceTree = "<group>"; };
 		61F0F0012FB022A0001C28CE /* IntegrationRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegrationRepository.swift; sourceTree = "<group>"; };
 		61F0F0032FB022A0001C28CE /* CrossPostWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossPostWebView.swift; sourceTree = "<group>"; };
-		61E75A002FC100A000D4B3F1 /* EtsyConnectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EtsyConnectView.swift; sourceTree = "<group>"; };
 		61FAA54F2FAA9041001C28CE /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		61FAA5622FAE216D001C28CE /* CatalogItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatalogItem.swift; sourceTree = "<group>"; };
 		61FAA5632FAE216D001C28CE /* InventoryUnit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InventoryUnit.swift; sourceTree = "<group>"; };
@@ -119,14 +125,16 @@
 		61FAA5892FB022A0001C28CE /* ConversationRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationRepository.swift; sourceTree = "<group>"; };
 		61FAA58B2FB022A0001C28CE /* ConversationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationView.swift; sourceTree = "<group>"; };
 		61FAA58D2FB022A0001C28CE /* SearchRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchRepository.swift; sourceTree = "<group>"; };
+		67BC65BADBDD92E27F2C170A /* ImportListingSheet.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ImportListingSheet.swift; sourceTree = "<group>"; };
 		76A8453ED0904B9D853B98E5 /* UploadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadManager.swift; sourceTree = "<group>"; };
+		93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalesDashboardView.swift; sourceTree = "<group>"; };
+		954511D35EA0839747028ADA /* BulkImportPillView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BulkImportPillView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B82E9D0002 /* ActiveDraftCarouselView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveDraftCarouselView.swift; sourceTree = "<group>"; };
-		AA0011223344556677AABBCC /* CategoryMappingRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryMappingRepository.swift; sourceTree = "<group>"; };
 		AA0011223344556677AABBEE /* MercariObservedDataRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MercariObservedDataRepository.swift; sourceTree = "<group>"; };
+		D58F95FAA23371A58634E74E /* URLExtractor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = URLExtractor.swift; sourceTree = "<group>"; };
+		E177FE23B86D196AD7B41F1E /* BulkImportSheet.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BulkImportSheet.swift; sourceTree = "<group>"; };
 		E7EBEECFD9B24F3D971DDEA2 /* Sale.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sale.swift; sourceTree = "<group>"; };
 		E9C92C11853A41889AB9C925 /* SaleRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SaleRepository.swift; sourceTree = "<group>"; };
-		209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordSaleSheet.swift; sourceTree = "<group>"; };
-		93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalesDashboardView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -238,6 +246,9 @@
 				61E75A002FC100A000D4B3F1 /* EtsyConnectView.swift */,
 				209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */,
 				93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */,
+				67BC65BADBDD92E27F2C170A /* ImportListingSheet.swift */,
+				E177FE23B86D196AD7B41F1E /* BulkImportSheet.swift */,
+				954511D35EA0839747028ADA /* BulkImportPillView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -266,9 +277,10 @@
 				76A8453ED0904B9D853B98E5 /* UploadManager.swift */,
 				61FAA5802FAF22A0001C28CE /* AuthManager.swift */,
 				61F0F0012FB022A0001C28CE /* IntegrationRepository.swift */,
-				AA0011223344556677AABBCC /* CategoryMappingRepository.swift */,
 				AA0011223344556677AABBEE /* MercariObservedDataRepository.swift */,
 				E9C92C11853A41889AB9C925 /* SaleRepository.swift */,
+				D58F95FAA23371A58634E74E /* URLExtractor.swift */,
+				09C400D2D0AB7F825F735BF1 /* BulkImportManager.swift */,
 			);
 			path = Data;
 			sourceTree = "<group>";
@@ -392,12 +404,16 @@
 				61F0F0022FB022A0001C28CE /* IntegrationRepository.swift in Sources */,
 				61F0F0042FB022A0001C28CE /* CrossPostWebView.swift in Sources */,
 				61E75A012FC100A000D4B3F1 /* EtsyConnectView.swift in Sources */,
-				AA0011223344556677AABBDD /* CategoryMappingRepository.swift in Sources */,
 				AA0011223344556677AABBFF /* MercariObservedDataRepository.swift in Sources */,
 				4DE0F3AA27864C66A4EC49AB /* Sale.swift in Sources */,
 				1A589EC58F7C4BA78F4A2708 /* SaleRepository.swift in Sources */,
 				60A7C95275BB4BCCAA8FA838 /* RecordSaleSheet.swift in Sources */,
 				EC4CE9E74B3D4A44A464E4A6 /* SalesDashboardView.swift in Sources */,
+				9944CB339CA5802F7C51CEEB /* URLExtractor.swift in Sources */,
+				E638B2296070470221FCA204 /* ImportListingSheet.swift in Sources */,
+				D66414564520B94BD62B1EEE /* BulkImportManager.swift in Sources */,
+				FC3EC2E105D97BA997530E74 /* BulkImportSheet.swift in Sources */,
+				B02F2E0D8C10F3EFEB9588F2 /* BulkImportPillView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

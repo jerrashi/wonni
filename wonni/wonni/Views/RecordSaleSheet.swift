@@ -152,8 +152,8 @@ struct RecordSaleSheet: View {
             // Hidden Mercari web loader — invisible, runs in background
             .background {
                 if let id = mercariListingId {
-                    MercariTransactionLoader(listingId: id) { value in
-                        takeHome = value
+                    MercariTransactionLoader(mercariId: id) { data in
+                        takeHome = data.takeHome
                         isFetchingTakeHome = false
                         fetchError = nil
                     } onError: { err in
@@ -278,9 +278,7 @@ struct RecordSaleSheet: View {
             let _ = try await SaleRepository.shared.recordSale(sale)
 
             if let listingId = listing.id {
-                try? await Functions.functions()
-                    .httpsCallable("decrementAndCascade")
-                    .call(["listingId": listingId, "platform": platform])
+                _ = try? await callCloudFunction("decrementAndCascade", ["listingId": listingId, "platform": platform])
             }
 
             let currentQty = listing.quantity ?? 1

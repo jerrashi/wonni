@@ -228,17 +228,42 @@ public class IntegrationRepository: ObservableObject {
         
         let functions = Functions.functions()
         for platform in platforms {
-            if platform == "ebay" {
-                do {
-                    let result = try await functions.httpsCallable("ebayCreateListing").call(["listingId": listingId])
-                    print("[IntegrationRepository] ebayCreateListing succeeded: \(result.data)")
-                } catch {
-                    print("[IntegrationRepository] ebayCreateListing failed: \(error.localizedDescription)")
-                    throw error
-                }
-            } else {
+            // Map each API-based platform to its Cloud Function. Mercari/Facebook are not
+            // API-driven (they post via in-app web autofill), so they're skipped here.
+            let fn: String
+            switch platform {
+            case "ebay": fn = "ebayCreateListing"
+            case "etsy": fn = "etsyCreateListing"
+            default:
                 print("[IntegrationRepository] Stub trigger for platform: \(platform)")
+                continue
+            }
+            do {
+                let result = try await functions.httpsCallable(fn).call(["listingId": listingId])
+                print("[IntegrationRepository] \(fn) succeeded: \(result.data)")
+            } catch {
+                print("[IntegrationRepository] \(fn) failed: \(error.localizedDescription)")
+                throw error
             }
         }
     }
+}
+
+/// Fire-and-forget invocation of a Firebase callable function.
+///
+/// `HTTPSCallableResult` is not `Sendable`, so awaiting `.call(...)` and bringing
+/// the result back into an actor-isolated context (e.g. a `Task {}` on the main
+/// actor) is an error in Swift 6. This `nonisolated` helper consumes the result
+/// locally and only ever exposes `Sendable` types (`[String: String]` in, `Bool`
+/// out), so the non-Sendable value never crosses an isolation boundary.
+@discardableResult
+func callCloudFunction(_ name: String, _ data: [String: String] = [:]) async throws -> Bool {
+    _ = try await Functions.functions().httpsCallable(name).call(data)
+    return true
+}
+
+@discardableResult
+func callCloudFunction(_ name: String, _ data: [String: Any]) async throws -> Bool {
+    _ = try await Functions.functions().httpsCallable(name).call(data)
+    return true
 }

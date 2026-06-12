@@ -438,7 +438,7 @@ struct BulkEditSheet: View {
 
                 for id in ebayIds {
                     Task {
-                        try? await Functions.functions().httpsCallable("ebayUpdateListing").call(["listingId": id])
+                        _ = try? await callCloudFunction("ebayUpdateListing", ["listingId": id])
                     }
                 }
 
@@ -478,20 +478,42 @@ struct DraftBulkEditSheet: View {
     @State private var descriptionPrepend: String = ""
     @State private var descriptionAppend: String = ""
 
+    // Used when every selected draft is empty: set the title/description directly on all of them
+    // (prepend/append is meaningless with no existing text).
+    @State private var titleSet: String = ""
+    @State private var descriptionSet: String = ""
+
     @State private var selectedCondition: ItemCondition? = nil
     @State private var selectedShipping: BulkEditSheet.ShippingPolicyMode = .unchanged
 
     @FocusState private var focusedField: BulkEditSheet.FocusField?
 
+    /// A draft counts as "empty" when it has no user-entered or AI title. The offline vision
+    /// identifier output (`visionTitle`) is intentionally treated as empty — it's a placeholder,
+    /// not a real title — so drafts that only have a vision guess still use the set-directly mode.
+    private func hasMeaningfulTitle(_ item: Item) -> Bool {
+        let t = (item.userEditedTitle ?? item.aiSuggestedTitle ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return !t.isEmpty
+    }
+    private var allDraftsEmpty: Bool {
+        !items.isEmpty && items.allSatisfy { !hasMeaningfulTitle($0) }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    dynamicTextRow(prepend: $titlePrepend, label: "Title", append: $titleAppend,
-                                   focus1: .titlePrepend, focus2: .titleAppend)
-                    dynamicTextRow(prepend: $descriptionPrepend, label: "Desc.", append: $descriptionAppend,
-                                   focus1: .descPrepend, focus2: .descAppend)
-                } header: { Text("Text Modifications") }
+                    if allDraftsEmpty {
+                        setTextRow(label: "Title", placeholder: "Title for all", text: $titleSet, focus: .titlePrepend)
+                        setTextRow(label: "Desc.", placeholder: "Description for all", text: $descriptionSet, focus: .descPrepend)
+                    } else {
+                        dynamicTextRow(prepend: $titlePrepend, label: "Title", append: $titleAppend,
+                                       focus1: .titlePrepend, focus2: .titleAppend)
+                        dynamicTextRow(prepend: $descriptionPrepend, label: "Desc.", append: $descriptionAppend,
+                                       focus1: .descPrepend, focus2: .descAppend)
+                    }
+                } header: { Text(allDraftsEmpty ? "Title & Description" : "Text Modifications") }
 
                 Section {
                     VStack(spacing: 12) {
@@ -589,6 +611,18 @@ struct DraftBulkEditSheet: View {
         }
     }
 
+    private func setTextRow(
+        label: String, placeholder: String, text: Binding<String>, focus: BulkEditSheet.FocusField
+    ) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            Text(label).font(.subheadline).fontWeight(.medium).foregroundStyle(.secondary).fixedSize()
+            TextField(placeholder, text: text, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .focused($focusedField, equals: focus)
+        }
+        .padding(.vertical, 4)
+    }
+
     @ViewBuilder
     private func dynamicTextRow(
         prepend: Binding<String>, label: String, append: Binding<String>,
@@ -609,28 +643,41 @@ struct DraftBulkEditSheet: View {
     }
 
     private var hasChanges: Bool {
-        (priceAdjustmentMode != .none && priceAdjustmentValue != nil) ||
-        !titlePrepend.isEmpty || !titleAppend.isEmpty ||
-        !descriptionPrepend.isEmpty || !descriptionAppend.isEmpty ||
-        selectedCondition != nil || selectedShipping != .unchanged
+        let textChanged = allDraftsEmpty
+            ? (!titleSet.isEmpty || !descriptionSet.isEmpty)
+            : (!titlePrepend.isEmpty || !titleAppend.isEmpty ||
+               !descriptionPrepend.isEmpty || !descriptionAppend.isEmpty)
+        return (priceAdjustmentMode != .none && priceAdjustmentValue != nil) ||
+            textChanged ||
+            selectedCondition != nil || selectedShipping != .unchanged
     }
 
     private func applyBulkEdit() {
+        let setMode = allDraftsEmpty
         for item in items {
-            let currentTitle = item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? ""
-            var newTitle = currentTitle
-            if !titlePrepend.isEmpty { newTitle = titlePrepend + newTitle }
-            if !titleAppend.isEmpty { newTitle = newTitle + titleAppend }
-            if newTitle != currentTitle {
-                item.userEditedTitle = newTitle.isEmpty ? nil : String(newTitle.prefix(140))
-            }
+            if setMode {
+                // Empty drafts: set the title/description directly on every selected draft.
+                let t = titleSet.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !t.isEmpty { item.userEditedTitle = String(t.prefix(140)) }
+                if !descriptionSet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    item.userEditedDescription = descriptionSet
+                }
+            } else {
+                let currentTitle = item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? ""
+                var newTitle = currentTitle
+                if !titlePrepend.isEmpty { newTitle = titlePrepend + newTitle }
+                if !titleAppend.isEmpty { newTitle = newTitle + titleAppend }
+                if newTitle != currentTitle {
+                    item.userEditedTitle = newTitle.isEmpty ? nil : String(newTitle.prefix(140))
+                }
 
-            let currentDesc = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
-            var newDesc = currentDesc
-            if !descriptionPrepend.isEmpty { newDesc = descriptionPrepend + newDesc }
-            if !descriptionAppend.isEmpty { newDesc = newDesc + descriptionAppend }
-            if newDesc != currentDesc {
-                item.userEditedDescription = newDesc.isEmpty ? nil : newDesc
+                let currentDesc = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
+                var newDesc = currentDesc
+                if !descriptionPrepend.isEmpty { newDesc = descriptionPrepend + newDesc }
+                if !descriptionAppend.isEmpty { newDesc = newDesc + descriptionAppend }
+                if newDesc != currentDesc {
+                    item.userEditedDescription = newDesc.isEmpty ? nil : newDesc
+                }
             }
 
             if let val = priceAdjustmentValue, priceAdjustmentMode != .none {

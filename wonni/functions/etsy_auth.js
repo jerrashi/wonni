@@ -79,43 +79,57 @@ async function exchangeCodeForToken(clientId, clientSecret, code, verifier, redi
 
 /**
  * Retrieves the user's Etsy Shop details.
+ * PKCE (public-client) apps use the keystring as x-api-key. Confidential apps require the
+ * shared secret. We try the keystring first (correct for PKCE flows), then fall back to the
+ * shared secret. Throws if neither works so etsyExchangeToken fails loudly instead of saving
+ * an empty shopId that breaks every subsequent listing call.
  */
-async function fetchEtsyShopDetails(accessToken, clientId, userId) {
-  const options = {
-    hostname: "openapi.etsy.com",
-    path: `/v3/application/users/${userId}/shops`,
-    method: "GET",
-    headers: {
-      "x-api-key": clientId,
-      "Authorization": `Bearer ${accessToken}`,
-      "Content-Type": "application/json"
-    }
-  };
-
+async function fetchEtsyShopDetails(accessToken, clientId, userId, clientSecret) {
   console.log(`[etsy_auth] Fetching shop details for userId=${userId} from Etsy`);
-  const response = await makeHttpRequest(options);
-  if (response.statusCode === 200) {
-    try {
-      const data = JSON.parse(response.body);
-      if (data.results && data.results.length > 0) {
-        const shop = data.results[0];
-        console.log(`[etsy_auth] Found shop: ${shop.shop_name} (ID: ${shop.shop_id})`);
-        return {
-          shopId: String(shop.shop_id),
-          shopName: shop.shop_name
-        };
+
+  // Try each candidate key in order: keystring first (PKCE/public apps), then shared secret.
+  const candidates = [clientId];
+  if (clientSecret && clientSecret !== clientId) candidates.push(clientSecret);
+
+  for (const apiKey of candidates) {
+    const options = {
+      hostname: "openapi.etsy.com",
+      path: `/v3/application/users/${userId}/shops`,
+      method: "GET",
+      headers: {
+        "x-api-key": apiKey,
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    };
+
+    const response = await makeHttpRequest(options);
+    if (response.statusCode === 200) {
+      try {
+        const data = JSON.parse(response.body);
+        if (data.results && data.results.length > 0) {
+          const shop = data.results[0];
+          console.log(`[etsy_auth] Found shop: ${shop.shop_name} (ID: ${shop.shop_id})`);
+          return { shopId: String(shop.shop_id), shopName: shop.shop_name };
+        }
+        console.warn("[etsy_auth] Shop list returned 0 results — user has no Etsy shop");
+        throw new Error("No Etsy shop found for this account. Make sure you have an active Etsy seller shop.");
+      } catch (e) {
+        if (e.message.includes("No Etsy shop")) throw e;
+        console.error("[etsy_auth] Error parsing shop details response:", e.message);
       }
-    } catch (e) {
-      console.error("[etsy_auth] Error parsing shop details response:", e.message);
+    } else if (response.statusCode === 403) {
+      console.warn(`[etsy_auth] 403 with apiKey candidate, will try next if available: ${response.body}`);
+    } else {
+      console.warn(`[etsy_auth] Failed to fetch shop details (${response.statusCode}): ${response.body}`);
+      break;
     }
-  } else {
-    console.warn(`[etsy_auth] Failed to fetch shop details (${response.statusCode}): ${response.body}`);
   }
-  
-  return {
-    shopId: "",
-    shopName: `Etsy User ${userId}`
-  };
+
+  throw new Error(
+    "Could not retrieve your Etsy shop ID. " +
+    "Make sure you have an active seller shop and that the Wonni app has the correct API credentials."
+  );
 }
 
 /**
@@ -192,7 +206,7 @@ exports.etsyExchangeToken = onCall(
       }
 
       // Fetch shop details to display correct shop name in settings
-      const shopDetails = await fetchEtsyShopDetails(accessToken, clientId, userId);
+      const shopDetails = await fetchEtsyShopDetails(accessToken, clientId, userId, clientSecret);
 
       // Persist to Firestore
       const db = admin.firestore();

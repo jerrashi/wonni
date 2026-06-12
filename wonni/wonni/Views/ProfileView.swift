@@ -38,16 +38,23 @@ struct ProfileView: View {
     @State private var selectedSort: ListingSortOption = .newest
     @State private var crossPostErrorMessage: String? = nil
     @State private var showCrossPostError = false
+    @State private var showImportSheet = false
+    @State private var showBulkImportSheet = false
     
     // Web Autofill Queue for non-API cross-posting (Mercari, Facebook)
     @State private var webAutofillQueue: [CrossPostJob] = []
     @State private var activeAutofillJob: CrossPostJob? = nil
+    @State private var activeMercariJob: CrossPostJob? = nil
 
     @State private var profile: UserPublicProfile?
     @State private var showMercariProfileSync = false
     @State private var showSalesDashboard = false
     @State private var listingToRecordSale: UserListing?
     @State private var saleSummary: (count: Int, takeHome: Double) = (0, 0)
+    @State private var soldOutListings: [UserListing] = []
+    @State private var listingToRestock: UserListing?
+    @State private var isSoldOutExpanded = false
+    @State private var listingToMarkSoldOut: UserListing?
 
     private var user: FirebaseAuth.User? { authManager.currentUser }
 
@@ -111,12 +118,22 @@ struct ProfileView: View {
                 if isLoading {
                     ProgressView().frame(maxWidth: .infinity, alignment: .center).padding(.top, 60)
                         .listRowBackground(Color.clear)
-                } else if listings.isEmpty {
+                } else if listings.isEmpty && soldOutListings.isEmpty {
                     emptyState
                         .listRowBackground(Color.clear)
                 } else {
-                    listingsList
+                    if !listings.isEmpty {
+                        listingsList
+                    }
+                    if !soldOutListings.isEmpty {
+                        soldOutSection
+                    }
                 }
+            }
+            .refreshable {
+                await loadProfile()
+                await loadListings()
+                await loadSaleSummary()
             }
             .listStyle(.plain)
             .environment(\.editMode, $editMode)
@@ -276,6 +293,12 @@ struct ProfileView: View {
                     }
                 }
             }
+            .sheet(isPresented: $showImportSheet) {
+                ImportListingSheet()
+            }
+            .sheet(isPresented: $showBulkImportSheet) {
+                BulkImportSheet()
+            }
             .sheet(isPresented: $showBulkPost) {
                 let selectedListingsArray = listings.filter { selectedListings.contains($0.id ?? "") }
                 BulkCrossPostSheet(listingsToPost: selectedListingsArray) { platforms in
@@ -286,23 +309,61 @@ struct ProfileView: View {
             .sheet(item: $activeAutofillJob, onDismiss: {
                 checkAndStartNextWebJob()
             }) { job in
-                if job.platform == "mercari" {
-                    MercariAutoPosterView(job: job)
-                } else {
-                    CrossPostContainerView(
-                        platformName: "Facebook Marketplace",
-                        listingTitle: job.title,
-                        listingDescription: job.description,
-                        listingPrice: job.price
-                    )
-                }
+                CrossPostContainerView(
+                    platformName: "Facebook Marketplace",
+                    listingTitle: job.title,
+                    listingDescription: job.description,
+                    listingPrice: job.price
+                )
             }
             .task {
                 await loadListings()
                 await loadProfile()
                 await loadSaleSummary()
             }
+            .sheet(item: $listingToRestock) { listing in
+                RestockSheet(listing: listing) { restockedQty in
+                    Task {
+                        guard let id = listing.id else { return }
+                        try? await ListingRepository.shared.restockListing(id: id, quantity: restockedQty)
+                        _ = try? await callCloudFunction("restockAndCascade", ["listingId": id, "quantity": restockedQty])
+                        soldOutListings.removeAll { $0.id == id }
+                        await loadListings()
+                    }
+                }
+            }
+            .alert("Mark as Sold Out?", isPresented: Binding(
+                get: { listingToMarkSoldOut != nil },
+                set: { if !$0 { listingToMarkSoldOut = nil } }
+            ), presenting: listingToMarkSoldOut) { listing in
+                Button("Mark Sold Out", role: .destructive) {
+                    Task {
+                        guard let id = listing.id else { return }
+                        _ = try? await callCloudFunction("markSoldOutAndCascade", ["listingId": id])
+                        listings.removeAll { $0.id == id }
+                        await loadListings()
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { listing in
+                let title = listing.customTitle ?? "this listing"
+                let hasCrossPosts = listing.crossPostStatus?.values.contains("posted") == true
+                let body = hasCrossPosts
+                    ? "\"\(title)\" will be marked sold out and deactivated on all connected platforms."
+                    : "\"\(title)\" will be marked as sold out."
+                Text(body)
+            }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let job = activeMercariJob {
+                MercariAutoPosterView(job: job) {
+                    activeMercariJob = nil
+                    checkAndStartNextWebJob()
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: activeMercariJob?.id)
     }
     private func loadProfile() async {
         guard let uid = user?.uid else { return }
@@ -426,12 +487,40 @@ struct ProfileView: View {
             .listRowBackground(Color.clear)
         }
 
-        Text("\(filteredListings.count) Listing\(filteredListings.count == 1 ? "" : "s")")
-            .font(.title2.weight(.medium))
-            .foregroundStyle(.primary)
-            .padding(.top, 4)
-            .padding(.bottom, 4)
-            .listRowSeparator(.hidden)
+        HStack {
+            Text("\(filteredListings.count) Listing\(filteredListings.count == 1 ? "" : "s")")
+                .font(.title2.weight(.medium))
+                .foregroundStyle(.primary)
+            Spacer()
+            Menu {
+                Button {
+                    showImportSheet = true
+                } label: {
+                    Label("Single Item URL", systemImage: "link")
+                }
+                
+                Button {
+                    showBulkImportSheet = true
+                } label: {
+                    Label("Bulk from Profile", systemImage: "square.grid.2x2.fill")
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "square.and.arrow.down")
+                    Text("Import")
+                }
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.accentColor.opacity(0.12))
+                .foregroundStyle(Color.accentColor)
+                .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.top, 4)
+        .padding(.bottom, 4)
+        .listRowSeparator(.hidden)
 
         ForEach(filteredListings) { listing in
             NavigationLink(destination: ListingDetailView(listing: listing)) {
@@ -455,6 +544,71 @@ struct ProfileView: View {
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }
+                Button {
+                    listingToMarkSoldOut = listing
+                } label: {
+                    Label("Sold Out", systemImage: "xmark.circle")
+                }
+                .tint(.orange)
+            }
+        }
+
+    }
+
+    @ViewBuilder private var soldOutSection: some View {
+        Button {
+            withAnimation { isSoldOutExpanded.toggle() }
+        } label: {
+            HStack {
+                Label("\(soldOutListings.count) Sold Out", systemImage: "archivebox")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Image(systemName: isSoldOutExpanded ? "chevron.up" : "chevron.down")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .buttonStyle(.plain)
+        .listRowSeparator(.hidden)
+        .padding(.top, 8)
+
+        if isSoldOutExpanded {
+            ForEach(soldOutListings) { listing in
+                HStack(spacing: 12) {
+                    if let path = listing.coverPhotoPath {
+                        StorageImage(path: path)
+                            .frame(width: 44, height: 44)
+                            .cornerRadius(6)
+                            .clipped()
+                    } else {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color(.systemGray5))
+                            .frame(width: 44, height: 44)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(listing.customTitle ?? "Untitled")
+                            .font(.subheadline)
+                            .lineLimit(1)
+                        Text(listing.price.map { "$\(String(format: "%.2f", $0))" } ?? "")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button {
+                        listingToRestock = listing
+                    } label: {
+                        Text("Restock")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.accentColor.opacity(0.12))
+                            .foregroundStyle(Color.accentColor)
+                            .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .listRowSeparator(.hidden)
             }
         }
     }
@@ -476,7 +630,10 @@ struct ProfileView: View {
         isLoading = true
         defer { isLoading = false }
         do {
-            listings = try await ListingRepository.shared.fetchActiveListings()
+            async let active = ListingRepository.shared.fetchActiveListings()
+            async let sold = ListingRepository.shared.fetchSoldListings()
+            listings = try await active
+            soldOutListings = (try? await sold) ?? []
         } catch {
             print("[ProfileView] Failed to load listings: \(error)")
         }
@@ -565,10 +722,14 @@ struct ProfileView: View {
     }
     
     private func checkAndStartNextWebJob() {
-        guard activeAutofillJob == nil else { return }
+        guard activeAutofillJob == nil, activeMercariJob == nil else { return }
         if !webAutofillQueue.isEmpty {
             let nextJob = webAutofillQueue.removeFirst()
-            activeAutofillJob = nextJob
+            if nextJob.platform == "mercari" {
+                activeMercariJob = nextJob
+            } else {
+                activeAutofillJob = nextJob
+            }
         } else {
             Task { await loadListings() }
         }
@@ -799,14 +960,24 @@ struct EditListingSheet: View {
     @State private var mercariLinkError: String?
     @State private var showMercariSync = false
     @State private var showMercariEdit = false
-    @State private var showMercariUpdatePrompt = false
+    @State private var applyEditsToMercari = true
     @State private var showMercariAutoEdit = false
     @State private var pendingOnSaveJobs: [CrossPostJob] = []
     @State private var showShippingProfileAlert = false
     @State private var reconnectSession: ASWebAuthenticationSession?
     @State private var reconnectAnchor = WebAuthPresentationAnchor()
     @State private var showMercariReconnect = false
-    
+    /// Set when the user unlinks Mercari in this edit session. The change is kept local until
+    /// "Save" so cancelling discards it; on save the Mercari fields are deleted from Firestore.
+    @State private var mercariCleared = false
+    @State private var showUnlinkMercariConfirm = false
+
+    // Mercari ID inline editing (Feature 4)
+    @State private var isEditingMercariId = false
+    @State private var mercariIdDraft: String = ""
+    @State private var showDeleteMercariConfirm = false
+    @State private var isSavingMercariId = false
+
     // Photo Editing
     @State private var editPhotos: [EditPhotoItem]
     @State private var isSelectionMode = false
@@ -843,213 +1014,22 @@ struct EditListingSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text("Photos").font(.headline)
-                            Spacer()
-                            if !editPhotos.isEmpty {
-                                if isSelectionMode {
-                                    HStack(spacing: 12) {
-                                        Button("Delete") {
-                                            for id in selectedPhotos {
-                                                editPhotos.removeAll(where: { $0.id == id })
-                                            }
-                                            selectedPhotos.removeAll()
-                                            isSelectionMode = false
-                                        }
-                                        .foregroundColor(.red)
-                                        .disabled(selectedPhotos.isEmpty)
-                                        
-                                        Button("Cancel") {
-                                            isSelectionMode = false
-                                            selectedPhotos.removeAll()
-                                        }
-                                    }
-                                } else {
-                                    Button("Select") {
-                                        isSelectionMode = true
-                                        selectedPhotos.removeAll()
-                                    }
-                                }
-                            }
-                        }
-                        
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 12) {
-                                ForEach(editPhotos) { item in
-                                    ZStack(alignment: .topTrailing) {
-                                        Group {
-                                            switch item {
-                                            case .existing(let path):
-                                                StorageImage(path: path)
-                                            case .new(_, let image):
-                                                Image(uiImage: image).resizable().scaledToFill()
-                                            }
-                                        }
-                                        .frame(width: 80, height: 80)
-                                        .cornerRadius(8)
-                                        .clipped()
-                                        .opacity(selectedPhotos.contains(item.id) ? 0.6 : 1.0)
-                                        .onDrag({
-                                            if !isSelectionMode {
-                                                draggedPhotoId = item.id
-                                                return NSItemProvider(object: item.id as NSString)
-                                            }
-                                            return NSItemProvider()
-                                        }, preview: {
-                                            Group {
-                                                switch item {
-                                                case .existing(let path):
-                                                    StorageImage(path: path)
-                                                case .new(_, let image):
-                                                    Image(uiImage: image).resizable().scaledToFill()
-                                                }
-                                            }
-                                            .frame(width: 80, height: 80)
-                                            .cornerRadius(8)
-                                            .clipped()
-                                        })
-                                        .onDrop(of: [.text], delegate: EditPhotoDropDelegate(
-                                            item: item,
-                                            photos: $editPhotos,
-                                            draggedPhotoId: $draggedPhotoId
-                                        ))
-                                        
-                                        if isSelectionMode {
-                                            Image(systemName: selectedPhotos.contains(item.id) ? "checkmark.circle.fill" : "circle")
-                                                .foregroundColor(selectedPhotos.contains(item.id) ? .blue : .white)
-                                                .background(Circle().fill(Color.black.opacity(0.4)))
-                                                .padding(4)
-                                        }
-                                    }
-                                    .onTapGesture {
-                                        if isSelectionMode {
-                                            if selectedPhotos.contains(item.id) {
-                                                selectedPhotos.remove(item.id)
-                                            } else {
-                                                selectedPhotos.insert(item.id)
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                                if !isSelectionMode {
-                                    PhotosPicker(selection: $newPhotosItems, matching: .images) {
-                                        VStack {
-                                            Image(systemName: "plus.circle").font(.title2)
-                                            Text("Add Photo").font(.caption2)
-                                        }
-                                        .foregroundColor(.accentColor)
-                                        .frame(width: 80, height: 80)
-                                        .background(Color(.systemGray6))
-                                        .cornerRadius(8)
-                                    }
-                                    .onChange(of: newPhotosItems) { _, newItems in
-                                        Task {
-                                            for phItem in newItems {
-                                                if let data = try? await phItem.loadTransferable(type: Data.self),
-                                                   let uiImage = UIImage(data: data) {
-                                                    editPhotos.append(.new(id: UUID().uuidString, image: uiImage))
-                                                }
-                                            }
-                                            newPhotosItems = []
-                                        }
-                                    }
-                                }
-                            }
-                            .padding(.vertical, 4)
-                        }
+                if linkedMercariId != nil {
+                    Section {
+                        Toggle("Apply edits to Mercari", isOn: $applyEditsToMercari)
+                            .tint(.accentColor)
                     }
                 }
-                
-                Section("Details") {
-                    TextField("Title", text: $title)
-                    TextField("Description", text: $description, axis: .vertical)
-                        .lineLimit(3...6)
-                    Picker("Condition", selection: $condition) {
-                        Text("Select Condition").tag(ItemCondition?.none)
-                        ForEach(ItemCondition.allCases, id: \.self) { c in
-                            Text(c.displayName).tag(ItemCondition?.some(c))
-                        }
-                    }
-                    TextField("Brand", text: $brand)
-                    TextField("Category", text: $category)
-                }
-                Section("Price & Quantity") {
-                    HStack {
-                        Text("$")
-                        TextField("0.00", value: $price, format: .number)
-                            .keyboardType(.decimalPad)
-                    }
-                    Stepper("Quantity: \(quantity)", value: $quantity, in: 1...999)
-                }
-                Section("Shipping") {
-                    Toggle("Free Shipping (Seller Pays)", isOn: $isFreeShipping)
-                    HStack {
-                        Text("Weight (lbs)")
-                        Spacer()
-                        TextField("0.0", value: $weightLbs, format: .number)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    HStack {
-                        Text("L (in)")
-                        TextField("0", value: $lengthIn, format: .number).keyboardType(.decimalPad).frame(maxWidth: 50)
-                        Spacer()
-                        Text("W")
-                        TextField("0", value: $widthIn, format: .number).keyboardType(.decimalPad).frame(maxWidth: 50)
-                        Spacer()
-                        Text("H")
-                        TextField("0", value: $heightIn, format: .number).keyboardType(.decimalPad).frame(maxWidth: 50)
-                    }
-                }
-                Section("Marketplaces") {
-                    if integrationRepo.integrations.isEmpty {
-                        Text("No integrations available. Link them in settings.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(integrationRepo.integrations) { integration in
-                            let isAPI = integration.platform == "ebay" || integration.platform == "etsy"
-                            Toggle(isOn: Binding(
-                                get: { selectedPlatforms.contains(integration.platform) },
-                                set: { isSelected in
-                                    if isSelected {
-                                        if isAPI && SellingSettingsRepository.shared.settings?.defaultLocation.postalCode.isEmpty != false {
-                                            platformToEnableAfterAddressSetup = integration.platform
-                                            showAddressSetupSheet = true
-                                        } else {
-                                            selectedPlatforms.insert(integration.platform)
-                                        }
-                                    } else {
-                                        selectedPlatforms.remove(integration.platform)
-                                    }
-                                }
-                            )) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(platformDisplayName(integration.platform))
-                                    if isAPI {
-                                        Text(integration.isConnected ? "Connected" : "Not connected (Link in settings)")
-                                            .font(.caption)
-                                            .foregroundStyle(integration.isConnected ? .green : .secondary)
-                                    } else {
-                                        Text("Autofill integration")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                            .disabled(isAPI && !integration.isConnected)
-                        }
-                    }
-                }
-
+                photosSection
+                detailsSection
+                shippingSection
+                marketplacesSection
                 crossPostStatusSection
             }
             .task {
                 await integrationRepo.loadIntegrations()
                 await SellingSettingsRepository.shared.loadSettings()
+                await clearStaleMercariPending()
             }
             .navigationTitle("Edit Listing")
             .navigationBarTitleDisplayMode(.inline)
@@ -1060,9 +1040,16 @@ struct EditListingSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     if isSaving {
                         ProgressView()
-                    } else {
+                    } else if hasChanges {
                         Button("Save") {
-                            Task { await saveListing() }
+                            // Clearing the Mercari ID requires a confirmation before saving.
+                            if isEditingMercariId
+                                && mercariIdDraft.trimmingCharacters(in: .whitespaces).isEmpty
+                                && linkedMercariId != nil {
+                                showDeleteMercariConfirm = true
+                            } else {
+                                Task { await saveListing() }
+                            }
                         }
                         .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
@@ -1104,11 +1091,21 @@ struct EditListingSheet: View {
                     }
                 }
             }
-            .alert("Update Mercari Listing?", isPresented: $showMercariUpdatePrompt) {
-                Button("Update Mercari") { showMercariAutoEdit = true }
-                Button("Not now", role: .cancel) { onSave(pendingOnSaveJobs); dismiss() }
+            .confirmationDialog("Unlink Mercari listing?", isPresented: $showUnlinkMercariConfirm, titleVisibility: .visible) {
+                Button("Unlink", role: .destructive) { clearMercariLocally() }
+                Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Wonni was updated. Would you like to apply these changes to the Mercari listing too?")
+                Text("This removes the Mercari link from this listing when you Save. You can paste a new link to replace it.")
+            }
+            .confirmationDialog("Remove Mercari listing?", isPresented: $showDeleteMercariConfirm, titleVisibility: .visible) {
+                Button("Remove", role: .destructive) {
+                    mercariCleared = true
+                    isEditingMercariId = false
+                    Task { await saveListing() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This removes the Mercari link. The listing stays live on Mercari but won't be tracked here.")
             }
             .alert("Shipping Profile", isPresented: $showShippingProfileAlert) {
                 Button("Got it", role: .cancel) {}
@@ -1139,6 +1136,8 @@ struct EditListingSheet: View {
             let statusMap = listing.crossPostStatus ?? [:]
             let platforms = Set(statusMap.keys)
                 .union(linkedMercariId != nil ? ["mercari"] : [])
+                // Hide Mercari immediately when unlinked this session (persisted on Save).
+                .subtracting(mercariCleared ? ["mercari"] : [])
                 .sorted()
 
             if platforms.isEmpty {
@@ -1174,6 +1173,221 @@ struct EditListingSheet: View {
         } header: {
             Text("Cross-post status")
                 .textCase(nil)
+        }
+    }
+
+    @ViewBuilder private var photosSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Photos").font(.headline)
+                    Spacer()
+                    if !editPhotos.isEmpty {
+                        if isSelectionMode {
+                            HStack(spacing: 12) {
+                                Button("Delete") {
+                                    for id in selectedPhotos {
+                                        editPhotos.removeAll(where: { $0.id == id })
+                                    }
+                                    selectedPhotos.removeAll()
+                                    isSelectionMode = false
+                                }
+                                .foregroundColor(.red)
+                                .disabled(selectedPhotos.isEmpty)
+                                Button("Cancel") {
+                                    isSelectionMode = false
+                                    selectedPhotos.removeAll()
+                                }
+                            }
+                        } else {
+                            Button("Select") {
+                                isSelectionMode = true
+                                selectedPhotos.removeAll()
+                            }
+                        }
+                    }
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(editPhotos) { item in
+                            ZStack(alignment: .topTrailing) {
+                                Group {
+                                    switch item {
+                                    case .existing(let path):
+                                        StorageImage(path: path)
+                                    case .new(_, let image):
+                                        Image(uiImage: image).resizable().scaledToFill()
+                                    }
+                                }
+                                .frame(width: 80, height: 80)
+                                .cornerRadius(8)
+                                .clipped()
+                                .opacity(selectedPhotos.contains(item.id) ? 0.6 : 1.0)
+                                .onDrag({
+                                    if !isSelectionMode {
+                                        draggedPhotoId = item.id
+                                        return NSItemProvider(object: item.id as NSString)
+                                    }
+                                    return NSItemProvider()
+                                }, preview: {
+                                    Group {
+                                        switch item {
+                                        case .existing(let path):
+                                            StorageImage(path: path)
+                                        case .new(_, let image):
+                                            Image(uiImage: image).resizable().scaledToFill()
+                                        }
+                                    }
+                                    .frame(width: 80, height: 80)
+                                    .cornerRadius(8)
+                                    .clipped()
+                                })
+                                .onDrop(of: [.text], delegate: EditPhotoDropDelegate(
+                                    item: item,
+                                    photos: $editPhotos,
+                                    draggedPhotoId: $draggedPhotoId
+                                ))
+                                if isSelectionMode {
+                                    Image(systemName: selectedPhotos.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                                        .foregroundColor(selectedPhotos.contains(item.id) ? .blue : .white)
+                                        .background(Circle().fill(Color.black.opacity(0.4)))
+                                        .padding(4)
+                                }
+                            }
+                            .onTapGesture {
+                                if isSelectionMode {
+                                    if selectedPhotos.contains(item.id) {
+                                        selectedPhotos.remove(item.id)
+                                    } else {
+                                        selectedPhotos.insert(item.id)
+                                    }
+                                }
+                            }
+                        }
+                        if !isSelectionMode {
+                            PhotosPicker(selection: $newPhotosItems, matching: .images) {
+                                VStack {
+                                    Image(systemName: "plus.circle").font(.title2)
+                                    Text("Add Photo").font(.caption2)
+                                }
+                                .foregroundColor(.accentColor)
+                                .frame(width: 80, height: 80)
+                                .background(Color(.systemGray6))
+                                .cornerRadius(8)
+                            }
+                            .onChange(of: newPhotosItems) { _, newItems in
+                                Task {
+                                    for phItem in newItems {
+                                        if let data = try? await phItem.loadTransferable(type: Data.self),
+                                           let uiImage = UIImage(data: data) {
+                                            editPhotos.append(.new(id: UUID().uuidString, image: uiImage))
+                                        }
+                                    }
+                                    newPhotosItems = []
+                                }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var detailsSection: some View {
+        Section("Details") {
+            TextField("Title", text: $title)
+            TextField("Description", text: $description, axis: .vertical)
+                .lineLimit(3...6)
+            Picker("Condition", selection: $condition) {
+                Text("Select Condition").tag(ItemCondition?.none)
+                ForEach(ItemCondition.allCases, id: \.self) { c in
+                    Text(c.displayName).tag(ItemCondition?.some(c))
+                }
+            }
+            TextField("Brand", text: $brand)
+            TextField("Category", text: $category)
+        }
+        Section("Price & Quantity") {
+            HStack {
+                Text("$")
+                TextField("0.00", value: $price, format: .number)
+                    .keyboardType(.decimalPad)
+            }
+            Stepper("Quantity: \(quantity)", value: $quantity, in: 1...999)
+        }
+    }
+
+    @ViewBuilder private var shippingSection: some View {
+        Section("Shipping") {
+            Toggle("Free Shipping (Seller Pays)", isOn: $isFreeShipping)
+            HStack {
+                Text("Weight (lbs)")
+                Spacer()
+                TextField("0.0", value: $weightLbs, format: .number)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+            }
+            dimensionsRow
+        }
+    }
+
+    @ViewBuilder private var marketplacesSection: some View {
+        Section("Marketplaces") {
+            if integrationRepo.integrations.isEmpty {
+                Text("No integrations available. Link them in settings.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                let available = integrationRepo.integrations.filter { i in
+                    let isAPI = i.platform == "ebay" || i.platform == "etsy"
+                    return !isAPI || i.isConnected
+                }
+                let disconnected = integrationRepo.integrations.filter { i in
+                    let isAPI = i.platform == "ebay" || i.platform == "etsy"
+                    return isAPI && !i.isConnected
+                }
+                ForEach(available) { integration in
+                    let isAPI = integration.platform == "ebay" || integration.platform == "etsy"
+                    Toggle(isOn: Binding(
+                        get: { selectedPlatforms.contains(integration.platform) },
+                        set: { isSelected in
+                            if isSelected {
+                                if isAPI && SellingSettingsRepository.shared.settings?.defaultLocation.postalCode.isEmpty != false {
+                                    platformToEnableAfterAddressSetup = integration.platform
+                                    showAddressSetupSheet = true
+                                } else {
+                                    selectedPlatforms.insert(integration.platform)
+                                }
+                            } else {
+                                selectedPlatforms.remove(integration.platform)
+                            }
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(platformDisplayName(integration.platform))
+                            if !isAPI {
+                                Text("Autofill integration")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                if !disconnected.isEmpty {
+                    HStack(spacing: 6) {
+                        Text("Connect in Settings:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ForEach(disconnected) { i in
+                            Text(platformDisplayName(i.platform))
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        Spacer()
+                    }
+                }
+            }
         }
     }
 
@@ -1225,16 +1439,57 @@ struct EditListingSheet: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.accentColor)
             } else if platform == "mercari", linkedMercariId != nil {
-                HStack {
-                    Button { showMercariEdit = true } label: {
-                        Label("Edit", systemImage: "pencil")
-                            .font(.caption.weight(.semibold))
+                if isEditingMercariId {
+                    // Inline ID editor with clear (X) button
+                    HStack(spacing: 8) {
+                        TextField("Mercari listing ID or URL", text: $mercariIdDraft)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .font(.caption)
+                        if !mercariIdDraft.isEmpty {
+                            Button {
+                                mercariIdDraft = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color.accentColor)
-                    Spacer()
-                    Button { showMercariSync = true } label: {
-                        Label("Sync", systemImage: "arrow.triangle.2.circlepath")
+                    HStack {
+                        Button("Cancel") {
+                            isEditingMercariId = false
+                            mercariIdDraft = linkedMercariId ?? ""
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .buttonStyle(.plain)
+                        Spacer()
+                        if mercariIdDraft.isEmpty {
+                            Text("Saves without a Mercari link")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Button {
+                            Task { await saveMercariIdOnly() }
+                        } label: {
+                            if isSavingMercariId {
+                                ProgressView().scaleEffect(0.7)
+                            } else {
+                                Text("Save")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isSavingMercariId)
+                    }
+                } else {
+                    Button {
+                        mercariIdDraft = linkedMercariId ?? ""
+                        isEditingMercariId = true
+                    } label: {
+                        Label("Edit ID", systemImage: "pencil")
                             .font(.caption.weight(.semibold))
                     }
                     .buttonStyle(.plain)
@@ -1244,9 +1499,19 @@ struct EditListingSheet: View {
         }
         .contextMenu {
             if platform == "mercari", linkedMercariId != nil {
+                Button {
+                    showMercariEdit = true
+                } label: {
+                    Label("Edit listing on Mercari", systemImage: "square.and.pencil")
+                }
+                Button {
+                    showMercariSync = true
+                } label: {
+                    Label("Sync from Mercari", systemImage: "arrow.triangle.2.circlepath")
+                }
+                Divider()
                 Button(role: .destructive) {
-                    linkedMercariId = nil
-                    mercariLinkError = nil
+                    showUnlinkMercariConfirm = true
                 } label: {
                     Label("Unlink Mercari listing", systemImage: "xmark.circle")
                 }
@@ -1365,6 +1630,112 @@ struct EditListingSheet: View {
         }
     }
 
+    @ViewBuilder private var dimensionsRow: some View {
+        HStack {
+            Text("L (in)")
+            TextField("0", value: $lengthIn, format: .number).keyboardType(.decimalPad).frame(maxWidth: 50)
+            Spacer()
+            Text("W")
+            TextField("0", value: $widthIn, format: .number).keyboardType(.decimalPad).frame(maxWidth: 50)
+            Spacer()
+            Text("H")
+            TextField("0", value: $heightIn, format: .number).keyboardType(.decimalPad).frame(maxWidth: 50)
+        }
+    }
+
+    private var photosChanged: Bool {
+        let currentPaths: [String] = editPhotos.compactMap {
+            if case .existing(let p) = $0 { return p } else { return nil }
+        }
+        let hasNew = editPhotos.contains { if case .new = $0 { return true } else { return false } }
+        return hasNew || currentPaths != listing.photoPaths
+    }
+
+    private var coreFieldsChanged: Bool {
+        title != (listing.customTitle ?? "") ||
+        price != listing.price ||
+        description != (listing.customDescription ?? "") ||
+        condition != listing.condition ||
+        category != (listing.category ?? "") ||
+        brand != (listing.brand ?? "") ||
+        quantity != (listing.quantity ?? 1)
+    }
+
+    private var shippingChanged: Bool {
+        let s = listing.shippingInfo
+        return isFreeShipping != !(s?.buyerPaysShipping ?? true) ||
+            weightLbs != s?.weightLbs ||
+            lengthIn != s?.packageDimensions?.lengthIn ||
+            widthIn != s?.packageDimensions?.widthIn ||
+            heightIn != s?.packageDimensions?.heightIn
+    }
+
+    private var hasChanges: Bool {
+        coreFieldsChanged || shippingChanged ||
+        selectedPlatforms != initialPlatforms ||
+        mercariCleared || photosChanged ||
+        (isEditingMercariId && mercariIdDraft != (linkedMercariId ?? ""))
+    }
+
+    /// Saves just the Mercari listing ID without requiring a full listing save.
+    private func saveMercariIdOnly() async {
+        guard let listingId = listing.id else { return }
+        isSavingMercariId = true
+        defer { isSavingMercariId = false }
+        let trimmed = mercariIdDraft.trimmingCharacters(in: .whitespaces)
+        do {
+            if trimmed.isEmpty {
+                try await Firestore.firestore().collection("listings").document(listingId).updateData([
+                    "crossPostListingIds.mercari": FieldValue.delete(),
+                    "crossPostStatus.mercari": FieldValue.delete(),
+                    "updatedAt": Timestamp(date: Date())
+                ])
+                linkedMercariId = nil
+            } else if let parsedId = parseMercariItemId(trimmed) {
+                try await Firestore.firestore().collection("listings").document(listingId).updateData([
+                    "crossPostListingIds.mercari": parsedId,
+                    "crossPostStatus.mercari": "posted",
+                    "updatedAt": Timestamp(date: Date())
+                ])
+                linkedMercariId = parsedId
+            } else {
+                return
+            }
+        } catch {
+            print("[EditListingSheet] saveMercariIdOnly failed: \(error)")
+        }
+        isEditingMercariId = false
+    }
+
+    /// Marks the Mercari association for removal *locally* — the row hides, the toggle clears,
+    /// and the manual-link field reappears so the user can paste a replacement. Nothing is
+    /// written to Firestore until "Save" (see saveListing); cancelling discards it.
+    private func clearMercariLocally() {
+        linkedMercariId = nil
+        selectedPlatforms.remove("mercari")
+        mercariLinkError = nil
+        mercariCleared = true
+    }
+
+    /// If the listing has been stuck in "pending" for > 90 seconds the auto-poster likely exited
+    /// mid-flow. Clear it so the user can delete or re-link the Mercari ID. Zero extra Firebase
+    /// reads — we already have the listing and the start time lives in UserDefaults.
+    private func clearStaleMercariPending() async {
+        guard let listingId = listing.id,
+              listing.crossPostStatus?["mercari"] == "pending",
+              let startTime = UserDefaults.standard.object(
+                  forKey: "mercariPendingStart_\(listingId)") as? Double
+        else { return }
+        let age = Date().timeIntervalSince1970 - startTime
+        guard age > 90 else { return }
+        UserDefaults.standard.removeObject(forKey: "mercariPendingStart_\(listingId)")
+        try? await Firestore.firestore().collection("listings").document(listingId).updateData([
+            "crossPostStatus.mercari": FieldValue.delete(),
+            "updatedAt": Timestamp(date: Date())
+        ])
+        print("[EditListingSheet] Cleared stale mercari=pending for listing \(listingId) (age: \(Int(age))s)")
+    }
+
     private func saveListing() async {
         guard let id = listing.id else { return }
         isSaving = true
@@ -1466,11 +1837,35 @@ struct EditListingSheet: View {
                 if platform == "ebay" || platform == "etsy" {
                     let fn = platform == "ebay" ? "ebayDeleteListing" : "etsyDeleteListing"
                     Task {
-                        try? await Functions.functions().httpsCallable(fn).call(["listingId": id])
+                        _ = try? await callCloudFunction(fn, ["listingId": id])
                     }
                 }
             }
-            
+
+            // Persist a Mercari unlink chosen this session. Mercari has no API delete (the listing
+            // stays live on Mercari); we just drop the local association so it's no longer marked
+            // posted here and can be re-linked or re-posted.
+            if mercariCleared {
+                try? await Firestore.firestore().collection("listings").document(id).updateData([
+                    "crossPostListingIds.mercari": FieldValue.delete(),
+                    "crossPostStatus.mercari": FieldValue.delete()
+                ])
+            }
+
+            // Persist a manually-edited Mercari listing ID (new link entered via Edit ID flow).
+            if isEditingMercariId && !mercariCleared {
+                let trimmed = mercariIdDraft.trimmingCharacters(in: .whitespaces)
+                if let parsedId = parseMercariItemId(trimmed), parsedId != linkedMercariId {
+                    try? await Firestore.firestore().collection("listings").document(id).updateData([
+                        "crossPostListingIds.mercari": parsedId,
+                        "crossPostStatus.mercari": "posted",
+                        "updatedAt": Timestamp(date: Date())
+                    ])
+                    linkedMercariId = parsedId
+                }
+                isEditingMercariId = false
+            }
+
             // Shipping profile alert: if buyer-pays-shipping changed on a live API listing
             let shippingChanged = isFreeShipping != !(listing.shippingInfo?.buyerPaysShipping ?? true)
             let hasLiveAPIListing = alreadyPosted.contains("ebay") || alreadyPosted.contains("etsy")
@@ -1478,19 +1873,18 @@ struct EditListingSheet: View {
                 showShippingProfileAlert = true
             }
 
-            // Mercari update prompt: ask before dismissing if Mercari is linked
+            // Mercari update logic: if Mercari is linked, the user left the toggle on,
             // and a Mercari-visible field (title, description, price, condition) changed.
-            // Quantity, weight, dimensions are not editable on Mercari, so skip the prompt
-            // if those are the only changes.
+            // Quantity, weight, dimensions are not editable on Mercari.
             let mercariIsLive = linkedMercariId != nil
             let mercariFieldsChanged =
                 title.trimmingCharacters(in: .whitespaces) != (listing.customTitle ?? "") ||
                 description.trimmingCharacters(in: .whitespaces) != (listing.customDescription ?? "") ||
                 price != listing.price ||
                 condition != listing.condition
-            if mercariIsLive && mercariFieldsChanged {
+            if mercariIsLive && mercariFieldsChanged && applyEditsToMercari {
                 pendingOnSaveJobs = newWebJobs
-                showMercariUpdatePrompt = true
+                showMercariAutoEdit = true
             } else {
                 onSave(newWebJobs)
                 dismiss()
@@ -1674,6 +2068,8 @@ struct SettingsSheet: View {
     @State private var showMercariLogin = false
     @State private var showEtsySetupAlert = false
     @State private var etsySetupMissingShipping = false
+    @State private var showEtsyConnectError = false
+    @State private var etsyConnectErrorMessage = ""
     @State private var etsySetupMissingReturn = false
     
     // Selling Settings State
@@ -1930,6 +2326,11 @@ struct SettingsSheet: View {
             .sheet(isPresented: $showMercariLogin) {
                 MercariConnectSheet()
             }
+            .alert("Etsy Connection Failed", isPresented: $showEtsyConnectError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(etsyConnectErrorMessage)
+            }
             .alert("Finish Etsy Setup", isPresented: $showEtsySetupAlert) {
                 if etsySetupMissingShipping {
                     Button("Add Shipping Profile") {
@@ -2095,7 +2496,10 @@ struct SettingsSheet: View {
                         }
                     }
                 } catch {
-                    // silent — exchange errors are rare and hard to surface without extra UI
+                    let msg = (error as NSError).userInfo["NSLocalizedDescription"] as? String
+                        ?? error.localizedDescription
+                    etsyConnectErrorMessage = msg
+                    showEtsyConnectError = true
                 }
             }
         }
@@ -2784,6 +3188,69 @@ struct PlatformRowView: View {
         case "etsy": return "Etsy"
         default: return key.capitalized
         }
+    }
+}
+
+// MARK: - RestockSheet
+
+struct RestockSheet: View {
+    let listing: UserListing
+    let onRestock: (Int) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var quantity = 1
+    @State private var isSaving = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    HStack {
+                        if let path = listing.coverPhotoPath {
+                            StorageImage(path: path)
+                                .frame(width: 52, height: 52)
+                                .cornerRadius(8)
+                                .clipped()
+                        }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(listing.customTitle ?? "Untitled")
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(2)
+                            Text(listing.price.map { "$\(String(format: "%.2f", $0))" } ?? "")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                Section("Restock Quantity") {
+                    Stepper("Quantity: \(quantity)", value: $quantity, in: 1...999)
+                }
+                Section {
+                    Text("This will set the listing back to active and update quantity on any connected marketplaces.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Restock")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if isSaving {
+                        ProgressView()
+                    } else {
+                        Button("Restock") {
+                            isSaving = true
+                            onRestock(quantity)
+                            dismiss()
+                        }
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }
 

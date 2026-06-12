@@ -118,10 +118,11 @@ struct CustomPhotoPickerView: View {
         @State private var navigateToOverview = false
         @State private var showingDraftHistory = false
         @State private var hidePreviouslySelected = false
+        @State private var photoAccessLimited = false
         @Environment(\.dismiss) private var dismiss
 
         @Environment(\.modelContext) private var modelContext
-        @Query(filter: #Predicate<Item> { $0.isDraft })
+        @Query(filter: #Predicate<Item> { $0.isDraft == true })
         private var allItems: [Item]
 
         @EnvironmentObject private var uploadManager: UploadManager
@@ -193,6 +194,21 @@ struct CustomPhotoPickerView: View {
             }
             .safeAreaInset(edge: .top) {
                 VStack(spacing: 0) {
+                    if photoAccessLimited {
+                        HStack(spacing: 6) {
+                            Image(systemName: "lock.fill")
+                                .font(.caption)
+                            Text("You've allowed access to only some photos.")
+                                .font(.caption)
+                            Spacer()
+                            Button("Select More") { presentLimitedLibraryPicker() }
+                                .font(.caption.weight(.semibold))
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                        .background(.bar)
+                    }
                     if !photoCollection.photoAssets.isEmpty {
                         Toggle(isOn: $hidePreviouslySelected) {
                             HStack(spacing: 6) {
@@ -238,8 +254,8 @@ struct CustomPhotoPickerView: View {
                         dismiss()
                     } label: {
                         HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                            Text("Back")
+                            Image(systemName: "camera.fill")
+                            Text("Camera")
                         }
                     }
                 }
@@ -272,6 +288,11 @@ struct CustomPhotoPickerView: View {
                 }
             }
             .task {
+                guard await PhotoLibrary.checkAuthorization() else {
+                    print("Photo library access not authorized for picker")
+                    return
+                }
+                photoAccessLimited = PHPhotoLibrary.authorizationStatus(for: .readWrite) == .limited
                 do {
                     try await photoCollection.load()
                 } catch {
@@ -286,6 +307,18 @@ struct CustomPhotoPickerView: View {
             }
         }
         
+        /// Present the system sheet that lets a limited-access user add more photos
+        /// to the app's allowed selection. PhotoCollection observes library changes,
+        /// so the grid refreshes automatically once the selection expands.
+        private func presentLimitedLibraryPicker() {
+            guard let scene = UIApplication.shared.connectedScenes
+                    .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene,
+                  let root = scene.keyWindow?.rootViewController else { return }
+            var top = root
+            while let presented = top.presentedViewController { top = presented }
+            PHPhotoLibrary.shared().presentLimitedLibraryPicker(from: top)
+        }
+
         /// Toggle a photo in/out of the active draft.
         private func togglePhoto(_ asset: PhotoAsset) {
             if activeDraftAssetIDs.contains(asset.id) {
@@ -494,7 +527,7 @@ struct CustomPhotoPickerView: View {
     // MARK: - DraftHistoryModal
     struct DraftHistoryModal: View {
         @Environment(\.dismiss) private var dismiss
-        @Query(filter: #Predicate<Item> { $0.isDraft })
+        @Query(filter: #Predicate<Item> { $0.isDraft == true })
         private var allItems: [Item]
         @ObservedObject var photoCollection: PhotoCollection
         @Environment(\.modelContext) private var modelContext
@@ -899,16 +932,20 @@ struct TitleCharCountView: View {
     }
 
     var body: some View {
-        HStack(spacing: 4) {
-            if let msg = message {
-                Text(msg).font(.caption2)
+        // Only surface the counter once the title is long enough to matter (>= 70 chars).
+        // Below that it renders nothing and takes no vertical space.
+        if count >= 70 {
+            HStack(spacing: 4) {
+                if let msg = message {
+                    Text(msg).font(.caption2)
+                }
+                Spacer()
+                Text("\(count)")
+                    .font(.caption2.monospacedDigit().weight(count > 80 ? .semibold : .regular))
             }
-            Spacer()
-            Text("\(count)")
-                .font(.caption2.monospacedDigit().weight(count > 80 ? .semibold : .regular))
+            .foregroundStyle(color)
+            .animation(.easeInOut(duration: 0.2), value: count)
         }
-        .foregroundStyle(color)
-        .animation(.easeInOut(duration: 0.2), value: count)
     }
 }
 
@@ -1456,7 +1493,7 @@ struct BulkListingOverviewView: View {
     var sessionDraftIDs: [UUID] = []
 
     @Environment(\.modelContext) private var modelContext
-    @Query(filter: #Predicate<Item> { $0.isDraft }, sort: \Item.createdAt, order: .reverse)
+    @Query(filter: #Predicate<Item> { $0.isDraft == true }, sort: \Item.createdAt, order: .reverse)
     private var allItems: [Item]
     @EnvironmentObject private var uploadManager: UploadManager
 
@@ -1464,7 +1501,6 @@ struct BulkListingOverviewView: View {
     @State private var cache = CachedImageManager()
     @State private var navigateToResults = false
     @State private var showProcessFullScreen = false
-    @State private var showingPickerForDraft = false
     @State private var isSelectMode = false
     @State private var selectedItemIDs: Set<UUID> = []
     @State private var showDraftBulkEdit = false
@@ -1592,9 +1628,6 @@ struct BulkListingOverviewView: View {
         .navigationDestination(isPresented: $navigateToResults) {
             ProcessResultsOverviewView()
         }
-        .navigationDestination(isPresented: $showingPickerForDraft) {
-            CustomPhotoPickerView(addingToExistingDraft: true)
-        }
         .onChange(of: uploadManager.showProcessResults) { _, show in
             if show {
                 showProcessFullScreen = false
@@ -1681,7 +1714,7 @@ enum DraftFocusSubfield: Hashable { case title, price, description }
 
 struct ProcessResultsOverviewView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query(filter: #Predicate<Item> { $0.isDraft })
+    @Query(filter: #Predicate<Item> { $0.isDraft == true })
     private var allItems: [Item]
     @EnvironmentObject private var uploadManager: UploadManager
 
