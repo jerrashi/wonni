@@ -938,6 +938,7 @@ exports.ebayCreateListing = onCall(
         marketplaceId: "EBAY_US",
         format: "FIXED_PRICE",
         availableQuantity: quantity,
+        outOfStockControl: true,
         categoryId: categoryId,
         listingDescription: description,
         listingPolicies: {

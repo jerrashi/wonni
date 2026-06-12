@@ -258,6 +258,13 @@ async function processSingleEbayOrder(order, uid, accessToken, isSandbox, db, cl
     const existing = existingDoc.data();
     const updates = {};
 
+    // Restore if the sale was soft-deleted — it came back through sync, so un-delete it
+    if (existing.isDeleted) {
+      updates.isDeleted = admin.firestore.FieldValue.delete();
+      updates.deletedAt = admin.firestore.FieldValue.delete();
+      console.log(`[processSingleEbayOrder] restoring soft-deleted sale for order ${orderId}`);
+    }
+
     const [tracking, freshTakeHome] = await Promise.all([
       ebayFetchTracking(orderId, accessToken, isSandbox),
       ebayFetchTakeHome(orderId, accessToken, isSandbox),
@@ -499,7 +506,18 @@ async function syncEtsyReceipts(uid, integrationRef, clientId, db, force = false
 
   for (const receipt of receipts) {
     const receiptId = String(receipt.receipt_id);
-    if (await saleExists(db, uid, receiptId)) continue;
+    const existingEtsySaleDoc = await findExistingSaleDoc(db, uid, receiptId);
+    if (existingEtsySaleDoc) {
+      if (existingEtsySaleDoc.data().isDeleted) {
+        await existingEtsySaleDoc.ref.update({
+          isDeleted: admin.firestore.FieldValue.delete(),
+          deletedAt: admin.firestore.FieldValue.delete(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        console.log(`[syncSales] restored soft-deleted Etsy sale for receipt ${receiptId}`);
+      }
+      continue;
+    }
 
     const firstTx = receipt.transactions?.[0];
     const etsyListingId = firstTx ? String(firstTx.listing_id) : null;

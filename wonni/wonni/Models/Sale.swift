@@ -56,6 +56,9 @@ struct Sale: Identifiable, Codable {
     var createdAt: Timestamp?
     var updatedAt: Timestamp?
 
+    var isDeleted: Bool?
+    var deletedAt: Timestamp?
+
     // MARK: - Init
 
     init(

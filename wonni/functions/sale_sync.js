@@ -109,21 +109,34 @@ async function updateEbayQty(listingId, newQty, uid, clientId, certId, db) {
   const authHeader = { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" };
 
   if (newQty <= 0) {
-    // Withdraw active offers so the listing goes inactive
+    // Set outOfStockControl=true so the listing goes "hidden" rather than ended.
+    // This preserves the eBay item ID and watchers — republishing later reactivates
+    // the same listing instead of creating a brand-new one.
     const offersRes = await makeRequest({
       hostname: host, path: `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}`,
       method: "GET", headers: authHeader,
     });
     if (offersRes.statusCode === 200) {
       const data = JSON.parse(offersRes.body);
-      for (const offer of (data.offers || [])) {
-        if (offer.status === "PUBLISHED") {
-          const wr = await makeRequest({
-            hostname: host, path: `/sell/inventory/v1/offer/${offer.offerId}/withdraw`,
-            method: "POST", headers: authHeader,
-          }, {});
-          console.log(`[sale_sync] eBay offer ${offer.offerId} withdrawn (qty=0): ${wr.statusCode}`);
-        }
+      const offer = (data.offers || []).find(o => o.status === "PUBLISHED") || data.offers?.[0];
+      if (offer?.offerId) {
+        const updateBody = {
+          sku,
+          marketplaceId: offer.marketplaceId || "EBAY_US",
+          format: "FIXED_PRICE",
+          availableQuantity: 0,
+          outOfStockControl: true,
+          categoryId: offer.categoryId,
+          listingDescription: offer.listingDescription,
+          listingPolicies: offer.listingPolicies,
+          merchantLocationKey: offer.merchantLocationKey,
+          pricingSummary: offer.pricingSummary,
+        };
+        const or = await makeRequest({
+          hostname: host, path: `/sell/inventory/v1/offer/${offer.offerId}`,
+          method: "PUT", headers: { ...authHeader, "Content-Language": "en-US" },
+        }, updateBody);
+        console.log(`[sale_sync] eBay offer ${offer.offerId} qty=0 outOfStockControl=true: ${or.statusCode}`);
       }
     }
   } else {
@@ -145,7 +158,7 @@ async function updateEbayQty(listingId, newQty, uid, clientId, certId, db) {
       console.warn(`[sale_sync] eBay inventory item GET failed: ${itemRes.statusCode}`);
     }
 
-    // Update offer's availableQuantity too
+    // Update offer's availableQuantity too, and re-publish if it was withdrawn
     const offersRes = await makeRequest({
       hostname: host, path: `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}`,
       method: "GET", headers: authHeader,
@@ -160,6 +173,7 @@ async function updateEbayQty(listingId, newQty, uid, clientId, certId, db) {
           marketplaceId: offer.marketplaceId || "EBAY_US",
           format: "FIXED_PRICE",
           availableQuantity: newQty,
+          outOfStockControl: true,
           categoryId: offer.categoryId,
           listingDescription: offer.listingDescription,
           listingPolicies: offer.listingPolicies,
@@ -170,7 +184,16 @@ async function updateEbayQty(listingId, newQty, uid, clientId, certId, db) {
           hostname: host, path: `/sell/inventory/v1/offer/${offer.offerId}`,
           method: "PUT", headers: { ...authHeader, "Content-Language": "en-US" },
         }, updateBody);
-        console.log(`[sale_sync] eBay offer ${offer.offerId} availableQty=${newQty}: ${or.statusCode}`);
+        console.log(`[sale_sync] eBay offer ${offer.offerId} availableQty=${newQty} outOfStockControl=true: ${or.statusCode}`);
+
+        // If the offer was withdrawn (UNPUBLISHED), republish it so the listing goes live again
+        if (offer.status !== "PUBLISHED") {
+          const pubRes = await makeRequest({
+            hostname: host, path: `/sell/inventory/v1/offer/${offer.offerId}/publish`,
+            method: "POST", headers: authHeader,
+          }, {});
+          console.log(`[sale_sync] eBay offer ${offer.offerId} republished: ${pubRes.statusCode} ${pubRes.body}`);
+        }
       }
     }
   }
