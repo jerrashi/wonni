@@ -150,6 +150,12 @@ struct BulkImportSheet: View {
                     .disabled(selectedItemUrls.isEmpty || isAnalyzing)
                 }
             }
+            .background(
+                MercariSheetWebView(webView: urlExtractor.webView)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .opacity(0.01)
+                    .allowsHitTesting(false)
+            )
         }
     }
     
@@ -177,8 +183,8 @@ struct BulkImportSheet: View {
     private func startImport() {
         let itemsToImport = availableItems.filter { selectedItemUrls.contains($0.url) }
         
-        // Pass a new instance of extractor so the view's state doesn't get messed up if dismissed
-        importManager.startImporting(previews: itemsToImport, extractor: URLExtractor(), context: modelContext)
+        // BulkImportManager now owns its own URLExtractor instance
+        importManager.startImporting(previews: itemsToImport, context: modelContext)
         dismiss()
     }
 }

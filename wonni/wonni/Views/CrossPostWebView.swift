@@ -357,7 +357,7 @@ private extension WKWebView {
 
 // Shared WKProcessPool for all Mercari WebViews — reusing the same web process within an
 // app launch helps stabilise Mercari's device fingerprint across consecutive auto-poster sessions.
-private let mercariProcessPool = WKProcessPool()
+let mercariProcessPool = WKProcessPool()
 
 // MARK: - MercariPostingState
 

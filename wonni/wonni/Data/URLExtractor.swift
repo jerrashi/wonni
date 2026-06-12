@@ -37,14 +37,27 @@ enum ExtractorError: Error, LocalizedError {
     }
 }
 
-class URLExtractor: NSObject, ObservableObject, WKNavigationDelegate {
+@MainActor
+class URLExtractor: NSObject, ObservableObject {
     @Published var isExtracting = false
     @Published var currentStatus = ""
     @Published var extractedListing: ExtractedListing?
     @Published var extractionError: Error?
     
-    private var webView: WKWebView?
-    private var completionPromise: ((Result<ExtractedListing, Error>) -> Void)?
+    /// Embed this in the view hierarchy for reliable JS execution
+    let webView: WKWebView
+    private let navDelegate = ExtractorNavDelegate()
+    
+    override init() {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .default()
+        config.processPool = mercariProcessPool
+        let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
+        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        self.webView = wv
+        super.init()
+        wv.navigationDelegate = navDelegate
+    }
     
     func extract(from urlString: String) async throws -> ExtractedListing {
         guard let url = URL(string: urlString) else {
@@ -59,8 +72,6 @@ class URLExtractor: NSObject, ObservableObject, WKNavigationDelegate {
         }
     }
     
-    private var profileCompletionPromise: ((Result<[ListingPreview], Error>) -> Void)?
-    
     func extractProfileListings(from urlString: String) async throws -> [ListingPreview] {
         guard let url = URL(string: urlString) else {
             throw ExtractorError.invalidURL
@@ -74,91 +85,26 @@ class URLExtractor: NSObject, ObservableObject, WKNavigationDelegate {
         }
     }
     
+    // MARK: - Single Mercari Listing
+    
     private func extractMercari(url: URL) async throws -> ExtractedListing {
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.main.async {
-                self.isExtracting = true
-                self.currentStatus = "Loading Mercari..."
-                self.extractedListing = nil
-                self.extractionError = nil
-                
-                self.completionPromise = { result in
-                    self.isExtracting = false
-                    switch result {
-                    case .success(let listing):
-                        self.extractedListing = listing
-                        continuation.resume(returning: listing)
-                    case .failure(let err):
-                        self.extractionError = err
-                        continuation.resume(throwing: err)
-                    }
-                }
-                
-                let config = WKWebViewConfiguration()
-                // Mercari needs default site data
-                config.websiteDataStore = .default()
-                self.webView = WKWebView(frame: .zero, configuration: config)
-                self.webView?.navigationDelegate = self
-                self.webView?.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-                
-                let request = URLRequest(url: url)
-                self.webView?.load(request)
-            }
-        }
-    }
-    
-    private func extractMercariProfile(url: URL) async throws -> [ListingPreview] {
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.main.async {
-                self.isExtracting = true
-                self.currentStatus = "Loading Mercari Profile..."
-                self.extractionError = nil
-                
-                self.profileCompletionPromise = { result in
-                    self.isExtracting = false
-                    switch result {
-                    case .success(let listings):
-                        continuation.resume(returning: listings)
-                    case .failure(let err):
-                        self.extractionError = err
-                        continuation.resume(throwing: err)
-                    }
-                }
-                
-                let config = WKWebViewConfiguration()
-                config.websiteDataStore = .default()
-                self.webView = WKWebView(frame: .zero, configuration: config)
-                self.webView?.navigationDelegate = self
-                self.webView?.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-                
-                let request = URLRequest(url: url)
-                self.webView?.load(request)
-            }
-        }
-    }
-    
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        DispatchQueue.main.async {
-            self.currentStatus = "Extracting details..."
-        }
+        isExtracting = true
+        currentStatus = "Loading Mercari..."
+        extractedListing = nil
+        extractionError = nil
         
-        // Wait a short moment for dynamic elements to load
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            if self.profileCompletionPromise != nil {
-                self.runMercariProfileScript(webView: webView)
-            } else {
-                self.runMercariScript(webView: webView)
-            }
-        }
-    }
-    
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        completionPromise?(.failure(error))
-        profileCompletionPromise?(.failure(error))
-    }
-    
-    private func runMercariScript(webView: WKWebView) {
-        // Mercari uses specific data-testid attributes we can target
+        navDelegate.reset()
+        webView.load(URLRequest(url: url))
+        
+        print("[URLExtractor] Loading \(url.absoluteString)")
+        let loaded = await navDelegate.waitForLoad(timeout: 15)
+        if !loaded { print("[URLExtractor] Page load timed out") }
+        
+        currentStatus = "Extracting details..."
+        
+        // Wait for React/Next.js hydration
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        
         let script = """
         (function() {
             try {
@@ -166,17 +112,18 @@ class URLExtractor: NSObject, ObservableObject, WKNavigationDelegate {
                 let priceText = document.querySelector('[data-testid="ItemPrice"]')?.innerText || "";
                 let desc = document.querySelector('[data-testid="ItemDescription"]')?.innerText || "";
                 
-                // Get all thumbnail images and convert them to the full res ones
-                // Mercari thumbnails usually have "thumb" or something, but product images have data-testid="ItemImage"
+                // Try og:title meta tag as fallback for title
+                if (!title) {
+                    let ogTitle = document.querySelector('meta[property="og:title"]');
+                    if (ogTitle) title = ogTitle.getAttribute('content') || "";
+                }
+                
                 let imgElements = document.querySelectorAll('[data-testid="ItemImage"] img');
                 let urls = [];
                 for (let img of imgElements) {
-                    if (img.src) {
-                        urls.push(img.src);
-                    }
+                    if (img.src) urls.push(img.src);
                 }
                 
-                // If ItemImage not found, try generic carousel images
                 if (urls.length === 0) {
                     let fallbacks = document.querySelectorAll('.image-carousel img, [data-testid="Carousel"] img');
                     for (let img of fallbacks) {
@@ -184,11 +131,20 @@ class URLExtractor: NSObject, ObservableObject, WKNavigationDelegate {
                     }
                 }
                 
+                // Fallback: og:image
+                if (urls.length === 0) {
+                    let ogImg = document.querySelector('meta[property="og:image"]');
+                    if (ogImg && ogImg.getAttribute('content')) {
+                        urls.push(ogImg.getAttribute('content'));
+                    }
+                }
+                
                 return {
                     title: title,
                     priceText: priceText,
                     description: desc,
-                    imageUrls: urls
+                    imageUrls: urls,
+                    debug: 'url: ' + window.location.href + '; title: ' + document.title
                 };
             } catch (e) {
                 return { error: e.toString() };
@@ -196,58 +152,78 @@ class URLExtractor: NSObject, ObservableObject, WKNavigationDelegate {
         })();
         """
         
-        webView.evaluateJavaScript(script) { [weak self] result, error in
-            guard let self = self else { return }
-            
-            if let error = error {
-                self.completionPromise?(.failure(ExtractorError.extractionFailed(error.localizedDescription)))
-                return
-            }
-            
-            guard let dict = result as? [String: Any],
-                  let title = dict["title"] as? String,
-                  let priceText = dict["priceText"] as? String,
-                  let description = dict["description"] as? String,
-                  let imageUrls = dict["imageUrls"] as? [String] else {
-                
-                if let dict = result as? [String: Any], let errStr = dict["error"] as? String {
-                    self.completionPromise?(.failure(ExtractorError.extractionFailed(errStr)))
-                } else {
-                    self.completionPromise?(.failure(ExtractorError.extractionFailed("Invalid response from JS")))
+        // Poll with retries
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            do {
+                let result = try await webView.evaluateJavaScript(script)
+                if let dict = result as? [String: Any] {
+                    if let errStr = dict["error"] as? String {
+                        print("[URLExtractor] JS error: \(errStr)")
+                        throw ExtractorError.extractionFailed(errStr)
+                    }
+                    
+                    let title = dict["title"] as? String ?? ""
+                    let priceText = dict["priceText"] as? String ?? ""
+                    let description = dict["description"] as? String ?? ""
+                    let imageUrls = dict["imageUrls"] as? [String] ?? []
+                    let debug = dict["debug"] as? String ?? ""
+                    
+                    print("[URLExtractor] Result: title=\(title), images=\(imageUrls.count), debug=\(debug)")
+                    
+                    if !title.isEmpty || !imageUrls.isEmpty {
+                        let digits = priceText.components(separatedBy: CharacterSet(charactersIn: "0123456789.").inverted).joined()
+                        let price = Double(digits) ?? 0.0
+                        let uniqueUrls = Array(NSOrderedSet(array: imageUrls)) as! [String]
+                        
+                        let listing = ExtractedListing(
+                            title: title,
+                            price: price,
+                            description: description,
+                            imageUrls: uniqueUrls
+                        )
+                        
+                        isExtracting = false
+                        extractedListing = listing
+                        return listing
+                    }
                 }
-                return
+            } catch let error as ExtractorError {
+                isExtracting = false
+                throw error
+            } catch {
+                print("[URLExtractor] JS eval error: \(error.localizedDescription)")
             }
-            
-            if title.isEmpty && imageUrls.isEmpty {
-                // We might need to wait longer
-                self.completionPromise?(.failure(ExtractorError.extractionFailed("Could not find item details on the page.")))
-                return
-            }
-            
-            // Parse price (e.g. "$12.00")
-            let digits = priceText.components(separatedBy: CharacterSet(charactersIn: "0123456789.").inverted).joined()
-            let price = Double(digits) ?? 0.0
-            
-            // Clean up URLs
-            let uniqueUrls = Array(NSOrderedSet(array: imageUrls)) as! [String]
-            
-            let listing = ExtractedListing(
-                title: title,
-                price: price,
-                description: description,
-                imageUrls: uniqueUrls
-            )
-            
-            self.completionPromise?(.success(listing))
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
         }
+        
+        isExtracting = false
+        throw ExtractorError.extractionFailed("Could not find item details on the page.")
     }
     
-    private func runMercariProfileScript(webView: WKWebView) {
+    // MARK: - Mercari Profile
+    
+    private func extractMercariProfile(url: URL) async throws -> [ListingPreview] {
+        isExtracting = true
+        currentStatus = "Loading Mercari Profile..."
+        extractionError = nil
+        
+        navDelegate.reset()
+        webView.load(URLRequest(url: url))
+        
+        print("[URLExtractor] Loading profile \(url.absoluteString)")
+        let loaded = await navDelegate.waitForLoad(timeout: 15)
+        if !loaded { print("[URLExtractor] Profile page load timed out") }
+        
+        currentStatus = "Scanning listings..."
+        
+        // Wait for React/Next.js hydration
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        
         let script = """
         (function() {
             try {
                 let items = [];
-                // Look for links to item pages
                 let links = document.querySelectorAll('a[href*="/item/m"]');
                 for (let link of links) {
                     let url = link.href;
@@ -255,7 +231,6 @@ class URLExtractor: NSObject, ObservableObject, WKNavigationDelegate {
                     let imgs = link.querySelectorAll('img');
                     let itemImg = null;
                     for (let i of imgs) {
-                        // Prefer images that aren't obviously avatars or UI icons
                         if (i.src && !i.src.includes('avatar') && !i.src.includes('profile')) {
                             itemImg = i;
                             break;
@@ -313,7 +288,6 @@ class URLExtractor: NSObject, ObservableObject, WKNavigationDelegate {
                     }
                 }
                 
-                // Deduplicate by URL
                 let uniqueItems = [];
                 let urls = new Set();
                 for (let item of items) {
@@ -323,46 +297,100 @@ class URLExtractor: NSObject, ObservableObject, WKNavigationDelegate {
                     }
                 }
                 
-                return uniqueItems;
+                return { items: uniqueItems, debug: 'found ' + uniqueItems.length + ' items, url: ' + window.location.href };
             } catch (e) {
                 return { error: e.toString() };
             }
         })();
         """
         
-        webView.evaluateJavaScript(script) { [weak self] result, error in
-            guard let self = self else { return }
-            
-            if let error = error {
-                self.profileCompletionPromise?(.failure(ExtractorError.extractionFailed(error.localizedDescription)))
-                return
-            }
-            
-            if let dict = result as? [String: Any], let errStr = dict["error"] as? String {
-                self.profileCompletionPromise?(.failure(ExtractorError.extractionFailed(errStr)))
-                return
-            }
-            
-            guard let itemsArray = result as? [[String: Any]] else {
-                self.profileCompletionPromise?(.failure(ExtractorError.extractionFailed("Invalid response format from JS.")))
-                return
-            }
-            
-            let previews = itemsArray.compactMap { dict -> ListingPreview? in
-                guard let url = dict["url"] as? String,
-                      let thumbnailUrl = dict["thumbnailUrl"] as? String,
-                      let title = dict["title"] as? String,
-                      let priceText = dict["priceText"] as? String else {
-                    return nil
+        // Poll with retries
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            do {
+                let result = try await webView.evaluateJavaScript(script)
+                if let dict = result as? [String: Any] {
+                    if let errStr = dict["error"] as? String {
+                        print("[URLExtractor] Profile JS error: \(errStr)")
+                        throw ExtractorError.extractionFailed(errStr)
+                    }
+                    
+                    let debug = dict["debug"] as? String ?? ""
+                    print("[URLExtractor] Profile: \(debug)")
+                    
+                    if let itemsArray = dict["items"] as? [[String: Any]], !itemsArray.isEmpty {
+                        let previews = itemsArray.compactMap { item -> ListingPreview? in
+                            guard let url = item["url"] as? String,
+                                  let thumbnailUrl = item["thumbnailUrl"] as? String,
+                                  let title = item["title"] as? String,
+                                  let priceText = item["priceText"] as? String else {
+                                return nil
+                            }
+                            
+                            let digits = priceText.components(separatedBy: CharacterSet(charactersIn: "0123456789.").inverted).joined()
+                            let price = Double(digits) ?? 0.0
+                            
+                            return ListingPreview(title: title, price: price, thumbnailUrl: thumbnailUrl, url: url)
+                        }
+                        
+                        isExtracting = false
+                        return previews
+                    }
                 }
-                
-                let digits = priceText.components(separatedBy: CharacterSet(charactersIn: "0123456789.").inverted).joined()
-                let price = Double(digits) ?? 0.0
-                
-                return ListingPreview(title: title, price: price, thumbnailUrl: thumbnailUrl, url: url)
+            } catch let error as ExtractorError {
+                isExtracting = false
+                throw error
+            } catch {
+                print("[URLExtractor] Profile JS eval error: \(error.localizedDescription)")
             }
-            
-            self.profileCompletionPromise?(.success(previews))
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+        }
+        
+        isExtracting = false
+        throw ExtractorError.extractionFailed("Could not find any listings on this profile page.")
+    }
+}
+
+// MARK: - Navigation Delegate
+
+private class ExtractorNavDelegate: NSObject, WKNavigationDelegate {
+    private var continuation: CheckedContinuation<Bool, Never>?
+    private var didFinish = false
+    
+    func reset() {
+        didFinish = false
+        continuation = nil
+    }
+    
+    func waitForLoad(timeout: TimeInterval) async -> Bool {
+        if didFinish { return true }
+        return await withCheckedContinuation { cont in
+            self.continuation = cont
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                if let c = self.continuation {
+                    self.continuation = nil
+                    c.resume(returning: false)
+                }
+            }
+        }
+    }
+    
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        print("[URLExtractor] Page loaded: \(webView.url?.absoluteString ?? "?")")
+        didFinish = true
+        if let c = continuation {
+            continuation = nil
+            c.resume(returning: true)
+        }
+    }
+    
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        print("[URLExtractor] Page failed: \(error.localizedDescription)")
+        didFinish = true
+        if let c = continuation {
+            continuation = nil
+            c.resume(returning: false)
         }
     }
 }

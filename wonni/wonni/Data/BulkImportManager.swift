@@ -29,12 +29,11 @@ class BulkImportManager: ObservableObject {
     @Published var currentIndex = 0
     @Published var totalCount = 0
     
-    private var urlExtractor: URLExtractor?
+    @Published var urlExtractor = URLExtractor()
     private var modelContext: SwiftData.ModelContext?
     
-    func startImporting(previews: [ListingPreview], extractor: URLExtractor, context: SwiftData.ModelContext) {
+    func startImporting(previews: [ListingPreview], context: SwiftData.ModelContext) {
         self.jobs = previews.map { BulkImportJob(preview: $0) }
-        self.urlExtractor = extractor
         self.modelContext = context
         self.totalCount = previews.count
         self.currentIndex = 0
@@ -53,8 +52,8 @@ class BulkImportManager: ObservableObject {
             jobs[index].status = .extracting
             
             do {
-                guard let extractor = urlExtractor, let ctx = modelContext else { break }
-                let extracted = try await extractor.extract(from: job.preview.url)
+                guard let ctx = modelContext else { break }
+                let extracted = try await urlExtractor.extract(from: job.preview.url)
                 
                 // Download images and create draft
                 try await createDraft(from: extracted, context: ctx)
