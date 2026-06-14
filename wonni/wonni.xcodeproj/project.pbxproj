@@ -64,6 +64,7 @@
 		61FAA5882FB022A0001C28CE /* ConversationRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA5892FB022A0001C28CE /* ConversationRepository.swift */; };
 		61FAA58A2FB022A0001C28CE /* ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA58B2FB022A0001C28CE /* ConversationView.swift */; };
 		61FAA58C2FB022A0001C28CE /* SearchRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA58D2FB022A0001C28CE /* SearchRepository.swift */; };
+		6A9BC89536054268BC3F7DDB /* PublicProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53C7176BC7F54AF2908CF8FE /* PublicProfileView.swift */; };
 		9944CB339CA5802F7C51CEEB /* URLExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D58F95FAA23371A58634E74E /* URLExtractor.swift */; };
 		A1B2C3D4E5F6A7B82E9D0001 /* ActiveDraftCarouselView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B82E9D0002 /* ActiveDraftCarouselView.swift */; };
 		AA0011223344556677AABBFF /* MercariObservedDataRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0011223344556677AABBEE /* MercariObservedDataRepository.swift */; };
@@ -132,6 +133,7 @@
 		61FAA5892FB022A0001C28CE /* ConversationRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationRepository.swift; sourceTree = "<group>"; };
 		61FAA58B2FB022A0001C28CE /* ConversationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationView.swift; sourceTree = "<group>"; };
 		61FAA58D2FB022A0001C28CE /* SearchRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchRepository.swift; sourceTree = "<group>"; };
+		53C7176BC7F54AF2908CF8FE /* PublicProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublicProfileView.swift; sourceTree = "<group>"; };
 		67BC65BADBDD92E27F2C170A /* ImportListingSheet.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ImportListingSheet.swift; sourceTree = "<group>"; };
 		76A8453ED0904B9D853B98E5 /* UploadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadManager.swift; sourceTree = "<group>"; };
 		93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalesDashboardView.swift; sourceTree = "<group>"; };
@@ -241,6 +243,7 @@
 				E177FE23B86D196AD7B41F1E /* BulkImportSheet.swift */,
 				6192AA632D7F641100EC2EFA /* CameraView */,
 				61FAA58B2FB022A0001C28CE /* ConversationView.swift */,
+				53C7176BC7F54AF2908CF8FE /* PublicProfileView.swift */,
 				6192AA5D2D7F583300EC2EFA /* CreateListingView.swift */,
 				61F0F0032FB022A0001C28CE /* CrossPostWebView.swift */,
 				6134E1562FDCB206007C3979 /* DraftPhotoEditModal.swift */,
@@ -407,6 +410,7 @@
 				61FAA5862FB022A0001C28CE /* ListingDetailView.swift in Sources */,
 				61FAA5882FB022A0001C28CE /* ConversationRepository.swift in Sources */,
 				61FAA58A2FB022A0001C28CE /* ConversationView.swift in Sources */,
+				6A9BC89536054268BC3F7DDB /* PublicProfileView.swift in Sources */,
 				61FAA58C2FB022A0001C28CE /* SearchRepository.swift in Sources */,
 				58027310287C4A0F94DF7BCF /* UploadManager.swift in Sources */,
 				2956025A9AE24C1CB28151E8 /* UploadPillView.swift in Sources */,

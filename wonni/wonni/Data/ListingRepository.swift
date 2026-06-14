@@ -224,6 +224,16 @@ class ListingRepository: ObservableObject {
         )
     }
 
+    func fetchActiveListings(forUserId userId: String) async throws -> [UserListing] {
+        let snapshot = try await db.collection(listingsCollection)
+            .whereField("userId", isEqualTo: userId)
+            .whereField("status", isEqualTo: ListingStatus.active.rawValue)
+            .order(by: "publishedAt", descending: true)
+            .limit(to: 20)
+            .getDocuments()
+        return snapshot.documents.compactMap { try? $0.data(as: UserListing.self) }
+    }
+
     /// Fetches active listings for discovery, excluding the given listing ID.
     /// Query is intentionally simple (single-field) to avoid composite index requirements.
     /// When catalog items exist, filter by catalogItemId instead.
