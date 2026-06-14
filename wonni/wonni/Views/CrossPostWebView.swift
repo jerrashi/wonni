@@ -3578,7 +3578,7 @@ private struct MercariDeactivateActionSheet: View {
 /// helpers if anything goes wrong.
 @MainActor
 final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelegate {
-    enum Phase {
+    enum Phase: Equatable {
         case navigating, injecting, success, manualFallback(String)
     }
 
@@ -3587,6 +3587,7 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
 
     let webView: WKWebView
     private var hasStarted = false
+    private var taskId = UUID()
 
     let mercariItemId: String
     let title: String
@@ -3620,13 +3621,28 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
         hasStarted = true
         self.photoBase64Strings = photoBase64Strings
         self.photosWereUpdated = photosWereUpdated
+        if manualReason == nil {
+            AppTaskQueue.shared.begin(id: taskId, label: "Updating Mercari listing…")
+        }
         let urlStr = "https://www.mercari.com/sell/edit/\(mercariItemId)/"
         if let url = URL(string: urlStr) {
             webView.load(URLRequest(url: url))
         } else {
+            AppTaskQueue.shared.complete(id: taskId)
             phase = .manualFallback("Invalid Mercari item ID")
             isWebViewVisible = true
         }
+    }
+
+    func restart() {
+        guard manualReason == nil else { return }
+        let savedPhotos = photoBase64Strings
+        let savedPhotosUpdated = photosWereUpdated
+        hasStarted = false
+        taskId = UUID()
+        phase = .navigating
+        isWebViewVisible = false
+        start(photoBase64Strings: savedPhotos, photosWereUpdated: savedPhotosUpdated)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -3634,6 +3650,7 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        AppTaskQueue.shared.complete(id: taskId)
         phase = .manualFallback("Page failed to load — edit manually")
         isWebViewVisible = true
     }
@@ -3673,6 +3690,7 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
         if manualReason != nil { return }
         guard case .navigating = phase else { return }
         phase = .injecting
+        defer { AppTaskQueue.shared.complete(id: taskId) }
 
         // Wait for the edit form to mount (same Title field check as create flow)
         let deadline = Date().addingTimeInterval(30)
@@ -3820,9 +3838,32 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
         """
         let saveResult = (try? await webView.callJS(saveJS)) as? String ?? "error"
         if saveResult == "submitted" {
-            // Brief wait then check for success (URL change or success element)
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            phase = .success
+            // Poll for navigation away from the edit URL or a success signal on the page.
+            // Mercari may redirect to the listing detail or show an inline success toast.
+            let successDeadline = Date().addingTimeInterval(15)
+            var editSucceeded = false
+            while Date() < successDeadline {
+                try? await Task.sleep(nanoseconds: 750_000_000)
+                let check = (try? await webView.callJS("""
+                    return (function() {
+                        var url = location.href.toLowerCase();
+                        if (url.indexOf('/sell/edit/') === -1) return 'navigated';
+                        var body = document.body ? document.body.innerText : '';
+                        if (/updated|changes saved|listing updated/i.test(body)) return 'success-text';
+                        return 'wait';
+                    })();
+                """)) as? String ?? "wait"
+                if check == "navigated" || check == "success-text" {
+                    editSucceeded = true
+                    break
+                }
+            }
+            if editSucceeded {
+                phase = .success
+            } else {
+                phase = .manualFallback("Mercari didn't confirm the update — check your listing manually")
+                isWebViewVisible = true
+            }
         } else {
             phase = .manualFallback("Couldn't find the save button — tap it manually")
             isWebViewVisible = true
@@ -3886,6 +3927,7 @@ struct MercariAutoEditSheet: View {
 
     @StateObject private var state: MercariAutoEditState
     @Environment(\.dismiss) private var dismiss
+    @State private var sheetDetent: PresentationDetent = .height(80)
 
     let photosWereUpdated: Bool
 
@@ -3914,21 +3956,26 @@ struct MercariAutoEditSheet: View {
                     statusContent
                 }
             }
-            .navigationTitle("Update Mercari Listing")
+            .navigationTitle(state.isWebViewVisible ? "Update Mercari Listing" : "")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { onDone(); dismiss() }
-                }
                 if state.isWebViewVisible {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close") { onDone(); dismiss() }
+                    }
                     ToolbarItem(placement: .primaryAction) {
                         Button { state.webView.reload() } label: {
                             Image(systemName: "arrow.clockwise")
                         }
                     }
+                } else if case .manualFallback = state.phase {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close") { onDone(); dismiss() }
+                    }
                 }
             }
         }
+        .presentationDetents([.height(80), .large], selection: $sheetDetent)
         .task {
             if photosWereUpdated {
                 var base64Photos: [String] = []
@@ -3942,38 +3989,52 @@ struct MercariAutoEditSheet: View {
                 state.start()
             }
         }
+        .onChange(of: state.phase) { _, newPhase in
+            switch newPhase {
+            case .success:
+                onDone()
+                dismiss()
+            case .manualFallback:
+                sheetDetent = .large
+            default:
+                break
+            }
+        }
     }
 
     @ViewBuilder
     private var statusContent: some View {
         switch state.phase {
         case .navigating, .injecting:
-            VStack(spacing: 16) {
-                ProgressView()
-                let label: String = { if case .navigating = state.phase { return "Loading Mercari edit form…" } else { return "Filling in updated details…" } }()
-                Text(label)
-                    .font(.subheadline).foregroundStyle(.secondary)
-            }
+            // Progress is shown in the shared AppTaskQueue pill bar — nothing to show here.
+            Color.clear
         case .success:
-            VStack(spacing: 16) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 56)).foregroundStyle(.green)
-                Text("Mercari listing updated!").font(.title3.weight(.semibold))
-                Button("Done") { onDone(); dismiss() }
-                    .buttonStyle(.borderedProminent)
-            }
+            Color.clear
         case .manualFallback(let reason):
-            VStack(spacing: 12) {
-                Image(systemName: "hand.tap.fill")
-                    .font(.system(size: 40)).foregroundStyle(.orange)
-                Text("Finish manually").font(.title3.weight(.semibold))
-                Text(reason).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Button("Show Mercari form") {
-                    state.isWebViewVisible = true
+            VStack(spacing: 20) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 44))
+                    .foregroundStyle(.orange)
+                Text("Update Failed")
+                    .font(.title2.weight(.bold))
+                Text(reason)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                VStack(spacing: 12) {
+                    Button("Retry") {
+                        sheetDetent = .height(80)
+                        state.restart()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button("Edit Manually in Browser") {
+                        state.isWebViewVisible = true
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.borderedProminent)
             }
             .padding(.horizontal, 32)
+            .padding(.top, 24)
         }
     }
 }
@@ -4232,7 +4293,7 @@ class MercariSyncManager: ObservableObject {
                 }
                 if soldDiff {
                     let sale = Sale(
-                        userId: "",
+                        userId: listing.userId,
                         listingId: listingId,
                         listingTitle: listing.customTitle,
                         coverPhotoPath: listing.coverPhotoPath,
