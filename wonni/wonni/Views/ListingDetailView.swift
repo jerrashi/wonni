@@ -131,6 +131,8 @@ struct ListingDetailView: View {
     @State private var showOfferSheet = false
     @State private var offerSent = false
     @State private var sellerProfile: UserPublicProfile?
+    @State private var messageConversation: Conversation?
+    @State private var showMessageConversation = false
 
     private var currentUserId: String { authManager.currentUser?.uid ?? "" }
     private var isSeller: Bool { listing.userId == currentUserId }
@@ -153,6 +155,11 @@ struct ListingDetailView: View {
                 Task { await submitOffer(amount: amount) }
             }
         }
+        .navigationDestination(isPresented: $showMessageConversation) {
+            if let conv = messageConversation {
+                ConversationView(conversation: conv)
+            }
+        }
         .overlay(alignment: .top) {
             if offerSent {
                 Text("Offer sent!")
@@ -168,6 +175,22 @@ struct ListingDetailView: View {
             suggestedListings = (try? await ListingRepository.shared
                 .fetchSuggestedListings(excluding: listing.id ?? "", limit: 8)) ?? []
             sellerProfile = try? await UserRepository.shared.fetchProfile(uid: listing.userId)
+        }
+    }
+
+    private func openMessageConversation() async {
+        do {
+            let convId = try await ConversationRepository.shared.getOrCreateConversation(
+                listing: listing, buyerId: currentUserId,
+                buyerDisplayName: authManager.currentUser?.displayName,
+                sellerDisplayName: sellerProfile?.displayName
+            )
+            if let conv = try await ConversationRepository.shared.fetchConversation(id: convId) {
+                messageConversation = conv
+                showMessageConversation = true
+            }
+        } catch {
+            print("[ListingDetailView] Message failed: \(error)")
         }
     }
 
@@ -238,12 +261,27 @@ struct ListingDetailView: View {
             }
 
             Divider()
-            sellerRow
+            NavigationLink(destination: PublicProfileView(userId: listing.userId, initialProfile: sellerProfile)) {
+                sellerRow
+            }
+            .buttonStyle(.plain)
             Divider()
 
             if !isSeller {
                 Button { showOfferSheet = true } label: {
                     Text("Make an Offer")
+                        .font(.subheadline.weight(.medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .strokeBorder(Color.primary.opacity(0.2), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+
+                Button { Task { await openMessageConversation() } } label: {
+                    Text("Message Seller")
                         .font(.subheadline.weight(.medium))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)

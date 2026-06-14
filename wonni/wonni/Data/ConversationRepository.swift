@@ -14,6 +14,11 @@ enum MessageType: String, Codable {
     case offer
 }
 
+enum ConversationType: String, Codable {
+    case listing
+    case general
+}
+
 struct Message: Identifiable, Codable {
     @DocumentID var id: String?
     var senderId: String
@@ -37,7 +42,7 @@ struct Conversation: Identifiable, Codable {
     var participants: [String]
     var buyerId: String
     var sellerId: String
-    var listingId: String
+    var listingId: String?
     var snapshotTitle: String?
     var snapshotCoverPath: String?
     var snapshotPrice: Double?
@@ -48,11 +53,16 @@ struct Conversation: Identifiable, Codable {
     var activeOfferAmount: Double?
     var buyerUnread: Int
     var sellerUnread: Int
+    var conversationType: ConversationType?
+    var participantDisplayNames: [String: String]?
+    var deletedBy: [String]?
 
-    init(participants: [String], buyerId: String, sellerId: String, listingId: String,
+    init(participants: [String], buyerId: String, sellerId: String, listingId: String? = nil,
          snapshotTitle: String? = nil, snapshotCoverPath: String? = nil,
          snapshotPrice: Double? = nil, hasActiveOffer: Bool = false,
-         activeOfferAmount: Double? = nil, buyerUnread: Int = 0, sellerUnread: Int = 0) {
+         activeOfferAmount: Double? = nil, buyerUnread: Int = 0, sellerUnread: Int = 0,
+         conversationType: ConversationType? = nil,
+         participantDisplayNames: [String: String]? = nil) {
         self.participants = participants
         self.buyerId = buyerId
         self.sellerId = sellerId
@@ -64,11 +74,16 @@ struct Conversation: Identifiable, Codable {
         self.activeOfferAmount = activeOfferAmount
         self.buyerUnread = buyerUnread
         self.sellerUnread = sellerUnread
+        self.conversationType = conversationType
+        self.participantDisplayNames = participantDisplayNames
+        self.deletedBy = []
     }
 
     func unreadCount(for userId: String) -> Int {
         userId == buyerId ? buyerUnread : sellerUnread
     }
+
+    var isGeneralConversation: Bool { conversationType == .general }
 }
 
 // MARK: - ConversationRepository
@@ -78,9 +93,14 @@ class ConversationRepository {
     private let db = Firestore.firestore()
     private let col = "conversations"
 
-    // One thread per (buyer, listing) — deterministic ID avoids duplicates
-    private func conversationId(buyerId: String, listingId: String) -> String {
+    private func listingConversationId(buyerId: String, listingId: String) -> String {
         "\(buyerId)_\(listingId)"
+    }
+
+    // Sorted UIDs + dm_ prefix distinguishes from listing conversation IDs
+    private func directConversationId(uid1: String, uid2: String) -> String {
+        let sorted = [uid1, uid2].sorted()
+        return "dm_\(sorted[0])_\(sorted[1])"
     }
 
     func observeConversations(
@@ -114,16 +134,26 @@ class ConversationRepository {
             }
     }
 
+    func fetchConversation(id: String) async throws -> Conversation? {
+        let doc = try await db.collection(col).document(id).getDocument()
+        return try? doc.data(as: Conversation.self)
+    }
+
     @discardableResult
-    func getOrCreateConversation(listing: UserListing, buyerId: String) async throws -> String {
+    func getOrCreateConversation(listing: UserListing, buyerId: String,
+                                 buyerDisplayName: String? = nil,
+                                 sellerDisplayName: String? = nil) async throws -> String {
         guard let listingId = listing.id else {
             throw NSError(domain: "ConversationRepository", code: 400,
                           userInfo: [NSLocalizedDescriptionKey: "Listing has no ID"])
         }
-        let convId = conversationId(buyerId: buyerId, listingId: listingId)
+        let convId = listingConversationId(buyerId: buyerId, listingId: listingId)
         let ref = db.collection(col).document(convId)
         let doc = try await ref.getDocument()
         if !doc.exists {
+            var names: [String: String] = [:]
+            if let n = buyerDisplayName { names[buyerId] = n }
+            if let n = sellerDisplayName { names[listing.userId] = n }
             let conv = Conversation(
                 participants: [buyerId, listing.userId],
                 buyerId: buyerId,
@@ -131,7 +161,33 @@ class ConversationRepository {
                 listingId: listingId,
                 snapshotTitle: listing.customTitle,
                 snapshotCoverPath: listing.coverPhotoPath,
-                snapshotPrice: listing.price
+                snapshotPrice: listing.price,
+                conversationType: .listing,
+                participantDisplayNames: names.isEmpty ? nil : names
+            )
+            try ref.setData(from: conv)
+        }
+        return convId
+    }
+
+    @discardableResult
+    func getOrCreateDirectConversation(currentUserId: String, currentDisplayName: String?,
+                                       otherUserId: String, otherDisplayName: String?) async throws -> String {
+        let convId = directConversationId(uid1: currentUserId, uid2: otherUserId)
+        let ref = db.collection(col).document(convId)
+        let doc = try await ref.getDocument()
+        if !doc.exists {
+            var names: [String: String] = [:]
+            if let n = currentDisplayName { names[currentUserId] = n }
+            if let n = otherDisplayName { names[otherUserId] = n }
+            let conv = Conversation(
+                participants: [currentUserId, otherUserId],
+                buyerId: currentUserId,
+                sellerId: otherUserId,
+                listingId: nil,
+                snapshotTitle: otherDisplayName,
+                conversationType: .general,
+                participantDisplayNames: names.isEmpty ? nil : names
             )
             try ref.setData(from: conv)
         }
@@ -174,5 +230,18 @@ class ConversationRepository {
         guard let conv = try? doc.data(as: Conversation.self) else { return }
         let field = conv.buyerId == userId ? "buyerUnread" : "sellerUnread"
         try await ref.updateData([field: 0])
+    }
+
+    func markAsUnread(conversationId: String, userId: String) async throws {
+        let ref = db.collection(col).document(conversationId)
+        let doc = try await ref.getDocument()
+        guard let conv = try? doc.data(as: Conversation.self) else { return }
+        let field = conv.buyerId == userId ? "buyerUnread" : "sellerUnread"
+        try await ref.updateData([field: 1])
+    }
+
+    func deleteConversation(conversationId: String, userId: String) async throws {
+        let ref = db.collection(col).document(conversationId)
+        try await ref.updateData(["deletedBy": FieldValue.arrayUnion([userId])])
     }
 }

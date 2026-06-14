@@ -22,13 +22,16 @@ struct ConversationView: View {
     private var isBuyer: Bool { conversation.buyerId == currentUserId }
     private var conversationId: String { conversation.id ?? "" }
     private var otherUserId: String { isBuyer ? conversation.sellerId : conversation.buyerId }
+    private var isGeneralConversation: Bool { conversation.isGeneralConversation }
     
     @State private var otherProfile: UserPublicProfile?
 
     var body: some View {
         VStack(spacing: 0) {
-            listingHeader
-            Divider()
+            if !isGeneralConversation {
+                listingHeader
+                Divider()
+            }
             messageList
             Divider()
             inputBar
@@ -130,39 +133,41 @@ struct ConversationView: View {
 
     private var inputBar: some View {
         HStack(spacing: 10) {
-            if isBuyer {
-                Button { showOfferSheet = true } label: {
-                    Text("Offer")
-                        .font(.subheadline.weight(.medium))
-                        .padding(.horizontal, 14).padding(.vertical, 8)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 20)
-                                .strokeBorder(Color.primary.opacity(0.25), lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
+            if !isGeneralConversation {
+                if isBuyer {
+                    Button { showOfferSheet = true } label: {
+                        Text("Offer")
+                            .font(.subheadline.weight(.medium))
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 20)
+                                    .strokeBorder(Color.primary.opacity(0.25), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
 
-                Button { showRoleActionAlert = true } label: {
-                    Text("Received")
-                        .font(.subheadline.weight(.medium))
-                        .padding(.horizontal, 14).padding(.vertical, 8)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 20)
-                                .strokeBorder(Color.primary.opacity(0.25), lineWidth: 1)
-                        )
+                    Button { showRoleActionAlert = true } label: {
+                        Text("Received")
+                            .font(.subheadline.weight(.medium))
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 20)
+                                    .strokeBorder(Color.primary.opacity(0.25), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button { showRoleActionAlert = true } label: {
+                        Text("Shipped")
+                            .font(.subheadline.weight(.medium))
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 20)
+                                    .strokeBorder(Color.primary.opacity(0.25), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-            } else {
-                Button { showRoleActionAlert = true } label: {
-                    Text("Shipped")
-                        .font(.subheadline.weight(.medium))
-                        .padding(.horizontal, 14).padding(.vertical, 8)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 20)
-                                .strokeBorder(Color.primary.opacity(0.25), lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
             }
 
             TextField("Message...", text: $messageText, axis: .vertical)
