@@ -15,6 +15,7 @@ struct ConversationView: View {
     @State private var messages: [Message] = []
     @State private var messageText = ""
     @State private var showOfferSheet = false
+    @State private var showRoleActionAlert = false
     @State private var listener: ListenerRegistration?
 
     private var currentUserId: String { authManager.currentUser?.uid ?? "" }
@@ -56,6 +57,11 @@ struct ConversationView: View {
             otherProfile = try? await UserRepository.shared.fetchProfile(uid: otherUserId)
         }
         .onDisappear { listener?.remove() }
+        .alert("Coming Soon", isPresented: $showRoleActionAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This feature is coming soon.")
+        }
         .sheet(isPresented: $showOfferSheet) {
             MakeOfferSheet(currentPrice: conversation.snapshotPrice) { amount in
                 Task { try? await ConversationRepository.shared.sendOffer(
@@ -127,6 +133,28 @@ struct ConversationView: View {
             if isBuyer {
                 Button { showOfferSheet = true } label: {
                     Text("Offer")
+                        .font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20)
+                                .strokeBorder(Color.primary.opacity(0.25), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+
+                Button { showRoleActionAlert = true } label: {
+                    Text("Received")
+                        .font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20)
+                                .strokeBorder(Color.primary.opacity(0.25), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button { showRoleActionAlert = true } label: {
+                    Text("Shipped")
                         .font(.subheadline.weight(.medium))
                         .padding(.horizontal, 14).padding(.vertical, 8)
                         .overlay(
