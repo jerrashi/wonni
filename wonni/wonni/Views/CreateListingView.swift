@@ -920,7 +920,7 @@ struct CustomPhotoPickerView: View {
     }
 
 // MARK: - Title character-count warning
-// eBay & Mercari: 80 chars · Facebook: 99 · Etsy: 140
+// Mercari: 40 chars · eBay: 80 chars · Facebook: 99 chars · Etsy: 140 chars
 struct TitleCharCountView: View {
     let count: Int
 
@@ -928,6 +928,7 @@ struct TitleCharCountView: View {
         if count > 140 { return Color(red: 0.75, green: 0.0, blue: 0.0) }
         if count > 99  { return .red }
         if count > 80  { return .orange }
+        if count > 40  { return .orange }
         return .secondary
     }
 
@@ -935,20 +936,20 @@ struct TitleCharCountView: View {
         if count > 140 { return "Truncated on all platforms" }
         if count > 99  { return "Only shows fully on Etsy" }
         if count > 80  { return "Facebook & Etsy only" }
+        if count > 40  { return "eBay, Facebook & Etsy only" }
         return nil
     }
 
     var body: some View {
-        // Only surface the counter once the title is long enough to matter (>= 70 chars).
-        // Below that it renders nothing and takes no vertical space.
-        if count >= 70 {
+        // Surface the counter once approaching Mercari's 40-char limit.
+        if count >= 35 {
             HStack(spacing: 4) {
                 if let msg = message {
                     Text(msg).font(.caption2)
                 }
                 Spacer()
                 Text("\(count)")
-                    .font(.caption2.monospacedDigit().weight(count > 80 ? .semibold : .regular))
+                    .font(.caption2.monospacedDigit().weight(count > 40 ? .semibold : .regular))
             }
             .foregroundStyle(color)
             .animation(.easeInOut(duration: 0.2), value: count)
