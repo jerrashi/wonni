@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import SwiftData
 import FirebaseStorage
 import FirebaseAuth
 import _PhotosUI_SwiftUI // required for PhotosPicker
@@ -55,6 +56,7 @@ struct ProfileView: View {
     @State private var listingToRestock: UserListing?
     @State private var isSoldOutExpanded = false
     @State private var listingToMarkSoldOut: UserListing?
+    @State private var isSellingSimilar = false
 
     private var user: FirebaseAuth.User? { authManager.currentUser }
 
@@ -537,6 +539,13 @@ struct ProfileView: View {
                     Label("Record Sale", systemImage: "dollarsign.circle")
                 }
                 .tint(.green)
+                Button {
+                    Task { await sellSimilar(listing) }
+                } label: {
+                    Label("Sell Similar", systemImage: "doc.on.doc")
+                }
+                .tint(.blue)
+                .disabled(isSellingSimilar)
             }
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 Button(role: .destructive) {
@@ -650,7 +659,91 @@ struct ProfileView: View {
             print("[ProfileView] Failed to delete listing: \(error)")
         }
     }
-    
+
+    private func sellSimilar(_ original: UserListing) async {
+        guard !isSellingSimilar, let userId = user?.uid else { return }
+        isSellingSimilar = true
+
+        let taskId = UUID()
+        AppTaskQueue.shared.begin(id: taskId, label: "Copying listing…", detail: original.customTitle, accentColor: .blue)
+
+        let newId = UUID().uuidString
+
+        // Copy all user-customizable fields; reset platform-specific state
+        var copy = UserListing(
+            id: newId,
+            userId: userId,
+            catalogItemId: original.catalogItemId,
+            inventoryUnitIds: [],
+            isBundleListing: original.isBundleListing,
+            bundleLabel: original.bundleLabel,
+            customTitle: original.customTitle,
+            customDescription: original.customDescription,
+            price: original.price,
+            currency: original.currency,
+            quantity: original.quantity,
+            condition: original.condition,
+            conditionNotes: original.conditionNotes,
+            photoPaths: [],
+            coverPhotoPath: nil,
+            shippingInfo: original.shippingInfo,
+            status: .draft,
+            createdAt: Timestamp(date: Date()),
+            updatedAt: Timestamp(date: Date()),
+            sourceAssetIdentifiers: [],
+            geminiIdentificationConfirmed: false,
+            sellingProfileId: original.sellingProfileId,
+            ebayCategory: original.ebayCategory,
+            variations: original.variations,
+            variationStrategy: original.variationStrategy
+        )
+
+        // Copy brand / category / tags / personalNote
+        copy.brand = original.brand
+        copy.category = original.category
+        copy.tags = original.tags
+        copy.personalNote = original.personalNote
+
+        // Download and re-upload photos under the new listing ID
+        var newPhotoPaths: [String] = []
+        let storage = StorageService.shared
+        for (index, path) in original.photoPaths.enumerated() {
+            AppTaskQueue.shared.update(
+                id: taskId,
+                detail: "Photo \(index + 1) of \(original.photoPaths.count)"
+            )
+            do {
+                let data = try await storage.downloadImageData(path: path)
+                if let image = UIImage(data: data) {
+                    let newPath = try await storage.uploadListingImageWithUUID(image: image, userId: userId, listingId: newId)
+                    newPhotoPaths.append(newPath)
+                }
+            } catch {
+                print("[ProfileView] sellSimilar: failed to copy photo at \(path): \(error)")
+            }
+        }
+        copy.photoPaths = newPhotoPaths
+        copy.coverPhotoPath = newPhotoPaths.first
+
+        do {
+            _ = try await ListingRepository.shared.saveDraft(copy)
+            AppTaskQueue.shared.complete(id: taskId)
+            await loadListings()
+            // Open EditListingSheet for the new listing
+            if let newListing = listings.first(where: { $0.id == newId }) {
+                listingToEdit = newListing
+            } else {
+                // Fallback: open with the copy struct directly
+                listingToEdit = copy
+            }
+        } catch {
+            AppTaskQueue.shared.complete(id: taskId)
+            print("[ProfileView] sellSimilar: failed to save copy: \(error)")
+        }
+
+        isSellingSimilar = false
+    }
+
     private func performBulkDelete() async {
         do {
             try await ListingRepository.shared.bulkDelete(listingIds: Array(selectedListings))
@@ -896,33 +989,7 @@ enum EditPhotoItem: Identifiable, Hashable {
     }
 }
 
-// MARK: - Edit Photo Drop Delegate
-struct EditPhotoDropDelegate: DropDelegate {
-    let item: EditPhotoItem
-    @Binding var photos: [EditPhotoItem]
-    @Binding var draggedPhotoId: String?
-    @Binding var isDraggingPhoto: Bool
 
-    func dropEntered(info: DropInfo) {
-        guard let dragged = draggedPhotoId, dragged != item.id else { return }
-        guard let from = photos.firstIndex(where: { $0.id == dragged }),
-              let to = photos.firstIndex(where: { $0.id == item.id }),
-              from != to else { return }
-        // No animation here — animating during live drag causes the layout to shift
-        // which invalidates the drag session and makes items jump around.
-        photos.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        return DropProposal(operation: .move)
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        isDraggingPhoto = false
-        draggedPhotoId = nil
-        return true
-    }
-}
 
 // MARK: - Edit Listing Sheet
 
@@ -987,11 +1054,8 @@ struct EditListingSheet: View {
 
     // Photo Editing
     @State private var editPhotos: [EditPhotoItem]
-    @State private var isSelectionMode = false
-    @State private var selectedPhotos = Set<String>()
     @State private var newPhotosItems: [PhotosPickerItem] = []
-    @State private var draggedPhotoId: String? = nil
-    @State private var isDraggingPhoto = false
+    @State private var showPhotoEditModal = false
 
     init(listing: UserListing, onSave: @escaping ([CrossPostJob]) -> Void) {
         self.listing = listing
@@ -1252,27 +1316,15 @@ struct EditListingSheet: View {
                     Text("Photos").font(.headline)
                     Spacer()
                     if !editPhotos.isEmpty {
-                        if isSelectionMode {
-                            HStack(spacing: 12) {
-                                Button("Delete") {
-                                    for id in selectedPhotos {
-                                        editPhotos.removeAll(where: { $0.id == id })
-                                    }
-                                    selectedPhotos.removeAll()
-                                    isSelectionMode = false
-                                }
-                                .foregroundColor(.red)
-                                .disabled(selectedPhotos.isEmpty)
-                                Button("Cancel") {
-                                    isSelectionMode = false
-                                    selectedPhotos.removeAll()
-                                }
-                            }
-                        } else {
-                            Button("Select") {
-                                isSelectionMode = true
-                                selectedPhotos.removeAll()
-                            }
+                        Button {
+                            showPhotoEditModal = true
+                        } label: {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.blue)
+                                .padding(6)
+                                .background(Color.blue.opacity(0.1))
+                                .clipShape(Circle())
                         }
                     }
                 }
@@ -1291,78 +1343,37 @@ struct EditListingSheet: View {
                                 .frame(width: 80, height: 80)
                                 .cornerRadius(8)
                                 .clipped()
-                                .opacity(draggedPhotoId == item.id ? 0.4 : (selectedPhotos.contains(item.id) ? 0.6 : 1.0))
-                                .onDrag({
-                                    if !isSelectionMode {
-                                        draggedPhotoId = item.id
-                                        isDraggingPhoto = true
-                                        return NSItemProvider(object: item.id as NSString)
-                                    }
-                                    return NSItemProvider()
-                                }, preview: {
-                                    Group {
-                                        switch item {
-                                        case .existing(let path):
-                                            StorageImage(path: path)
-                                        case .new(_, let image):
-                                            Image(uiImage: image).resizable().scaledToFill()
-                                        }
-                                    }
-                                    .frame(width: 80, height: 80)
-                                    .cornerRadius(8)
-                                    .clipped()
-                                })
-                                .onDrop(of: [.text], delegate: EditPhotoDropDelegate(
-                                    item: item,
-                                    photos: $editPhotos,
-                                    draggedPhotoId: $draggedPhotoId,
-                                    isDraggingPhoto: $isDraggingPhoto
-                                ))
-                                if isSelectionMode {
-                                    Image(systemName: selectedPhotos.contains(item.id) ? "checkmark.circle.fill" : "circle")
-                                        .foregroundColor(selectedPhotos.contains(item.id) ? .blue : .white)
-                                        .background(Circle().fill(Color.black.opacity(0.4)))
-                                        .padding(4)
-                                }
-                            }
-                            .onTapGesture {
-                                if isSelectionMode {
-                                    if selectedPhotos.contains(item.id) {
-                                        selectedPhotos.remove(item.id)
-                                    } else {
-                                        selectedPhotos.insert(item.id)
-                                    }
-                                }
                             }
                         }
-                        if !isSelectionMode {
-                            PhotosPicker(selection: $newPhotosItems, matching: .images) {
-                                VStack {
-                                    Image(systemName: "plus.circle").font(.title2)
-                                    Text("Add Photo").font(.caption2)
-                                }
-                                .foregroundColor(.accentColor)
-                                .frame(width: 80, height: 80)
-                                .background(Color(.systemGray6))
-                                .cornerRadius(8)
+                        
+                        PhotosPicker(selection: $newPhotosItems, matching: .images) {
+                            VStack {
+                                Image(systemName: "plus.circle").font(.title2)
+                                Text("Add Photo").font(.caption2)
                             }
-                            .onChange(of: newPhotosItems) { _, newItems in
-                                Task {
-                                    for phItem in newItems {
-                                        if let data = try? await phItem.loadTransferable(type: Data.self),
-                                           let uiImage = UIImage(data: data) {
-                                            editPhotos.append(.new(id: UUID().uuidString, image: uiImage))
-                                        }
+                            .foregroundColor(.accentColor)
+                            .frame(width: 80, height: 80)
+                            .background(Color(.systemGray6))
+                            .cornerRadius(8)
+                        }
+                        .onChange(of: newPhotosItems) { _, newItems in
+                            Task {
+                                for phItem in newItems {
+                                    if let data = try? await phItem.loadTransferable(type: Data.self),
+                                       let uiImage = UIImage(data: data) {
+                                        editPhotos.append(.new(id: UUID().uuidString, image: uiImage))
                                     }
-                                    newPhotosItems = []
                                 }
+                                newPhotosItems = []
                             }
                         }
                     }
                     .padding(.vertical, 4)
                 }
-                .scrollDisabled(isDraggingPhoto)
             }
+        }
+        .fullScreenCover(isPresented: $showPhotoEditModal) {
+            PublishedPhotoModal(photos: $editPhotos)
         }
     }
 
@@ -2160,11 +2171,14 @@ struct StorageImage: View {
 
 struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var authManager: AuthManager
-    
+
     @AppStorage("saveToCameraRoll") private var saveToCameraRoll: Bool = true
     @AppStorage("showCameraGrid") private var showCameraGrid: Bool = false
     @State private var showSignOutConfirm = false
+    @State private var isMigrating = false
+    @State private var migrationMessage: String? = nil
     
     @StateObject private var integrationRepo = IntegrationRepository.shared
     @State private var showLinkAlert = false
@@ -2253,6 +2267,32 @@ struct SettingsSheet: View {
                                 onDisconnect: { disconnectPlatform(platform: integration.platform) }
                             )
                         }
+                    }
+                }
+
+                Section(header: Text("Data")) {
+                    Button {
+                        Task { await migrateSwiftDataItems() }
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Migrate Legacy Listings")
+                                Text("Upload locally-saved listings (imported before this update) to your account.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            if isMigrating {
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(isMigrating)
+
+                    if let msg = migrationMessage {
+                        Text(msg)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
 
@@ -2689,6 +2729,103 @@ struct SettingsSheet: View {
             await MainActor.run {
                 isSavingSettings = false
             }
+        }
+    }
+
+    // MARK: - Legacy SwiftData migration
+
+    private func migrateSwiftDataItems() async {
+        guard let userId = Auth.auth().currentUser?.uid else { return }
+        isMigrating = true
+        migrationMessage = nil
+
+        let descriptor = FetchDescriptor<Item>()
+        guard let items = try? modelContext.fetch(descriptor) else {
+            isMigrating = false
+            migrationMessage = "Could not read local data."
+            return
+        }
+
+        let unmigrated = items.filter { $0.firestoreListingId == nil }
+        guard !unmigrated.isEmpty else {
+            isMigrating = false
+            migrationMessage = "No legacy listings found."
+            return
+        }
+
+        var migratedCount = 0
+        for item in unmigrated {
+            let listingId = UUID().uuidString
+            var photoPaths: [String] = []
+
+            if item.isLocalPhotoOnly {
+                for (i, data) in item.photosData.enumerated() {
+                    if let image = UIImage(data: data),
+                       let path = try? await StorageService.shared.uploadListingImage(
+                           image: image, index: i, userId: userId, listingId: listingId
+                       ) {
+                        photoPaths.append(path)
+                    }
+                }
+            } else {
+                photoPaths = item.firebasePhotoPaths ?? []
+            }
+
+            let shippingInfo = ShippingInfo(
+                buyerPaysShipping: item.buyerPaysShipping,
+                handlingFee: item.handlingFee,
+                estimatedShippingDays: item.estimatedShippingDays,
+                weightLbs: item.weightLbs,
+                packageDimensions: {
+                    if let l = item.lengthIn, let w = item.widthIn, let h = item.heightIn {
+                        return PackageDimensions(lengthIn: l, widthIn: w, heightIn: h)
+                    }
+                    return nil
+                }()
+            )
+
+            let condition = mapItemCondition(item.condition)
+            var listing = UserListing(
+                id: listingId,
+                userId: userId,
+                catalogItemId: "",
+                customTitle: item.userEditedTitle ?? item.originalUserTitleBeforeAI,
+                customDescription: item.userEditedDescription ?? item.originalUserDescriptionBeforeAI,
+                price: item.userEditedPrice,
+                currency: "USD",
+                quantity: 1,
+                condition: condition,
+                photoPaths: photoPaths,
+                coverPhotoPath: photoPaths.first,
+                shippingInfo: shippingInfo,
+                status: item.isLocalPhotoOnly ? .active : .draft,
+                createdAt: Timestamp(date: item.createdAt),
+                updatedAt: Timestamp(date: Date())
+            )
+            listing.brand = item.aiSuggestedBrand
+            listing.category = item.aiSuggestedCategory
+            listing.tags = item.tags.isEmpty ? nil : item.tags
+            listing.personalNote = item.personalNote
+
+            if (try? await ListingRepository.shared.saveDraft(listing)) != nil {
+                item.firestoreListingId = listingId
+                try? modelContext.save()
+                migratedCount += 1
+            }
+        }
+
+        isMigrating = false
+        migrationMessage = "Migrated \(migratedCount) of \(unmigrated.count) listing\(unmigrated.count == 1 ? "" : "s")."
+    }
+
+    private func mapItemCondition(_ raw: String?) -> ItemCondition {
+        switch raw {
+        case "new":      return .new
+        case "likeNew":  return .likeNew
+        case "good":     return .good
+        case "fair":     return .fair
+        case "poor":     return .poor
+        default:         return .good
         }
     }
 }

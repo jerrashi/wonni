@@ -5,17 +5,17 @@
 
 import SwiftUI
 import FirebaseFunctions
+import FirebaseAuth
+import FirebaseFirestore
 
 struct ImportListingSheet: View {
     @Environment(\.dismiss) var dismiss
-    @Environment(\.modelContext) private var modelContext
-    @EnvironmentObject private var uploadManager: UploadManager
-    
+
     @State private var urlString: String = ""
     @State private var isImporting: Bool = false
     @State private var importStatus: String = ""
     @State private var importError: String? = nil
-    
+
     @StateObject private var urlExtractor = URLExtractor()
     
     var body: some View {
@@ -79,66 +79,84 @@ struct ImportListingSheet: View {
     }
     
     private func performImport() async {
+        guard let userId = Auth.auth().currentUser?.uid else {
+            importError = "Not signed in."
+            return
+        }
         isImporting = true
         importError = nil
         importStatus = "Analyzing URL..."
-        
+
         let url = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        
+
         do {
             var extracted: ExtractedListing
-            
+            var ebayItemId: String? = nil
+
             if url.lowercased().contains("ebay.com") {
-                // Extract eBay Item ID
                 guard let itemId = extractEbayItemId(from: url) else {
                     throw URLError(.badURL, userInfo: [NSLocalizedDescriptionKey: "Could not find an eBay Item ID in the URL."])
                 }
-                
+                ebayItemId = itemId
                 importStatus = "Fetching from eBay API..."
                 extracted = try await fetchFromEbay(itemId: itemId)
             } else {
-                // Web scrape (Mercari, etc.)
                 extracted = try await urlExtractor.extract(from: url)
             }
-            
-            importStatus = "Downloading images..."
-            let photosData = try await downloadImages(urls: extracted.imageUrls)
-            
-            // Create Draft Item
-            let draft = Item(
-                photosData: photosData,
-                buyerPaysShipping: true,
-                handlingFee: 0.0,
-                estimatedShippingDays: 3,
-                isDraft: true,
-                sourceAssetIdentifiers: [], // We don't have local PHAssets for these
-                isLocalPhotoOnly: true, // We will treat them as local NSData since they aren't uploaded yet
-                originalUserTitleBeforeAI: extracted.title,
-                originalUserDescriptionBeforeAI: extracted.description
-            )
-            
-            // Pre-fill user edits
-            draft.userEditedTitle = extracted.title
-            draft.userEditedPrice = extracted.price
-            draft.userEditedDescription = extracted.description
-            
-            if !extracted.condition.isEmpty {
-                // simple mapping if possible, otherwise leave it
-                draft.condition = mapCondition(extracted.condition)
+
+            importStatus = "Uploading images..."
+            let listingId = UUID().uuidString
+            var photoPaths: [String] = []
+            let imageUrls = extracted.imageUrls.isEmpty ? [] : extracted.imageUrls
+            for (i, urlStr) in imageUrls.prefix(12).enumerated() {
+                importStatus = "Uploading image \(i + 1) of \(min(imageUrls.count, 12))…"
+                guard let imgUrl = URL(string: urlStr),
+                      let (data, _) = try? await URLSession.shared.data(from: imgUrl),
+                      let image = UIImage(data: data),
+                      let path = try? await StorageService.shared.uploadListingImage(
+                          image: image, index: i, userId: userId, listingId: listingId
+                      ) else { continue }
+                photoPaths.append(path)
             }
-            
-            // Insert and save
-            modelContext.insert(draft)
-            try modelContext.save()
-            
-            // Set it as active draft so we can immediately edit it
-            uploadManager.activeDraftID = draft.id
-            
+
+            // Build cross-post IDs
+            var crossPostIds: [String: String]? = nil
+            var crossPostStatus: [String: String]? = nil
+            if let ebayId = ebayItemId {
+                crossPostIds = ["ebay": ebayId]
+                crossPostStatus = ["ebay": "posted"]
+            } else if let mercariId = extractMercariItemId(from: url) {
+                crossPostIds = ["mercari": mercariId]
+                crossPostStatus = ["mercari": "posted"]
+            }
+
+            let condition = mapCondition(extracted.condition) ?? .good
+            let listing = UserListing(
+                id: listingId,
+                userId: userId,
+                catalogItemId: "",
+                customTitle: extracted.title.isEmpty ? nil : extracted.title,
+                customDescription: extracted.description.isEmpty ? nil : extracted.description,
+                price: extracted.price,
+                currency: "USD",
+                quantity: 1,
+                condition: condition,
+                photoPaths: photoPaths,
+                coverPhotoPath: photoPaths.first,
+                status: .active,
+                createdAt: Timestamp(date: Date()),
+                updatedAt: Timestamp(date: Date()),
+                publishedAt: Timestamp(date: Date()),
+                crossPostStatus: crossPostStatus,
+                crossPostListingIds: crossPostIds
+            )
+            _ = try await ListingRepository.shared.saveDraft(listing)
+
             dismiss()
         } catch {
             importError = error.localizedDescription
         }
-        
+
         isImporting = false
     }
     
@@ -180,33 +198,28 @@ struct ImportListingSheet: View {
         }
     }
     
-    private func downloadImages(urls: [String]) async throws -> [Data] {
-        var dataArray: [Data] = []
-        for urlStr in urls.prefix(12) { // Cap at 12 images
-            if let url = URL(string: urlStr) {
-                do {
-                    let (data, _) = try await URLSession.shared.data(from: url)
-                    dataArray.append(data)
-                } catch {
-                    print("Failed to download image: \(urlStr)")
-                }
-            }
+    private func extractMercariItemId(from url: String) -> String? {
+        if let range = url.range(of: #"/item/(m[A-Za-z0-9]+)"#, options: .regularExpression) {
+            return String(url[range]).replacingOccurrences(of: "/item/", with: "")
         }
-        return dataArray
+        if let range = url.range(of: #"\bm\d{6,}\b"#, options: .regularExpression) {
+            return String(url[range])
+        }
+        return nil
     }
-    
-    private func mapCondition(_ text: String) -> String? {
+
+    private func mapCondition(_ text: String) -> ItemCondition? {
         let lower = text.lowercased()
         if lower.contains("new") && !lower.contains("other") && !lower.contains("without tags") {
-            return "new"
+            return .new
         } else if lower.contains("like new") || lower.contains("excellent") {
-            return "likeNew"
+            return .likeNew
         } else if lower.contains("good") {
-            return "good"
+            return .good
         } else if lower.contains("fair") {
-            return "fair"
+            return .fair
         } else if lower.contains("poor") || lower.contains("parts") {
-            return "poor"
+            return .poor
         }
         return nil
     }

@@ -408,7 +408,6 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         let config = WKWebViewConfiguration()
         // Shares cookies with MercariLoginView (both use WKWebsiteDataStore.default())
         config.websiteDataStore = WKWebsiteDataStore.default()
-        config.processPool = mercariProcessPool
         config.allowsInlineMediaPlayback = true
         webView = WKWebView(frame: .zero, configuration: config)
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
@@ -1999,7 +1998,6 @@ struct MercariLoginView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = WKWebsiteDataStore.default()
-        configuration.processPool = mercariProcessPool
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         webView.navigationDelegate = context.coordinator
@@ -2697,7 +2695,6 @@ struct MercariListingEditSheet: View {
     @State private var webView: WKWebView = {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.default()
-        config.processPool = mercariProcessPool
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         return wv
@@ -3574,7 +3571,7 @@ private struct MercariDeactivateActionSheet: View {
     }
 }
 
-// MARK: - MercariAutoEditSheet
+// MARK: - MercariAutoEditState
 
 /// Headless Mercari listing editor. Navigates to the Mercari edit form, autofills updated
 /// title/description/price/condition, and submits. Falls back to a visible WebView with clipboard
@@ -3599,6 +3596,9 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
     // When set, skips headless autofill and opens the webview directly so the user can edit manually.
     let manualReason: String?
 
+    var photoBase64Strings: [String] = []
+    var photosWereUpdated: Bool = false
+
     init(mercariItemId: String, title: String, listingDescription: String, price: Double, condition: String, manualReason: String? = nil) {
         self.mercariItemId = mercariItemId
         self.title = title
@@ -3615,9 +3615,11 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
         if manualReason != nil { isWebViewVisible = true }
     }
 
-    func start() {
+    func start(photoBase64Strings: [String] = [], photosWereUpdated: Bool = false) {
         guard !hasStarted else { return }
         hasStarted = true
+        self.photoBase64Strings = photoBase64Strings
+        self.photosWereUpdated = photosWereUpdated
         let urlStr = "https://www.mercari.com/sell/edit/\(mercariItemId)/"
         if let url = URL(string: urlStr) {
             webView.load(URLRequest(url: url))
@@ -3634,6 +3636,36 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         phase = .manualFallback("Page failed to load — edit manually")
         isWebViewVisible = true
+    }
+
+    func attachPhotos(_ base64Strings: [String]) async -> String {
+        let js = """
+        var fileInput = document.querySelector('input[data-testid="SellPhotoInput"], input[type="file"]');
+        if (!fileInput) { return 'no-file-input'; }
+        if (!base64Photos || base64Photos.length === 0) { return 'no-photos'; }
+        try {
+            var b64toBlob = function(b64Data) {
+                var byteCharacters = atob(b64Data);
+                var byteArrays = [];
+                for (var offset = 0; offset < byteCharacters.length; offset += 512) {
+                    var slice = byteCharacters.slice(offset, offset + 512);
+                    var byteNumbers = new Array(slice.length);
+                    for (var i = 0; i < slice.length; i++) { byteNumbers[i] = slice.charCodeAt(i); }
+                    byteArrays.push(new Uint8Array(byteNumbers));
+                }
+                return new Blob(byteArrays, {type: 'image/jpeg'});
+            };
+            var dt = new DataTransfer();
+            for (var pi = 0; pi < base64Photos.length; pi++) {
+                dt.items.add(new File([b64toBlob(base64Photos[pi])], 'photo_' + pi + '.jpg', {type: 'image/jpeg'}));
+            }
+            fileInput.files = dt.files;
+            fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+            fileInput.dispatchEvent(new Event('input', { bubbles: true }));
+            return 'attached-' + base64Photos.length;
+        } catch (e) { return 'error:' + e.message; }
+        """
+        return (try? await webView.callJS(js, args: ["base64Photos": base64Strings])) as? String ?? "error"
     }
 
     private func runEditAutofill() async {
@@ -3714,6 +3746,36 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
             phase = .manualFallback("Couldn't fill form fields — edit manually")
             isWebViewVisible = true
             return
+        }
+
+        if photosWereUpdated {
+            // Delete all existing photos
+            let deletePhotosJS = """
+            var btns = Array.from(document.querySelectorAll('button[aria-label="Delete photo"], button[aria-label="Remove photo"], [data-testid="SellPhotoPreview"] button, [data-testid="PhotoPreview"] button'));
+            for (var btn of btns) { btn.click(); }
+            return 'deleted-' + btns.length;
+            """
+            _ = try? await webView.callJS(deletePhotosJS)
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+
+            if !photoBase64Strings.isEmpty {
+                var photosOK = false
+                for attempt in 1...4 {
+                    let attachResult = await attachPhotos(photoBase64Strings)
+                    print("[MercariAutoEditState] Photos attempt \(attempt): \(attachResult)")
+                    try? await Task.sleep(nanoseconds: 3_500_000_000)
+                    
+                    let checkErrorJS = "return (document.body.innerText || '').indexOf('Something wrong happened') !== -1 ? 'error' : 'ok';"
+                    let errorResult = (try? await webView.callJS(checkErrorJS)) as? String
+                    if errorResult != "error" {
+                        photosOK = true
+                        break
+                    }
+                }
+                if !photosOK {
+                    print("[MercariAutoEditState] Photos failed after retries")
+                }
+            }
         }
 
         // Disable smart pricing if it auto-enabled
@@ -3825,17 +3887,20 @@ struct MercariAutoEditSheet: View {
     @StateObject private var state: MercariAutoEditState
     @Environment(\.dismiss) private var dismiss
 
+    let photosWereUpdated: Bool
+
     init(listing: UserListing, mercariId: String, photosWereUpdated: Bool = false, onDone: @escaping () -> Void) {
         self.listing = listing
         self.mercariId = mercariId
         self.onDone = onDone
+        self.photosWereUpdated = photosWereUpdated
         _state = StateObject(wrappedValue: MercariAutoEditState(
             mercariItemId: mercariId,
             title: listing.customTitle ?? "",
             listingDescription: listing.customDescription ?? "",
             price: listing.price ?? 0,
             condition: listing.condition.rawValue,
-            manualReason: photosWereUpdated ? "Photos were updated — add them to Mercari below" : nil
+            manualReason: nil
         ))
     }
 
@@ -3864,7 +3929,19 @@ struct MercariAutoEditSheet: View {
                 }
             }
         }
-        .task { state.start() }
+        .task {
+            if photosWereUpdated {
+                var base64Photos: [String] = []
+                for path in listing.photoPaths {
+                    if let data = try? await StorageService.shared.downloadImageData(path: path) {
+                        base64Photos.append(data.base64EncodedString())
+                    }
+                }
+                state.start(photoBase64Strings: base64Photos, photosWereUpdated: true)
+            } else {
+                state.start()
+            }
+        }
     }
 
     @ViewBuilder
@@ -3924,7 +4001,6 @@ final class MercariItemLoader: ObservableObject {
     init() {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.default()
-        config.processPool = mercariProcessPool
         webView = WKWebView(frame: .zero, configuration: config)
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
     }
@@ -4194,7 +4270,6 @@ final class MercariSaleSyncManager: ObservableObject {
     init() {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.default()
-        config.processPool = mercariProcessPool
         let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
         wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         wv.navigationDelegate = navDelegate
