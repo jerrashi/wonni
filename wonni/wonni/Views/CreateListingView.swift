@@ -972,14 +972,14 @@ struct DraftRow: View {
     private var titleBinding: Binding<String> {
         Binding(
             get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? "" },
-            set: { let v = String($0.prefix(140)); item.userEditedTitle = v.isEmpty ? nil : v; try? modelContext.save() }
+            set: { let v = String($0.prefix(140)); item.userEditedTitle = v.isEmpty ? nil : v }
         )
     }
 
     private var descriptionBinding: Binding<String> {
         Binding(
             get: { item.userEditedDescription ?? item.aiSuggestedDescription ?? "" },
-            set: { item.userEditedDescription = $0.isEmpty ? nil : $0; try? modelContext.save() }
+            set: { item.userEditedDescription = $0.isEmpty ? nil : $0 }
         )
     }
 
@@ -1038,7 +1038,6 @@ struct DraftRow: View {
                             .onChange(of: priceText) { _, newValue in
                                 let cleaned = newValue.filter { $0.isNumber || $0 == "." }
                                 item.userEditedPrice = cleaned.isEmpty ? nil : Double(cleaned)
-                                try? modelContext.save()
                             }
                     }
                 }
@@ -1125,11 +1124,8 @@ struct DraftEditSheet: View {
         @State private var selectedCondition: ItemCondition = .good
         @State private var tagsText: String = ""
 
-        // Photos state
-        @State private var isSelectionMode = false
-        @State private var selectedPhotos = Set<String>()
+        @State private var showPhotoEditModal = false
         @State private var selectedItems: [PhotosPickerItem] = []
-        @State private var draggedAssetId: String? = nil
 
         // Shipping & Dimensions state
         @State private var weightText: String = ""
@@ -1150,24 +1146,10 @@ struct DraftEditSheet: View {
                                     .font(.headline)
                                 Spacer()
                                 if !item.sourceAssetIdentifiers.isEmpty {
-                                    if isSelectionMode {
-                                        HStack(spacing: 12) {
-                                            Button("Delete") {
-                                                deleteSelectedPhotos()
-                                            }
-                                            .foregroundColor(.red)
-                                            .disabled(selectedPhotos.isEmpty)
-                                            
-                                            Button("Cancel") {
-                                                isSelectionMode = false
-                                                selectedPhotos.removeAll()
-                                            }
-                                        }
-                                    } else {
-                                        Button("Select") {
-                                            isSelectionMode = true
-                                            selectedPhotos.removeAll()
-                                        }
+                                    Button {
+                                        showPhotoEditModal = true
+                                    } label: {
+                                        Image(systemName: "pencil")
                                     }
                                 }
                             }
@@ -1192,58 +1174,10 @@ struct DraftEditSheet: View {
                                             .frame(width: 80, height: 80)
                                             .cornerRadius(8)
                                             .clipped()
-                                            .opacity(selectedPhotos.contains(assetId) ? 0.6 : 1.0)
-                                            .onDrag({
-                                                if !isSelectionMode {
-                                                    draggedAssetId = assetId
-                                                    return NSItemProvider(object: assetId as NSString)
-                                                }
-                                                return NSItemProvider()
-                                            }, preview: {
-                                                Group {
-                                                    if let uiImage = item.image(for: assetId) {
-                                                        Image(uiImage: uiImage)
-                                                            .resizable()
-                                                            .scaledToFill()
-                                                    } else {
-                                                        PhotoItemView(
-                                                            asset: PhotoAsset(identifier: assetId),
-                                                            cache: cache,
-                                                            imageSize: CGSize(width: 160, height: 160)
-                                                        )
-                                                    }
-                                                }
-                                                .frame(width: 80, height: 80)
-                                                .cornerRadius(8)
-                                                .clipped()
-                                            })
-                                            .onDrop(of: [.text], delegate: SheetPhotoDropDelegate(
-                                                item: item,
-                                                assetId: assetId,
-                                                draggedAssetId: $draggedAssetId,
-                                                modelContext: modelContext
-                                            ))
-                                            
-                                            if isSelectionMode {
-                                                Image(systemName: selectedPhotos.contains(assetId) ? "checkmark.circle.fill" : "circle")
-                                                    .foregroundColor(selectedPhotos.contains(assetId) ? .blue : .white)
-                                                    .background(Circle().fill(Color.black.opacity(0.4)))
-                                                    .padding(4)
-                                            }
-                                        }
-                                        .onTapGesture {
-                                            if isSelectionMode {
-                                                if selectedPhotos.contains(assetId) {
-                                                    selectedPhotos.remove(assetId)
-                                                } else {
-                                                    selectedPhotos.insert(assetId)
-                                                }
-                                            }
                                         }
                                     }
                                     
-                                    if !isSelectionMode {
-                                        PhotosPicker(selection: $selectedItems, matching: .images) {
+                                    PhotosPicker(selection: $selectedItems, matching: .images) {
                                             VStack {
                                                 Image(systemName: "plus.circle")
                                                     .font(.title2)
@@ -1267,7 +1201,6 @@ struct DraftEditSheet: View {
                                                 try? modelContext.save()
                                             }
                                         }
-                                    }
                                 }
                                 .padding(.vertical, 4)
                             }
@@ -1399,18 +1332,13 @@ struct DraftEditSheet: View {
                         applyTemplateToDraft(template)
                     }
                 }
+                .fullScreenCover(isPresented: $showPhotoEditModal) {
+                    DraftPhotoEditModal(item: item)
+                }
                 .onAppear { loadFromDraft() }
             }
         }
 
-        private func deleteSelectedPhotos() {
-            for assetId in selectedPhotos {
-                _ = item.removePhoto(assetId: assetId)
-            }
-            selectedPhotos.removeAll()
-            isSelectionMode = false
-            try? modelContext.save()
-        }
 
         private func applyTemplateToDraft(_ template: ListingTemplate) {
             if let t = template.title, !t.isEmpty { title = t }
@@ -1483,32 +1411,6 @@ struct DraftEditSheet: View {
         }
     }
 
-    struct SheetPhotoDropDelegate: DropDelegate {
-        let item: Item
-        let assetId: String
-        @Binding var draggedAssetId: String?
-        let modelContext: ModelContext
-
-        func dropEntered(info: DropInfo) {
-            guard let dragged = draggedAssetId, dragged != assetId else { return }
-            if let from = item.sourceAssetIdentifiers.firstIndex(of: dragged),
-               let to = item.sourceAssetIdentifiers.firstIndex(of: assetId) {
-                withAnimation {
-                    item.movePhoto(from: from, to: to)
-                }
-            }
-        }
-
-        func dropUpdated(info: DropInfo) -> DropProposal? {
-            return DropProposal(operation: .move)
-        }
-
-        func performDrop(info: DropInfo) -> Bool {
-            draggedAssetId = nil
-            try? modelContext.save()
-            return true
-        }
-    }
 
 // MARK: - DescriptionEditorSheet
 private struct DescriptionEditorSheet: View {

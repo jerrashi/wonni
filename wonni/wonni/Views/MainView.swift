@@ -65,8 +65,17 @@ struct MainView: View {
         // When AI processing finishes, hop back to the Sell tab so the review/publish step is
         // shown right away. Without this, a user who minimized the processing screen and walked
         // off to another tab wouldn't see the next step until they re-tapped Sell.
+        // Delay by one run-loop tick when the pill sheet is open: SwiftUI cannot simultaneously
+        // dismiss a sheet and change the selected tab in the same update frame — doing so causes
+        // the UI to freeze. ProcessProgressView's own onChange dismisses the sheet first; the
+        // brief delay ensures that animation completes before the tab switch fires.
         .onChange(of: uploadManager.showProcessResults) { _, show in
-            if show { uploadManager.selectedTab = 2 }
+            if show {
+                let delay: Double = uploadManager.showProgressSheet ? 0.35 : 0
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    uploadManager.selectedTab = 2
+                }
+            }
         }
         .fullScreenCover(isPresented: Binding(
             get: { authManager.currentUser == nil },

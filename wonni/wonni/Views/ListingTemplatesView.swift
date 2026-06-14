@@ -134,8 +134,7 @@ struct EditTemplateSheet: View {
 
     @State private var editPhotos: [EditPhotoItem]
     @State private var newPhotoItems: [PhotosPickerItem] = []
-    @State private var draggedPhotoId: String? = nil
-    @State private var isDraggingPhoto = false
+    @State private var showPhotoEditModal = false
 
     @State private var isSaving = false
     @State private var saveError: String?
@@ -171,6 +170,21 @@ struct EditTemplateSheet: View {
                 }
 
                 Section("Photos") {
+                    HStack {
+                        Spacer()
+                        if !editPhotos.isEmpty {
+                            Button {
+                                showPhotoEditModal = true
+                            } label: {
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(.blue)
+                                    .padding(6)
+                                    .background(Color.blue.opacity(0.1))
+                                    .clipShape(Circle())
+                            }
+                        }
+                    }
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 12) {
                             ForEach(editPhotos) { item in
@@ -200,7 +214,6 @@ struct EditTemplateSheet: View {
                         }
                         .padding(.vertical, 4)
                     }
-                    .scrollDisabled(isDraggingPhoto)
                 }
 
                 Section("Listing Fields") {
@@ -279,6 +292,9 @@ struct EditTemplateSheet: View {
                 }
             }
         }
+        .fullScreenCover(isPresented: $showPhotoEditModal) {
+            PublishedPhotoModal(photos: $editPhotos)
+        }
     }
 
     @ViewBuilder
@@ -293,35 +309,6 @@ struct EditTemplateSheet: View {
             .frame(width: 80, height: 80)
             .cornerRadius(8)
             .clipped()
-            .opacity(draggedPhotoId == item.id ? 0.4 : 1.0)
-            .onDrag({
-                draggedPhotoId = item.id
-                isDraggingPhoto = true
-                return NSItemProvider(object: item.id as NSString)
-            }, preview: {
-                Group {
-                    switch item {
-                    case .existing(let path): StorageImage(path: path)
-                    case .new(_, let img): Image(uiImage: img).resizable().scaledToFill()
-                    }
-                }
-                .frame(width: 80, height: 80).cornerRadius(8).clipped()
-            })
-            .onDrop(of: [.text], delegate: EditPhotoDropDelegate(
-                item: item,
-                photos: $editPhotos,
-                draggedPhotoId: $draggedPhotoId,
-                isDraggingPhoto: $isDraggingPhoto
-            ))
-
-            Button {
-                editPhotos.removeAll { $0.id == item.id }
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.white, Color.black.opacity(0.6))
-                    .font(.title3)
-            }
-            .padding(4)
         }
     }
 
