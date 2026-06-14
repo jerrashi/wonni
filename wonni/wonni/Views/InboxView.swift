@@ -109,6 +109,7 @@ private struct ConversationRow: View {
     let currentUserId: String
 
     private var unread: Int { conversation.unreadCount(for: currentUserId) }
+    private var isBuyer: Bool { conversation.buyerId == currentUserId }
 
     private var timeText: String {
         guard let date = conversation.lastMessageAt?.dateValue() else { return "" }
@@ -136,9 +137,20 @@ private struct ConversationRow: View {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(conversation.snapshotTitle ?? "Listing")
-                    .font(.subheadline.weight(unread > 0 ? .semibold : .medium))
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Text(conversation.snapshotTitle ?? "Listing")
+                        .font(.subheadline.weight(unread > 0 ? .semibold : .medium))
+                        .lineLimit(1)
+                    Text(isBuyer ? "Buying" : "Selling")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(isBuyer ? Color.blue : Color.green)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(
+                            isBuyer ? Color.blue.opacity(0.1) : Color.green.opacity(0.1),
+                            in: Capsule()
+                        )
+                        .layoutPriority(1)
+                }
                 if let last = conversation.lastMessage {
                     Text(last)
                         .font(.caption)
