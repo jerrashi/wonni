@@ -15,6 +15,24 @@ class SearchViewModel: ObservableObject {
     @Published var savedSearches: [SavedSearch] = []
     @Published var isSearching = false
     @Published var hasSearched = false
+    @Published var suggestions: [String] = []
+    private var suggestTask: Task<Void, Never>?
+
+    func updateSuggestions(query: String) {
+        suggestTask?.cancel()
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else {
+            suggestions = []
+            return
+        }
+        suggestTask = Task {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled else { return }
+            let results = (try? await SearchRepository.shared.search(query: trimmed)) ?? []
+            guard !Task.isCancelled else { return }
+            suggestions = Array(results.compactMap { $0.customTitle }.prefix(5))
+        }
+    }
 
     func loadInitial() async {
         async let trendFetch  = SearchRepository.shared.fetchTrending()
@@ -77,9 +95,14 @@ struct SearchView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if vm.hasSearched {
                     resultsView
+                } else if isFocused && !searchText.isEmpty {
+                    suggestionList
                 } else {
                     idleView
                 }
+            }
+            .onChange(of: searchText) { _, newValue in
+                vm.updateSuggestions(query: newValue)
             }
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -114,6 +137,7 @@ struct SearchView: View {
                         searchText = ""
                         vm.hasSearched = false
                         vm.results = []
+                        vm.suggestions = []
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
@@ -132,6 +156,7 @@ struct SearchView: View {
                     isFocused = false
                     vm.hasSearched = false
                     vm.results = []
+                    vm.suggestions = []
                 }
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             } else {
@@ -158,6 +183,43 @@ struct SearchView: View {
         let key = searchText.lowercased().trimmingCharacters(in: .whitespaces)
         let alreadySaved = vm.savedSearches.contains { $0.id == key }
         return alreadySaved ? "bookmark.fill" : "bookmark"
+    }
+
+    // MARK: Suggestion List (autocomplete + trending while typing)
+
+    private var suggestionList: some View {
+        List {
+            if !vm.suggestions.isEmpty {
+                Section("Suggestions") {
+                    ForEach(vm.suggestions, id: \.self) { title in
+                        Button {
+                            searchText = title
+                            Task { await submitSearch() }
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "magnifyingglass")
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 20)
+                                Text(title)
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                Image(systemName: "arrow.up.left")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                }
+            }
+            if !vm.trending.isEmpty {
+                Section("Trending") {
+                    ForEach(vm.trending) { trend in
+                        trendingRow(trend)
+                    }
+                }
+            }
+        }
+        .listStyle(.plain)
     }
 
     // MARK: Idle View (saved / recent / trending)
