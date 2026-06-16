@@ -399,6 +399,27 @@ graph TD
 
 ---
 
+## Infrastructure & CI
+
+### What's set up
+
+| System | What it does | Triggers |
+|---|---|---|
+| **GitHub Actions — Functions** | ESLint lint → Jest tests → Firebase deploy | Push to `main` touching `wonni/functions/**` |
+| **GitHub Actions — SwiftLint** | Checks Swift files for force unwraps, unused vars, etc. | Pull request touching any `.swift` file |
+| **Xcode Cloud** | Archive iOS build → TestFlight internal distribution | Push to any branch (⚠️ change to `main` only) |
+| **Branch protection** | Blocks pushes to `main` if `Lint & Test` CI fails | All remote pushes to `main` |
+
+### Secrets required
+
+- `FIREBASE_TOKEN` — GitHub repo secret. Generate with `firebase login:ci`. Used by the Functions workflow to deploy.
+
+### Pending
+
+- [ ] **Unit tests — Swift data layer** (`ListingRepository`, `SearchRepository`, `SaleRepository`). Add a Swift Testing / XCTest target in Xcode. These three files handle all Firestore reads and are the most likely to break silently when queries or indexes change. Do after Wave 1 agent branches are merged so tests reflect the post-merge state.
+
+---
+
 ## Known Bugs
 
 | Bug | Details | Fix Direction |
