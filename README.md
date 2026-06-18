@@ -405,6 +405,8 @@ graph TD
 |---|---|---|
 | Flash doesn't cover tab bar | `isFlashing` state is local to `CameraView` | Move flash overlay to `MainView` root or increase z-index |
 | SourceKit stale index errors | "No such module 'FirebaseAI'" etc. appear after edits | Not real build errors; clear on Xcode clean build |
+| Mercari "mark as sold out" broken | Marking a listing as sold out does not propagate to the Mercari listing | Trace the sold-out action in `ProfileView` / `EditListingSheet` → add a Mercari headless WKWebView flow (similar to auto-updater) that navigates to the listing and triggers the sold-out toggle |
+| Bulk edit missing "mark as sold out" | Sold-out action is not available in the multi-select bulk edit sheet | Add sold-out as a bulk action in `BulkEditSheet` alongside bulk delete and bulk "Post to…"; wire it to the same per-listing sold-out flow once that is fixed |
 
 ---
 
