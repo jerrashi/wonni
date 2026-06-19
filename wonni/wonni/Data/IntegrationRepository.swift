@@ -223,6 +223,27 @@ public class IntegrationRepository: ObservableObject {
     }
 
     /// Submits a cross-post event to the backend.
+    /// Deletes a listing from API-based platforms (eBay, Etsy). Best-effort — never throws;
+    /// failures are logged so the Wonni-side deletion always proceeds.
+    /// Web-only platforms (Mercari, Facebook) cannot be deleted via API and are skipped.
+    public func triggerCrossDelete(listingId: String, platforms: [String]) async {
+        let functions = Functions.functions()
+        for platform in platforms {
+            let fn: String
+            switch platform {
+            case "ebay": fn = "ebayDeleteListing"
+            case "etsy": fn = "etsyDeleteListing"
+            default: continue
+            }
+            do {
+                _ = try await functions.httpsCallable(fn).call(["listingId": listingId])
+                print("[IntegrationRepository] \(fn) delete succeeded for \(listingId)")
+            } catch {
+                print("[IntegrationRepository] \(fn) delete failed for \(listingId): \(error.localizedDescription)")
+            }
+        }
+    }
+
     public func triggerCrossPost(listingId: String, platforms: [String]) async throws {
         print("[IntegrationRepository] Triggering cross-post for listing \(listingId) to \(platforms)")
         

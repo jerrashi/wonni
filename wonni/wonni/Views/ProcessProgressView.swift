@@ -121,7 +121,15 @@ struct ProcessProgressView: View {
         .navigationTitle("Processing")
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: uploadManager.showProcessResults) { _, show in
-            if show { dismiss() }
+            if show {
+                if let minimizeAction = onMinimize {
+                    // Dismiss the fullScreenCover so the global results sheet
+                    // can appear cleanly without a competing presentation.
+                    minimizeAction()
+                } else {
+                    dismiss()
+                }
+            }
         }
     }
 
