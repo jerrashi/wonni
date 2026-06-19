@@ -56,6 +56,7 @@ struct ProfileView: View {
     @State private var listingToRestock: UserListing?
     @State private var isSoldOutExpanded = false
     @State private var listingToMarkSoldOut: UserListing?
+    @State private var listingToDelete: UserListing?
     @State private var isSellingSimilar = false
 
     private var user: FirebaseAuth.User? { authManager.currentUser }
@@ -107,184 +108,27 @@ struct ProfileView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List(selection: $selectedListings) {
-                header
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 20, trailing: 0))
-                
-                searchAndSortBar
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 10, trailing: 20))
-                
-                if isLoading {
-                    ProgressView().frame(maxWidth: .infinity, alignment: .center).padding(.top, 60)
-                        .listRowBackground(Color.clear)
-                } else if listings.isEmpty && soldOutListings.isEmpty {
-                    emptyState
-                        .listRowBackground(Color.clear)
-                } else {
-                    if !listings.isEmpty {
-                        listingsList
+        profileNavStack
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if let job = activeMercariJob {
+                    MercariAutoPosterView(job: job) {
+                        activeMercariJob = nil
+                        checkAndStartNextWebJob()
                     }
-                    if !soldOutListings.isEmpty {
-                        soldOutSection
-                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-            .refreshable {
-                await loadProfile()
-                await loadListings()
-                await loadSaleSummary()
-            }
-            .listStyle(.plain)
-            .environment(\.editMode, $editMode)
-            .navigationTitle(editMode == .active ? "\(selectedListings.count) Selected" : "Profile")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    if !listings.isEmpty {
-                        Button {
-                            if editMode == .active {
-                                editMode = .inactive
-                                selectedListings.removeAll()
-                            } else {
-                                editMode = .active
-                            }
-                        } label: {
-                            Text(editMode == .active ? "Done" : "Select")
-                        }
-                    }
-                }
-                
-                ToolbarItem(placement: .topBarTrailing) {
-                    if editMode == .inactive {
-                        Button { showSettings = true } label: {
-                            Image(systemName: "gearshape")
-                        }
-                    }
-                }
+            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: activeMercariJob?.id)
+    }
 
-                ToolbarItem(placement: .topBarLeading) {
-                    if hasMercariListings && editMode == .inactive {
-                        Button {
-                            showMercariProfileSync = true
-                        } label: {
-                            ZStack(alignment: .topTrailing) {
-                                Image(systemName: "arrow.triangle.2.circlepath")
-                                if pendingMercariCount > 0 {
-                                    Circle()
-                                        .fill(Color.orange)
-                                        .frame(width: 8, height: 8)
-                                        .offset(x: 4, y: -4)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                if editMode == .active {
-                    VStack(spacing: 0) {
-                        Divider()
-                        HStack {
-                            Button(role: .destructive) {
-                                isBulkDeleting = true
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .disabled(selectedListings.isEmpty)
-                            
-                            Spacer()
-                            
-                            Button {
-                                showBulkPost = true
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "square.and.arrow.up")
-                                    Text("Post to...")
-                                }
-                            }
-                            .disabled(selectedListings.isEmpty)
-                            
-                            Spacer()
-                            
-                            Button("Edit") {
-                                showBulkEdit = true
-                            }
-                            .disabled(selectedListings.isEmpty)
-                        }
-                        .padding()
-                        .background(.bar)
-                    }
-                }
-            }
-            .sheet(isPresented: $showSettings) {
-                SettingsSheet()
-            }
-            .sheet(isPresented: $showMercariProfileSync) {
-                MercariProfileSyncSheet {
-                    Task { await loadListings() }
-                }
-            }
-            .sheet(isPresented: $showSalesDashboard) {
-                SalesDashboardView()
-            }
-            .sheet(item: $listingToRecordSale) { listing in
-                RecordSaleSheet(listing: listing) {
-                    Task {
-                        await loadListings()
-                        await loadSaleSummary()
-                    }
-                }
-            }
-            .alert("Delete \(selectedListings.count) Listings?", isPresented: $isBulkDeleting) {
-                Button("Delete", role: .destructive) {
-                    Task { await performBulkDelete() }
-                }
-                Button("Cancel", role: .cancel) {}
-            }
-            // Hold the eBay/API error until no web-autofill sheet is up — an alert can't show
-            // beneath an active sheet, so without this gate it would be swallowed the moment the
-            // Mercari sheet opened. Same fix as the bulk publish flow.
-            .alert("Cross-Post Failed", isPresented: Binding(
-                get: { showCrossPostError && activeAutofillJob == nil },
-                set: { showCrossPostError = $0 }
-            ), presenting: crossPostErrorMessage) { _ in
-                if crossPostErrorMessage?.contains("ebay.com/bp/manage") == true || crossPostErrorMessage?.contains("bizpolicy.ebay.com") == true || crossPostErrorMessage?.contains("Business Policies") == true {
-                    Button("Enable on eBay") {
-                        if let url = URL(string: "https://www.ebay.com/bp/manage") {
-                            UIApplication.shared.open(url)
-                        }
-                    }
-                    Button("Go to Settings") { showSettings = true }
-                    Button("Dismiss", role: .cancel) {}
-                } else {
-                    Button("OK", role: .cancel) {}
-                }
-            } message: { message in
-                Text(message)
-            }
-            .sheet(isPresented: $showBulkEdit) {
-                BulkEditSheet(selectedListingIds: selectedListings) {
-                    editMode = .inactive
-                    selectedListings.removeAll()
-                    Task { await loadListings() }
-                }
-            }
-            .sheet(isPresented: $showEditProfile) {
-                EditProfileSheet(
-                    currentName: user?.displayName ?? "",
-                    currentUsername: profile?.username ?? "",
-                    currentPhotoURL: profile?.photoURL
-                ) {
-                    Task { await loadProfile() }
-                }
-            }
+    // Extracted to break the compiler's type-check budget: body stays trivial,
+    // the sheet/alert chain gets its own fresh inference pass here.
+    @ViewBuilder
+    private var profileNavStack: some View {
+        profileNavCore
             .sheet(item: $listingToEdit) { listing in
                 EditListingSheet(listing: listing) { jobs in
                     Task { await loadListings() }
-                    
                     if !jobs.isEmpty {
                         self.webAutofillQueue.append(contentsOf: jobs)
                         if self.activeAutofillJob == nil {
@@ -350,22 +194,139 @@ struct ProfileView: View {
             } message: { listing in
                 let title = listing.customTitle ?? "this listing"
                 let hasCrossPosts = listing.crossPostStatus?.values.contains("posted") == true
-                let body = hasCrossPosts
+                let msg = hasCrossPosts
                     ? "\"\(title)\" will be marked sold out and deactivated on all connected platforms."
                     : "\"\(title)\" will be marked as sold out."
-                Text(body)
+                Text(msg)
             }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if let job = activeMercariJob {
-                MercariAutoPosterView(job: job) {
-                    activeMercariJob = nil
-                    checkAndStartNextWebJob()
+            .confirmationDialog(
+                "Delete Listing?",
+                isPresented: Binding(
+                    get: { listingToDelete != nil },
+                    set: { if !$0 { listingToDelete = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: listingToDelete
+            ) { listing in
+                Button("Delete", role: .destructive) {
+                    let toDelete = listing
+                    listingToDelete = nil
+                    Task { await deleteListing(toDelete) }
                 }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                Button("Cancel", role: .cancel) { listingToDelete = nil }
+            } message: { listing in
+                let linkedPlatforms = listing.crossPostStatus?
+                    .filter { $0.value == "posted" }
+                    .keys.sorted() ?? []
+                if linkedPlatforms.isEmpty {
+                    Text("This listing will be permanently deleted. This cannot be undone.")
+                } else {
+                    Text("This listing will be permanently deleted from Wonni. This cannot be undone.\n\nNote: listings on Mercari or Facebook must be removed manually.")
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var profileNavCore: some View {
+        NavigationStack {
+            List(selection: $selectedListings) {
+                header
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 20, trailing: 0))
+
+                searchAndSortBar
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 10, trailing: 20))
+
+                if isLoading {
+                    ProgressView().frame(maxWidth: .infinity, alignment: .center).padding(.top, 60)
+                        .listRowBackground(Color.clear)
+                } else if listings.isEmpty && soldOutListings.isEmpty {
+                    emptyState
+                        .listRowBackground(Color.clear)
+                } else {
+                    if !listings.isEmpty {
+                        listingsList
+                    }
+                    if !soldOutListings.isEmpty {
+                        soldOutSection
+                    }
+                }
+            }
+            .refreshable {
+                await loadProfile()
+                await loadListings()
+                await loadSaleSummary()
+            }
+            .listStyle(.plain)
+            .environment(\.editMode, $editMode)
+            .navigationTitle(editMode == .active ? "\(selectedListings.count) Selected" : "Profile")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { profileToolbar }
+            .safeAreaInset(edge: .bottom) { bulkActionBar }
+            .sheet(isPresented: $showSettings) {
+                SettingsSheet()
+            }
+            .sheet(isPresented: $showMercariProfileSync) {
+                MercariProfileSyncSheet {
+                    Task { await loadListings() }
+                }
+            }
+            .sheet(isPresented: $showSalesDashboard) {
+                SalesDashboardView()
+            }
+            .sheet(item: $listingToRecordSale) { listing in
+                RecordSaleSheet(listing: listing) {
+                    Task {
+                        await loadListings()
+                        await loadSaleSummary()
+                    }
+                }
+            }
+            .alert("Delete \(selectedListings.count) Listings?", isPresented: $isBulkDeleting) {
+                Button("Delete", role: .destructive) {
+                    Task { await performBulkDelete() }
+                }
+                Button("Cancel", role: .cancel) {}
+            }
+            // Hold the eBay/API error until no web-autofill sheet is up — an alert can't show
+            // beneath an active sheet, so without this gate it would be swallowed the moment the
+            // Mercari sheet opened. Same fix as the bulk publish flow.
+            .alert("Cross-Post Failed", isPresented: Binding(
+                get: { showCrossPostError && activeAutofillJob == nil },
+                set: { showCrossPostError = $0 }
+            ), presenting: crossPostErrorMessage) { _ in
+                if crossPostErrorMessage?.contains("ebay.com/bp/manage") == true || crossPostErrorMessage?.contains("bizpolicy.ebay.com") == true || crossPostErrorMessage?.contains("Business Policies") == true {
+                    Button("Enable on eBay") {
+                        if let url = URL(string: "https://www.ebay.com/bp/manage") {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                    Button("Go to Settings") { showSettings = true }
+                    Button("Dismiss", role: .cancel) {}
+                } else {
+                    Button("OK", role: .cancel) {}
+                }
+            } message: { message in
+                Text(message)
+            }
+            .sheet(isPresented: $showBulkEdit) {
+                BulkEditSheet(selectedListingIds: selectedListings) {
+                    editMode = .inactive
+                    selectedListings.removeAll()
+                    Task { await loadListings() }
+                }
+            }
+            .sheet(isPresented: $showEditProfile) {
+                EditProfileSheet(
+                    currentName: user?.displayName ?? "",
+                    currentUsername: profile?.username ?? "",
+                    currentPhotoURL: profile?.photoURL
+                ) {
+                    Task { await loadProfile() }
+                }
             }
         }
-        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: activeMercariJob?.id)
     }
     private func loadProfile() async {
         guard let uid = user?.uid else { return }
@@ -549,19 +510,90 @@ struct ProfileView: View {
             }
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 Button(role: .destructive) {
-                    Task { await deleteListing(listing) }
+                    listingToDelete = listing
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }
-                Button {
-                    listingToMarkSoldOut = listing
-                } label: {
-                    Label("Sold Out", systemImage: "xmark.circle")
-                }
-                .tint(.orange)
             }
         }
 
+    }
+
+    @ToolbarContentBuilder
+    private var profileToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            if !listings.isEmpty {
+                Button {
+                    if editMode == .active {
+                        editMode = .inactive
+                        selectedListings.removeAll()
+                    } else {
+                        editMode = .active
+                    }
+                } label: {
+                    Text(editMode == .active ? "Done" : "Select")
+                }
+            }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            if editMode == .inactive {
+                Button { showSettings = true } label: {
+                    Image(systemName: "gearshape")
+                }
+            }
+        }
+        ToolbarItem(placement: .topBarLeading) {
+            if hasMercariListings && editMode == .inactive {
+                Button { showMercariProfileSync = true } label: {
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                        if pendingMercariCount > 0 {
+                            Circle()
+                                .fill(Color.orange)
+                                .frame(width: 8, height: 8)
+                                .offset(x: 4, y: -4)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var bulkActionBar: some View {
+        if editMode == .active {
+            VStack(spacing: 0) {
+                Divider()
+                HStack {
+                    Button(role: .destructive) {
+                        isBulkDeleting = true
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .disabled(selectedListings.isEmpty)
+
+                    Spacer()
+
+                    Button {
+                        showBulkPost = true
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "square.and.arrow.up")
+                            Text("Post to...")
+                        }
+                    }
+                    .disabled(selectedListings.isEmpty)
+
+                    Spacer()
+
+                    Button("Edit") {
+                        showBulkEdit = true
+                    }
+                    .disabled(selectedListings.isEmpty)
+                }
+                .padding()
+                .background(.bar)
+            }
+        }
     }
 
     @ViewBuilder private var soldOutSection: some View {
@@ -650,11 +682,17 @@ struct ProfileView: View {
     
     private func deleteListing(_ listing: UserListing) async {
         guard let id = listing.id else { return }
+        // Delete from API-based platforms first (eBay, Etsy). Best-effort — never blocks Wonni delete.
+        // Mercari/Facebook are web-only and cannot be deleted programmatically.
+        let postedPlatforms = listing.crossPostStatus?
+            .filter { $0.value == "posted" }
+            .map { $0.key } ?? []
+        if !postedPlatforms.isEmpty {
+            await IntegrationRepository.shared.triggerCrossDelete(listingId: id, platforms: postedPlatforms)
+        }
         do {
             try await ListingRepository.shared.deleteListing(id: id)
-            if let index = listings.firstIndex(where: { $0.id == id }) {
-                listings.remove(at: index)
-            }
+            listings.removeAll { $0.id == id }
         } catch {
             print("[ProfileView] Failed to delete listing: \(error)")
         }
