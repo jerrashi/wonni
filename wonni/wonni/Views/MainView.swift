@@ -83,6 +83,21 @@ struct MainView: View {
             NavigationStack { ProcessResultsOverviewView() }
                 .environmentObject(uploadManager)
         }
+        // Global Mercari cross-post pill — shown above the tab bar for all flows that
+        // call UploadManager.globalMercariJob. Runs the WebView headlessly; expands to
+        // full screen only when user interaction is required (login, category review).
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let job = uploadManager.globalMercariJob {
+                MercariAutoPosterView(job: job) {
+                    let completion = uploadManager.onMercariJobComplete
+                    uploadManager.globalMercariJob = nil
+                    uploadManager.onMercariJobComplete = nil
+                    completion?()
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: uploadManager.globalMercariJob?.id)
         .sheet(isPresented: $uploadManager.showCrossPostStatus) {
             NavigationStack {
                 CrossPostStatusView(

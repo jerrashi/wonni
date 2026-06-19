@@ -74,11 +74,15 @@ class UploadManager: ObservableObject {
     @Published var isProcessPillVisible = false
     @Published var showProgressSheet = false
 
+    // ── Global Mercari cross-post job (shown as pill above tab bar from MainView) ──
+    @Published var globalMercariJob: CrossPostJob? = nil
+    /// Called by MainView's MercariAutoPosterView onDismiss to advance the queue in the originating view.
+    var onMercariJobComplete: (() -> Void)? = nil
+
     // ── Internal tracking ───────────────────────────────────────────────────
     private var activeUploadCount = 0
     private var processTask: Task<Void, Never>?
     private var processingTaskId = UUID()
-    private var uploadTaskId = UUID()
     private var publishTaskId = UUID()
 
     // ── ETA helper ─────────────────────────────────────────────────────────
@@ -193,13 +197,6 @@ class UploadManager: ObservableObject {
             isUploadingPhotos = true
             uploadStartTime = Date()
             uploadProgress = 0
-            uploadTaskId = UUID()
-            AppTaskQueue.shared.begin(
-                id: uploadTaskId,
-                label: "Uploading photos",
-                progress: 0,
-                accentColor: .blue
-            )
         }
         activeUploadCount += 1
         uploadStatuses[draft.id] = .pending
@@ -258,7 +255,6 @@ class UploadManager: ObservableObject {
             activeUploadCount -= 1
             if activeUploadCount <= 0 {
                 isUploadingPhotos = false
-                AppTaskQueue.shared.complete(id: uploadTaskId)
             }
         }
     }
@@ -275,7 +271,6 @@ class UploadManager: ObservableObject {
             }
         }
         uploadProgress = sum / Double(statuses.count)
-        AppTaskQueue.shared.update(id: uploadTaskId, progress: uploadProgress)
     }
 
     func areAllUploadsFinished() -> Bool {
@@ -669,6 +664,8 @@ class UploadManager: ObservableObject {
         sessionDraftIDs.removeAll()
         activeDraftID = nil
         crossPostStatusPending = false
+        globalMercariJob = nil
+        onMercariJobComplete = nil
     }
 
     // MARK: – On-device Vision Recognition
