@@ -53,6 +53,7 @@ class UploadManager: ObservableObject {
     @Published var processCurrentIndex = 0
     @Published var processTotalCount = 0
     @Published var showProcessResults = false
+    @Published var showResultsOverview = false
     @Published var processedItemIDs: [UUID] = []
     @Published var processingFailedIDs: Set<UUID> = []
     @Published var processQueuedIDs: [UUID] = []
@@ -60,13 +61,13 @@ class UploadManager: ObservableObject {
     // ── Publish Phase ───────────────────────────────────────────────────────
     @Published var isPublishing = false
     @Published var publishError: String? = nil
-    /// IDs of SwiftData drafts that have been published to Firestore but whose
-    /// deletion is deferred until all cross-posting jobs for the session complete.
     @Published var publishedPendingDeletionIDs: Set<UUID> = []
-    /// True while a cross-post status overview is owed to the user. Suppresses the automatic
-    /// return-to-root after publish so the overview can be shown first (its Done button performs
-    /// the actual return). Set when any platform is cross-posted; cleared by the overview / reset.
     @Published var crossPostStatusPending = false
+    /// Populated just before publishDrafts is called (by ProcessResultsOverviewView).
+    /// Kept in UploadManager so MainView can show CrossPostStatusView globally.
+    @Published var sessionCrossPostItems: [CrossPostSessionItem] = []
+    /// Drives the global CrossPostStatusView sheet in MainView.
+    @Published var showCrossPostStatus = false
 
     // ── Legacy / Pill visibility ─────────────────────────────────────────────
     @Published var isPillVisible = false
@@ -77,6 +78,8 @@ class UploadManager: ObservableObject {
     private var activeUploadCount = 0
     private var processTask: Task<Void, Never>?
     private var processingTaskId = UUID()
+    private var uploadTaskId = UUID()
+    private var publishTaskId = UUID()
 
     // ── ETA helper ─────────────────────────────────────────────────────────
     var uploadEtaString: String? {
@@ -190,6 +193,13 @@ class UploadManager: ObservableObject {
             isUploadingPhotos = true
             uploadStartTime = Date()
             uploadProgress = 0
+            uploadTaskId = UUID()
+            AppTaskQueue.shared.begin(
+                id: uploadTaskId,
+                label: "Uploading photos",
+                progress: 0,
+                accentColor: .blue
+            )
         }
         activeUploadCount += 1
         uploadStatuses[draft.id] = .pending
@@ -248,6 +258,7 @@ class UploadManager: ObservableObject {
             activeUploadCount -= 1
             if activeUploadCount <= 0 {
                 isUploadingPhotos = false
+                AppTaskQueue.shared.complete(id: uploadTaskId)
             }
         }
     }
@@ -264,6 +275,7 @@ class UploadManager: ObservableObject {
             }
         }
         uploadProgress = sum / Double(statuses.count)
+        AppTaskQueue.shared.update(id: uploadTaskId, progress: uploadProgress)
     }
 
     func areAllUploadsFinished() -> Bool {
@@ -501,9 +513,21 @@ class UploadManager: ObservableObject {
         print("[UploadManager] publishDrafts called for \(drafts.count) items")
         isPublishing = true
         publishError = nil
+        publishTaskId = UUID()
+        let taskId = publishTaskId
+        AppTaskQueue.shared.begin(
+            id: taskId,
+            label: "Publishing \(drafts.count == 1 ? "listing" : "\(drafts.count) listings")",
+            progress: -1,
+            accentColor: .blue,
+            onTap: { [weak self] in self?.showResultsOverview = true }
+        )
 
         Task {
-            defer { isPublishing = false }
+            defer {
+                isPublishing = false
+                AppTaskQueue.shared.complete(id: taskId)
+            }
 
             guard let userId = Auth.auth().currentUser?.uid else {
                 print("[UploadManager] Publish aborted: No authenticated user")
@@ -597,12 +621,9 @@ class UploadManager: ObservableObject {
 
             if publishedCount > 0 {
                 showProcessResults = false
-                // Don't bounce home if a cross-post status overview is owed (web jobs pending, or
-                // an API-only cross-post like eBay). The results view shows the overview, whose
-                // Done button returns to root.
-                if pendingAutofillJobsCount == 0 && !crossPostStatusPending {
-                    shouldReturnToRoot = true
-                }
+                // Transition to CrossPostStatusView is handled by
+                // ProcessResultsOverviewView.onChange(of: isPublishing). shouldReturnToRoot
+                // is set when the user taps Done in CrossPostStatusView (onDone closure).
             } else {
                 publishError = "Could not publish listings. Check your connection and try again."
             }
@@ -632,6 +653,9 @@ class UploadManager: ObservableObject {
         isProcessing = false
         isPublishing = false
         showProcessResults = false
+        showResultsOverview = false
+        sessionCrossPostItems = []
+        showCrossPostStatus = false
         publishError = nil
         uploadProgress = 0
         uploadStatuses.removeAll()

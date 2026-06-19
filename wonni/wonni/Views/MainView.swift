@@ -62,20 +62,40 @@ struct MainView: View {
             NavigationStack { MercariSyncProgressSheet() }
                 .environmentObject(mercariSyncManager)
         }
-        // When AI processing finishes, hop back to the Sell tab so the review/publish step is
-        // shown right away. Without this, a user who minimized the processing screen and walked
-        // off to another tab wouldn't see the next step until they re-tapped Sell.
-        // Delay by one run-loop tick when the pill sheet is open: SwiftUI cannot simultaneously
-        // dismiss a sheet and change the selected tab in the same update frame — doing so causes
-        // the UI to freeze. ProcessProgressView's own onChange dismisses the sheet first; the
-        // brief delay ensures that animation completes before the tab switch fires.
+        // When AI processing finishes, show the publish overview as a global sheet.
+        // The 0.5 s delay lets any open cover/sheet (ProcessProgressView fullScreenCover
+        // or pill sheet) finish its dismiss animation before the results sheet appears —
+        // presenting two sheets simultaneously in the same frame corrupts the nav stack.
         .onChange(of: uploadManager.showProcessResults) { _, show in
             if show {
-                let delay: Double = uploadManager.showProgressSheet ? 0.35 : 0
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    uploadManager.selectedTab = 2
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    uploadManager.showResultsOverview = true
                 }
             }
+        }
+        // Close the results sheet when publishing completes and the app returns to root.
+        .onChange(of: uploadManager.shouldReturnToRoot) { _, should in
+            if should {
+                uploadManager.showResultsOverview = false
+            }
+        }
+        .sheet(isPresented: $uploadManager.showResultsOverview) {
+            NavigationStack { ProcessResultsOverviewView() }
+                .environmentObject(uploadManager)
+        }
+        .sheet(isPresented: $uploadManager.showCrossPostStatus) {
+            NavigationStack {
+                CrossPostStatusView(
+                    items: uploadManager.sessionCrossPostItems,
+                    onDone: {
+                        uploadManager.crossPostStatusPending = false
+                        uploadManager.showCrossPostStatus = false
+                        uploadManager.sessionCrossPostItems = []
+                        uploadManager.shouldReturnToRoot = true
+                    }
+                )
+            }
+            .environmentObject(uploadManager)
         }
         .fullScreenCover(isPresented: Binding(
             get: { authManager.currentUser == nil },
