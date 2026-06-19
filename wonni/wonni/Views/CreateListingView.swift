@@ -1792,7 +1792,7 @@ struct ProcessResultsOverviewView: View {
         // that's why the error used to flash and vanish the instant Mercari opened. Gating on
         // `activeAutofillJob == nil` holds the error until the web queue drains, then shows it.
         .alert("Cross-Post Failed", isPresented: Binding(
-            get: { crossPostError != nil && activeAutofillJob == nil },
+            get: { crossPostError != nil && activeAutofillJob == nil && uploadManager.globalMercariJob == nil },
             set: { if !$0 { crossPostError = nil } }
         )) {
             Button("OK", role: .cancel) { crossPostError = nil }
@@ -1805,16 +1805,12 @@ struct ProcessResultsOverviewView: View {
         .sheet(item: $activeAutofillJob, onDismiss: {
             checkAndStartNextWebJob()
         }) { job in
-            if job.platform == "mercari" {
-                MercariAutoPosterView(job: job)
-            } else {
-                CrossPostContainerView(
-                    platformName: "Facebook Marketplace",
-                    listingTitle: job.title,
-                    listingDescription: job.description,
-                    listingPrice: job.price
-                )
-            }
+            CrossPostContainerView(
+                platformName: "Facebook Marketplace",
+                listingTitle: job.title,
+                listingDescription: job.description,
+                listingPrice: job.price
+            )
         }
         .onChange(of: uploadManager.isPublishing) { _, isPublishing in
             guard !isPublishing else { return }
@@ -1910,15 +1906,19 @@ struct ProcessResultsOverviewView: View {
     }
 
     private func checkAndStartNextWebJob() {
-        guard activeAutofillJob == nil else { return }
+        guard activeAutofillJob == nil, uploadManager.globalMercariJob == nil else { return }
         if !webAutofillQueue.isEmpty {
             let nextJob = webAutofillQueue.removeFirst()
             uploadManager.pendingAutofillJobsCount = webAutofillQueue.count + 1
-            // Defer so the just-dismissed sheet fully tears down before the next presents. Setting
-            // a new .sheet(item:) value synchronously inside onDismiss is silently dropped by
-            // SwiftUI — that's why the second Mercari sheet never appeared.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                activeAutofillJob = nextJob
+            if nextJob.platform == "mercari" {
+                // Mercari runs headlessly — show as a pill above the tab bar via MainView.
+                uploadManager.globalMercariJob = nextJob
+                uploadManager.onMercariJobComplete = { checkAndStartNextWebJob() }
+            } else {
+                // Facebook and other web platforms require a visible sheet.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                    activeAutofillJob = nextJob
+                }
             }
         } else {
             uploadManager.pendingAutofillJobsCount = 0
@@ -2036,6 +2036,7 @@ struct CrossPostStatusView: View {
     @State private var listeners: [ListenerRegistration] = []
     @State private var retryJob: CrossPostJob? = nil
     @State private var retryingEbay: Set<String> = []
+    @EnvironmentObject private var uploadManager: UploadManager
 
     var body: some View {
         VStack(spacing: 0) {
@@ -2081,16 +2082,12 @@ struct CrossPostStatusView: View {
         .onAppear(perform: startListeners)
         .onDisappear(perform: stopListeners)
         .sheet(item: $retryJob) { job in
-            if job.platform == "mercari" {
-                MercariAutoPosterView(job: job)
-            } else {
-                CrossPostContainerView(
-                    platformName: "Facebook Marketplace",
-                    listingTitle: job.title,
-                    listingDescription: job.description,
-                    listingPrice: job.price
-                )
-            }
+            CrossPostContainerView(
+                platformName: "Facebook Marketplace",
+                listingTitle: job.title,
+                listingDescription: job.description,
+                listingPrice: job.price
+            )
         }
     }
 
@@ -2160,8 +2157,20 @@ struct CrossPostStatusView: View {
                 try? await IntegrationRepository.shared.triggerCrossPost(listingId: item.id, platforms: [platform])
                 retryingEbay.remove(item.id)
             }
-        case "mercari", "facebook":
-            // Re-run the web autofill from the published listing's Storage photos.
+        case "mercari":
+            let job = CrossPostJob(
+                platform: platform,
+                title: item.title,
+                description: item.description,
+                price: item.price,
+                listingId: item.id,
+                photoFirebasePaths: item.photoPaths,
+                buyerPaysShipping: item.buyerPaysShipping
+            )
+            uploadManager.globalMercariJob = job
+            uploadManager.onMercariJobComplete = nil
+        case "facebook":
+            // Facebook requires a visible full-screen sheet.
             retryJob = CrossPostJob(
                 platform: platform,
                 title: item.title,
