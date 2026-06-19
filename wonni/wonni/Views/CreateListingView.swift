@@ -1027,7 +1027,7 @@ struct DraftRow: View {
                             DispatchQueue.main.async { tf.selectAll(nil) }
                         }
 
-                    TitleCharCountView(count: titleBinding.wrappedValue.count)
+                    TitleCharCountView(count: (item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? "").count)
 
                     HStack(spacing: 3) {
                         Text("$").font(.subheadline).foregroundStyle(.secondary)
@@ -1450,14 +1450,17 @@ struct BulkListingOverviewView: View {
 
     @FocusState private var focusedField: DraftFocusField?
     @State private var cache = CachedImageManager()
-    @State private var navigateToResults = false
     @State private var showProcessFullScreen = false
     @State private var isSelectMode = false
     @State private var selectedItemIDs: Set<UUID> = []
     @State private var showDraftBulkEdit = false
 
     private var drafts: [Item] {
-        allItems.filter { !$0.sourceAssetIdentifiers.isEmpty }
+        let sessionIDs = Set(uploadManager.sessionDraftIDs)
+        if !sessionIDs.isEmpty {
+            return allItems.filter { sessionIDs.contains($0.id) && !$0.sourceAssetIdentifiers.isEmpty }
+        }
+        return allItems.filter { !$0.sourceAssetIdentifiers.isEmpty }
     }
 
     var body: some View {
@@ -1576,20 +1579,15 @@ struct BulkListingOverviewView: View {
                 }
             }
         }
-        .navigationDestination(isPresented: $navigateToResults) {
-            ProcessResultsOverviewView()
-        }
-        .onChange(of: uploadManager.showProcessResults) { _, show in
-            if show {
-                showProcessFullScreen = false
-                navigateToResults = true
-            }
-        }
         .fullScreenCover(isPresented: $showProcessFullScreen) {
             NavigationStack {
                 ProcessProgressView(onMinimize: {
                     showProcessFullScreen = false
-                    uploadManager.selectedTab = 0
+                    // Defer the tab switch past the cover dismiss animation so
+                    // SwiftUI doesn't get two simultaneous nav mutations in one frame.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        uploadManager.selectedTab = 0
+                    }
                 })
             }
             .environmentObject(uploadManager)
@@ -1684,11 +1682,6 @@ struct ProcessResultsOverviewView: View {
     /// Firestore listing document exists before the Cloud Function tries to read it.
     /// Stores title for error messages since the SwiftData Item may be deleted by then.
     @State private var pendingAPITriggers: [(listingId: String, title: String, platforms: [String])] = []
-    /// Per-listing cross-post info captured at publish time, driving the post-publish status
-    /// overview. Captured before the SwiftData drafts are deleted so the overview can read live
-    /// platform status from Firestore and offer retries.
-    @State private var sessionCrossPostItems: [CrossPostSessionItem] = []
-    @State private var showStatusOverview = false
 
     // Only show the items that went through AI processing
     private var results: [Item] {
@@ -1847,20 +1840,17 @@ struct ProcessResultsOverviewView: View {
                 }
             }
             // Start web autofill jobs (Mercari, Facebook) after publish completes. If there are
-            // none (e.g. eBay-only), jump straight to the status overview — eBay status fills in
-            // live as the Cloud Function calls above complete.
+            // none (e.g. eBay-only), transition to the global CrossPostStatusView sheet.
             if !webAutofillQueue.isEmpty {
                 checkAndStartNextWebJob()
-            } else if !sessionCrossPostItems.isEmpty {
-                showStatusOverview = true
+            } else {
+                uploadManager.showResultsOverview = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    uploadManager.showCrossPostStatus = true
+                }
             }
         }
-        .navigationDestination(isPresented: $showStatusOverview) {
-            CrossPostStatusView(items: sessionCrossPostItems) {
-                uploadManager.crossPostStatusPending = false
-                uploadManager.shouldReturnToRoot = true
-            }
-        }
+        .interactiveDismissDisabled(uploadManager.isPublishing || activeAutofillJob != nil)
     }
     
     @ViewBuilder private var publishConfirmationSheetContent: some View {
@@ -1886,20 +1876,22 @@ struct ProcessResultsOverviewView: View {
             // Capture per-listing cross-post info now (before the drafts are deleted) so the
             // post-publish status overview can show per-platform status and offer retries.
             let attemptedPlatforms = Array(selectedPlatforms).sorted()
+            // Always populate so CrossPostStatusView (global sheet) can show at minimum
+            // "Wonni - posted" even when no cross-posting was selected.
+            uploadManager.sessionCrossPostItems = toPublish.compactMap { item in
+                guard let listingId = item.firestoreListingId else { return nil }
+                return CrossPostSessionItem(
+                    id: listingId,
+                    title: item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled",
+                    description: item.userEditedDescription ?? item.aiSuggestedDescription ?? "",
+                    price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
+                    coverPhotoPath: item.firebasePhotoPaths?.first,
+                    photoPaths: item.firebasePhotoPaths ?? [],
+                    platforms: attemptedPlatforms,
+                    buyerPaysShipping: item.buyerPaysShipping
+                )
+            }
             if !attemptedPlatforms.isEmpty {
-                sessionCrossPostItems = toPublish.compactMap { item in
-                    guard let listingId = item.firestoreListingId else { return nil }
-                    return CrossPostSessionItem(
-                        id: listingId,
-                        title: item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled",
-                        description: item.userEditedDescription ?? item.aiSuggestedDescription ?? "",
-                        price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
-                        coverPhotoPath: item.firebasePhotoPaths?.first,
-                        photoPaths: item.firebasePhotoPaths ?? [],
-                        platforms: attemptedPlatforms,
-                        buyerPaysShipping: item.buyerPaysShipping
-                    )
-                }
                 uploadManager.crossPostStatusPending = true
             }
             // Defer API cross-posts to onChange(of: isPublishing) so the Firestore write
@@ -1930,7 +1922,7 @@ struct ProcessResultsOverviewView: View {
             }
         } else {
             uploadManager.pendingAutofillJobsCount = 0
-            // All cross-posting jobs finished — now safe to delete SwiftData items
+            // All web cross-posting jobs finished — now safe to delete SwiftData items
             // that were held alive so startPosting() could read their photos.
             let pendingIDs = uploadManager.publishedPendingDeletionIDs
             if !pendingIDs.isEmpty {
@@ -1940,12 +1932,10 @@ struct ProcessResultsOverviewView: View {
                 try? modelContext.save()
                 uploadManager.publishedPendingDeletionIDs.removeAll()
             }
-            // Show the per-platform status overview instead of bouncing home. Its Done button
-            // performs the actual return-to-root.
-            if !sessionCrossPostItems.isEmpty {
-                showStatusOverview = true
-            } else if uploadManager.shouldReturnToRoot == false {
-                uploadManager.shouldReturnToRoot = true
+            // Close the results sheet and open CrossPostStatusView globally from MainView.
+            uploadManager.showResultsOverview = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                uploadManager.showCrossPostStatus = true
             }
         }
     }
@@ -2384,7 +2374,7 @@ struct ResultDraftRow: View {
                             uploadManager.syncDraftData(item)
                         }
 
-                    TitleCharCountView(count: titleBinding.wrappedValue.count)
+                    TitleCharCountView(count: (item.userEditedTitle ?? item.aiSuggestedTitle ?? "").count)
 
                     HStack(spacing: 3) {
                         Text("$").font(.subheadline).foregroundStyle(.secondary)
