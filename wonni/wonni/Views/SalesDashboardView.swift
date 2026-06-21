@@ -920,11 +920,11 @@ final class MercariSalesPageImporter: ObservableObject {
                                  (pp.seller && pp.seller.items))) || [];
                     for (var item of items) {
                         var sid = String(item.id || '');
-                        if (sid && !seen.has(sid)) {
-                            seen.add(sid);
-                            results.push({ id: sid, name: item.name || null,
-                                           price: item.price ? item.price / 100 : null });
-                        }
+                        if (!sid || seen.has(sid)) continue;
+                        if (item.status && item.status.toLowerCase() === 'inactive') continue;
+                        seen.add(sid);
+                        results.push({ id: sid, name: item.name || null,
+                                       price: item.price ? item.price / 100 : null });
                     }
                 } catch(e) {}
             }
@@ -933,6 +933,8 @@ final class MercariSalesPageImporter: ObservableObject {
             for (var link of links) {
                 var m = link.href.match(/\/us\/item\/(m[a-zA-Z0-9]+)/);
                 if (!m || seen.has(m[1])) continue;
+                var ribbon = link.querySelector('[class*="RibbonTitle"]');
+                if (ribbon && ribbon.innerText.trim().toLowerCase() === 'inactive') continue;
                 seen.add(m[1]);
                 var nameEl = link.querySelector('[data-testid="ItemName"],[data-testid="item-name"],p');
                 var priceEl = link.querySelector('[data-testid="ItemPrice"],[data-testid="item-price"],span');

@@ -2835,7 +2835,11 @@ struct MercariSyncSheet: View {
                     }
                     .padding()
                 case .loaded:
-                    resultList
+                    if loader.statusRaw == "inactive" {
+                        inactiveView
+                    } else {
+                        resultList
+                    }
                 }
             }
             .navigationTitle("Sync from Mercari")
@@ -2919,6 +2923,73 @@ struct MercariSyncSheet: View {
     }
 
     private func money(_ v: Double) -> String { String(format: "$%.2f", v) }
+
+    // Shown when Mercari serves the "no longer for sale" page — the listing was deactivated or
+    // sold there. The action depends on why: a pending-deactivation listing just needs the stale
+    // reminder cleared; an otherwise-active listing can be marked sold out across platforms.
+    @ViewBuilder private var inactiveView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "minus.circle.fill")
+                .font(.system(size: 44)).foregroundStyle(.orange)
+            Text("No longer active on Mercari").font(.headline)
+            if listing.pendingMercariDeactivation == true {
+                Text("This sold on another platform and you'd been asked to deactivate it on Mercari. It's now inactive — you're all set.")
+                    .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button { Task { await markHandled() } } label: {
+                    HStack { if isApplying { ProgressView() }; Text("Mark as handled") }
+                        .fontWeight(.semibold).frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent).tint(.orange).disabled(isApplying)
+            } else if listing.status != .sold {
+                Text("This listing is inactive on Mercari but still active on Wonni. If it sold, mark it sold out to end it everywhere.")
+                    .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button { Task { await markSoldOut() } } label: {
+                    HStack { if isApplying { ProgressView() }; Text("Mark sold out in Wonni") }
+                        .fontWeight(.semibold).frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent).tint(.red).disabled(isApplying)
+            } else {
+                Text("Already sold out in Wonni — nothing to do.")
+                    .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+            if let url = URL(string: "https://www.mercari.com/us/item/\(mercariId)/") {
+                Link("Open on Mercari", destination: url).font(.subheadline)
+            }
+            if let err = applyError { Text(err).font(.caption).foregroundStyle(.red) }
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // Clears the stale "deactivate on Mercari" reminder once Mercari confirms the item is inactive.
+    private func markHandled() async {
+        guard let listingId = listing.id else { return }
+        isApplying = true; applyError = nil
+        do {
+            try await Firestore.firestore().collection("listings").document(listingId)
+                .updateData(["pendingMercariDeactivation": FieldValue.delete(),
+                             "updatedAt": Timestamp(date: Date())])
+            onApplied()
+            dismiss()
+        } catch { applyError = "Couldn't update the listing. Try again." }
+        isApplying = false
+    }
+
+    // Marks an otherwise-active listing sold out and cascades qty=0 to eBay/Etsy.
+    private func markSoldOut() async {
+        guard let listingId = listing.id else { return }
+        isApplying = true; applyError = nil
+        do {
+            _ = try await callCloudFunction("markSoldOutAndCascade", ["listingId": listingId])
+            // markSoldOutAndCascade re-flags Mercari for deactivation, but Mercari is already
+            // inactive here, so clear that flag to avoid a phantom "Action needed" entry.
+            try? await Firestore.firestore().collection("listings").document(listingId)
+                .updateData(["pendingMercariDeactivation": FieldValue.delete()])
+            onApplied()
+            dismiss()
+        } catch { applyError = "Couldn't mark sold out. Try again." }
+        isApplying = false
+    }
 
     private func apply() async {
         guard let listingId = listing.id else { return }
@@ -3020,6 +3091,8 @@ struct MercariProfileSyncSheet: View {
     @State private var listingToSync: UserListing?
     @State private var listingToDeactivate: UserListing?
     @State private var listingToRelist: CrossPostJob?
+    @State private var deactivateSelectMode = false
+    @State private var selectedDeactivateIds: Set<String> = []
 
     private var pendingListings: [UserListing] {
         listings.filter { $0.pendingMercariDeactivation == true || $0.pendingMercariRelist == true }
@@ -3050,9 +3123,41 @@ struct MercariProfileSyncSheet: View {
                                 ForEach(pendingListings) { listing in
                                     pendingRow(listing)
                                 }
+                                if deactivateSelectMode && !selectedDeactivateIds.isEmpty {
+                                    Button {
+                                        Task {
+                                            for id in selectedDeactivateIds {
+                                                await clearFlag("pendingMercariDeactivation", for: id)
+                                            }
+                                            selectedDeactivateIds = []
+                                            deactivateSelectMode = false
+                                            onComplete()
+                                        }
+                                    } label: {
+                                        Label("Mark \(selectedDeactivateIds.count) as Handled", systemImage: "checkmark.circle.fill")
+                                            .font(.subheadline.weight(.semibold))
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(.orange)
+                                    .listRowBackground(Color.clear)
+                                }
                             } header: {
-                                Label("Action needed", systemImage: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.orange).textCase(nil)
+                                HStack {
+                                    Label("Action needed", systemImage: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.orange).textCase(nil)
+                                    Spacer()
+                                    if deactivateSelectMode {
+                                        Button("Cancel") {
+                                            deactivateSelectMode = false
+                                            selectedDeactivateIds = []
+                                        }
+                                        .font(.caption).foregroundStyle(.orange)
+                                    } else {
+                                        Button("Select") { deactivateSelectMode = true }
+                                            .font(.caption).foregroundStyle(.orange)
+                                    }
+                                }
                             }
                         }
                         Section("All Mercari listings (\(normalListings.count))") {
@@ -3144,58 +3249,90 @@ struct MercariProfileSyncSheet: View {
 
     @ViewBuilder private func pendingRow(_ listing: UserListing) -> some View {
         let isDeactivate = listing.pendingMercariDeactivation == true
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(listing.customTitle ?? "Untitled")
-                        .font(.subheadline.weight(.semibold)).lineLimit(1)
-                    if let price = listing.price {
-                        Text(String(format: "$%.2f", price))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+        let listingId = listing.id ?? ""
+        let isSelected = selectedDeactivateIds.contains(listingId)
+        HStack(alignment: .top, spacing: 10) {
+            if deactivateSelectMode && isDeactivate {
+                Button {
+                    if isSelected { selectedDeactivateIds.remove(listingId) }
+                    else { selectedDeactivateIds.insert(listingId) }
+                } label: {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3).foregroundStyle(isSelected ? .orange : .secondary)
                 }
-                Spacer()
-                Label(
-                    isDeactivate ? "Deactivate needed" : "Re-list needed",
-                    systemImage: isDeactivate ? "minus.circle.fill" : "arrow.up.circle.fill"
-                )
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(isDeactivate ? .red : .blue)
-                .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
+                .padding(.top, 12)
             }
-            if isDeactivate {
-                Text("This listing sold elsewhere (qty=0). Deactivate it on Mercari.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button {
-                    listingToDeactivate = listing
-                } label: {
-                    Label("Deactivate on Mercari", systemImage: "minus.circle")
-                        .font(.caption.weight(.semibold))
+            // Photo thumbnail
+            Group {
+                if let path = listing.photoPaths.first ?? listing.coverPhotoPath {
+                    StorageImage(path: path).frame(width: 52, height: 52).cornerRadius(8)
+                } else {
+                    Color(.systemGray5).frame(width: 52, height: 52).cornerRadius(8)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.red)
-            } else {
-                Text("This Mercari listing sold. Re-list it since you still have stock.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button {
-                    listingToRelist = CrossPostJob(
-                        platform: "mercari",
-                        title: listing.customTitle ?? "",
-                        description: listing.customDescription ?? "",
-                        price: listing.price ?? 0,
-                        listingId: listing.id,
-                        photoFirebasePaths: listing.photoPaths,
-                        buyerPaysShipping: listing.shippingInfo?.buyerPaysShipping ?? false
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(listing.customTitle ?? "Untitled")
+                            .font(.subheadline.weight(.semibold)).lineLimit(1)
+                        if let price = listing.price {
+                            Text(String(format: "$%.2f", price))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Label(
+                        isDeactivate ? "Deactivate needed" : "Re-list needed",
+                        systemImage: isDeactivate ? "minus.circle.fill" : "arrow.up.circle.fill"
                     )
-                } label: {
-                    Label("Re-list on Mercari", systemImage: "arrow.up.circle")
-                        .font(.caption.weight(.semibold))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(isDeactivate ? .red : .blue)
+                    .labelStyle(.iconOnly)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
+                if isDeactivate {
+                    Text("Sold elsewhere (qty=0). Deactivate on Mercari.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if !deactivateSelectMode {
+                        Button {
+                            listingToDeactivate = listing
+                        } label: {
+                            Label("Deactivate on Mercari", systemImage: "minus.circle")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                    }
+                } else {
+                    Text("Sold on Mercari. Re-list since you still have stock.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button {
+                        listingToRelist = CrossPostJob(
+                            platform: "mercari",
+                            title: listing.customTitle ?? "",
+                            description: listing.customDescription ?? "",
+                            price: listing.price ?? 0,
+                            listingId: listing.id,
+                            photoFirebasePaths: listing.photoPaths,
+                            buyerPaysShipping: listing.shippingInfo?.buyerPaysShipping ?? false
+                        )
+                    } label: {
+                        Label("Re-list on Mercari", systemImage: "arrow.up.circle")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                }
             }
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if deactivateSelectMode && isDeactivate {
+                if isSelected { selectedDeactivateIds.remove(listingId) }
+                else { selectedDeactivateIds.insert(listingId) }
+            }
+        }
     }
 
     private func reload() async {
@@ -4058,12 +4195,14 @@ final class MercariItemLoader: ObservableObject {
     @Published var thumbnailUrl: String?
 
     let webView: WKWebView
+    private let navDelegate = SaleNavDelegate()
 
     init() {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.default()
         webView = WKWebView(frame: .zero, configuration: config)
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        webView.navigationDelegate = navDelegate
     }
 
     func load(itemId: String) async {
@@ -4072,7 +4211,9 @@ final class MercariItemLoader: ObservableObject {
         guard let url = URL(string: "https://www.mercari.com/us/item/\(itemId)/") else {
             phase = .failed; return
         }
+        navDelegate.reset()
         webView.load(URLRequest(url: url))
+        _ = await navDelegate.waitForLoad(timeout: 20)
 
         let js = #"""
         return (function() {
@@ -4133,6 +4274,12 @@ final class MercariItemLoader: ObservableObject {
             }
             // Body-text status fallback intentionally omitted — too many false positives
             // (e.g. "47 items sold" in seller stats). Trust __NEXT_DATA__ status only.
+            // Product ribbon check: "Inactive" ribbon means the listing was deactivated (not sold).
+            // Must run before the CTA button fallback so it takes priority.
+            if (!out.status) {
+                var ribbonEl = document.querySelector('[class*="RibbonTitle"]');
+                if (ribbonEl && ribbonEl.innerText) out.status = ribbonEl.innerText.trim().toLowerCase();
+            }
             // CTA button fallback: "item sold" (not logged in) or "view order" (seller
             // logged in) are exact button labels only present when the item is sold.
             if (!out.status) {
@@ -4140,6 +4287,15 @@ final class MercariItemLoader: ObservableObject {
                 for (var b of btns) {
                     var t = (b.innerText || b.textContent || '').trim().toLowerCase();
                     if (t === 'item sold' || t === 'view order') { out.status = 'sold_out'; break; }
+                }
+            }
+            // Removed/deactivated listing: Mercari serves a generic "no longer for sale" page with
+            // no __NEXT_DATA__ item. Detect that copy so the loader returns a definitive "inactive"
+            // status instead of timing out and reporting a generic read failure.
+            if (!out.status && out.price === null) {
+                var bodyText = ((document.body && document.body.innerText) || '').toLowerCase();
+                if (/no longer (for sale|available)/.test(bodyText)) {
+                    out.status = 'inactive';
                 }
             }
             return JSON.stringify(out);
@@ -4252,6 +4408,15 @@ class MercariSyncManager: ObservableObject {
                 statusRaw: loader.statusRaw
             )
             self.syncResults[listingId] = result
+
+            // This listing was flagged "go deactivate on Mercari" (it sold on another platform).
+            // Mercari now confirms it's inactive/sold, so the user already handled it — clear the
+            // stale flag here so the "Action needed" list stops nagging about it.
+            if listing.pendingMercariDeactivation == true && (result.statusRaw == "inactive" || result.isSold) {
+                try? await Firestore.firestore().collection("listings").document(listingId)
+                    .updateData(["pendingMercariDeactivation": FieldValue.delete(),
+                                 "updatedAt": FieldValue.serverTimestamp()])
+            }
         }
         self.isFinished = true
     }
@@ -4263,7 +4428,8 @@ class MercariSyncManager: ObservableObject {
             let mercariIsSold = result.isSold
             let ebayIsPosted = listing.crossPostStatus?["ebay"] == "posted"
 
-            if applyStatus && listing.pendingMercariDeactivation == true && mercariIsSold {
+            let mercariIsInactive = result.statusRaw == "inactive"
+            if applyStatus && listing.pendingMercariDeactivation == true && (mercariIsSold || mercariIsInactive) {
                 try? await Firestore.firestore().collection("listings").document(listingId)
                     .updateData(["pendingMercariDeactivation": FieldValue.delete(),
                                  "updatedAt": FieldValue.serverTimestamp()])
@@ -4315,6 +4481,7 @@ struct MercariSaleResult {
     var takeHome: Double?
     var trackingNumber: String?
     var carrier: String?
+    var thumbnailUrl: String?
 }
 
 @MainActor
@@ -4338,7 +4505,7 @@ final class MercariSaleSyncManager: ObservableObject {
     }
     
     func sync(sales: [Sale]) async {
-        let mercariSales = sales.filter { $0.platform == "mercari" && ($0.takeHome == nil || $0.trackingNumber == nil) }
+        let mercariSales = sales.filter { $0.platform == "mercari" && ($0.takeHome == nil || $0.trackingNumber == nil || $0.coverPhotoPath == nil) }
         guard !mercariSales.isEmpty else {
             print("[MercariSaleSync] No mercari sales needing sync")
             return
@@ -4372,7 +4539,8 @@ final class MercariSaleSyncManager: ObservableObject {
             currentStatus = "Syncing \(i + 1)/\(mercariSales.count)..."
             print("[MercariSaleSync] Loading order page for item \(platformOrderId)")
             
-            if let result = await loadSaleData(itemId: platformOrderId) {
+            let needsPhoto = sale.coverPhotoPath == nil
+            if let result = await loadSaleData(itemId: platformOrderId, fetchPhoto: needsPhoto) {
                 var update: [String: Any] = [:]
                 if let th = result.takeHome, sale.takeHome != th {
                     update["takeHome"] = th
@@ -4385,7 +4553,11 @@ final class MercariSaleSyncManager: ObservableObject {
                 if let c = result.carrier, sale.carrier != c {
                     update["carrier"] = c
                 }
-                
+                if let photo = result.thumbnailUrl, sale.coverPhotoPath == nil {
+                    update["thumbnailUrl"] = photo
+                    print("[MercariSaleSync] thumbnailUrl backfilled for \(platformOrderId)")
+                }
+
                 if !update.isEmpty {
                     update["updatedAt"] = FieldValue.serverTimestamp()
                     if let id = sale.id {
@@ -4402,7 +4574,7 @@ final class MercariSaleSyncManager: ObservableObject {
         AppTaskQueue.shared.complete(id: saleTaskId)
     }
     
-    private func loadSaleData(itemId: String) async -> MercariSaleResult? {
+    private func loadSaleData(itemId: String, fetchPhoto: Bool = false) async -> MercariSaleResult? {
         guard let url = URL(string: "https://www.mercari.com/transaction/order_status/\(itemId)/") else {
             return nil
         }
@@ -4435,7 +4607,7 @@ final class MercariSaleSyncManager: ObservableObject {
             return JSON.stringify(out);
         })();
         """
-        
+
         var hasTracking = false
         let deadline = Date().addingTimeInterval(15)
         while Date() < deadline {
@@ -4501,7 +4673,48 @@ final class MercariSaleSyncManager: ObservableObject {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
             }
         }
-        
+
+        // Load the item page to get the cover photo — the order page's og:image is a
+        // generic Mercari brand image, so the item page is the reliable photo source.
+        if fetchPhoto, let itemUrl = URL(string: "https://www.mercari.com/us/item/\(itemId)/") {
+            navDelegate.reset()
+            webView.load(URLRequest(url: itemUrl))
+            let itemLoaded = await navDelegate.waitForLoad(timeout: 15)
+            if itemLoaded {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                let jsPhoto = """
+                (function() {
+                    var nd = document.getElementById('__NEXT_DATA__');
+                    if (nd) {
+                        try {
+                            var jd = JSON.parse(nd.textContent || '');
+                            var pp = jd && jd.props && jd.props.pageProps;
+                            var item = (pp && (pp.item || (pp.data && pp.data.item) || (pp.meta && pp.meta.item)));
+                            if (item) {
+                                var photos = item.photos || [];
+                                if (photos.length > 0) {
+                                    var p = photos[0].thumbnailUrl || photos[0].url || null;
+                                    if (p) return p;
+                                }
+                                if (item.thumbnailUrl) return item.thumbnailUrl;
+                                if (item.photo_url) return item.photo_url;
+                            }
+                        } catch(e) {}
+                    }
+                    var og = document.querySelector('meta[property="og:image"]');
+                    if (og && og.content) return og.content;
+                    return null;
+                })();
+                """
+                if let photo = (try? await webView.evaluateJavaScript(jsPhoto)) as? String, !photo.isEmpty {
+                    result.thumbnailUrl = photo
+                    print("[MercariSaleSync] Got photo from item page for \(itemId)")
+                } else {
+                    print("[MercariSaleSync] No photo found on item page for \(itemId)")
+                }
+            }
+        }
+
         return result
     }
 }
