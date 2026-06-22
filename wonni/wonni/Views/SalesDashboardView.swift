@@ -973,7 +973,11 @@ final class MercariSalesPageImporter: ObservableObject {
                     }
                 }
 
-                results.push({ id: m[1], name: name||null, price: priceStr?parseFloat(priceStr):null, thumbnailUrl: thumbUrl });
+                // DEBUG: Log extraction for this item
+                var debugItem = { id: m[1], name: name||null, price: priceStr?parseFloat(priceStr):null, thumbnailUrl: thumbUrl };
+                console.log('[MercariSalesPageImporter] Extracted item:', JSON.stringify(debugItem));
+
+                results.push(debugItem);
             }
             return JSON.stringify(results);
         })();
