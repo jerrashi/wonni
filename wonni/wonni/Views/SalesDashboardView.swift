@@ -1004,7 +1004,6 @@ final class MercariSalesPageImporter: ObservableObject {
                 print("[MercariSalesPageImporter]   thumbnailUrl: \(item.thumbnailUrl ?? "nil")")
                 return item
             }
-            }
             if foundItems.isEmpty {
                 scanError = "No items found. Navigate to your Sold Items tab first."
             }
