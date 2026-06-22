@@ -622,16 +622,7 @@ struct CustomPhotoPickerView: View {
                                                         }
                                                     }
                                             } else {
-                                                TextField("Add title…", text: draftTitleBinding(for: draft))
-                                                    .font(.subheadline.weight(.semibold))
-                                                    .foregroundStyle(hasUserTitle ? .primary : .secondary)
-                                                    .focused($focusedDraftID, equals: draft.id)
-                                                    .onReceive(NotificationCenter.default.publisher(
-                                                        for: UITextField.textDidBeginEditingNotification
-                                                    )) { notification in
-                                                        guard let tf = notification.object as? UITextField else { return }
-                                                        DispatchQueue.main.async { tf.selectAll(nil) }
-                                                    }
+                                                DraftHistoryTitleField(draft: draft, focusedDraftID: $focusedDraftID)
                                             }
                                         }
                                         .padding(.horizontal)
@@ -811,6 +802,9 @@ struct CustomPhotoPickerView: View {
                         Button("Done") { focusedDraftID = nil }
                     }
                 }
+                .onChange(of: focusedDraftID) { _, _ in
+                    try? modelContext.save()
+                }
                 .alert("Delete Selected?", isPresented: $showingDeleteConfirm) {
                     Button("Cancel", role: .cancel) { }
                     Button("Delete", role: .destructive) {
@@ -837,15 +831,6 @@ struct CustomPhotoPickerView: View {
             }
         }
 
-        private func draftTitleBinding(for draft: Item) -> Binding<String> {
-            Binding(
-                get: { draft.userEditedTitle ?? draft.visionTitle ?? draft.aiSuggestedTitle ?? "" },
-                set: {
-                    draft.userEditedTitle = $0.isEmpty ? nil : $0
-                    try? modelContext.save()
-                }
-            )
-        }
 
         private func moveFocusByDraft(_ delta: Int) {
             guard let current = focusedDraftID,
@@ -919,7 +904,41 @@ struct CustomPhotoPickerView: View {
         }
     }
 
-// MARK: - Title character-count warning
+struct DraftHistoryTitleField: View {
+    let draft: Item
+    var focusedDraftID: FocusState<UUID?>.Binding
+    @State private var localTitle: String = ""
+
+    var body: some View {
+        TextField("Add title…", text: $localTitle)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(draft.userEditedTitle != nil ? .primary : .secondary)
+            .focused(focusedDraftID, equals: draft.id)
+            .onReceive(NotificationCenter.default.publisher(for: UITextField.textDidBeginEditingNotification)) { notification in
+                guard let tf = notification.object as? UITextField else { return }
+                if focusedDraftID.wrappedValue == draft.id {
+                    DispatchQueue.main.async { tf.selectAll(nil) }
+                }
+            }
+            .onAppear {
+                localTitle = draft.userEditedTitle ?? draft.visionTitle ?? draft.aiSuggestedTitle ?? ""
+            }
+            .onChange(of: focusedDraftID.wrappedValue) { oldFocus, newFocus in
+                if oldFocus == draft.id && newFocus != draft.id {
+                    let v = localTitle
+                    if draft.userEditedTitle != (v.isEmpty ? nil : v) {
+                        draft.userEditedTitle = v.isEmpty ? nil : v
+                    }
+                }
+            }
+            .onDisappear {
+                let v = localTitle
+                if draft.userEditedTitle != (v.isEmpty ? nil : v) {
+                    draft.userEditedTitle = v.isEmpty ? nil : v
+                }
+            }
+    }
+}
 // eBay & Mercari: 80 chars · Facebook: 99 · Etsy: 140
 struct TitleCharCountView: View {
     let count: Int
@@ -967,21 +986,9 @@ struct DraftRow: View {
 
     @Environment(\.modelContext) private var modelContext
     @State private var priceText: String = ""
+    @State private var titleText: String = ""
     @State private var showDescriptionEditor = false
 
-    private var titleBinding: Binding<String> {
-        Binding(
-            get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? "" },
-            set: { let v = String($0.prefix(140)); item.userEditedTitle = v.isEmpty ? nil : v }
-        )
-    }
-
-    private var descriptionBinding: Binding<String> {
-        Binding(
-            get: { item.userEditedDescription ?? item.aiSuggestedDescription ?? "" },
-            set: { item.userEditedDescription = $0.isEmpty ? nil : $0 }
-        )
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1018,7 +1025,7 @@ struct DraftRow: View {
 
                 // Title + price (constrained to photo height)
                 VStack(alignment: .leading, spacing: 6) {
-                    TextField("Add title…", text: titleBinding)
+                    TextField("Add title…", text: $titleText)
                         .font(.body.weight(.semibold))
                         .foregroundStyle(item.userEditedTitle != nil ? .primary : .secondary)
                         .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .title))
@@ -1027,7 +1034,7 @@ struct DraftRow: View {
                             DispatchQueue.main.async { tf.selectAll(nil) }
                         }
 
-                    TitleCharCountView(count: (item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? "").count)
+                    TitleCharCountView(count: titleText.count)
 
                     HStack(spacing: 3) {
                         Text("$").font(.subheadline).foregroundStyle(.secondary)
@@ -1035,17 +1042,13 @@ struct DraftRow: View {
                             .font(.subheadline)
                             .keyboardType(.decimalPad)
                             .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .price))
-                            .onChange(of: priceText) { _, newValue in
-                                let cleaned = newValue.filter { $0.isNumber || $0 == "." }
-                                item.userEditedPrice = cleaned.isEmpty ? nil : Double(cleaned)
-                            }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             // ── Description (full width) ────────────────────────────────────
-            let descText = descriptionBinding.wrappedValue
+            let descText = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
             Button { showDescriptionEditor = true } label: {
                 Text(descText.isEmpty ? "Add description…" : descText)
                     .lineLimit(2)
@@ -1062,7 +1065,13 @@ struct DraftRow: View {
             }
             .buttonStyle(.plain)
             .sheet(isPresented: $showDescriptionEditor) {
-                DescriptionEditorSheet(text: descriptionBinding, hasAIPurple: item.originalUserDescriptionBeforeAI != nil)
+                DescriptionEditorSheet(
+                    initialText: descText,
+                    onSave: { newText in
+                        item.userEditedDescription = newText.isEmpty ? nil : newText
+                    },
+                    hasAIPurple: item.originalUserDescriptionBeforeAI != nil
+                )
             }
 
             // ── AI badge / undo row ─────────────────────────────────────────
@@ -1100,328 +1109,354 @@ struct DraftRow: View {
         }
         .padding(.vertical, 8)
         .onAppear {
+            titleText = item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? ""
             if let p = item.userEditedPrice {
                 priceText = String(format: "%.2f", p)
             }
+        }
+        .onChange(of: focusedField.wrappedValue) { oldFocus, newFocus in
+            // When focus changes from this item's title/price to somewhere else or nil, save
+            if oldFocus?.itemID == item.id && newFocus?.itemID != item.id {
+                saveLocalStateToModel()
+            }
+        }
+        .onDisappear {
+            saveLocalStateToModel()
+        }
+    }
+
+    private func saveLocalStateToModel() {
+        let v = String(titleText.prefix(140))
+        if item.userEditedTitle != (v.isEmpty ? nil : v) {
+            item.userEditedTitle = v.isEmpty ? nil : v
+        }
+        
+        let cleaned = priceText.filter { $0.isNumber || $0 == "." }
+        let newPrice = cleaned.isEmpty ? nil : Double(cleaned)
+        if item.userEditedPrice != newPrice {
+            item.userEditedPrice = newPrice
         }
     }
 }
 
 // MARK: - DraftEditSheet (full listing editor)
 struct DraftEditSheet: View {
-        let item: Item
-        @Environment(\.dismiss) private var dismiss
-        @Environment(\.modelContext) private var modelContext
+    let item: Item
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
 
-        @State private var cache = CachedImageManager()
-        @State private var title: String = ""
-        @State private var priceText: String = ""
-        @State private var description: String = ""
-        @State private var personalNote: String = ""
-        @State private var buyerPaysShipping: Bool = true
-        @State private var handlingFee: String = ""
-        @State private var estimatedDays: String = ""
-        @State private var selectedCondition: ItemCondition = .good
-        @State private var tagsText: String = ""
+    @State private var cache = CachedImageManager()
+    @State private var title: String = ""
+    @State private var priceText: String = ""
+    @State private var description: String = ""
+    @State private var personalNote: String = ""
+    @State private var buyerPaysShipping: Bool = true
+    @State private var handlingFee: String = ""
+    @State private var estimatedDays: String = ""
+    @State private var selectedCondition: ItemCondition = .good
+    @State private var tagsText: String = ""
 
-        @State private var showPhotoEditModal = false
-        @State private var selectedItems: [PhotosPickerItem] = []
+    @State private var showPhotoEditModal = false
+    @State private var selectedItems: [PhotosPickerItem] = []
 
-        // Shipping & Dimensions state
-        @State private var weightText: String = ""
-        @State private var lengthText: String = ""
-        @State private var widthText: String = ""
-        @State private var heightText: String = ""
+    // Shipping & Dimensions state
+    @State private var weightText: String = ""
+    @State private var lengthText: String = ""
+    @State private var widthText: String = ""
+    @State private var heightText: String = ""
 
-        @State private var showTemplatePicker = false
-        @State private var isApplyingTemplate = false
+    @State private var showTemplatePicker = false
+    @State private var isApplyingTemplate = false
 
-        var body: some View {
-            NavigationStack {
-                Form {
-                    Section {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Text("Photos")
-                                    .font(.headline)
-                                Spacer()
-                                if !item.sourceAssetIdentifiers.isEmpty {
-                                    Button {
-                                        showPhotoEditModal = true
-                                    } label: {
-                                        Image(systemName: "pencil")
-                                    }
-                                }
-                            }
-                            
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 12) {
-                                    ForEach(item.sourceAssetIdentifiers, id: \.self) { assetId in
-                                        ZStack(alignment: .topTrailing) {
-                                            Group {
-                                                if let uiImage = item.image(for: assetId) {
-                                                    Image(uiImage: uiImage)
-                                                        .resizable()
-                                                        .scaledToFill()
-                                                } else {
-                                                    PhotoItemView(
-                                                        asset: PhotoAsset(identifier: assetId),
-                                                        cache: cache,
-                                                        imageSize: CGSize(width: 160, height: 160)
-                                                    )
-                                                }
-                                            }
-                                            .frame(width: 80, height: 80)
-                                            .cornerRadius(8)
-                                            .clipped()
-                                        }
-                                    }
-                                    
-                                    PhotosPicker(selection: $selectedItems, matching: .images) {
-                                            VStack {
-                                                Image(systemName: "plus.circle")
-                                                    .font(.title2)
-                                                Text("Add Photo")
-                                                    .font(.caption2)
-                                            }
-                                            .foregroundColor(.accentColor)
-                                            .frame(width: 80, height: 80)
-                                            .background(Color(.systemGray6))
-                                            .cornerRadius(8)
-                                        }
-                                        .onChange(of: selectedItems) { _, newItems in
-                                            Task {
-                                                for phItem in newItems {
-                                                    if let data = try? await phItem.loadTransferable(type: Data.self) {
-                                                        let assetId = UUID().uuidString
-                                                        item.insertPhoto(assetId: assetId, data: data, at: item.sourceAssetIdentifiers.count)
-                                                    }
-                                                }
-                                                selectedItems = []
-                                                try? modelContext.save()
-                                            }
-                                        }
-                                }
-                                .padding(.vertical, 4)
-                            }
-                        }
-                    }
-
-                    Section("Title & Price") {
-                        TextField("Title", text: $title)
-                            .font(.body.weight(.medium))
-                            .onChange(of: title) { _, v in
-                                if v.count > 140 { title = String(v.prefix(140)) }
-                            }
-                        TitleCharCountView(count: title.count)
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Text("$")
-                            TextField("0.00", text: $priceText)
-                                .keyboardType(.decimalPad)
-                        }
-                    }
-
-                    Section("Description") {
-                        TextEditor(text: $description)
-                            .frame(minHeight: 80)
-                    }
-
-                    Section("Condition") {
-                        Picker("Condition", selection: $selectedCondition) {
-                            ForEach(ItemCondition.allCases, id: \.self) { c in
-                                Text(c.displayName).tag(c)
-                            }
-                        }
-                    }
-
-                    Section("Tags") {
-                        TextField("e.g. photocard, kpop, sealed", text: $tagsText)
-                    }
-
-                    Section("Note (hidden from buyer)") {
-                        TextField("e.g. stored in basement", text: $personalNote)
-                    }
-
-                    Section("Shipping & Dimensions") {
-                        Toggle("Buyer pays shipping", isOn: $buyerPaysShipping)
-                        if !buyerPaysShipping {
-                            HStack {
-                                Text("Handling fee")
-                                Spacer()
-                                Text("$")
-                                TextField("0.00", text: $handlingFee)
-                                    .keyboardType(.decimalPad)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(width: 80)
-                            }
-                        }
-                        HStack {
-                            Text("Est. shipping days")
+                            Text("Photos")
+                                .font(.headline)
                             Spacer()
-                            TextField("3", text: $estimatedDays)
-                                .keyboardType(.numberPad)
-                                .multilineTextAlignment(.trailing)
-                                .frame(width: 60)
+                            if !item.sourceAssetIdentifiers.isEmpty {
+                                Button {
+                                    showPhotoEditModal = true
+                                } label: {
+                                    Image(systemName: "pencil")
+                                }
+                            }
                         }
                         
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 12) {
+                                ForEach(item.sourceAssetIdentifiers, id: \.self) { assetId in
+                                    ZStack(alignment: .topTrailing) {
+                                        Group {
+                                            if let uiImage = item.image(for: assetId) {
+                                                Image(uiImage: uiImage)
+                                                    .resizable()
+                                                    .scaledToFill()
+                                            } else {
+                                                PhotoItemView(
+                                                    asset: PhotoAsset(identifier: assetId),
+                                                    cache: cache,
+                                                    imageSize: CGSize(width: 160, height: 160)
+                                                )
+                                            }
+                                        }
+                                        .frame(width: 80, height: 80)
+                                        .cornerRadius(8)
+                                        .clipped()
+                                    }
+                                }
+                                
+                                PhotosPicker(selection: $selectedItems, matching: .images) {
+                                        VStack {
+                                            Image(systemName: "plus.circle")
+                                                .font(.title2)
+                                            Text("Add Photo")
+                                                .font(.caption2)
+                                        }
+                                        .foregroundColor(.accentColor)
+                                        .frame(width: 80, height: 80)
+                                        .background(Color(.systemGray6))
+                                        .cornerRadius(8)
+                                    }
+                                    .onChange(of: selectedItems) { _, newItems in
+                                        Task {
+                                            for phItem in newItems {
+                                                if let data = try? await phItem.loadTransferable(type: Data.self) {
+                                                    let assetId = UUID().uuidString
+                                                    item.insertPhoto(assetId: assetId, data: data, at: item.sourceAssetIdentifiers.count)
+                                                }
+                                            }
+                                            selectedItems = []
+                                            try? modelContext.save()
+                                        }
+                                    }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+
+                Section("Title & Price") {
+                    TextField("Title", text: $title)
+                        .font(.body.weight(.medium))
+                        .onChange(of: title) { _, v in
+                            if v.count > 140 { title = String(v.prefix(140)) }
+                        }
+                    TitleCharCountView(count: title.count)
+                    HStack {
+                        Text("$")
+                        TextField("0.00", text: $priceText)
+                            .keyboardType(.decimalPad)
+                    }
+                }
+
+                Section("Description") {
+                    TextEditor(text: $description)
+                        .frame(minHeight: 80)
+                }
+
+                Section("Condition") {
+                    Picker("Condition", selection: $selectedCondition) {
+                        ForEach(ItemCondition.allCases, id: \.self) { c in
+                            Text(c.displayName).tag(c)
+                        }
+                    }
+                }
+
+                Section("Tags") {
+                    TextField("e.g. photocard, kpop, sealed", text: $tagsText)
+                }
+
+                Section("Note (hidden from buyer)") {
+                    TextField("e.g. stored in basement", text: $personalNote)
+                }
+
+                Section("Shipping & Dimensions") {
+                    Toggle("Buyer pays shipping", isOn: $buyerPaysShipping)
+                    if !buyerPaysShipping {
                         HStack {
-                            Text("Weight (lbs)")
+                            Text("Handling fee")
                             Spacer()
-                            TextField("lbs", text: $weightText)
+                            Text("$")
+                            TextField("0.00", text: $handlingFee)
                                 .keyboardType(.decimalPad)
                                 .multilineTextAlignment(.trailing)
                                 .frame(width: 80)
                         }
+                    }
+                    HStack {
+                        Text("Est. shipping days")
+                        Spacer()
+                        TextField("3", text: $estimatedDays)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 60)
+                    }
+                    
+                    HStack {
+                        Text("Weight (lbs)")
+                        Spacer()
+                        TextField("lbs", text: $weightText)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 80)
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Dimensions (inches)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                         
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Dimensions (inches)")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                            
-                            HStack(spacing: 12) {
-                                HStack {
-                                    Text("L:")
-                                    TextField("Length", text: $lengthText)
-                                        .keyboardType(.decimalPad)
-                                        .textFieldStyle(.roundedBorder)
-                                        .multilineTextAlignment(.center)
-                                }
-                                HStack {
-                                    Text("W:")
-                                    TextField("Width", text: $widthText)
-                                        .keyboardType(.decimalPad)
-                                        .textFieldStyle(.roundedBorder)
-                                        .multilineTextAlignment(.center)
-                                }
-                                HStack {
-                                    Text("H:")
-                                    TextField("Height", text: $heightText)
-                                        .keyboardType(.decimalPad)
-                                        .textFieldStyle(.roundedBorder)
-                                        .multilineTextAlignment(.center)
-                                }
+                        HStack(spacing: 12) {
+                            HStack {
+                                Text("L:")
+                                TextField("Length", text: $lengthText)
+                                    .keyboardType(.decimalPad)
+                                    .textFieldStyle(.roundedBorder)
+                                    .multilineTextAlignment(.center)
+                            }
+                            HStack {
+                                Text("W:")
+                                TextField("Width", text: $widthText)
+                                    .keyboardType(.decimalPad)
+                                    .textFieldStyle(.roundedBorder)
+                                    .multilineTextAlignment(.center)
+                            }
+                            HStack {
+                                Text("H:")
+                                TextField("Height", text: $heightText)
+                                    .keyboardType(.decimalPad)
+                                    .textFieldStyle(.roundedBorder)
+                                    .multilineTextAlignment(.center)
                             }
                         }
-                        .padding(.vertical, 4)
                     }
+                    .padding(.vertical, 4)
                 }
-                .navigationTitle("Edit Draft")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Button("Cancel") { dismiss() }
-                    }
-                    ToolbarItem(placement: .bottomBar) {
-                        Button {
-                            showTemplatePicker = true
-                        } label: {
-                            Label("Templates", systemImage: "doc.on.doc")
-                                .font(.caption.weight(.semibold))
-                        }
-                    }
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Save") {
-                            saveToDraft()
-                            dismiss()
-                        }
-                        .fontWeight(.semibold)
-                    }
-                }
-                .sheet(isPresented: $showTemplatePicker) {
-                    TemplatePickerSheet { template in
-                        applyTemplateToDraft(template)
-                    }
-                }
-                .fullScreenCover(isPresented: $showPhotoEditModal) {
-                    DraftPhotoEditModal(item: item)
-                }
-                .onAppear { loadFromDraft() }
             }
+            .navigationTitle("Edit Draft")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .bottomBar) {
+                    Button {
+                        showTemplatePicker = true
+                    } label: {
+                        Label("Templates", systemImage: "doc.on.doc")
+                            .font(.caption.weight(.semibold))
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") {
+                        saveToDraft()
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+            .sheet(isPresented: $showTemplatePicker) {
+                TemplatePickerSheet { template in
+                    applyTemplateToDraft(template)
+                }
+            }
+            .fullScreenCover(isPresented: $showPhotoEditModal) {
+                DraftPhotoEditModal(item: item)
+            }
+            .onAppear { loadFromDraft() }
         }
+    }
 
 
-        private func applyTemplateToDraft(_ template: ListingTemplate) {
-            if let t = template.title, !t.isEmpty { title = t }
-            if let d = template.customDescription, !d.isEmpty { description = d }
-            if let c = template.condition, let cond = ItemCondition(rawValue: c) { selectedCondition = cond }
-            if let free = template.isFreeShipping { buyerPaysShipping = !free }
-            if let w = template.weightLbs { weightText = String(format: "%.2f", w) }
-            if let dims = template.packageDimensions {
-                lengthText = String(format: "%.2f", dims.lengthIn)
-                widthText = String(format: "%.2f", dims.widthIn)
-                heightText = String(format: "%.2f", dims.heightIn)
-            }
-            guard !template.photoPaths.isEmpty else { return }
-            isApplyingTemplate = true
-            Task {
-                for path in template.photoPaths {
-                    if let data = try? await StorageService.shared.downloadImageData(path: path),
-                       let img = UIImage(data: data) {
-                        let fakeId = "tpl_\(UUID().uuidString)"
-                        item.insertPhoto(assetId: fakeId, data: img.jpegData(compressionQuality: 0.85), at: item.sourceAssetIdentifiers.count)
-                        try? modelContext.save()
-                    }
+    private func applyTemplateToDraft(_ template: ListingTemplate) {
+        if let t = template.title, !t.isEmpty { title = t }
+        if let d = template.customDescription, !d.isEmpty { description = d }
+        if let c = template.condition, let cond = ItemCondition(rawValue: c) { selectedCondition = cond }
+        if let free = template.isFreeShipping { buyerPaysShipping = !free }
+        if let w = template.weightLbs { weightText = String(format: "%.2f", w) }
+        if let dims = template.packageDimensions {
+            lengthText = String(format: "%.2f", dims.lengthIn)
+            widthText = String(format: "%.2f", dims.widthIn)
+            heightText = String(format: "%.2f", dims.heightIn)
+        }
+        guard !template.photoPaths.isEmpty else { return }
+        isApplyingTemplate = true
+        Task {
+            for path in template.photoPaths {
+                if let data = try? await StorageService.shared.downloadImageData(path: path),
+                   let img = UIImage(data: data) {
+                    let fakeId = "tpl_\(UUID().uuidString)"
+                    item.insertPhoto(assetId: fakeId, data: img.jpegData(compressionQuality: 0.85), at: item.sourceAssetIdentifiers.count)
+                    try? modelContext.save()
                 }
-                isApplyingTemplate = false
             }
+            isApplyingTemplate = false
         }
+    }
 
-        private func loadFromDraft() {
-            title = item.userEditedTitle ?? item.aiSuggestedTitle ?? ""
-            if let p = item.userEditedPrice {
-                priceText = String(format: "%.2f", p)
-            }
-            description = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
-            personalNote = item.personalNote ?? ""
-            if let c = item.condition, let parsed = ItemCondition(rawValue: c) {
-                selectedCondition = parsed
-            } else {
-                selectedCondition = .good
-            }
-            buyerPaysShipping = item.buyerPaysShipping
-            handlingFee = item.handlingFee > 0 ? String(format: "%.2f", item.handlingFee) : ""
-            estimatedDays = "\(item.estimatedShippingDays)"
-            tagsText = item.tags.joined(separator: ", ")
-            
-            // Dimensions & Weight
-            if let w = item.weightLbs { weightText = String(format: "%.2f", w) } else { weightText = "" }
-            if let l = item.lengthIn { lengthText = String(format: "%.2f", l) } else { lengthText = "" }
-            if let w = item.widthIn { widthText = String(format: "%.2f", w) } else { widthText = "" }
-            if let h = item.heightIn { heightText = String(format: "%.2f", h) } else { heightText = "" }
+    private func loadFromDraft() {
+        title = item.userEditedTitle ?? item.aiSuggestedTitle ?? ""
+        if let p = item.userEditedPrice {
+            priceText = String(format: "%.2f", p)
         }
+        description = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
+        personalNote = item.personalNote ?? ""
+        if let c = item.condition, let parsed = ItemCondition(rawValue: c) {
+            selectedCondition = parsed
+        } else {
+            selectedCondition = .good
+        }
+        buyerPaysShipping = item.buyerPaysShipping
+        handlingFee = item.handlingFee > 0 ? String(format: "%.2f", item.handlingFee) : ""
+        estimatedDays = "\(item.estimatedShippingDays)"
+        tagsText = item.tags.joined(separator: ", ")
+        
+        // Dimensions & Weight
+        if let w = item.weightLbs { weightText = String(format: "%.2f", w) } else { weightText = "" }
+        if let l = item.lengthIn { lengthText = String(format: "%.2f", l) } else { lengthText = "" }
+        if let w = item.widthIn { widthText = String(format: "%.2f", w) } else { widthText = "" }
+        if let h = item.heightIn { heightText = String(format: "%.2f", h) } else { heightText = "" }
+    }
 
-        private func saveToDraft() {
-            item.userEditedTitle = title.isEmpty ? nil : title
-            item.userEditedPrice = Double(priceText.filter { $0.isNumber || $0 == "." })
-            item.userEditedDescription = description.isEmpty ? nil : description
-            item.personalNote = personalNote.isEmpty ? nil : personalNote
-            item.condition = selectedCondition.rawValue
-            item.buyerPaysShipping = buyerPaysShipping
-            item.handlingFee = Double(handlingFee.filter { $0.isNumber || $0 == "." }) ?? 0
-            item.estimatedShippingDays = Int(estimatedDays) ?? 3
-            item.tags = tagsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-            
-            // Dimensions & Weight
-            item.weightLbs = Double(weightText.filter { $0.isNumber || $0 == "." })
-            item.lengthIn = Double(lengthText.filter { $0.isNumber || $0 == "." })
-            item.widthIn = Double(widthText.filter { $0.isNumber || $0 == "." })
-            item.heightIn = Double(heightText.filter { $0.isNumber || $0 == "." })
-            
-            try? modelContext.save()
-        }
+    private func saveToDraft() {
+        item.userEditedTitle = title.isEmpty ? nil : title
+        item.userEditedPrice = Double(priceText.filter { $0.isNumber || $0 == "." })
+        item.userEditedDescription = description.isEmpty ? nil : description
+        item.personalNote = personalNote.isEmpty ? nil : personalNote
+        item.condition = selectedCondition.rawValue
+        item.buyerPaysShipping = buyerPaysShipping
+        item.handlingFee = Double(handlingFee.filter { $0.isNumber || $0 == "." }) ?? 0
+        item.estimatedShippingDays = Int(estimatedDays) ?? 3
+        item.tags = tagsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        
+        // Dimensions & Weight
+        item.weightLbs = Double(weightText.filter { $0.isNumber || $0 == "." })
+        item.lengthIn = Double(lengthText.filter { $0.isNumber || $0 == "." })
+        item.widthIn = Double(widthText.filter { $0.isNumber || $0 == "." })
+        item.heightIn = Double(heightText.filter { $0.isNumber || $0 == "." })
+        
+        try? modelContext.save()
+    }
     }
 
 
 // MARK: - DescriptionEditorSheet
 private struct DescriptionEditorSheet: View {
-    var text: Binding<String>
+    var initialText: String
+    var onSave: (String) -> Void
     var hasAIPurple: Bool
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focused: Bool
+    
+    @State private var localText: String = ""
 
     var body: some View {
         NavigationStack {
-            TextEditor(text: text)
+            TextEditor(text: $localText)
                 .focused($focused)
                 .font(.body)
                 .padding(.horizontal, 12)
@@ -1431,11 +1466,17 @@ private struct DescriptionEditorSheet: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
+                        Button("Done") {
+                            onSave(localText)
+                            dismiss()
+                        }
                     }
                 }
         }
-        .onAppear { focused = true }
+        .onAppear {
+            localText = initialText
+            focused = true
+        }
     }
 }
 
