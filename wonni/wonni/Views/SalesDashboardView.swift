@@ -962,6 +962,16 @@ final class MercariSalesPageImporter: ObservableObject {
                         thumbUrl = null;
                     }
                 }
+                // If no src found, try to find any image with mercdn.net or mercari-images in href
+                if (!thumbUrl) {
+                    var allImgs = Array.from(link.querySelectorAll('img'));
+                    for (var img of allImgs) {
+                        if (img.src && (img.src.indexOf('mercdn.net') !== -1 || img.src.indexOf('mercari-images') !== -1)) {
+                            thumbUrl = img.src;
+                            break;
+                        }
+                    }
+                }
 
                 results.push({ id: m[1], name: name||null, price: priceStr?parseFloat(priceStr):null, thumbnailUrl: thumbUrl });
             }

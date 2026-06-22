@@ -91,6 +91,15 @@ class SaleRepository: ObservableObject {
         s.userId = userId
         s.createdAt = Timestamp(date: Date())
         s.updatedAt = Timestamp(date: Date())
+
+        // DEBUG: Log what we're about to save to Firestore
+        print("[SaleRepository.addSale] Saving sale with:")
+        print("[SaleRepository.addSale]   platform: \(s.platform)")
+        print("[SaleRepository.addSale]   listingTitle: \(s.listingTitle ?? "nil")")
+        print("[SaleRepository.addSale]   coverPhotoPath: \(s.coverPhotoPath ?? "nil")")
+        print("[SaleRepository.addSale]   thumbnailUrl: \(s.thumbnailUrl ?? "nil")")
+
         try db.collection(col).document().setData(from: s)
+        print("[SaleRepository.addSale] Sale saved successfully")
     }
 }
