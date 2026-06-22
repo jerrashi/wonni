@@ -1,0 +1,30 @@
+{
+  "configurations" : [
+    {
+      "id" : "5F9F3C8B-9C2D-4E1A-B5D9-7A3F2E1C4D6B",
+      "name" : "Test Configurations",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "codeCoverage" : false,
+    "commandLineArgumentsEnabled" : false,
+    "environmentVariablesEnabled" : false,
+    "testExecutionOrdering" : "random"
+  },
+  "testTargets" : [
+    {
+      "skippedTests" : [
+
+      ],
+      "target" : {
+        "containerPath" : "container:wonni.xcodeproj",
+        "identifier" : "wonniUITests",
+        "name" : "wonniUITests"
+      }
+    }
+  ],
+  "version" : 1
+}
