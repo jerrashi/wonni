@@ -144,10 +144,47 @@ All in `wonni/functions/`. Deployed via Firebase CLI.
 - **Two navigation mutations per frame = freeze** — see Navigation rules above.
 - **SwiftData `Item` vs Firestore `UserListing`** — drafts are `Item` (local SwiftData). After publishing they become `UserListing` in Firestore. The two never coexist for the same listing.
 
+## Testing strategy
+
+**Goal**: Prevent broken code reaching main by testing critical user flows automatically.
+
+**Test layers**:
+1. **SwiftLint** (code quality) — runs on all PRs, warnings only
+2. **Unit tests** (XCTest) — test data models, managers, state logic
+3. **UI tests** (XCUITest) — test end-to-end selling flow on every PR
+4. **Build check** — verify app builds without errors
+
+**Critical test: Selling flow end-to-end** (`SellingFlowTests.swift`)
+- Camera → Proceed to drafts → Process (AI) → Review & Publish → Platform toggles → Publish
+- Runs on iPhone 15 simulator, timeout: 60s for AI processing
+- MUST pass before main merge
+
+**Running tests locally**:
+```bash
+cd wonni
+
+# Unit tests
+xcodebuild test -scheme wonni -destination 'platform=iOS Simulator,name=iPhone 15'
+
+# UI tests (selling flow)
+xcodebuild test -scheme wonniUITests -destination 'platform=iOS Simulator,name=iPhone 15'
+```
+
+**GitHub Actions** (`.github/workflows/test.yml`)
+- Runs on all PRs and pushes to main
+- Blocks merge if tests fail
+- Uploads logs on failure for debugging
+
+**When adding features**:
+- Add unit tests for new managers/models
+- Add UI test scenarios for user-facing flows
+- All tests must pass before PR merge
+
 ## Dev workflow
 
 - **Branch naming**: `claude/<short-slug>` for AI-assisted work
 - **Commit style**: conventional commits (`feat:`, `fix:`, `docs:`, `chore:`) — no `Co-Authored-By` lines
-- **CI**: Xcode Cloud runs SwiftLint (warnings only, non-blocking) and builds on push to main
+- **CI**: GitHub Actions runs SwiftLint, unit tests, and UI tests on all PRs (required to pass before merge)
+- **Testing**: See Testing strategy section above
 - **Git worktrees**: used to isolate feature branches while keeping main buildable
 - **Cloud Functions deploy**: `firebase deploy --only functions` from `wonni/` directory
