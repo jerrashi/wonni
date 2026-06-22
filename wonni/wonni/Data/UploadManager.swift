@@ -422,6 +422,7 @@ class UploadManager: ObservableObject {
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             isProcessPillVisible = false
             AppTaskQueue.shared.complete(id: processingTaskId)
+            showProgressSheet = false
             showProcessResults = true
         }
     }
