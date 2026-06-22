@@ -5,6 +5,8 @@
 
 import SwiftUI
 import WebKit
+import FirebaseFirestore
+import FirebaseStorage
 
 struct AddSaleView: View {
     @Environment(\.dismiss) private var dismiss
