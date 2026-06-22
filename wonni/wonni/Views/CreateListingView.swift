@@ -1074,6 +1074,7 @@ struct DraftRow: View {
                 )
             }
 
+
             // ── AI badge / undo row ─────────────────────────────────────────
             let hasAIEdits = item.originalUserTitleBeforeAI != nil || item.originalUserDescriptionBeforeAI != nil
             if hasAIEdits || item.processedAt != nil {
