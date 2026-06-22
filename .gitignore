@@ -76,3 +76,12 @@ wonni/functions/node_modules/
 wonni/*.log
 wonni/firebase-debug*.log
 wonni/.firebase/
+
+# Design system — generated artifacts (re-created by /design-sync re-run)
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+design-system/node_modules/
+design-system/dist/
