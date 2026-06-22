@@ -10,7 +10,7 @@ import SwiftData
 import FirebaseCore
 
 @main
-struct wonniApp: App {
+struct WonniApp: App {
     @StateObject private var uploadManager = UploadManager()
     @StateObject private var authManager = AuthManager()
     @StateObject private var bulkImportManager = BulkImportManager()
