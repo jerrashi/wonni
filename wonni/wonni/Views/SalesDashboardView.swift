@@ -71,51 +71,87 @@ struct SalesDashboardView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    syncButton
-                }
-                ToolbarItem(placement: .secondaryAction) {
-                    Menu {
-                        Button { showAddSale = true } label: {
-                            Label("Add by URL", systemImage: "link")
-                        }
-                        Button { showImportSales = true } label: {
-                            Label("Import from profile", systemImage: "square.and.arrow.down.on.square")
-                        }
-                    } label: {
-                        Label("Add", systemImage: "plus")
-                    }
-                }
             }
             .safeAreaInset(edge: .bottom) {
-                if let toast = syncToast {
-                    Text(toast)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 16).padding(.vertical, 10)
-                        .background(Color.accentColor.opacity(0.92))
-                        .clipShape(Capsule())
-                        .padding(.bottom, 12)
+                VStack(spacing: 0) {
+                    // Toast message
+                    if let toast = syncToast {
+                        Text(toast)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16).padding(.vertical, 10)
+                            .background(Color.accentColor.opacity(0.92))
+                            .clipShape(Capsule())
+                            .padding(.bottom, 12)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+
+                    // Bulk hide button
+                    if isSelectMode && !selectedSaleIds.isEmpty {
+                        Button {
+                            showBulkHideConfirmation = true
+                        } label: {
+                            Text("Hide \(selectedSaleIds.count) sale\(selectedSaleIds.count == 1 ? "" : "s")")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.secondary)
+                        .padding(.horizontal)
+                        .padding(.bottom, 8)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
-            .animation(.spring(duration: 0.3), value: syncToast)
-            .safeAreaInset(edge: .bottom) {
-                if isSelectMode && !selectedSaleIds.isEmpty {
-                    Button {
-                        showBulkHideConfirmation = true
-                    } label: {
-                        Text("Hide \(selectedSaleIds.count) sale\(selectedSaleIds.count == 1 ? "" : "s")")
-                            .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.secondary)
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+
+                    // Prominent SYNC and ADD buttons
+                    if !sales.isEmpty || !isLoading {
+                        HStack(spacing: 12) {
+                            // SYNC Button
+                            Button(action: { Task { await syncSales() } }) {
+                                HStack(spacing: 8) {
+                                    if isSyncing {
+                                        ProgressView()
+                                            .scaleEffect(0.9, anchor: .center)
+                                    } else {
+                                        Image(systemName: "arrow.triangle.2.circlepath")
+                                    }
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("SYNC")
+                                            .font(.subheadline.weight(.semibold))
+                                        Text(isSyncing ? "Syncing..." : "Update from platforms")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.blue)
+                            .disabled(isSyncing)
+
+                            // ADD Button
+                            NavigationLink(destination: AddSaleView()) {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "plus.circle.fill")
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("ADD")
+                                            .font(.subheadline.weight(.semibold))
+                                        Text("Record a sale")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.green)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(Color(.systemGroupedBackground))
+                    }
                 }
+                .animation(.spring(duration: 0.3), value: syncToast)
+                .animation(.spring(duration: 0.25), value: selectedSaleIds.isEmpty)
             }
-            .animation(.spring(duration: 0.25), value: selectedSaleIds.isEmpty)
             .sheet(item: $selectedSale) { sale in
                 SaleDetailSheet(sale: sale) {
                     Task { await reload() }
