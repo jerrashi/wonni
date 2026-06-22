@@ -1,0 +1,647 @@
+/* Wonni Design System — v0.1.0
+   Brand: Purple-led, iOS-native feel, AI-forward
+   Inter font is provided at runtime by the host; SF Pro is Apple system font. */
+
+/* ── TOKENS ─────────────────────────────────── */
+:root {
+  /* Purple scale */
+  --w-purple-50:  #F5F3FF;
+  --w-purple-100: #EDE9FF;
+  --w-purple-200: #DDD6FE;
+  --w-purple-300: #C4B5FD;
+  --w-purple-400: #A78BFA;
+  --w-purple-500: #8B5CF6;
+  --w-purple-600: #7C3AED;
+  --w-purple-700: #6D28D9;
+  --w-purple-800: #5B21B6;
+  --w-purple-900: #2E1065;
+
+  /* Semantic brand */
+  --w-brand:       var(--w-purple-500);
+  --w-brand-dark:  var(--w-purple-600);
+  --w-brand-light: var(--w-purple-100);
+
+  /* Surfaces */
+  --w-surface:          #FFFFFF;
+  --w-surface-alt:      #F9F8FF;
+  --w-surface-elevated: #FFFFFF;
+
+  /* Text */
+  --w-text:           #1A1228;
+  --w-text-secondary: #6B6180;
+  --w-text-tertiary:  #9D97AE;
+  --w-text-on-brand:  #FFFFFF;
+
+  /* Borders */
+  --w-border:        #DDD6FE;
+  --w-border-subtle: #EDE9FF;
+
+  /* Status */
+  --w-success:      #10B981;
+  --w-success-bg:   #D1FAE5;
+  --w-success-text: #065F46;
+  --w-warning:      #F59E0B;
+  --w-warning-bg:   #FEF3C7;
+  --w-warning-text: #92400E;
+  --w-error:        #EF4444;
+  --w-error-bg:     #FEE2E2;
+  --w-error-text:   #991B1B;
+  --w-pending:      #8B5CF6;
+  --w-pending-bg:   #EDE9FF;
+
+  /* Typography */
+  --w-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif;
+
+  /* Font sizes (iOS scale) */
+  --w-text-xs:   11px;
+  --w-text-sm:   13px;
+  --w-text-base: 15px;
+  --w-text-md:   17px;
+  --w-text-lg:   20px;
+  --w-text-xl:   24px;
+  --w-text-2xl:  28px;
+
+  /* Spacing (4px grid) */
+  --w-space-1:  4px;
+  --w-space-2:  8px;
+  --w-space-3:  12px;
+  --w-space-4:  16px;
+  --w-space-5:  20px;
+  --w-space-6:  24px;
+  --w-space-8:  32px;
+  --w-space-10: 40px;
+  --w-space-12: 48px;
+
+  /* Border radius */
+  --w-radius-xs:   6px;
+  --w-radius-sm:   8px;
+  --w-radius-md:   12px;
+  --w-radius-lg:   16px;
+  --w-radius-xl:   20px;
+  --w-radius-2xl:  24px;
+  --w-radius-pill: 9999px;
+
+  /* Shadows */
+  --w-shadow-sm:   0 1px 3px rgba(124,58,237,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --w-shadow-md:   0 4px 16px rgba(124,58,237,0.10), 0 2px 8px rgba(0,0,0,0.06);
+  --w-shadow-lg:   0 8px 32px rgba(124,58,237,0.14), 0 4px 16px rgba(0,0,0,0.08);
+  --w-shadow-pill: 0 4px 20px rgba(124,58,237,0.28), 0 2px 8px rgba(0,0,0,0.12);
+
+  /* Transitions */
+  --w-t:      200ms cubic-bezier(0.4,0,0.2,1);
+  --w-t-fast: 120ms cubic-bezier(0.4,0,0.2,1);
+  --w-t-slow: 350ms cubic-bezier(0.4,0,0.2,1);
+}
+
+/* ── BASE ───────────────────────────────────── */
+.wonni, .wonni * {
+  box-sizing: border-box;
+  font-family: var(--w-font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── BUTTON ─────────────────────────────────── */
+.wonni-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--w-space-2);
+  border: none;
+  cursor: pointer;
+  font-family: var(--w-font);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  transition: all var(--w-t);
+  white-space: nowrap;
+  user-select: none;
+  position: relative;
+  overflow: hidden;
+  text-decoration: none;
+  outline: none;
+}
+.wonni-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.wonni-btn--sm { height: 32px; padding: 0 var(--w-space-3); border-radius: var(--w-radius-sm); font-size: var(--w-text-sm); }
+.wonni-btn--md { height: 44px; padding: 0 var(--w-space-5); border-radius: var(--w-radius-md); font-size: var(--w-text-base); }
+.wonni-btn--lg { height: 52px; padding: 0 var(--w-space-6); border-radius: var(--w-radius-lg); font-size: var(--w-text-md); }
+
+.wonni-btn--primary {
+  background: var(--w-brand);
+  color: var(--w-text-on-brand);
+  box-shadow: 0 2px 8px rgba(139,92,246,0.32);
+}
+.wonni-btn--primary:hover:not(:disabled) {
+  background: var(--w-brand-dark);
+  box-shadow: 0 4px 16px rgba(139,92,246,0.42);
+  transform: translateY(-1px);
+}
+.wonni-btn--primary:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 1px 4px rgba(139,92,246,0.24);
+}
+
+.wonni-btn--secondary {
+  background: var(--w-brand-light);
+  color: var(--w-brand-dark);
+  border: 1.5px solid var(--w-border);
+}
+.wonni-btn--secondary:hover:not(:disabled) {
+  background: var(--w-purple-200);
+  border-color: var(--w-purple-300);
+}
+
+.wonni-btn--ghost {
+  background: transparent;
+  color: var(--w-brand-dark);
+}
+.wonni-btn--ghost:hover:not(:disabled) { background: var(--w-brand-light); }
+
+.wonni-btn--destructive {
+  background: var(--w-error-bg);
+  color: var(--w-error-text);
+  border: 1.5px solid rgba(239,68,68,0.2);
+}
+.wonni-btn--destructive:hover:not(:disabled) {
+  background: #FEE2E2;
+  border-color: var(--w-error);
+}
+
+.wonni-btn__spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: wonni-spin 0.6s linear infinite;
+}
+
+/* ── APP PILL ───────────────────────────────── */
+.wonni-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--w-space-2);
+  padding: var(--w-space-2) var(--w-space-4);
+  border-radius: var(--w-radius-pill);
+  box-shadow: var(--w-shadow-pill);
+  transition: all var(--w-t);
+  cursor: pointer;
+  min-width: 0;
+}
+.wonni-pill--purple  { background: var(--w-brand);    color: var(--w-text-on-brand); }
+.wonni-pill--accent  { background: #1C1425;             color: var(--w-text-on-brand); }
+.wonni-pill--success { background: var(--w-success);   color: var(--w-text-on-brand); }
+.wonni-pill--warning { background: var(--w-warning);   color: var(--w-text-on-brand); }
+
+.wonni-pill:hover { transform: translateY(-2px); }
+
+.wonni-pill__icon {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+.wonni-pill__label {
+  font-size: var(--w-text-sm);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.wonni-pill__sublabel {
+  font-size: var(--w-text-xs);
+  opacity: 0.75;
+  white-space: nowrap;
+  margin-top: 1px;
+}
+
+/* ── LISTING CARD ───────────────────────────── */
+.wonni-listing-card {
+  background: var(--w-surface);
+  border-radius: var(--w-radius-lg);
+  overflow: hidden;
+  box-shadow: var(--w-shadow-sm);
+  border: 1px solid var(--w-border-subtle);
+  transition: all var(--w-t);
+  cursor: pointer;
+  position: relative;
+}
+.wonni-listing-card:hover {
+  box-shadow: var(--w-shadow-md);
+  transform: translateY(-2px);
+  border-color: var(--w-border);
+}
+.wonni-listing-card--selected {
+  border-color: var(--w-brand);
+  box-shadow: 0 0 0 2px var(--w-brand), var(--w-shadow-sm);
+}
+.wonni-listing-card__image {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  background: var(--w-purple-50);
+  display: block;
+}
+.wonni-listing-card__image-placeholder {
+  width: 100%;
+  aspect-ratio: 1;
+  background: var(--w-purple-50);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--w-purple-300);
+  font-size: 32px;
+}
+.wonni-listing-card__body   { padding: var(--w-space-3); }
+.wonni-listing-card__title  {
+  font-size: var(--w-text-sm);
+  font-weight: 600;
+  color: var(--w-text);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  letter-spacing: -0.01em;
+}
+.wonni-listing-card__price  {
+  font-size: var(--w-text-md);
+  font-weight: 700;
+  color: var(--w-text);
+  letter-spacing: -0.03em;
+  margin-top: var(--w-space-1);
+}
+.wonni-listing-card__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--w-space-1);
+  margin-top: var(--w-space-2);
+}
+.wonni-listing-card__status {
+  position: absolute;
+  top: var(--w-space-2);
+  left: var(--w-space-2);
+}
+.wonni-listing-card__select {
+  position: absolute;
+  top: var(--w-space-2);
+  right: var(--w-space-2);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.8);
+  background: rgba(255,255,255,0.2);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--w-t-fast);
+}
+.wonni-listing-card__select--checked {
+  background: var(--w-brand);
+  border-color: var(--w-brand);
+}
+
+/* ── PROCESSING PROGRESS ────────────────────── */
+.wonni-processing {
+  padding: var(--w-space-6);
+  text-align: center;
+}
+.wonni-processing__icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--w-brand-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto var(--w-space-4);
+  font-size: 24px;
+  color: var(--w-brand);
+}
+.wonni-processing__title {
+  font-size: var(--w-text-md);
+  font-weight: 700;
+  color: var(--w-text);
+  letter-spacing: -0.02em;
+  margin-bottom: var(--w-space-1);
+}
+.wonni-processing__subtitle {
+  font-size: var(--w-text-sm);
+  color: var(--w-text-secondary);
+  margin-bottom: var(--w-space-5);
+}
+.wonni-processing__bar-track {
+  height: 6px;
+  border-radius: var(--w-radius-pill);
+  background: var(--w-border-subtle);
+  overflow: hidden;
+  margin-bottom: var(--w-space-3);
+}
+.wonni-processing__bar-fill {
+  height: 100%;
+  border-radius: var(--w-radius-pill);
+  background: linear-gradient(90deg, var(--w-brand) 0%, var(--w-purple-400) 100%);
+  transition: width var(--w-t-slow);
+}
+.wonni-processing__steps { display: flex; justify-content: space-between; gap: var(--w-space-2); }
+.wonni-processing__step  { flex: 1; display: flex; flex-direction: column; align-items: center; gap: var(--w-space-1); }
+.wonni-processing__step-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--w-border);
+  transition: all var(--w-t-fast);
+}
+.wonni-processing__step-dot--active {
+  background: var(--w-brand);
+  box-shadow: 0 0 0 3px var(--w-brand-light);
+  animation: wonni-pulse 1.5s ease-in-out infinite;
+}
+.wonni-processing__step-dot--done  { background: var(--w-success); }
+.wonni-processing__step-label      { font-size: 10px; font-weight: 500; color: var(--w-text-tertiary); text-align: center; }
+.wonni-processing__step-label--active { color: var(--w-brand); font-weight: 600; }
+.wonni-processing__step-label--done   { color: var(--w-success); }
+
+/* ── AI BADGE ───────────────────────────────── */
+.wonni-ai-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: var(--w-radius-pill);
+  font-size: var(--w-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.wonni-ai-badge--filled  { padding: 2px 8px 2px 6px; background: var(--w-purple-100); color: var(--w-purple-700); }
+.wonni-ai-badge--outline { padding: 2px 8px 2px 6px; background: transparent; color: var(--w-purple-600); border: 1px solid var(--w-purple-300); }
+
+/* ── CROSS POST BADGE ───────────────────────── */
+.wonni-xbadge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--w-space-1);
+  padding: 3px 8px 3px 6px;
+  border-radius: var(--w-radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.wonni-xbadge--posted  { background: var(--w-success-bg); color: var(--w-success-text); }
+.wonni-xbadge--pending { background: var(--w-pending-bg); color: var(--w-purple-700); }
+.wonni-xbadge--failed  { background: var(--w-error-bg);   color: var(--w-error-text); }
+.wonni-xbadge--manual  { background: var(--w-warning-bg); color: var(--w-warning-text); }
+.wonni-xbadge__dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.wonni-xbadge--posted .wonni-xbadge__dot  { background: var(--w-success); }
+.wonni-xbadge--pending .wonni-xbadge__dot { background: var(--w-pending); }
+.wonni-xbadge--failed .wonni-xbadge__dot  { background: var(--w-error); }
+.wonni-xbadge--manual .wonni-xbadge__dot  { background: var(--w-warning); }
+
+/* ── PLATFORM TOGGLE ────────────────────────── */
+.wonni-platform-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--w-space-3);
+  padding: var(--w-space-3) var(--w-space-4);
+  background: var(--w-surface);
+  border-radius: var(--w-radius-md);
+  border: 1.5px solid var(--w-border-subtle);
+  cursor: pointer;
+  transition: all var(--w-t-fast);
+}
+.wonni-platform-toggle:hover           { border-color: var(--w-border); background: var(--w-surface-alt); }
+.wonni-platform-toggle--enabled        { border-color: var(--w-brand-light); background: var(--w-surface-alt); }
+.wonni-platform-toggle--disconnected   { opacity: 0.6; }
+.wonni-platform-toggle__icon {
+  width: 32px; height: 32px;
+  border-radius: var(--w-radius-xs);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+.wonni-platform-toggle__label  { flex: 1; min-width: 0; }
+.wonni-platform-toggle__name   { font-size: var(--w-text-sm); font-weight: 600; color: var(--w-text); letter-spacing: -0.01em; }
+.wonni-platform-toggle__status { font-size: var(--w-text-xs); color: var(--w-text-secondary); margin-top: 1px; }
+.wonni-platform-toggle__switch {
+  width: 44px; height: 26px;
+  border-radius: var(--w-radius-pill);
+  background: var(--w-border);
+  position: relative;
+  flex-shrink: 0;
+  transition: background var(--w-t-fast);
+}
+.wonni-platform-toggle__switch--on { background: var(--w-brand); }
+.wonni-platform-toggle__switch-thumb {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: white;
+  position: absolute;
+  top: 2px; left: 2px;
+  transition: transform var(--w-t-fast);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.wonni-platform-toggle__switch--on .wonni-platform-toggle__switch-thumb { transform: translateX(18px); }
+
+/* ── TAB BAR ────────────────────────────────── */
+.wonni-tabbar {
+  display: flex;
+  align-items: flex-end;
+  padding: 0 var(--w-space-2) 4px;
+  background: rgba(255,255,255,0.88);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-top: 0.5px solid var(--w-border-subtle);
+  height: 83px;
+}
+.wonni-tabbar__item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  padding-bottom: 12px;
+  gap: 3px;
+  cursor: pointer;
+  transition: all var(--w-t-fast);
+  position: relative;
+}
+.wonni-tabbar__item-icon {
+  width: 28px; height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  transition: transform var(--w-t-fast);
+}
+.wonni-tabbar__item--active .wonni-tabbar__item-icon { transform: scale(1.06); }
+.wonni-tabbar__item-label { font-size: 10px; font-weight: 500; color: var(--w-text-tertiary); letter-spacing: 0.01em; line-height: 1; }
+.wonni-tabbar__item--active .wonni-tabbar__item-label { color: var(--w-brand); font-weight: 600; }
+.wonni-tabbar__camera-btn {
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--w-brand) 0%, var(--w-purple-700) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 22px;
+  box-shadow: 0 4px 16px rgba(139,92,246,0.4), 0 2px 8px rgba(0,0,0,0.12);
+  margin-bottom: 2px;
+  transition: all var(--w-t-fast);
+}
+.wonni-tabbar__camera-btn:hover { transform: scale(1.05); box-shadow: 0 6px 20px rgba(139,92,246,0.5); }
+.wonni-tabbar__badge {
+  position: absolute;
+  top: 2px;
+  right: calc(50% - 18px);
+  min-width: 16px; height: 16px;
+  border-radius: var(--w-radius-pill);
+  background: var(--w-error);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border: 1.5px solid white;
+}
+
+/* ── PHOTO GRID ─────────────────────────────── */
+.wonni-photogrid { display: grid; gap: 2px; border-radius: var(--w-radius-md); overflow: hidden; }
+.wonni-photogrid--2col { grid-template-columns: repeat(2, 1fr); }
+.wonni-photogrid--3col { grid-template-columns: repeat(3, 1fr); }
+.wonni-photogrid--4col { grid-template-columns: repeat(4, 1fr); }
+.wonni-photogrid__item {
+  aspect-ratio: 1;
+  position: relative;
+  overflow: hidden;
+  background: var(--w-purple-50);
+  cursor: pointer;
+}
+.wonni-photogrid__item img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform var(--w-t); }
+.wonni-photogrid__item:hover img { transform: scale(1.04); }
+.wonni-photogrid__item--selected::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(139,92,246,0.2);
+  pointer-events: none;
+}
+.wonni-photogrid__item-check {
+  position: absolute;
+  top: 6px; right: 6px;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--w-brand);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+}
+.wonni-photogrid__empty {
+  grid-column: 1 / -1;
+  aspect-ratio: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--w-space-3);
+  color: var(--w-text-tertiary);
+  background: var(--w-surface-alt);
+  border-radius: var(--w-radius-md);
+  border: 2px dashed var(--w-border);
+}
+
+/* ── CROSS POST STATUS CARD ─────────────────── */
+.wonni-status-card {
+  background: var(--w-surface);
+  border-radius: var(--w-radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--w-border-subtle);
+  box-shadow: var(--w-shadow-sm);
+}
+.wonni-status-card__header {
+  display: flex;
+  gap: var(--w-space-3);
+  padding: var(--w-space-4);
+  border-bottom: 1px solid var(--w-border-subtle);
+}
+.wonni-status-card__image {
+  width: 56px; height: 56px;
+  border-radius: var(--w-radius-sm);
+  object-fit: cover;
+  background: var(--w-purple-50);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+}
+.wonni-status-card__info { flex: 1; min-width: 0; }
+.wonni-status-card__title {
+  font-size: var(--w-text-base);
+  font-weight: 600;
+  color: var(--w-text);
+  letter-spacing: -0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wonni-status-card__price {
+  font-size: var(--w-text-xl);
+  font-weight: 700;
+  color: var(--w-text);
+  letter-spacing: -0.03em;
+  margin-top: 2px;
+}
+.wonni-status-card__platforms { padding: var(--w-space-3) var(--w-space-4); display: flex; flex-direction: column; gap: var(--w-space-2); }
+.wonni-status-card__platform-row { display: flex; align-items: center; gap: var(--w-space-3); }
+.wonni-status-card__platform-icon {
+  width: 28px; height: 28px;
+  border-radius: var(--w-radius-xs);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+.wonni-status-card__platform-name { font-size: var(--w-text-sm); font-weight: 500; color: var(--w-text); flex: 1; }
+
+/* ── SHEET ──────────────────────────────────── */
+.wonni-sheet {
+  background: var(--w-surface);
+  border-radius: var(--w-radius-2xl) var(--w-radius-2xl) 0 0;
+  overflow: hidden;
+  max-width: 480px;
+  width: 100%;
+  margin: 0 auto;
+  box-shadow: 0 -8px 40px rgba(0,0,0,0.12), 0 -2px 8px rgba(0,0,0,0.06);
+}
+.wonni-sheet__handle { width: 36px; height: 5px; border-radius: var(--w-radius-pill); background: var(--w-border); margin: var(--w-space-3) auto; }
+.wonni-sheet__header { padding: 0 var(--w-space-5) var(--w-space-4); text-align: center; }
+.wonni-sheet__title  { font-size: var(--w-text-md); font-weight: 700; color: var(--w-text); letter-spacing: -0.02em; }
+.wonni-sheet__subtitle { font-size: var(--w-text-sm); color: var(--w-text-secondary); margin-top: 2px; }
+.wonni-sheet__body { padding: 0 var(--w-space-5) var(--w-space-6); }
+.wonni-sheet__body--no-padding { padding: 0; }
+
+/* ── ANIMATIONS ─────────────────────────────── */
+@keyframes wonni-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes wonni-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.7; transform: scale(0.88); }
+}
+@keyframes wonni-shimmer {
+  from { background-position: -200% 0; }
+  to   { background-position: 200% 0; }
+}
+.wonni-shimmer {
+  background: linear-gradient(90deg, var(--w-purple-50) 25%, var(--w-purple-100) 50%, var(--w-purple-50) 75%);
+  background-size: 200% 100%;
+  animation: wonni-shimmer 1.5s infinite;
+}
