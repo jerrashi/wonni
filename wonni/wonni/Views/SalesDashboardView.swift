@@ -902,6 +902,16 @@ final class MercariSalesPageImporter: ObservableObject {
     func scanCurrentPage() async {
         isScanning = true; scanError = nil; foundItems = []
 
+        // Check if we're on a supported page
+        let urlCheckJS = "return window.location.pathname;"
+        if let currentPath = (try? await webView.callJS(urlCheckJS)) as? String {
+            if currentPath.contains("/transaction/order_status/") {
+                scanError = "Order status pages aren't supported. Please navigate to your Sold Items tab first."
+                isScanning = false
+                return
+            }
+        }
+
         // Phase 1: scroll to bottom repeatedly to trigger infinite-scroll loading
         await scrollToLoadAll()
 
