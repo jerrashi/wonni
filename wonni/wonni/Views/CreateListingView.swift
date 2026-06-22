@@ -1775,7 +1775,10 @@ struct ProcessResultsOverviewView: View {
                 Spacer()
 
                 Button {
-                    showPublishConfirmation = true
+                    focusedField = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        showPublishConfirmation = true
+                    }
                 } label: {
                     HStack(spacing: 8) {
                         let busy = uploadManager.isUploadingPhotos || uploadManager.isPublishing
@@ -2691,9 +2694,9 @@ struct PublishedRow: View {
 struct PublishConfirmationSheet: View {
     let itemsToPublish: [Item]
     let onConfirm: (Set<String>) -> Void
-    
+
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var integrationRepo = IntegrationRepository.shared
+    @ObservedObject private var integrationRepo = IntegrationRepository.shared
     @State private var selectedPlatforms: Set<String> = []
     @State private var showAddressSetupSheet = false
     @State private var platformToEnableAfterAddressSetup = ""
