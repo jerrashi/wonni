@@ -924,12 +924,20 @@ final class MercariSalesPageImporter: ObservableObject {
                         if (!sid || seen.has(sid)) continue;
                         if (item.status && item.status.toLowerCase() === 'inactive') continue;
                         seen.add(sid);
-                        var thumbUrl = (item.thumbnailUrl || item.image || item.imageUrl) || null;
+                        // Check multiple image field names from Mercari's JSON structure
+                        var thumbUrl = (item.thumbnailUrl || item.image || item.imageUrl ||
+                                       item.thumbnail || item.photo || item.photos) || null;
+                        // If photos is an array, take the first one
+                        if (Array.isArray(thumbUrl) && thumbUrl.length > 0) {
+                            thumbUrl = thumbUrl[0];
+                        }
                         results.push({ id: sid, name: item.name || null,
                                        price: item.price ? item.price / 100 : null,
                                        thumbnailUrl: thumbUrl });
                     }
-                } catch(e) {}
+                } catch(e) {
+                    console.log('Error parsing __NEXT_DATA__:', e);
+                }
             }
             // DOM fallback: any link pointing to /us/item/m...
             var links = Array.from(document.querySelectorAll('a[href*="/us/item/m"]'));
@@ -943,8 +951,18 @@ final class MercariSalesPageImporter: ObservableObject {
                 var priceEl = link.querySelector('[data-testid="ItemPrice"],[data-testid="item-price"],span');
                 var name = nameEl ? nameEl.innerText.trim() : null;
                 var priceStr = priceEl ? priceEl.innerText.replace(/[^0-9.]/g,'') : null;
+
+                // More robust image extraction: check src, data-src (lazy-load), and style background-image
                 var imgEl = link.querySelector('img');
-                var thumbUrl = imgEl && imgEl.src ? imgEl.src : null;
+                var thumbUrl = null;
+                if (imgEl) {
+                    thumbUrl = imgEl.src || imgEl.getAttribute('data-src') || imgEl.getAttribute('data-image') || null;
+                    // Filter out placeholder/loading images (data URIs, very small URLs)
+                    if (thumbUrl && (thumbUrl.startsWith('data:') || thumbUrl.length < 20)) {
+                        thumbUrl = null;
+                    }
+                }
+
                 results.push({ id: m[1], name: name||null, price: priceStr?parseFloat(priceStr):null, thumbnailUrl: thumbUrl });
             }
             return JSON.stringify(results);
@@ -954,14 +972,24 @@ final class MercariSalesPageImporter: ObservableObject {
         if let json = (try? await webView.callJS(js)) as? String,
            let data = json.data(using: .utf8),
            let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            // DEBUG: Log raw JSON from JavaScript extraction
+            print("[MercariSalesPageImporter] Raw JSON from JS: \(json)")
+
             foundItems = arr.compactMap { dict in
                 guard let id = dict["id"] as? String, !id.isEmpty else { return nil }
-                return MercariFoundSaleItem(
+                let item = MercariFoundSaleItem(
                     id: id,
                     name: dict["name"] as? String,
                     price: (dict["price"] as? NSNumber)?.doubleValue,
                     thumbnailUrl: dict["thumbnailUrl"] as? String
                 )
+                // DEBUG: Log parsed items
+                print("[MercariSalesPageImporter] Parsed item ID: \(id)")
+                print("[MercariSalesPageImporter]   name: \(item.name ?? "nil")")
+                print("[MercariSalesPageImporter]   price: \(item.price ?? 0)")
+                print("[MercariSalesPageImporter]   thumbnailUrl: \(item.thumbnailUrl ?? "nil")")
+                return item
+            }
             }
             if foundItems.isEmpty {
                 scanError = "No items found. Navigate to your Sold Items tab first."
@@ -1129,7 +1157,19 @@ struct MercariSalesImportSheet: View {
                 status: .pending,
                 soldAt: Timestamp(date: soldAt)
             )
-            try? await SaleRepository.shared.addSale(sale)
+            // DEBUG: Log thumbnail URL extraction
+            print("[MercariImport] Item ID: \(item.id)")
+            print("[MercariImport] Item name: \(item.name ?? "nil")")
+            print("[MercariImport] Item price: \(item.price ?? 0)")
+            print("[MercariImport] Item thumbnailUrl: \(item.thumbnailUrl ?? "nil")")
+            print("[MercariImport] Sale.thumbnailUrl being saved: \(sale.thumbnailUrl ?? "nil")")
+
+            do {
+                try await SaleRepository.shared.addSale(sale)
+                print("[MercariImport] Successfully saved sale for \(item.id)")
+            } catch {
+                print("[MercariImport] Failed to save sale for \(item.id): \(error)")
+            }
         }
         onImported()
         dismiss()

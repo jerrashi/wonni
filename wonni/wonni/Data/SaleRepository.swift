@@ -33,9 +33,21 @@ class SaleRepository: ObservableObject {
             .whereField("userId", isEqualTo: userId)
             .order(by: "soldAt", descending: true)
             .getDocuments()
-        return snap.documents
+        let sales = snap.documents
             .compactMap { try? $0.data(as: Sale.self) }
             .filter { !($0.isDeleted == true) }
+
+        // DEBUG: Log thumbnailUrl retrieval
+        for sale in sales {
+            if sale.platform == "mercari" {
+                print("[SaleRepository.fetchSales] Mercari sale ID: \(sale.id ?? "nil")")
+                print("[SaleRepository.fetchSales]   Title: \(sale.listingTitle ?? "nil")")
+                print("[SaleRepository.fetchSales]   coverPhotoPath: \(sale.coverPhotoPath ?? "nil")")
+                print("[SaleRepository.fetchSales]   thumbnailUrl: \(sale.thumbnailUrl ?? "nil")")
+            }
+        }
+
+        return sales
     }
 
     func fetchHiddenSales() async throws -> [Sale] {
