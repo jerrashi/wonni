@@ -870,7 +870,7 @@ struct AddSaleSheet: View {
 
         // Use MercariTakeHomeScraper to extract take-home, tracking, and carrier
         await withCheckedContinuation { continuation in
-            MercariTakeHomeScraper(mercariId: itemId) { data in
+            MercariTakeHomeScraper(mercariId: itemId, onSuccess: { data in
                 if let takeHome = data.takeHome {
                     self.takeHomeString = String(format: "%.2f", takeHome)
                 }
@@ -881,11 +881,11 @@ struct AddSaleSheet: View {
                     self.carrier = carrier
                 }
                 continuation.resume()
-            } onError: {
+            }, onFail: {
                 // Order status page fetch failed (user may not be logged in, item may not be sold, etc.)
                 // This is not necessarily an error—user can fill in details manually
                 continuation.resume()
-            }
+            })
         }
     }
 
