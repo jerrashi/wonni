@@ -877,6 +877,7 @@ struct MercariFoundSaleItem: Identifiable {
     let id: String
     let name: String?
     let price: Double?
+    let thumbnailUrl: String?
 }
 
 @MainActor
@@ -923,8 +924,10 @@ final class MercariSalesPageImporter: ObservableObject {
                         if (!sid || seen.has(sid)) continue;
                         if (item.status && item.status.toLowerCase() === 'inactive') continue;
                         seen.add(sid);
+                        var thumbUrl = (item.thumbnailUrl || item.image || item.imageUrl) || null;
                         results.push({ id: sid, name: item.name || null,
-                                       price: item.price ? item.price / 100 : null });
+                                       price: item.price ? item.price / 100 : null,
+                                       thumbnailUrl: thumbUrl });
                     }
                 } catch(e) {}
             }
@@ -940,7 +943,9 @@ final class MercariSalesPageImporter: ObservableObject {
                 var priceEl = link.querySelector('[data-testid="ItemPrice"],[data-testid="item-price"],span');
                 var name = nameEl ? nameEl.innerText.trim() : null;
                 var priceStr = priceEl ? priceEl.innerText.replace(/[^0-9.]/g,'') : null;
-                results.push({ id: m[1], name: name||null, price: priceStr?parseFloat(priceStr):null });
+                var imgEl = link.querySelector('img');
+                var thumbUrl = imgEl && imgEl.src ? imgEl.src : null;
+                results.push({ id: m[1], name: name||null, price: priceStr?parseFloat(priceStr):null, thumbnailUrl: thumbUrl });
             }
             return JSON.stringify(results);
         })();
@@ -954,7 +959,8 @@ final class MercariSalesPageImporter: ObservableObject {
                 return MercariFoundSaleItem(
                     id: id,
                     name: dict["name"] as? String,
-                    price: (dict["price"] as? NSNumber)?.doubleValue
+                    price: (dict["price"] as? NSNumber)?.doubleValue,
+                    thumbnailUrl: dict["thumbnailUrl"] as? String
                 )
             }
             if foundItems.isEmpty {
@@ -1116,6 +1122,7 @@ struct MercariSalesImportSheet: View {
         for item in importer.foundItems where selectedIds.contains(item.id) {
             let sale = Sale(
                 listingTitle: item.name,
+                thumbnailUrl: item.thumbnailUrl,
                 platform: "mercari",
                 platformOrderId: item.id,
                 priceSoldFor: item.price ?? 0,
