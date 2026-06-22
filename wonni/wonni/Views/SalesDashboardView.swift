@@ -902,18 +902,8 @@ final class MercariSalesPageImporter: ObservableObject {
     func scanCurrentPage() async {
         isScanning = true; scanError = nil; foundItems = []
 
-        // Check if we're on an order status page
-        let urlCheckJS = "return window.location.pathname;"
-        var isOrderStatusPage = false
-        if let currentPath = (try? await webView.callJS(urlCheckJS)) as? String {
-            isOrderStatusPage = currentPath.contains("/transaction/order_status/")
-        }
-
-        // For order status pages, don't scroll (single order), but still extract
-        if !isOrderStatusPage {
-            // Phase 1: scroll to bottom repeatedly to trigger infinite-scroll loading
-            await scrollToLoadAll()
-        }
+        // Phase 1: scroll to bottom repeatedly to trigger infinite-scroll loading
+        await scrollToLoadAll()
 
         // Phase 2: extract all items now present in the DOM
         scanStatus = "Extracting items…"
@@ -922,121 +912,72 @@ final class MercariSalesPageImporter: ObservableObject {
         return (function() {
             var results = [];
             var seen = new Set();
-            var currentPath = window.location.pathname;
-            var isOrderPage = currentPath.indexOf('/transaction/order_status/') !== -1;
-
-            if (isOrderPage) {
-                // Extract from order status page
-                var nd = document.getElementById('__NEXT_DATA__');
-                if (nd) {
-                    try {
-                        var data = JSON.parse(nd.textContent || '');
-                        var pp = data.props && data.props.pageProps;
-                        // Order pages have item data nested in transaction or order object
-                        var item = (pp && (pp.transaction || pp.order || pp.item)) || null;
-                        if (item && item.item) {
-                            item = item.item;
+            var nd = document.getElementById('__NEXT_DATA__');
+            if (nd) {
+                try {
+                    var data = JSON.parse(nd.textContent || '');
+                    var pp = data.props && data.props.pageProps;
+                    var items = (pp && (pp.items || (pp.data && pp.data.items) ||
+                                 (pp.seller && pp.seller.items))) || [];
+                    for (var item of items) {
+                        var sid = String(item.id || '');
+                        if (!sid || seen.has(sid)) continue;
+                        if (item.status && item.status.toLowerCase() === 'inactive') continue;
+                        seen.add(sid);
+                        // Check multiple image field names from Mercari's JSON structure
+                        var thumbUrl = (item.thumbnailUrl || item.image || item.imageUrl ||
+                                       item.thumbnail || item.photo || item.photos) || null;
+                        // If photos is an array, take the first one
+                        if (Array.isArray(thumbUrl) && thumbUrl.length > 0) {
+                            thumbUrl = thumbUrl[0];
                         }
-
-                        if (item) {
-                            var itemId = String(item.id || '');
-                            if (itemId && !seen.has(itemId)) {
-                                seen.add(itemId);
-                                var thumbUrl = (item.thumbnailUrl || item.image || item.imageUrl ||
-                                               item.thumbnail || item.photo || item.photos) || null;
-                                if (Array.isArray(thumbUrl) && thumbUrl.length > 0) {
-                                    thumbUrl = thumbUrl[0];
-                                }
-                                var soldPrice = (pp && pp.transaction && pp.transaction.soldPrice) || item.price || null;
-                                if (typeof soldPrice === 'number' && soldPrice > 100) {
-                                    // Likely in cents, convert to dollars
-                                    soldPrice = soldPrice / 100;
-                                }
-                                results.push({
-                                    id: itemId,
-                                    name: item.name || null,
-                                    price: soldPrice,
-                                    thumbnailUrl: thumbUrl
-                                });
-                                console.log('[MercariSalesPageImporter] Order page item:', JSON.stringify(results[results.length-1]));
-                            }
-                        }
-                    } catch(e) {
-                        console.log('Error parsing order page __NEXT_DATA__:', e);
+                        results.push({ id: sid, name: item.name || null,
+                                       price: item.price ? item.price / 100 : null,
+                                       thumbnailUrl: thumbUrl });
                     }
-                }
-            } else {
-                // Extract from sales list page (original logic)
-                var nd = document.getElementById('__NEXT_DATA__');
-                if (nd) {
-                    try {
-                        var data = JSON.parse(nd.textContent || '');
-                        var pp = data.props && data.props.pageProps;
-                        var items = (pp && (pp.items || (pp.data && pp.data.items) ||
-                                     (pp.seller && pp.seller.items))) || [];
-                        for (var item of items) {
-                            var sid = String(item.id || '');
-                            if (!sid || seen.has(sid)) continue;
-                            if (item.status && item.status.toLowerCase() === 'inactive') continue;
-                            seen.add(sid);
-                            // Check multiple image field names from Mercari's JSON structure
-                            var thumbUrl = (item.thumbnailUrl || item.image || item.imageUrl ||
-                                           item.thumbnail || item.photo || item.photos) || null;
-                            // If photos is an array, take the first one
-                            if (Array.isArray(thumbUrl) && thumbUrl.length > 0) {
-                                thumbUrl = thumbUrl[0];
-                            }
-                            results.push({ id: sid, name: item.name || null,
-                                           price: item.price ? item.price / 100 : null,
-                                           thumbnailUrl: thumbUrl });
-                        }
-                    } catch(e) {
-                        console.log('Error parsing __NEXT_DATA__:', e);
-                    }
+                } catch(e) {
+                    console.log('Error parsing __NEXT_DATA__:', e);
                 }
             }
-
             // DOM fallback: any link pointing to /us/item/m...
-            if (!isOrderPage) {
-                var links = Array.from(document.querySelectorAll('a[href*="/us/item/m"]'));
-                for (var link of links) {
-                    var m = link.href.match(/\/us\/item\/(m[a-zA-Z0-9]+)/);
-                    if (!m || seen.has(m[1])) continue;
-                    var ribbon = link.querySelector('[class*="RibbonTitle"]');
-                    if (ribbon && ribbon.innerText.trim().toLowerCase() === 'inactive') continue;
-                    seen.add(m[1]);
-                    var nameEl = link.querySelector('[data-testid="ItemName"],[data-testid="item-name"],p');
-                    var priceEl = link.querySelector('[data-testid="ItemPrice"],[data-testid="item-price"],span');
-                    var name = nameEl ? nameEl.innerText.trim() : null;
-                    var priceStr = priceEl ? priceEl.innerText.replace(/[^0-9.]/g,'') : null;
+            var links = Array.from(document.querySelectorAll('a[href*="/us/item/m"]'));
+            for (var link of links) {
+                var m = link.href.match(/\/us\/item\/(m[a-zA-Z0-9]+)/);
+                if (!m || seen.has(m[1])) continue;
+                var ribbon = link.querySelector('[class*="RibbonTitle"]');
+                if (ribbon && ribbon.innerText.trim().toLowerCase() === 'inactive') continue;
+                seen.add(m[1]);
+                var nameEl = link.querySelector('[data-testid="ItemName"],[data-testid="item-name"],p');
+                var priceEl = link.querySelector('[data-testid="ItemPrice"],[data-testid="item-price"],span');
+                var name = nameEl ? nameEl.innerText.trim() : null;
+                var priceStr = priceEl ? priceEl.innerText.replace(/[^0-9.]/g,'') : null;
 
-                    // More robust image extraction: check src, data-src (lazy-load), and style background-image
-                    var imgEl = link.querySelector('img');
-                    var thumbUrl = null;
-                    if (imgEl) {
-                        thumbUrl = imgEl.src || imgEl.getAttribute('data-src') || imgEl.getAttribute('data-image') || null;
-                        // Filter out placeholder/loading images (data URIs, very small URLs)
-                        if (thumbUrl && (thumbUrl.startsWith('data:') || thumbUrl.length < 20)) {
-                            thumbUrl = null;
-                        }
+                // More robust image extraction: check src, data-src (lazy-load), and style background-image
+                var imgEl = link.querySelector('img');
+                var thumbUrl = null;
+                if (imgEl) {
+                    thumbUrl = imgEl.src || imgEl.getAttribute('data-src') || imgEl.getAttribute('data-image') || null;
+                    // Filter out placeholder/loading images (data URIs, very small URLs)
+                    if (thumbUrl && (thumbUrl.startsWith('data:') || thumbUrl.length < 20)) {
+                        thumbUrl = null;
                     }
-                    // If no src found, try to find any image with mercdn.net or mercari-images in href
-                    if (!thumbUrl) {
-                        var allImgs = Array.from(link.querySelectorAll('img'));
-                        for (var img of allImgs) {
-                            if (img.src && (img.src.indexOf('mercdn.net') !== -1 || img.src.indexOf('mercari-images') !== -1)) {
-                                thumbUrl = img.src;
-                                break;
-                            }
-                        }
-                    }
-
-                    // DEBUG: Log extraction for this item
-                    var debugItem = { id: m[1], name: name||null, price: priceStr?parseFloat(priceStr):null, thumbnailUrl: thumbUrl };
-                    console.log('[MercariSalesPageImporter] Extracted item:', JSON.stringify(debugItem));
-
-                    results.push(debugItem);
                 }
+                // If no src found, try to find any image with mercdn.net or mercari-images in href
+                if (!thumbUrl) {
+                    var allImgs = Array.from(link.querySelectorAll('img'));
+                    for (var img of allImgs) {
+                        if (img.src && (img.src.indexOf('mercdn.net') !== -1 || img.src.indexOf('mercari-images') !== -1)) {
+                            thumbUrl = img.src;
+                            break;
+                        }
+                    }
+                }
+
+                // DEBUG: Log extraction for this item
+                var debugItem = { id: m[1], name: name||null, price: priceStr?parseFloat(priceStr):null, thumbnailUrl: thumbUrl };
+                console.log('[MercariSalesPageImporter] Extracted item:', JSON.stringify(debugItem));
+
+                results.push(debugItem);
             }
             return JSON.stringify(results);
         })();
