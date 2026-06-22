@@ -2356,31 +2356,15 @@ struct ResultDraftRow: View {
 
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var uploadManager: UploadManager
+    @State private var titleText: String = ""
     @State private var priceText: String = ""
+    @State private var descriptionText: String = ""
     @State private var showEditSheet = false
     @State private var showDescriptionEditor = false
     @State private var undoneAITitle: String? = nil
     @State private var undoneAIDescription: String? = nil
     @State private var toastMessage: String? = nil
     @State private var toastRestoreAction: (() -> Void)? = nil
-
-    private var titleBinding: Binding<String> {
-        Binding(
-            get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? "" },
-            set: { let v = String($0.prefix(140)); item.userEditedTitle = v.isEmpty ? nil : v; try? modelContext.save() }
-        )
-    }
-
-    private var descriptionBinding: Binding<String> {
-        Binding(
-            get: { item.userEditedDescription ?? item.aiSuggestedDescription ?? "" },
-            set: {
-                item.userEditedDescription = $0.isEmpty ? nil : $0
-                try? modelContext.save()
-                uploadManager.syncDraftData(item)
-            }
-        )
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2410,21 +2394,18 @@ struct ResultDraftRow: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     if let origTitle = item.originalUserTitleBeforeAI {
-                        WordDiffView(before: origTitle, after: titleBinding.wrappedValue)
+                        WordDiffView(before: origTitle, after: titleText)
                         Button("Undo AI title edits") { undoAITitle() }
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.blue)
                             .buttonStyle(.plain)
                     }
 
-                    TextField("Title", text: titleBinding)
+                    TextField("Title", text: $titleText)
                         .font(.body.weight(.semibold))
                         .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .title))
-                        .onChange(of: titleBinding.wrappedValue) { _, _ in
-                            uploadManager.syncDraftData(item)
-                        }
 
-                    TitleCharCountView(count: (item.userEditedTitle ?? item.aiSuggestedTitle ?? "").count)
+                    TitleCharCountView(count: titleText.count)
 
                     HStack(spacing: 3) {
                         Text("$").font(.subheadline).foregroundStyle(.secondary)
@@ -2432,12 +2413,6 @@ struct ResultDraftRow: View {
                             .font(.subheadline)
                             .keyboardType(.decimalPad)
                             .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .price))
-                            .onChange(of: priceText) { _, v in
-                                let cleaned = v.filter { $0.isNumber || $0 == "." }
-                                item.userEditedPrice = cleaned.isEmpty ? nil : Double(cleaned)
-                                try? modelContext.save()
-                                uploadManager.syncDraftData(item)
-                            }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2455,7 +2430,7 @@ struct ResultDraftRow: View {
 
             // ── Description (full width) ────────────────────────────────────
             if let origDesc = item.originalUserDescriptionBeforeAI {
-                WordDiffView(before: origDesc, after: descriptionBinding.wrappedValue)
+                WordDiffView(before: origDesc, after: descriptionText)
                     .padding(.horizontal, 4)
                 Button("Undo AI description edits") { undoAIDescription() }
                     .font(.caption2.weight(.medium))
@@ -2464,12 +2439,11 @@ struct ResultDraftRow: View {
                     .padding(.leading, 4)
             }
 
-            let descText = descriptionBinding.wrappedValue
             Button { showDescriptionEditor = true } label: {
-                Text(descText.isEmpty ? "Add description…" : descText)
+                Text(descriptionText.isEmpty ? "Add description…" : descriptionText)
                     .lineLimit(3)
                     .font(.caption)
-                    .foregroundStyle(descText.isEmpty
+                    .foregroundStyle(descriptionText.isEmpty
                         ? Color(.placeholderText)
                         : (item.userEditedDescription != nil ? .primary : .secondary))
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -2485,8 +2459,13 @@ struct ResultDraftRow: View {
             }
             .buttonStyle(.plain)
             .sheet(isPresented: $showDescriptionEditor) {
-                DescriptionEditorSheet(text: descriptionBinding,
-                                       hasAIPurple: item.originalUserDescriptionBeforeAI != nil)
+                DescriptionEditorSheet(
+                    initialText: descriptionText,
+                    onSave: { newText in
+                        item.userEditedDescription = newText.isEmpty ? nil : newText
+                    },
+                    hasAIPurple: item.originalUserDescriptionBeforeAI != nil
+                )
             }
 
             // ── AI badge row ────────────────────────────────────────────────
@@ -2515,13 +2494,43 @@ struct ResultDraftRow: View {
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: toastMessage != nil)
         .onAppear {
+            titleText = item.userEditedTitle ?? item.aiSuggestedTitle ?? ""
+            descriptionText = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
             if let p = item.userEditedPrice ?? item.aiSuggestedPrice {
                 priceText = String(format: "%.2f", p)
             }
         }
+        .onChange(of: focusedField.wrappedValue) { oldFocus, newFocus in
+            if oldFocus?.itemID == item.id && newFocus?.itemID != item.id {
+                saveLocalStateToModel()
+            }
+        }
+        .onDisappear {
+            saveLocalStateToModel()
+        }
         .sheet(isPresented: $showEditSheet) {
             DraftEditSheet(item: item)
         }
+    }
+
+    private func saveLocalStateToModel() {
+        let v = String(titleText.prefix(140))
+        if item.userEditedTitle != (v.isEmpty ? nil : v) {
+            item.userEditedTitle = v.isEmpty ? nil : v
+        }
+
+        if item.userEditedDescription != (descriptionText.isEmpty ? nil : descriptionText) {
+            item.userEditedDescription = descriptionText.isEmpty ? nil : descriptionText
+        }
+
+        let cleaned = priceText.filter { $0.isNumber || $0 == "." }
+        let newPrice = cleaned.isEmpty ? nil : Double(cleaned)
+        if item.userEditedPrice != newPrice {
+            item.userEditedPrice = newPrice
+        }
+
+        try? modelContext.save()
+        uploadManager.syncDraftData(item)
     }
 
     private func undoAITitle() {
@@ -2607,21 +2616,9 @@ struct PublishedRow: View {
     let cache: CachedImageManager
 
     @Environment(\.modelContext) private var modelContext
+    @State private var titleText: String = ""
     @State private var priceText: String = ""
-
-    private var titleBinding: Binding<String> {
-        Binding(
-            get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? "" },
-            set: { item.userEditedTitle = $0; try? modelContext.save() }
-        )
-    }
-
-    private var descriptionBinding: Binding<String> {
-        Binding(
-            get: { item.userEditedDescription ?? item.aiSuggestedDescription ?? "" },
-            set: { item.userEditedDescription = $0; try? modelContext.save() }
-        )
-    }
+    @State private var descriptionText: String = ""
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -2641,7 +2638,7 @@ struct PublishedRow: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                TextField("Title…", text: titleBinding)
+                TextField("Title…", text: $titleText)
                     .font(.headline)
 
                 HStack(spacing: 2) {
@@ -2652,7 +2649,7 @@ struct PublishedRow: View {
                 }
                 .font(.subheadline)
 
-                TextField("Description…", text: descriptionBinding, axis: .vertical)
+                TextField("Description…", text: $descriptionText, axis: .vertical)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2...4)
@@ -2660,15 +2657,33 @@ struct PublishedRow: View {
         }
         .padding(.vertical, 4)
         .onAppear {
+            titleText = item.userEditedTitle ?? item.aiSuggestedTitle ?? ""
+            descriptionText = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
             if let p = item.userEditedPrice ?? item.aiSuggestedPrice {
                 priceText = String(format: "%.2f", p)
             }
         }
-        .onChange(of: priceText) { _, newValue in
-            let cleaned = newValue.filter { $0.isNumber || $0 == "." }
-            item.userEditedPrice = cleaned.isEmpty ? nil : Double(cleaned)
-            try? modelContext.save()
+        .onDisappear {
+            saveLocalStateToModel()
         }
+    }
+
+    private func saveLocalStateToModel() {
+        if item.userEditedTitle != titleText {
+            item.userEditedTitle = titleText
+        }
+
+        if item.userEditedDescription != descriptionText {
+            item.userEditedDescription = descriptionText
+        }
+
+        let cleaned = priceText.filter { $0.isNumber || $0 == "." }
+        let newPrice = cleaned.isEmpty ? nil : Double(cleaned)
+        if item.userEditedPrice != newPrice {
+            item.userEditedPrice = newPrice
+        }
+
+        try? modelContext.save()
     }
 }
 
