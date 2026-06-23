@@ -711,6 +711,7 @@ struct AddSaleSheet: View {
     @StateObject private var loader = MercariItemLoader()
     @State private var matchedListingId: String? = nil
     @State private var matchedCoverPhotoPath: String? = nil
+    @State private var fetchedThumbnailUrl: String? = nil
 
     private var canSave: Bool {
         !title.isEmpty && Double(priceString.replacingOccurrences(of: "$", with: "")) != nil
@@ -819,6 +820,7 @@ struct AddSaleSheet: View {
                 if loader.phase == .loaded {
                     if let n = loader.name, !n.isEmpty { title = n }
                     if let p = loader.priceDollars { priceString = String(format: "%.2f", p) }
+                    fetchedThumbnailUrl = loader.thumbnailUrl
                     let match = await ListingRepository.shared.findListingByMercariId(itemId)
                     matchedListingId = match?.listingId
                     matchedCoverPhotoPath = match?.coverPhotoPath
@@ -854,7 +856,7 @@ struct AddSaleSheet: View {
             listingId: matchedListingId,
             listingTitle: title.isEmpty ? nil : title,
             coverPhotoPath: matchedCoverPhotoPath,
-            thumbnailUrl: matchedCoverPhotoPath == nil ? loader.thumbnailUrl : nil,
+            thumbnailUrl: matchedCoverPhotoPath == nil ? fetchedThumbnailUrl : nil,
             platform: platform,
             platformOrderId: platformOrderId.isEmpty ? nil : platformOrderId,
             priceSoldFor: price,
