@@ -1947,7 +1947,7 @@ struct ProcessResultsOverviewView: View {
             }
             uploadManager.publishDrafts(drafts: toPublish, modelContext: modelContext)
         }
-        .presentationDetents([.fraction(0.75), .large])
+        .presentationDetents([.large])
     }
 
     private func checkAndStartNextWebJob() {
@@ -2787,8 +2787,11 @@ struct PublishConfirmationSheet: View {
             .task {
                 await integrationRepo.loadIntegrations()
                 await SellingSettingsRepository.shared.loadSettings()
-                // Default toggle connected API platforms
-                selectedPlatforms = Set(integrationRepo.integrations.filter { $0.isConnected }.map { $0.platform })
+                // Only set the default selection on first load; don't overwrite changes the
+                // user has already made before the async load completed.
+                if selectedPlatforms.isEmpty {
+                    selectedPlatforms = Set(integrationRepo.integrations.filter { $0.isConnected }.map { $0.platform })
+                }
             }
             .sheet(isPresented: $showAddressSetupSheet) {
                 AddressSetupSheet {
