@@ -925,16 +925,29 @@ struct DraftHistoryTitleField: View {
             }
             .onChange(of: focusedDraftID.wrappedValue) { oldFocus, newFocus in
                 if oldFocus == draft.id && newFocus != draft.id {
-                    let v = localTitle
-                    if draft.userEditedTitle != (v.isEmpty ? nil : v) {
-                        draft.userEditedTitle = v.isEmpty ? nil : v
+                    let v = localTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let placeholder = draft.visionTitle ?? draft.aiSuggestedTitle ?? ""
+                    if v.isEmpty {
+                        // User cleared the field — remove user title
+                        if draft.userEditedTitle != nil { draft.userEditedTitle = nil }
+                    } else if v != placeholder || draft.userEditedTitle != nil {
+                        // Commit if it differs from the placeholder, or if there was already a user title
+                        if draft.userEditedTitle != v {
+                            draft.userEditedTitle = v
+                        }
                     }
+                    // If v == placeholder and draft.userEditedTitle == nil, don't commit (user just tapped and left)
                 }
             }
             .onDisappear {
-                let v = localTitle
-                if draft.userEditedTitle != (v.isEmpty ? nil : v) {
-                    draft.userEditedTitle = v.isEmpty ? nil : v
+                let v = localTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                let placeholder = draft.visionTitle ?? draft.aiSuggestedTitle ?? ""
+                if v.isEmpty {
+                    if draft.userEditedTitle != nil { draft.userEditedTitle = nil }
+                } else if v != placeholder || draft.userEditedTitle != nil {
+                    if draft.userEditedTitle != v {
+                        draft.userEditedTitle = v
+                    }
                 }
             }
     }
@@ -988,7 +1001,7 @@ struct DraftRow: View {
     @State private var priceText: String = ""
     @State private var titleText: String = ""
     @State private var showDescriptionEditor = false
-
+    @State private var showTitleEditor = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1025,14 +1038,21 @@ struct DraftRow: View {
 
                 // Title + price (constrained to photo height)
                 VStack(alignment: .leading, spacing: 6) {
-                    TextField("Add title…", text: $titleText)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(item.userEditedTitle != nil ? .primary : .secondary)
-                        .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .title))
-                        .onReceive(NotificationCenter.default.publisher(for: UITextField.textDidBeginEditingNotification)) { notification in
-                            guard let tf = notification.object as? UITextField else { return }
-                            DispatchQueue.main.async { tf.selectAll(nil) }
+                    Button { showTitleEditor = true } label: {
+                        Text(titleText.isEmpty ? "Add title…" : titleText)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(item.userEditedTitle != nil ? .primary : .secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .lineLimit(2)
+                    }
+                    .buttonStyle(.plain)
+                    .sheet(isPresented: $showTitleEditor) {
+                        TitleEditorSheet(initialText: titleText) { newText in
+                            titleText = newText
+                            let v = String(newText.prefix(140))
+                            item.userEditedTitle = v.isEmpty ? nil : v
                         }
+                    }
 
                     TitleCharCountView(count: titleText.count)
 
@@ -1119,6 +1139,18 @@ struct DraftRow: View {
             // When focus changes from this item's title/price to somewhere else or nil, save
             if oldFocus?.itemID == item.id && newFocus?.itemID != item.id {
                 saveLocalStateToModel()
+            }
+        }
+        .onChange(of: item.userEditedTitle) { _, newVal in
+            // Sync local title state when the model is updated externally (e.g. bulk edit)
+            titleText = newVal ?? item.aiSuggestedTitle ?? item.visionTitle ?? ""
+        }
+        .onChange(of: item.userEditedPrice) { _, newVal in
+            // Sync local price state when the model is updated externally (e.g. bulk edit)
+            if let p = newVal {
+                priceText = String(format: "%.2f", p)
+            } else {
+                priceText = ""
             }
         }
         .onDisappear {
@@ -1464,6 +1496,39 @@ private struct DescriptionEditorSheet: View {
                 .padding(.top, 4)
                 .background(hasAIPurple ? Color.purple.opacity(0.05) : Color(.systemBackground))
                 .navigationTitle("Description")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            onSave(localText)
+                            dismiss()
+                        }
+                    }
+                }
+        }
+        .onAppear {
+            localText = initialText
+            focused = true
+        }
+    }
+}
+
+// MARK: - TitleEditorSheet
+private struct TitleEditorSheet: View {
+    var initialText: String
+    var onSave: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var focused: Bool
+    @State private var localText: String = ""
+
+    var body: some View {
+        NavigationStack {
+            TextField("Title", text: $localText, axis: .vertical)
+                .focused($focused)
+                .font(.body)
+                .padding(.horizontal, 12)
+                .padding(.top, 4)
+                .navigationTitle("Title")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
