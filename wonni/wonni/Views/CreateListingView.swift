@@ -988,6 +988,7 @@ struct DraftRow: View {
     @State private var priceText: String = ""
     @State private var titleText: String = ""
     @State private var showDescriptionEditor = false
+    @State private var hasEditedTitle = false
 
 
     var body: some View {
@@ -1111,10 +1112,12 @@ struct DraftRow: View {
         .padding(.vertical, 8)
         .onAppear {
             titleText = item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? ""
+            hasEditedTitle = false
             if let p = item.userEditedPrice {
                 priceText = String(format: "%.2f", p)
             }
         }
+        .onChange(of: titleText) { _, _ in hasEditedTitle = true }
         .onChange(of: focusedField.wrappedValue) { oldFocus, newFocus in
             // When focus changes from this item's title/price to somewhere else or nil, save
             if oldFocus?.itemID == item.id && newFocus?.itemID != item.id {
@@ -1127,11 +1130,12 @@ struct DraftRow: View {
     }
 
     private func saveLocalStateToModel() {
-        let v = String(titleText.prefix(140))
-        if item.userEditedTitle != (v.isEmpty ? nil : v) {
-            item.userEditedTitle = v.isEmpty ? nil : v
+        if hasEditedTitle {
+            let v = String(titleText.prefix(140))
+            if item.userEditedTitle != (v.isEmpty ? nil : v) {
+                item.userEditedTitle = v.isEmpty ? nil : v
+            }
         }
-        
         let cleaned = priceText.filter { $0.isNumber || $0 == "." }
         let newPrice = cleaned.isEmpty ? nil : Double(cleaned)
         if item.userEditedPrice != newPrice {
@@ -2701,6 +2705,7 @@ struct PublishConfirmationSheet: View {
     @State private var selectedPlatforms: Set<String> = []
     @State private var showAddressSetupSheet = false
     @State private var platformToEnableAfterAddressSetup = ""
+    @State private var hasInitializedPlatforms = false
     
     var body: some View {
         NavigationStack {
@@ -2787,7 +2792,8 @@ struct PublishConfirmationSheet: View {
             .task {
                 await integrationRepo.loadIntegrations()
                 await SellingSettingsRepository.shared.loadSettings()
-                // Default toggle connected API platforms
+                guard !hasInitializedPlatforms else { return }
+                hasInitializedPlatforms = true
                 selectedPlatforms = Set(integrationRepo.integrations.filter { $0.isConnected }.map { $0.platform })
             }
             .sheet(isPresented: $showAddressSetupSheet) {

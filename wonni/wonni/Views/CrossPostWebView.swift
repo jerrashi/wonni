@@ -4254,6 +4254,20 @@ final class MercariItemLoader: ObservableObject {
                 var og = document.querySelector('meta[property="og:image"]');
                 if (og && og.content) out.photo = og.content;
             }
+            // DOM fallbacks for sold/inactive listings where og:image is absent
+            if (!out.photo) {
+                var itemImgEl = document.querySelector('[data-testid="ItemImage"] img, [data-testid="ItemThumbImage"], [data-testid="ItemPhoto"] img');
+                if (itemImgEl && itemImgEl.src) out.photo = itemImgEl.src;
+            }
+            if (!out.photo) {
+                var allImgs = Array.from(document.querySelectorAll('img'));
+                for (var img of allImgs) {
+                    if (img.src && (img.src.includes('mercdn.net') || img.src.includes('mercari-images')) && !img.src.includes('avatar') && !img.src.includes('profile')) {
+                        out.photo = img.src;
+                        break;
+                    }
+                }
+            }
             // DOM query for title is more reliable than NEXT_DATA which often contains the seller name
             var nameEl = document.querySelector('[data-testid="ItemName"]');
             if (nameEl && nameEl.innerText) {
