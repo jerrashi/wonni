@@ -479,7 +479,7 @@ private struct SaleRow: View {
                         .scaledToFill()
                         .frame(width: 52, height: 52)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
-                } else if let urlStr = sale.thumbnailUrl, let url = URL(string: urlStr) {
+                } else if let urlStr = sale.thumbnailUrl, !urlStr.contains("ogp_image"), let url = URL(string: urlStr) {
                     AsyncImage(url: url) { phase in
                         switch phase {
                         case .success(let img):
@@ -721,7 +721,7 @@ struct AddSaleSheet: View {
             Form {
                 Section {
                     HStack(spacing: 8) {
-                        TextField("Paste Mercari item URL", text: $urlString)
+                        TextField("Paste order status URL, listing URL, or item ID", text: $urlString)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .keyboardType(.URL)
@@ -740,7 +740,7 @@ struct AddSaleSheet: View {
                 } header: {
                     Text("Import from URL")
                 } footer: {
-                    Text("Paste a Mercari listing URL to auto-fill title and price.")
+                    Text("Paste a Mercari order status URL, listing URL, or item ID to auto-fill.")
                 }
 
                 Section("Details") {
@@ -808,7 +808,20 @@ struct AddSaleSheet: View {
         let input = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         isFetching = true; fetchError = nil
 
-        if input.contains("mercari.com") {
+        if input.range(of: #"^m[a-zA-Z0-9]+$"#, options: .regularExpression) != nil {
+            // Raw Mercari item ID — fetch order status data first, then item page for title
+            platform = "mercari"
+            platformOrderId = input
+            await fetchFromOrderStatusPage(itemId: input)
+            await loader.load(itemId: input)
+            if loader.phase == .loaded {
+                if let n = loader.name, !n.isEmpty { title = n }
+                if let date = loader.soldAt { soldAt = date }
+                let match = await ListingRepository.shared.findListingByMercariId(input)
+                matchedListingId = match?.listingId
+                matchedCoverPhotoPath = match?.coverPhotoPath
+            }
+        } else if input.contains("mercari.com") {
             platform = "mercari"
 
             // Check if it's an order status URL
@@ -817,6 +830,14 @@ struct AddSaleSheet: View {
                let idRange = input[range].range(of: #"m[a-zA-Z0-9]+"#, options: .regularExpression) {
                 let itemId = String(input[range][idRange])
                 platformOrderId = itemId
+                await loader.load(itemId: itemId)
+                if loader.phase == .loaded {
+                    if let n = loader.name, !n.isEmpty { title = n }
+                    if let date = loader.soldAt { soldAt = date }
+                    let match = await ListingRepository.shared.findListingByMercariId(itemId)
+                    matchedListingId = match?.listingId
+                    matchedCoverPhotoPath = match?.coverPhotoPath
+                }
                 await fetchFromOrderStatusPage(itemId: itemId)
             } else {
                 // Check if it's an item listing URL
@@ -825,25 +846,17 @@ struct AddSaleSheet: View {
                    let idRange = input[range].range(of: #"m[a-zA-Z0-9]+"#, options: .regularExpression) {
                     let itemId = String(input[range][idRange])
                     platformOrderId = itemId
-                    // For item listing URLs, extract item name/photo, but then try to get sale data from order status
                     await loader.load(itemId: itemId)
                     if loader.phase == .loaded {
                         if let n = loader.name, !n.isEmpty { title = n }
+                        if let date = loader.soldAt { soldAt = date }
                         let match = await ListingRepository.shared.findListingByMercariId(itemId)
                         matchedListingId = match?.listingId
                         matchedCoverPhotoPath = match?.coverPhotoPath
                     }
-                    // Now try to fetch sale data from order status page
                     await fetchFromOrderStatusPage(itemId: itemId)
                 } else {
-                    // Check if it's just an item ID
-                    let idOnlyPattern = #"^m[a-zA-Z0-9]+$"#
-                    if input.range(of: idOnlyPattern, options: .regularExpression) != nil {
-                        platformOrderId = input
-                        await fetchFromOrderStatusPage(itemId: input)
-                    } else {
-                        fetchError = "Couldn't find a Mercari item ID, listing URL, or order status URL."
-                    }
+                    fetchError = "Couldn't find a Mercari listing URL or order status URL."
                 }
             }
         } else if input.contains("ebay.com") {
@@ -862,15 +875,11 @@ struct AddSaleSheet: View {
     }
 
     private func fetchFromOrderStatusPage(itemId: String) async {
-        // Extract sold price from order status page first
-        let soldPrice = await extractSoldPrice(itemId: itemId)
-        if let price = soldPrice {
-            self.priceString = String(format: "%.2f", price)
-        }
-
-        // Use MercariTakeHomeScraper to extract take-home, tracking, and carrier
         await withCheckedContinuation { continuation in
-            MercariTakeHomeScraper(mercariId: itemId, onSuccess: { data in
+            let scraper = MercariTakeHomeScraper(mercariId: itemId, onSuccess: { data in
+                if let price = data.soldPrice {
+                    self.priceString = String(format: "%.2f", price)
+                }
                 if let takeHome = data.takeHome {
                     self.takeHomeString = String(format: "%.2f", takeHome)
                 }
@@ -880,62 +889,14 @@ struct AddSaleSheet: View {
                 if let carrier = data.carrier {
                     self.carrier = carrier
                 }
+                if let date = data.soldDate {
+                    self.soldAt = date
+                }
                 continuation.resume()
             }, onFail: {
-                // Order status page fetch failed (user may not be logged in, item may not be sold, etc.)
-                // This is not necessarily an error—user can fill in details manually
                 continuation.resume()
             })
-        }
-    }
-
-    private func extractSoldPrice(itemId: String) async -> Double? {
-        let tempWebView = WKWebView()
-        let orderStatusURL = URL(string: "https://www.mercari.com/transaction/order_status/\(itemId)/")!
-
-        return await withCheckedContinuation { continuation in
-            var finished = false
-
-            class PageDelegate: NSObject, WKNavigationDelegate {
-                let onLoad: (WKWebView) -> Void
-                init(onLoad: @escaping (WKWebView) -> Void) {
-                    self.onLoad = onLoad
-                }
-                func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-                    onLoad(webView)
-                }
-            }
-
-            let delegate = PageDelegate { webView in
-                let js = """
-                (function() {
-                    var el = document.querySelector('[data-testid="Sold-price-value"]');
-                    return el ? el.innerText : null;
-                })()
-                """
-                webView.evaluateJavaScript(js) { result, _ in
-                    finished = true
-                    if let priceText = result as? String {
-                        let cleaned = priceText.replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespaces)
-                        if let price = Double(cleaned) {
-                            continuation.resume(returning: price)
-                            return
-                        }
-                    }
-                    continuation.resume(returning: nil)
-                }
-            }
-
-            tempWebView.navigationDelegate = delegate
-            tempWebView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-            tempWebView.load(URLRequest(url: orderStatusURL))
-
-            // Timeout after 15 seconds
-            DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
-                if !finished {
-                    continuation.resume(returning: nil)
-                }
-            }
+            scraper.start()
         }
     }
 
