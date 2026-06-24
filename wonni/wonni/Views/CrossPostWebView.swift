@@ -3367,8 +3367,10 @@ struct MercariProfileSyncSheet: View {
 
 struct MercariTransactionData {
     let takeHome: Double?
+    let soldPrice: Double?
     let trackingNumber: String?
     let carrier: String?
+    let soldDate: Date?
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -3464,7 +3466,7 @@ struct MercariTransactionLoader: UIViewRepresentable {
                             webView.load(URLRequest(url: url))
                         } else {
                             self.extracted = true
-                            self.onDataFound(MercariTransactionData(takeHome: takeHome, trackingNumber: nil, carrier: nil))
+                            self.onDataFound(MercariTransactionData(takeHome: takeHome, soldPrice: nil, trackingNumber: nil, carrier: nil, soldDate: nil))
                         }
                     } else if attempt < 1 {
                         self.extractTransactionData(webView: webView, attempt: attempt + 1)
@@ -3490,8 +3492,10 @@ struct MercariTransactionLoader: UIViewRepresentable {
                         self.extracted = true
                         self.onDataFound(MercariTransactionData(
                             takeHome: self.pendingTakeHome,
+                            soldPrice: nil,
                             trackingNumber: trackingNumber,
-                            carrier: carrier
+                            carrier: carrier,
+                            soldDate: nil
                         ))
                     } else {
                         self.extractTrackingData(webView: webView, attempt: attempt + 1)
@@ -3517,6 +3521,8 @@ final class MercariTakeHomeScraper: NSObject, WKNavigationDelegate {
     private var webView: WKWebView?
     private var phase: Phase = .transactionPage
     private var pendingTakeHome: Double?
+    private var pendingSoldPrice: Double?
+    private var pendingSoldDate: Date?
     private var extracted = false
     // Strong self-reference so ARC doesn't deallocate us before callbacks fire.
     private var retainCycle: MercariTakeHomeScraper?
@@ -3599,15 +3605,21 @@ final class MercariTakeHomeScraper: NSObject, WKNavigationDelegate {
                 (function() {
                     var el = document.querySelector('[data-testid="You-made-value"]');
                     var takeHome = el ? el.textContent : null;
+                    var priceEl = document.querySelector('[data-testid="Sold-price-value"]');
+                    var soldPrice = priceEl ? priceEl.textContent : null;
                     var btn = document.querySelector('[data-testid="ShippingCTAButton"]');
                     var trackingHref = btn ? btn.getAttribute('href') : null;
-                    return { takeHome: takeHome, trackingHref: trackingHref };
+                    var soldTimeEl = document.querySelector('[data-testid="ItemSoldTime"]');
+                    var soldOn = soldTimeEl ? soldTimeEl.textContent.trim() : null;
+                    return { takeHome: takeHome, soldPrice: soldPrice, trackingHref: trackingHref, soldOn: soldOn };
                 })()
                 """
             webView.evaluateJavaScript(js) { [weak self, weak webView] result, _ in
                 guard let self, let webView else { return }
                 var takeHome: Double? = nil
+                var soldPrice: Double? = nil
                 var trackingHref: String? = nil
+                var soldDate: Date? = nil
                 if let dict = result as? [String: Any] {
                     if let text = dict["takeHome"] as? String {
                         let cleaned = text.trimmingCharacters(in: .whitespaces)
@@ -3615,16 +3627,33 @@ final class MercariTakeHomeScraper: NSObject, WKNavigationDelegate {
                             .replacingOccurrences(of: ",", with: "")
                         takeHome = Double(cleaned).flatMap { $0 > 0 ? $0 : nil }
                     }
+                    if let text = dict["soldPrice"] as? String {
+                        let cleaned = text.trimmingCharacters(in: .whitespaces)
+                            .replacingOccurrences(of: "$", with: "")
+                            .replacingOccurrences(of: ",", with: "")
+                        soldPrice = Double(cleaned).flatMap { $0 > 0 ? $0 : nil }
+                    }
                     trackingHref = dict["trackingHref"] as? String
+                    if let rawDate = dict["soldOn"] as? String {
+                        let fmt = DateFormatter()
+                        fmt.locale = Locale(identifier: "en_US_POSIX")
+                        let text = rawDate.replacingOccurrences(of: "Sold on ", with: "")
+                        for format in ["MM/dd/yy", "MM/dd/yyyy"] {
+                            fmt.dateFormat = format
+                            if let d = fmt.date(from: text) { soldDate = d; break }
+                        }
+                    }
                 }
-                if takeHome != nil || trackingHref != nil {
+                if takeHome != nil || trackingHref != nil || soldPrice != nil {
                     self.pendingTakeHome = takeHome
+                    self.pendingSoldPrice = soldPrice
+                    self.pendingSoldDate = soldDate
                     if let href = trackingHref, let url = URL(string: href.hasPrefix("http") ? href : "https://www.mercari.com\(href)") {
                         self.phase = .trackingPage
                         webView.load(URLRequest(url: url))
                     } else {
                         self.extracted = true
-                        self.finish { self.onSuccess(MercariTransactionData(takeHome: takeHome, trackingNumber: nil, carrier: nil)) }
+                        self.finish { self.onSuccess(MercariTransactionData(takeHome: takeHome, soldPrice: soldPrice, trackingNumber: nil, carrier: nil, soldDate: soldDate)) }
                     }
                 } else if attempt < 1 {
                     self.extractTransactionData(webView: webView, attempt: attempt + 1)
@@ -3650,8 +3679,10 @@ final class MercariTakeHomeScraper: NSObject, WKNavigationDelegate {
                     self.extracted = true
                     self.finish { self.onSuccess(MercariTransactionData(
                         takeHome: self.pendingTakeHome,
+                        soldPrice: self.pendingSoldPrice,
                         trackingNumber: trackingNumber,
-                        carrier: carrier
+                        carrier: carrier,
+                        soldDate: self.pendingSoldDate
                     )) }
                 } else {
                     self.extractTrackingData(webView: webView, attempt: attempt + 1)
@@ -4193,6 +4224,7 @@ final class MercariItemLoader: ObservableObject {
     @Published var name: String?
     @Published var descriptionText: String?
     @Published var thumbnailUrl: String?
+    @Published var soldAt: Date?
 
     let webView: WKWebView
     private let navDelegate = SaleNavDelegate()
@@ -4207,7 +4239,7 @@ final class MercariItemLoader: ObservableObject {
 
     func load(itemId: String) async {
         phase = .loading
-        priceDollars = nil; isSold = false; statusRaw = nil; name = nil; descriptionText = nil; thumbnailUrl = nil
+        priceDollars = nil; isSold = false; statusRaw = nil; name = nil; descriptionText = nil; thumbnailUrl = nil; soldAt = nil
         guard let url = URL(string: "https://www.mercari.com/us/item/\(itemId)/") else {
             phase = .failed; return
         }
@@ -4217,7 +4249,7 @@ final class MercariItemLoader: ObservableObject {
 
         let js = #"""
         return (function() {
-            var out = { price: null, status: null, name: null, description: null, photo: null };
+            var out = { price: null, status: null, name: null, description: null, photo: null, soldOn: null };
             var nd = document.getElementById('__NEXT_DATA__');
             var text = nd ? (nd.textContent || '') : '';
             if (text) {
@@ -4298,6 +4330,11 @@ final class MercariItemLoader: ObservableObject {
                     out.status = 'inactive';
                 }
             }
+            var soldTimeEl = document.querySelector('[data-testid="ItemSoldTime"]');
+            if (soldTimeEl) {
+                var stm = soldTimeEl.innerText.match(/(\d{2}\/\d{2}\/\d{2,4})/);
+                if (stm) out.soldOn = stm[1];
+            }
             return JSON.stringify(out);
         })();
         """#
@@ -4315,6 +4352,14 @@ final class MercariItemLoader: ObservableObject {
                     name = obj["name"] as? String
                     descriptionText = obj["description"] as? String
                     thumbnailUrl = obj["photo"] as? String
+                    if let rawDate = obj["soldOn"] as? String {
+                        let fmt = DateFormatter()
+                        fmt.locale = Locale(identifier: "en_US_POSIX")
+                        for format in ["MM/dd/yy", "MM/dd/yyyy"] {
+                            fmt.dateFormat = format
+                            if let d = fmt.date(from: rawDate) { soldAt = d; break }
+                        }
+                    }
                     let s = (status ?? "").lowercased()
                     // Match exact Mercari status strings; contains("sold") was triggering on
                     // seller-stats text ("47 items sold") when the body fallback ran.
@@ -4482,6 +4527,7 @@ struct MercariSaleResult {
     var trackingNumber: String?
     var carrier: String?
     var thumbnailUrl: String?
+    var soldAt: Date?
 }
 
 @MainActor
@@ -4505,7 +4551,12 @@ final class MercariSaleSyncManager: ObservableObject {
     }
     
     func sync(sales: [Sale]) async {
-        let mercariSales = sales.filter { $0.platform == "mercari" && ($0.takeHome == nil || $0.trackingNumber == nil || $0.coverPhotoPath == nil) }
+        let mercariSales = sales.filter { sale in
+            guard sale.platform == "mercari" else { return false }
+            let hasRealPhoto = sale.coverPhotoPath != nil ||
+                (sale.thumbnailUrl != nil && sale.thumbnailUrl?.contains("ogp_image") != true)
+            return sale.takeHome == nil || sale.trackingNumber == nil || !hasRealPhoto
+        }
         guard !mercariSales.isEmpty else {
             print("[MercariSaleSync] No mercari sales needing sync")
             return
@@ -4539,7 +4590,8 @@ final class MercariSaleSyncManager: ObservableObject {
             currentStatus = "Syncing \(i + 1)/\(mercariSales.count)..."
             print("[MercariSaleSync] Loading order page for item \(platformOrderId)")
             
-            let needsPhoto = sale.coverPhotoPath == nil
+            let needsPhoto = sale.coverPhotoPath == nil &&
+                (sale.thumbnailUrl == nil || sale.thumbnailUrl?.contains("ogp_image") == true)
             if let result = await loadSaleData(itemId: platformOrderId, fetchPhoto: needsPhoto) {
                 var update: [String: Any] = [:]
                 if let th = result.takeHome, sale.takeHome != th {
@@ -4556,6 +4608,10 @@ final class MercariSaleSyncManager: ObservableObject {
                 if let photo = result.thumbnailUrl, sale.coverPhotoPath == nil {
                     update["thumbnailUrl"] = photo
                     print("[MercariSaleSync] thumbnailUrl backfilled for \(platformOrderId)")
+                }
+                if let soldAt = result.soldAt {
+                    update["soldAt"] = Timestamp(date: soldAt)
+                    print("[MercariSaleSync] soldAt = \(soldAt) for \(platformOrderId)")
                 }
 
                 if !update.isEmpty {
@@ -4592,7 +4648,7 @@ final class MercariSaleSyncManager: ObservableObject {
         
         let jsOrder = """
         (function() {
-            var out = { takeHome: null, hasTracking: false, debug: '' };
+            var out = { takeHome: null, hasTracking: false, soldOn: null, debug: '' };
             var takeHomeEl = document.querySelector('p[data-testid="You-made-value"]');
             if (takeHomeEl) {
                 out.debug += 'Found takeHome: ' + takeHomeEl.innerText + '; ';
@@ -4600,6 +4656,11 @@ final class MercariSaleSyncManager: ObservableObject {
                 if (text) out.takeHome = parseFloat(text);
             } else {
                 out.debug += 'No takeHome el; ';
+            }
+            var soldTimeEl = document.querySelector('[data-testid="ItemSoldTime"]');
+            if (soldTimeEl) {
+                var m = soldTimeEl.innerText.match(/(\\d{2}\\/\\d{2}\\/\\d{2,4})/);
+                if (m) out.soldOn = m[1];
             }
             var trackingBtn = document.querySelector('a[data-testid="ShippingCTAButton"]');
             if (trackingBtn) { out.hasTracking = true; }
@@ -4619,6 +4680,20 @@ final class MercariSaleSyncManager: ObservableObject {
                         if dict["takeHome"] != nil || dict["hasTracking"] as? Bool == true {
                             result.takeHome = dict["takeHome"] as? Double
                             hasTracking = dict["hasTracking"] as? Bool ?? false
+                            if let soldOn = dict["soldOn"] as? String {
+                                result.soldAt = Self.parseMercariSoldDate(soldOn)
+                                break
+                            }
+                            // takeHome found but ItemSoldTime not yet rendered — one extra poll
+                            if Date().addingTimeInterval(2) < deadline {
+                                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                                if let jsResult2 = try? await webView.evaluateJavaScript(jsOrder) as? String,
+                                   let d2 = jsResult2.data(using: .utf8),
+                                   let dict2 = try? JSONSerialization.jsonObject(with: d2) as? [String: Any],
+                                   let soldOn = dict2["soldOn"] as? String {
+                                    result.soldAt = Self.parseMercariSoldDate(soldOn)
+                                }
+                            }
                             break
                         }
                     }
@@ -4684,6 +4759,10 @@ final class MercariSaleSyncManager: ObservableObject {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 let jsPhoto = """
                 (function() {
+                    function isOGP(url) {
+                        return !url || url.indexOf('ogp_image') !== -1 || url.indexOf('assets/common') !== -1;
+                    }
+                    var out = { photo: null, soldOn: null };
                     var nd = document.getElementById('__NEXT_DATA__');
                     if (nd) {
                         try {
@@ -4694,28 +4773,63 @@ final class MercariSaleSyncManager: ObservableObject {
                                 var photos = item.photos || [];
                                 if (photos.length > 0) {
                                     var p = photos[0].thumbnailUrl || photos[0].url || null;
-                                    if (p) return p;
+                                    if (p && !isOGP(p)) out.photo = p;
                                 }
-                                if (item.thumbnailUrl) return item.thumbnailUrl;
-                                if (item.photo_url) return item.photo_url;
+                                if (!out.photo && item.thumbnailUrl && !isOGP(item.thumbnailUrl)) out.photo = item.thumbnailUrl;
+                                if (!out.photo && item.photo_url && !isOGP(item.photo_url)) out.photo = item.photo_url;
                             }
                         } catch(e) {}
                     }
-                    var og = document.querySelector('meta[property="og:image"]');
-                    if (og && og.content) return og.content;
-                    return null;
+                    if (!out.photo) {
+                        var imgs = document.querySelectorAll('img');
+                        for (var i = 0; i < imgs.length; i++) {
+                            var src = imgs[i].src || '';
+                            if (src.indexOf('static.mercdn.net') !== -1 && !isOGP(src)) { out.photo = src; break; }
+                        }
+                    }
+                    if (!out.photo) {
+                        var og = document.querySelector('meta[property="og:image"]');
+                        var ogSrc = og && og.content ? og.content : null;
+                        if (ogSrc && !isOGP(ogSrc)) out.photo = ogSrc;
+                    }
+                    var soldTimeEl = document.querySelector('[data-testid="ItemSoldTime"]');
+                    if (soldTimeEl) {
+                        var stm = soldTimeEl.innerText.match(/(\\d{2}\\/\\d{2}\\/\\d{2,4})/);
+                        if (stm) out.soldOn = stm[1];
+                    }
+                    return JSON.stringify(out);
                 })();
                 """
-                if let photo = (try? await webView.evaluateJavaScript(jsPhoto)) as? String, !photo.isEmpty {
-                    result.thumbnailUrl = photo
-                    print("[MercariSaleSync] Got photo from item page for \(itemId)")
-                } else {
-                    print("[MercariSaleSync] No photo found on item page for \(itemId)")
+                if let json = (try? await webView.evaluateJavaScript(jsPhoto)) as? String,
+                   let jdata = json.data(using: .utf8),
+                   let obj = try? JSONSerialization.jsonObject(with: jdata) as? [String: Any] {
+                    if let photo = obj["photo"] as? String, !photo.isEmpty {
+                        result.thumbnailUrl = photo
+                        print("[MercariSaleSync] Got photo from item page for \(itemId)")
+                    } else {
+                        print("[MercariSaleSync] No real photo found on item page for \(itemId)")
+                    }
+                    if result.soldAt == nil, let soldOn = obj["soldOn"] as? String {
+                        result.soldAt = Self.parseMercariSoldDate(soldOn)
+                        if let d = result.soldAt {
+                            print("[MercariSaleSync] soldAt from item page for \(itemId): \(d)")
+                        }
+                    }
                 }
             }
         }
 
         return result
+    }
+
+    private static func parseMercariSoldDate(_ raw: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        for format in ["MM/dd/yy", "MM/dd/yyyy"] {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: raw) { return date }
+        }
+        return nil
     }
 }
 
