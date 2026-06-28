@@ -91,7 +91,8 @@ struct SalesDashboardView: View {
                         Button {
                             showBulkHideConfirmation = true
                         } label: {
-                            Text("Hide \(selectedSaleIds.count) sale\(selectedSaleIds.count == 1 ? "" : "s")")
+                            let plural = selectedSaleIds.count == 1 ? "" : "s"
+                            Text("Hide \(selectedSaleIds.count) sale\(plural)")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
