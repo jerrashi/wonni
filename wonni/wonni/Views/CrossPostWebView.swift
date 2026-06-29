@@ -4578,11 +4578,11 @@ final class MercariSaleSyncManager: ObservableObject {
         navDelegate.reset()
         webView.load(URLRequest(url: url))
         
-        let loaded = await navDelegate.waitForLoad(timeout: 15)
+        let loaded = await navDelegate.waitForLoad(timeout: 10)
         if !loaded { print("[MercariSaleSync] Order page timed out for \(itemId)") }
-        
+
         // Wait for React/Next.js hydration
-        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
         
         var result = MercariSaleResult()
         
@@ -4619,7 +4619,7 @@ final class MercariSaleSyncManager: ObservableObject {
         """
 
         var hasTracking = false
-        let deadline = Date().addingTimeInterval(15)
+        let deadline = Date().addingTimeInterval(8)
         while Date() < deadline {
             do {
                 if let jsResult = try await webView.evaluateJavaScript(jsOrder) as? String {
@@ -4648,11 +4648,11 @@ final class MercariSaleSyncManager: ObservableObject {
             
             navDelegate.reset()
             webView.load(URLRequest(url: trackingUrl))
-            let trackingLoaded = await navDelegate.waitForLoad(timeout: 15)
+            let trackingLoaded = await navDelegate.waitForLoad(timeout: 10)
             if !trackingLoaded { print("[MercariSaleSync] Tracking page timed out") }
-            
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            
+
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+
             let jsTracking = """
             (function() {
                 var out = { trackingNumber: null, carrier: null };
@@ -4664,7 +4664,7 @@ final class MercariSaleSyncManager: ObservableObject {
             })();
             """
             
-            let trackingDeadline = Date().addingTimeInterval(15)
+            let trackingDeadline = Date().addingTimeInterval(8)
             while Date() < trackingDeadline {
                 do {
                     if let jsResult = try await webView.evaluateJavaScript(jsTracking) as? String {
@@ -4745,11 +4745,11 @@ final class MercariSaleSyncManager: ObservableObject {
         guard let url = URL(string: "https://www.mercari.com/mypage/listings/in_progress/?sortBy=7") else { return [] }
         navDelegate.reset()
         webView.load(URLRequest(url: url))
-        guard await navDelegate.waitForLoad(timeout: 15) else {
+        guard await navDelegate.waitForLoad(timeout: 10) else {
             print("[MercariSaleSync] scanForNewSales: page timed out")
             return []
         }
-        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
 
         // Extract items from table rows. Each row has an item link and a date <td> with format MM/DD/YY.
         // We walk rows rather than just links so we can associate each item with its updated date.
