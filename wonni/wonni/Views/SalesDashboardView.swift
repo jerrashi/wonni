@@ -21,7 +21,7 @@ struct SalesDashboardView: View {
     @State private var filterPlatform: String? = nil
     @State private var showMercariSync = false
     @AppStorage("lastSalesSyncDate") private var lastSyncTimestamp: Double = 0
-    @AppStorage("mercariSalesAutoSync") private var mercariAutoSync: Bool = false
+    @State private var mercariAutoImport: Bool = true  // loaded from Firestore in reload()
     
     @StateObject private var mercariSaleSyncManager = MercariSaleSyncManager()
 
@@ -33,6 +33,7 @@ struct SalesDashboardView: View {
     @State private var showBulkDeleteConfirmation = false
     @State private var showAddSale = false
     @State private var showImportSales = false
+    @State private var pendingMercariImports: [MercariFoundSaleItem] = []
 
     private var secondsUntilNextSync: Int {
         let elapsed = Date().timeIntervalSince1970 - lastSyncTimestamp
@@ -122,8 +123,10 @@ struct SalesDashboardView: View {
             .sheet(isPresented: $showAddSale, onDismiss: { Task { await reload() } }) {
                 AddSaleView()
             }
-            .sheet(isPresented: $showImportSales) {
-                MercariSalesImportSheet { Task { await reload() } }
+            .sheet(isPresented: $showImportSales, onDismiss: { pendingMercariImports = [] }) {
+                MercariSalesImportSheet(preloadedItems: pendingMercariImports) {
+                    Task { await reload() }
+                }
             }
             .confirmationDialog(
                 "Delete this sale?",
@@ -341,15 +344,8 @@ struct SalesDashboardView: View {
             )
             .contextMenu {
                 Button("Import from Mercari") {
+                    pendingMercariImports = []
                     showImportSales = true
-                }
-                Button {
-                    mercariAutoSync.toggle()
-                } label: {
-                    Label(
-                        mercariAutoSync ? "Auto-import Mercari: On" : "Auto-import Mercari: Off",
-                        systemImage: mercariAutoSync ? "checkmark.circle.fill" : "circle"
-                    )
                 }
             }
         }
@@ -396,8 +392,10 @@ struct SalesDashboardView: View {
         isLoading = true
         async let fetchSales = SaleRepository.shared.fetchSales()
         async let fetchHidden = SaleRepository.shared.fetchHiddenSales()
+        async let fetchSettings = IntegrationRepository.shared.loadSalesDashboardSettings()
         sales = (try? await fetchSales) ?? []
         hiddenSales = (try? await fetchHidden) ?? []
+        mercariAutoImport = await fetchSettings
         isLoading = false
     }
 
@@ -449,10 +447,38 @@ struct SalesDashboardView: View {
     // Iterates web-autofill platform managers in order.
     // Add new platforms here as: await nextPlatformSyncManager.sync(sales: sales)
     private func syncWebPlatforms() async {
-        if mercariAutoSync {
-            let knownMercariIds = Set(sales.compactMap { $0.platform == "mercari" ? $0.platformOrderId : nil })
-            await mercariSaleSyncManager.scanForNewSales(knownOrderIds: knownMercariIds)
-            await reload()
+        let knownMercariIds = Set(sales.compactMap { $0.platform == "mercari" ? $0.platformOrderId : nil })
+        // Stop scanning items older than one day before last sync so we don't re-examine the full history.
+        let stopDate = lastSyncTimestamp > 0
+            ? Date(timeIntervalSince1970: lastSyncTimestamp - 86_400)
+            : nil
+        let found = await mercariSaleSyncManager.scanForNewSales(
+            knownOrderIds: knownMercariIds,
+            stopBeforeDate: stopDate
+        )
+        if !found.isEmpty {
+            if mercariAutoImport {
+                for item in found {
+                    let match = await ListingRepository.shared.findListingByMercariId(item.id)
+                    let sale = Sale(
+                        listingId: match?.listingId,
+                        listingTitle: item.name,
+                        coverPhotoPath: match?.coverPhotoPath,
+                        thumbnailUrl: match?.coverPhotoPath == nil ? item.thumbnailUrl : nil,
+                        platform: "mercari",
+                        platformOrderId: item.id,
+                        priceSoldFor: item.price ?? 0,
+                        status: .pending,
+                        soldAt: Timestamp(date: Date())
+                    )
+                    try? await SaleRepository.shared.addSale(sale)
+                }
+                await reload()
+            } else {
+                // Let the user pick — open import sheet pre-populated with found items.
+                pendingMercariImports = found
+                showImportSales = true
+            }
         }
         await mercariSaleSyncManager.sync(sales: sales)
         // Future: await facebookSaleSyncManager.scanForNewSales(...) / .sync(...)
@@ -1005,6 +1031,7 @@ final class MercariSalesPageImporter: ObservableObject {
 }
 
 struct MercariSalesImportSheet: View {
+    var preloadedItems: [MercariFoundSaleItem]
     var onImported: () -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -1012,14 +1039,20 @@ struct MercariSalesImportSheet: View {
     @State private var selectedIds: Set<String> = []
     @State private var isImporting = false
     @State private var soldAt = Date()
-    @State private var showDatePicker = false
+
+    init(preloadedItems: [MercariFoundSaleItem] = [], onImported: @escaping () -> Void) {
+        self.preloadedItems = preloadedItems
+        self.onImported = onImported
+    }
 
     var body: some View {
         NavigationStack {
-            if importer.foundItems.isEmpty {
+            // If items were pre-loaded from a sync scan, skip the browser and go straight to selection.
+            let displayItems = importer.foundItems.isEmpty ? preloadedItems : importer.foundItems
+            if displayItems.isEmpty {
                 browserView
             } else {
-                resultsView
+                resultsView(items: displayItems)
             }
         }
     }
@@ -1071,13 +1104,13 @@ struct MercariSalesImportSheet: View {
         }
     }
 
-    private var resultsView: some View {
+    private func resultsView(items: [MercariFoundSaleItem]) -> some View {
         VStack(spacing: 0) {
             DatePicker("Date sold", selection: $soldAt, displayedComponents: .date)
                 .padding(.horizontal, 16).padding(.vertical, 10)
                 .background(Color(.systemGroupedBackground))
 
-            List(importer.foundItems) { item in
+            List(items) { item in
                 Button {
                     if selectedIds.contains(item.id) { selectedIds.remove(item.id) }
                     else { selectedIds.insert(item.id) }
@@ -1100,30 +1133,34 @@ struct MercariSalesImportSheet: View {
                 .foregroundStyle(.primary)
             }
         }
-        .navigationTitle("\(importer.foundItems.count) items found")
+        .navigationTitle("\(items.count) items found")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Back") { importer.foundItems = []; selectedIds.removeAll() }
+                if preloadedItems.isEmpty {
+                    Button("Back") { importer.foundItems = []; selectedIds.removeAll() }
+                } else {
+                    Button("Cancel") { dismiss() }
+                }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button("All") { selectedIds = Set(importer.foundItems.map { $0.id }) }
-                    .disabled(selectedIds.count == importer.foundItems.count)
+                Button("All") { selectedIds = Set(items.map { $0.id }) }
+                    .disabled(selectedIds.count == items.count)
             }
             ToolbarItem(placement: .confirmationAction) {
                 if isImporting {
                     ProgressView()
                 } else {
-                    Button("Import (\(selectedIds.count))") { Task { await importSelected() } }
+                    Button("Import (\(selectedIds.count))") { Task { await importSelected(from: items) } }
                         .disabled(selectedIds.isEmpty)
                 }
             }
         }
     }
 
-    private func importSelected() async {
+    private func importSelected(from items: [MercariFoundSaleItem]) async {
         isImporting = true
-        for item in importer.foundItems where selectedIds.contains(item.id) {
+        for item in items where selectedIds.contains(item.id) {
             let match = await ListingRepository.shared.findListingByMercariId(item.id)
             let sale = Sale(
                 listingId: match?.listingId,

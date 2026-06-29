@@ -2231,6 +2231,9 @@ struct SettingsSheet: View {
     @State private var etsyConnectErrorMessage = ""
     @State private var etsySetupMissingReturn = false
     
+    // Sales dashboard settings (Firestore-backed for cross-device sync)
+    @State private var mercariAutoImport: Bool = true
+
     // Selling Settings State
     @StateObject private var settingsRepo = SellingSettingsRepository.shared
     @State private var addressLine1 = ""
@@ -2344,6 +2347,21 @@ struct SettingsSheet: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
+                    }
+                }
+
+                Section(header: Text("Sales")) {
+                    Toggle(isOn: $mercariAutoImport) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Auto-import Mercari Sales")
+                                .font(.body)
+                            Text("When syncing, automatically record all new Mercari sales. Turn off to review and select which sales to import.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .onChange(of: mercariAutoImport) { _, newValue in
+                        Task { await IntegrationRepository.shared.saveSalesDashboardSettings(mercariAutoImport: newValue) }
                     }
                 }
 
@@ -2517,6 +2535,7 @@ struct SettingsSheet: View {
                 await integrationRepo.loadIntegrations()
                 await settingsRepo.loadSettings()
                 loadLocalSettingsState()
+                mercariAutoImport = await IntegrationRepository.shared.loadSalesDashboardSettings()
             }
             .onDisappear {
                 saveSellingSettings(showAlertOnSuccess: false)

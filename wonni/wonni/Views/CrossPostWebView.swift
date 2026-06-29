@@ -4736,15 +4736,18 @@ final class MercariSaleSyncManager: ObservableObject {
     // are encountered. Saves genuinely new items as Sale records.
     // Both "In Progress" and "Complete" sections are covered because __NEXT_DATA__
     // and the DOM link fallback operate on the full page regardless of section.
-    func scanForNewSales(knownOrderIds: Set<String>) async {
+    /// Scans Mercari's in-progress transactions and returns newly discovered items.
+    /// Stops at the first known order ID or when an item's updated date is before `stopBeforeDate`.
+    /// Callers decide whether to auto-save or present for manual selection.
+    func scanForNewSales(knownOrderIds: Set<String>, stopBeforeDate: Date? = nil) async -> [MercariFoundSaleItem] {
         // sortBy=7 = Last Updated, so we get newest sales first without needing dropdown interaction.
         // /in_progress/ shows transactions currently being traded — complete ones are already tracked.
-        guard let url = URL(string: "https://www.mercari.com/mypage/listings/in_progress/?sortBy=7") else { return }
+        guard let url = URL(string: "https://www.mercari.com/mypage/listings/in_progress/?sortBy=7") else { return [] }
         navDelegate.reset()
         webView.load(URLRequest(url: url))
         guard await navDelegate.waitForLoad(timeout: 15) else {
             print("[MercariSaleSync] scanForNewSales: page timed out")
-            return
+            return []
         }
         try? await Task.sleep(nanoseconds: 3_000_000_000)
 
@@ -4761,9 +4764,13 @@ final class MercariSaleSyncManager: ObservableObject {
                         var sid = String(it.id || '');
                         if (!sid || seen.has(sid)) continue;
                         seen.add(sid);
+                        // updated is seconds or ms; normalise to seconds
+                        var upd = it.updated || it.updatedAt || it.updated_at || null;
+                        if (upd && upd > 1e10) upd = upd / 1000;
                         results.push({ id: sid, name: it.name || null,
                                        price: it.price ? it.price / 100 : null,
-                                       thumbnailUrl: (it.thumbnails && it.thumbnails[0]) || null });
+                                       thumbnailUrl: (it.thumbnails && it.thumbnails[0]) || null,
+                                       updated: upd });
                     }
                 } catch(e) {}
             }
@@ -4777,15 +4784,15 @@ final class MercariSaleSyncManager: ObservableObject {
                     results.push({ id: m[1],
                                    name: nameEl ? nameEl.innerText.trim() : null,
                                    price: priceEl ? parseFloat(priceEl.innerText.replace(/[^0-9.]/g,'')) || null : null,
-                                   thumbnailUrl: null });
+                                   thumbnailUrl: null,
+                                   updated: null });
                 }
             }
             return JSON.stringify(results);
         })();
         """
 
-        var newItems: [(id: String, name: String?, price: Double?, thumbnailUrl: String?)] = []
-        var consecutiveKnown = 0
+        var newItems: [MercariFoundSaleItem] = []
         var lastCount = 0
         var done = false
 
@@ -4802,41 +4809,35 @@ final class MercariSaleSyncManager: ObservableObject {
 
             for dict in arr.dropFirst(lastCount) {
                 guard let id = dict["id"] as? String, !id.isEmpty else { continue }
-                if knownOrderIds.contains(id) {
-                    consecutiveKnown += 1
-                    if consecutiveKnown >= 3 { done = true; break }
-                } else {
-                    consecutiveKnown = 0
-                    newItems.append((
-                        id: id,
-                        name: dict["name"] as? String,
-                        price: (dict["price"] as? NSNumber)?.doubleValue,
-                        thumbnailUrl: dict["thumbnailUrl"] as? String
-                    ))
+
+                // Stop at the first sale we already know about — list is newest-first
+                if knownOrderIds.contains(id) { done = true; break }
+
+                // Stop if this item is older than one day before our last sync
+                if let cutoff = stopBeforeDate,
+                   let updatedSecs = (dict["updated"] as? NSNumber)?.doubleValue {
+                    let itemDate = Date(timeIntervalSince1970: updatedSecs)
+                    if itemDate < cutoff { done = true; break }
                 }
+
+                let name = dict["name"] as? String
+                let price = (dict["price"] as? NSNumber)?.doubleValue
+                guard let n = name, !n.isEmpty, let p = price, p > 0 else {
+                    print("[MercariSaleSync] skipping item \(id): missing name or price")
+                    continue
+                }
+                newItems.append(MercariFoundSaleItem(
+                    id: id,
+                    name: n,
+                    price: p,
+                    thumbnailUrl: dict["thumbnailUrl"] as? String
+                ))
             }
             lastCount = arr.count
         }
 
-        print("[MercariSaleSync] scanForNewSales: \(newItems.count) new sale(s)")
-        for item in newItems {
-            // Require a name and a non-zero price — guards against extracting active listings
-            // or malformed page data.
-            guard let name = item.name, !name.isEmpty, let price = item.price, price > 0 else {
-                print("[MercariSaleSync] skipping item \(item.id): missing name or price")
-                continue
-            }
-            let sale = Sale(
-                listingTitle: name,
-                thumbnailUrl: item.thumbnailUrl,
-                platform: "mercari",
-                platformOrderId: item.id,
-                priceSoldFor: price,
-                status: .pending,
-                soldAt: Timestamp(date: Date())
-            )
-            try? await SaleRepository.shared.addSale(sale)
-        }
+        print("[MercariSaleSync] scanForNewSales: \(newItems.count) new item(s)")
+        return newItems
     }
 
     private func ensureLastUpdatedSort() async {
