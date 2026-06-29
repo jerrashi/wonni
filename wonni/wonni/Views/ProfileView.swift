@@ -272,7 +272,7 @@ struct ProfileView: View {
                     Task { await loadListings() }
                 }
             }
-            .sheet(isPresented: $showSalesDashboard) {
+            .navigationDestination(isPresented: $showSalesDashboard) {
                 SalesDashboardView()
             }
             .sheet(item: $listingToRecordSale) { listing in

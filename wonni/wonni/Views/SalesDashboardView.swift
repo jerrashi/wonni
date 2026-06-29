@@ -12,7 +12,6 @@ import WebKit
 private let syncCooldown: TimeInterval = 5 * 60  // 5 minutes
 
 struct SalesDashboardView: View {
-    @Environment(\.dismiss) private var dismiss
     @State private var sales: [Sale] = []
     @State private var isLoading = true
     @State private var isSyncing = false
@@ -49,110 +48,65 @@ struct SalesDashboardView: View {
     private var platforms: [String] { Array(Set(sales.map { $0.platform })).sorted() }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if isLoading {
-                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if sales.isEmpty {
-                    emptySalesState
-                } else {
-                    salesList
-                }
+        Group {
+            if isLoading {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if sales.isEmpty {
+                emptySalesState
+            } else {
+                salesList
             }
-            .background(
-                MercariSheetWebView(webView: mercariSaleSyncManager.webView)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .opacity(0.01)
-                    .allowsHitTesting(false)
-            )
-            .navigationTitle("Sales")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 0) {
-                    // Toast message
-                    if let toast = syncToast {
-                        Text(toast)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 16).padding(.vertical, 10)
-                            .background(Color.accentColor.opacity(0.92))
-                            .clipShape(Capsule())
-                            .padding(.bottom, 12)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+        .background(
+            MercariSheetWebView(webView: mercariSaleSyncManager.webView)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(0.01)
+                .allowsHitTesting(false)
+        )
+        .navigationTitle("Sales")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                HStack(spacing: 4) {
+                    syncButton
+                    Button {
+                        showAddSale = true
+                    } label: {
+                        Image(systemName: "plus")
                     }
-
-                    // Bulk hide button
-                    if isSelectMode && !selectedSaleIds.isEmpty {
-                        Button {
-                            showBulkHideConfirmation = true
-                        } label: {
-                            let plural = selectedSaleIds.count == 1 ? "" : "s"
-                            Text("Hide \(selectedSaleIds.count) sale\(plural)")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.secondary)
-                        .padding(.horizontal)
-                        .padding(.bottom, 8)
+                }
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 0) {
+                if let toast = syncToast {
+                    Text(toast)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .background(Color.accentColor.opacity(0.92))
+                        .clipShape(Capsule())
+                        .padding(.bottom, 12)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-
-                    // Prominent SYNC and ADD buttons
-                    if !sales.isEmpty || !isLoading {
-                        HStack(spacing: 12) {
-                            // SYNC Button
-                            Button(action: { Task { await syncSales() } }) {
-                                HStack(spacing: 8) {
-                                    if isSyncing {
-                                        ProgressView()
-                                            .scaleEffect(0.9, anchor: .center)
-                                    } else {
-                                        Image(systemName: "arrow.triangle.2.circlepath")
-                                    }
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("SYNC")
-                                            .font(.subheadline.weight(.semibold))
-                                        Text(isSyncing ? "Syncing..." : "Update from platforms")
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Color.blue)
-                            .disabled(isSyncing)
-
-                            // ADD Button
-                            NavigationLink(destination: AddSaleView()) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "plus.circle.fill")
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("ADD")
-                                            .font(.subheadline.weight(.semibold))
-                                        Text("Record a sale")
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Color.green)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .background(Color(.systemGroupedBackground))
-                    }
                 }
-                .animation(.spring(duration: 0.3), value: syncToast)
-                .animation(.spring(duration: 0.25), value: selectedSaleIds.isEmpty)
+                if isSelectMode && !selectedSaleIds.isEmpty {
+                    Button {
+                        showBulkHideConfirmation = true
+                    } label: {
+                        let plural = selectedSaleIds.count == 1 ? "" : "s"
+                        Text("Hide \(selectedSaleIds.count) sale\(plural)")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.secondary)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
+            .animation(.spring(duration: 0.3), value: syncToast)
+            .animation(.spring(duration: 0.25), value: selectedSaleIds.isEmpty)
+        }
             .sheet(item: $selectedSale) { sale in
                 SaleDetailSheet(sale: sale) {
                     Task { await reload() }
@@ -163,8 +117,8 @@ struct SalesDashboardView: View {
                     Task { await reload() }
                 }
             }
-            .sheet(isPresented: $showAddSale) {
-                AddSaleSheet { Task { await reload() } }
+            .sheet(isPresented: $showAddSale, onDismiss: { Task { await reload() } }) {
+                AddSaleView()
             }
             .sheet(isPresented: $showImportSales) {
                 MercariSalesImportSheet { Task { await reload() } }
@@ -200,8 +154,6 @@ struct SalesDashboardView: View {
             } message: {
                 Text("These sales will be hidden. You can restore them from the Hidden section.")
             }
-
-        }
         .task { await reload() }
     }
 
@@ -367,6 +319,7 @@ struct SalesDashboardView: View {
             }
         }
         .listStyle(.plain)
+        .refreshable { await syncSales() }
     }
 
     @ViewBuilder
@@ -450,37 +403,46 @@ struct SalesDashboardView: View {
         salesSyncTaskId = UUID()
         AppTaskQueue.shared.begin(id: salesSyncTaskId, label: "Syncing sales")
         if !force { lastSyncTimestamp = Date().timeIntervalSince1970 }
+
+        let toast = await syncAPIPlatforms(force: force)
+        await syncWebPlatforms()
+
+        AppTaskQueue.shared.complete(id: salesSyncTaskId)
+        isSyncing = false
+        if let toast { showToast(toast) }
+    }
+
+    // Calls the Cloud Function which runs eBay → Etsy in sequence.
+    // Returns a toast string, or nil on rate-limit (toast handled inside).
+    private func syncAPIPlatforms(force: Bool) async -> String? {
         do {
             let result = try await Functions.functions()
                 .httpsCallable("syncSales")
                 .call(force ? ["force": true] : [:])
             let dict = result.data as? [String: Any] ?? [:]
             if dict["rateLimited"] as? Bool == true {
-                showToast("Try again in a few minutes")
-            } else {
-                let newSales = dict["newSales"] as? Int ?? 0
-                await reload()
-                if dict["ebayError"] as? String == "reconnect_required" {
-                    showToast("Reconnect eBay in Settings to enable sale sync")
-                } else {
-                    showToast(newSales > 0
-                        ? "\(newSales) new sale\(newSales == 1 ? "" : "s") recorded"
-                        : "Already up to date")
-                }
+                return "Try again in a few minutes"
             }
+            let newSales = dict["newSales"] as? Int ?? 0
+            await reload()
+            if dict["ebayError"] as? String == "reconnect_required" {
+                return "Reconnect eBay in Settings to enable sale sync"
+            }
+            return newSales > 0
+                ? "\(newSales) new sale\(newSales == 1 ? "" : "s") recorded"
+                : "Already up to date"
         } catch {
             if !force { lastSyncTimestamp = 0 }
-            showToast("Sync failed: \(error.localizedDescription)")
+            return "Sync failed: \(error.localizedDescription)"
         }
-        
-        let mercariSales = sales.filter { $0.platform == "mercari" && ($0.takeHome == nil || $0.trackingNumber == nil) }
-        if !mercariSales.isEmpty {
-            await mercariSaleSyncManager.sync(sales: mercariSales)
-            await reload()
-        }
-        
-        AppTaskQueue.shared.complete(id: salesSyncTaskId)
-        isSyncing = false
+    }
+
+    // Iterates web-autofill platform managers in order.
+    // Add new platforms here as: await nextPlatformSyncManager.sync(sales: sales)
+    private func syncWebPlatforms() async {
+        await mercariSaleSyncManager.sync(sales: sales)
+        // Future: await facebookSaleSyncManager.sync(sales: sales)
+        await reload()
     }
 
     private func bulkHide() async {
@@ -587,9 +549,11 @@ private struct SaleRow: View {
 
     private func statusBadge(_ status: SaleStatus) -> some View {
         let (label, color): (String, Color) = switch status {
-        case .pending:  ("Pending", .orange)
-        case .shipped:  ("Shipped", .blue)
-        case .complete: ("Complete", .green)
+        case .pending:   ("Pending", .orange)
+        case .shipped:   ("Shipped", .blue)
+        case .complete:  ("Complete", .green)
+        case .cancelled: ("Cancelled", .red)
+        case .returned:  ("Returned", .purple)
         }
         return Text(label)
             .font(.caption2.weight(.semibold))
@@ -914,6 +878,7 @@ struct MercariFoundSaleItem: Identifiable {
     let id: String
     let name: String?
     let price: Double?
+    let thumbnailUrl: String?
 }
 
 @MainActor
@@ -991,7 +956,8 @@ final class MercariSalesPageImporter: ObservableObject {
                 return MercariFoundSaleItem(
                     id: id,
                     name: dict["name"] as? String,
-                    price: (dict["price"] as? NSNumber)?.doubleValue
+                    price: (dict["price"] as? NSNumber)?.doubleValue,
+                    thumbnailUrl: dict["thumbnailUrl"] as? String
                 )
             }
             if foundItems.isEmpty {
