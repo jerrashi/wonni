@@ -479,9 +479,48 @@ async function syncEbayOrders(uid, integrationRef, clientId, certId, db, force =
     if (result.isNew) newCount += result.count ?? 1;
   }
 
+  // Refresh non-terminal sales that may be outside the lookback window.
+  // The window fetch only discovers new orders — existing pending/shipped sales
+  // need a direct per-order lookup to pick up tracking and status changes.
+  await refreshExistingEbaySales(uid, db, accessToken, isSandbox, clientId, certId, etsyClientId.value());
+
   await integrationRef.update({ lastEbayPollAt: admin.firestore.Timestamp.now() });
   console.log(`[syncSales] eBay uid=${uid}: ${newCount} new sales from ${orders.length} orders`);
   return newCount;
+}
+
+async function refreshExistingEbaySales(uid, db, accessToken, isSandbox, clientId, certId, etsyClientIdVal) {
+  const snap = await db.collection("sales")
+    .where("userId", "==", uid)
+    .where("platform", "==", "ebay")
+    .where("status", "in", ["pending", "shipped", "delivered"])
+    .get();
+  if (snap.empty) return;
+
+  console.log(`[refreshExistingEbaySales] uid=${uid}: refreshing ${snap.docs.length} non-terminal eBay sales`);
+  for (const doc of snap.docs) {
+    const orderId = doc.data().platformOrderId;
+    if (!orderId) continue;
+
+    const res = await makeRequest({
+      hostname: isSandbox ? "api.sandbox.ebay.com" : "api.ebay.com",
+      path: `/sell/fulfillment/v1/order/${encodeURIComponent(orderId)}`,
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+      },
+    });
+
+    if (res.statusCode !== 200) {
+      console.warn(`[refreshExistingEbaySales] order=${orderId} status=${res.statusCode} — skipping`);
+      continue;
+    }
+
+    const order = JSON.parse(res.body);
+    await processSingleEbayOrder(order, uid, accessToken, isSandbox, db, clientId, certId, etsyClientIdVal);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
