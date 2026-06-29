@@ -407,15 +407,17 @@ struct SalesDashboardView: View {
             return
         }
         isSyncing = true
-        salesSyncTaskId = UUID()
-        AppTaskQueue.shared.begin(id: salesSyncTaskId, label: "Syncing sales")
+        let taskId = UUID()
+        salesSyncTaskId = taskId
+        AppTaskQueue.shared.begin(id: taskId, label: "Syncing sales")
         if !force { lastSyncTimestamp = Date().timeIntervalSince1970 }
+        defer {
+            AppTaskQueue.shared.complete(id: taskId)
+            isSyncing = false
+        }
 
         let toast = await syncAPIPlatforms(force: force)
         await syncWebPlatforms()
-
-        AppTaskQueue.shared.complete(id: salesSyncTaskId)
-        isSyncing = false
         if let toast { showToast(toast) }
     }
 
