@@ -222,6 +222,41 @@ public class IntegrationRepository: ObservableObject {
         }
     }
 
+    /// Loads sales dashboard settings from Firestore. Returns defaults if not yet saved.
+    /// Stored at `users/{uid}/settings/salesDashboard`.
+    public func loadSalesDashboardSettings() async -> Bool {
+        guard let uid = userId else { return true }
+        do {
+            let doc = try await db.collection(usersCollection)
+                .document(uid)
+                .collection("settings")
+                .document("salesDashboard")
+                .getDocument()
+            guard doc.exists, let data = doc.data() else { return true }
+            return data["mercariAutoImport"] as? Bool ?? true
+        } catch {
+            print("[IntegrationRepository] loadSalesDashboardSettings error: \(error)")
+            return true
+        }
+    }
+
+    /// Persists sales dashboard settings to Firestore for cross-device sync.
+    public func saveSalesDashboardSettings(mercariAutoImport: Bool) async {
+        guard let uid = userId else { return }
+        do {
+            try await db.collection(usersCollection)
+                .document(uid)
+                .collection("settings")
+                .document("salesDashboard")
+                .setData([
+                    "mercariAutoImport": mercariAutoImport,
+                    "updatedAt": FieldValue.serverTimestamp()
+                ], merge: true)
+        } catch {
+            print("[IntegrationRepository] saveSalesDashboardSettings error: \(error)")
+        }
+    }
+
     /// Submits a cross-post event to the backend.
     /// Deletes a listing from API-based platforms (eBay, Etsy). Best-effort — never throws;
     /// failures are logged so the Wonni-side deletion always proceeds.
