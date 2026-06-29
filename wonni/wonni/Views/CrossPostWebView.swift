@@ -4499,6 +4499,7 @@ final class MercariSaleSyncManager: ObservableObject {
     init() {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.default()
+        config.processPool = mercariProcessPool
         let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
         wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         wv.navigationDelegate = navDelegate
@@ -4751,50 +4752,99 @@ final class MercariSaleSyncManager: ObservableObject {
         }
         try? await Task.sleep(nanoseconds: 1_500_000_000)
 
-        // Extract items from table rows. Each row has an item link and a date <td> with format MM/DD/YY.
-        // We walk rows rather than just links so we can associate each item with its updated date.
+        // Mercari item IDs always match /m\d+/. We look for that pattern in any link href
+        // since the in-progress page may link to /transaction/order_status/m[id]/ rather
+        // than /us/item/m[id]/, and the URL scheme can vary by page/experiment.
         let extractJS = """
         return (function() {
             var results = [];
             var seen = new Set();
             var dateRe = /^\\d{2}\\/\\d{2}\\/\\d{2,4}$/;
+            var idRe = /(m\\d+)/;
 
-            // Primary: walk <tr> rows to pair item links with their date cell
-            for (var row of document.querySelectorAll('tr')) {
-                var link = row.querySelector('a[href*="/us/item/m"]');
-                if (!link) continue;
-                var m = link.href.match(/\\/us\\/item\\/(m[a-zA-Z0-9]+)/);
-                if (!m || seen.has(m[1])) continue;
-                seen.add(m[1]);
-                var dateTd = Array.from(row.querySelectorAll('td'))
-                    .find(function(td) { return dateRe.test(td.innerText.trim()); });
-                var nameEl = link.querySelector('[data-testid="ItemName"],p');
-                var priceEl = link.querySelector('[data-testid="ItemPrice"],span');
-                var imgEl = link.querySelector('img');
-                results.push({
-                    id: m[1],
-                    name: nameEl ? nameEl.innerText.trim() : null,
-                    price: priceEl ? parseFloat(priceEl.innerText.replace(/[^0-9.]/g,'')) || null : null,
-                    thumbnailUrl: imgEl ? imgEl.src : null,
-                    updatedStr: dateTd ? dateTd.innerText.trim() : null
-                });
+            function extractId(href) {
+                var m = href.match(idRe);
+                return m ? m[1] : null;
             }
 
-            // Fallback: plain link scan with no date (date-based stop won't fire)
+            // Phase 1: try __NEXT_DATA__ — broadest search across all known key paths
+            var nd = document.getElementById('__NEXT_DATA__');
+            if (nd) {
+                try {
+                    var root = JSON.parse(nd.textContent || '');
+                    // Flatten everything under pageProps into candidate arrays
+                    var pp = root.props && root.props.pageProps;
+                    var candidates = [];
+                    if (pp) {
+                        // Walk all top-level and one-level-deep keys looking for arrays of objects with id+name
+                        for (var k in pp) {
+                            var v = pp[k];
+                            if (Array.isArray(v) && v.length && v[0] && v[0].id) candidates = candidates.concat(v);
+                            else if (v && typeof v === 'object') {
+                                for (var k2 in v) {
+                                    var v2 = v[k2];
+                                    if (Array.isArray(v2) && v2.length && v2[0] && v2[0].id) candidates = candidates.concat(v2);
+                                }
+                            }
+                        }
+                    }
+                    for (var it of candidates) {
+                        var sid = String(it.id || '');
+                        var extractedId = extractId(sid) || extractId(it.itemId || '');
+                        if (!extractedId || seen.has(extractedId)) continue;
+                        seen.add(extractedId);
+                        var upd = it.updated || it.updatedAt || it.updated_at || null;
+                        var price = it.price ? (it.price > 1000 ? it.price / 100 : it.price) : null;
+                        results.push({ id: extractedId, name: it.name || null,
+                                       price: price, thumbnailUrl: (it.thumbnails && it.thumbnails[0]) || it.thumbnailUrl || null,
+                                       updatedStr: null });
+                    }
+                } catch(e) {}
+            }
+
+            // Phase 2: DOM scan — walk <tr> rows first to pair links with date cells
             if (results.length === 0) {
-                for (var link of document.querySelectorAll('a[href*="/us/item/m"]')) {
-                    var m = link.href.match(/\\/us\\/item\\/(m[a-zA-Z0-9]+)/);
-                    if (!m || seen.has(m[1])) continue;
-                    seen.add(m[1]);
-                    var nameEl = link.querySelector('[data-testid="ItemName"],p');
-                    var priceEl = link.querySelector('[data-testid="ItemPrice"],span');
-                    results.push({ id: m[1],
+                for (var row of document.querySelectorAll('tr')) {
+                    // Any anchor whose href contains a Mercari item ID
+                    var link = Array.from(row.querySelectorAll('a[href]'))
+                        .find(function(a) { return idRe.test(a.href) && a.href.includes('mercari.com'); });
+                    if (!link) continue;
+                    var eid = extractId(link.href);
+                    if (!eid || seen.has(eid)) continue;
+                    seen.add(eid);
+                    var dateTd = Array.from(row.querySelectorAll('td'))
+                        .find(function(td) { return dateRe.test(td.innerText.trim()); });
+                    var nameEl = row.querySelector('[data-testid="ItemName"],[data-testid="item-name"],td p,td span');
+                    var priceEl = row.querySelector('[data-testid="ItemPrice"],[data-testid="item-price"]');
+                    var priceText = priceEl ? priceEl.innerText.replace(/[^0-9.]/g,'') : null;
+                    var imgEl = row.querySelector('img');
+                    results.push({ id: eid,
                                    name: nameEl ? nameEl.innerText.trim() : null,
-                                   price: priceEl ? parseFloat(priceEl.innerText.replace(/[^0-9.]/g,'')) || null : null,
-                                   thumbnailUrl: null, updatedStr: null });
+                                   price: priceText ? parseFloat(priceText) || null : null,
+                                   thumbnailUrl: imgEl ? imgEl.src : null,
+                                   updatedStr: dateTd ? dateTd.innerText.trim() : null });
                 }
             }
-            return JSON.stringify(results);
+
+            // Phase 3: bare link scan (no row context, no dates)
+            if (results.length === 0) {
+                for (var a of document.querySelectorAll('a[href*="mercari.com"]')) {
+                    var eid = extractId(a.href);
+                    if (!eid || seen.has(eid)) continue;
+                    seen.add(eid);
+                    var nameEl = a.querySelector('[data-testid="ItemName"],p');
+                    var priceEl = a.querySelector('[data-testid="ItemPrice"],span');
+                    var imgEl = a.querySelector('img');
+                    var priceText = priceEl ? priceEl.innerText.replace(/[^0-9.]/g,'') : null;
+                    results.push({ id: eid,
+                                   name: nameEl ? nameEl.innerText.trim() : null,
+                                   price: priceText ? parseFloat(priceText) || null : null,
+                                   thumbnailUrl: imgEl ? imgEl.src : null,
+                                   updatedStr: null });
+                }
+            }
+
+            return JSON.stringify({ items: results, url: window.location.href, count: results.length });
         })();
         """
 
@@ -4816,7 +4866,10 @@ final class MercariSaleSyncManager: ObservableObject {
 
             guard let json = (try? await webView.callJS(extractJS)) as? String,
                   let data = json.data(using: .utf8),
-                  let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { continue }
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let arr = root["items"] as? [[String: Any]] else { continue }
+
+            print("[MercariSaleSync] scan: \(arr.count) items on page, url=\(root["url"] as? String ?? "?")")
 
             if arr.count <= lastCount { break }
 
