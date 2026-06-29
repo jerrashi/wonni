@@ -8,8 +8,9 @@ import FirebaseFirestore
 
 enum SaleStatus: String, Codable, CaseIterable {
     case pending   = "pending"    // sold, not yet shipped
-    case shipped   = "shipped"    // tracking entered
-    case complete  = "complete"   // delivered / closed
+    case shipped   = "shipped"    // tracking entered / in transit
+    case delivered = "delivered"  // package delivered, within return window
+    case complete  = "complete"   // return window closed / both parties rated
     case cancelled = "cancelled"  // order cancelled
     case returned  = "returned"   // buyer returned item
 }

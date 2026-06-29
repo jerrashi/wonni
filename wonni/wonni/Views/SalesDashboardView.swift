@@ -440,8 +440,14 @@ struct SalesDashboardView: View {
     // Iterates web-autofill platform managers in order.
     // Add new platforms here as: await nextPlatformSyncManager.sync(sales: sales)
     private func syncWebPlatforms() async {
+        // Step 1: scan for new sales, stopping early once known sales are reached
+        let knownMercariIds = Set(sales.compactMap { $0.platform == "mercari" ? $0.platformOrderId : nil })
+        await mercariSaleSyncManager.scanForNewSales(knownOrderIds: knownMercariIds)
+        await reload()
+
+        // Step 2: update status of existing non-terminal sales
         await mercariSaleSyncManager.sync(sales: sales)
-        // Future: await facebookSaleSyncManager.sync(sales: sales)
+        // Future: await facebookSaleSyncManager.scanForNewSales(...) / .sync(...)
         await reload()
     }
 
@@ -551,6 +557,7 @@ private struct SaleRow: View {
         let (label, color): (String, Color) = switch status {
         case .pending:   ("Pending", .orange)
         case .shipped:   ("Shipped", .blue)
+        case .delivered: ("Delivered", .cyan)
         case .complete:  ("Complete", .green)
         case .cancelled: ("Cancelled", .red)
         case .returned:  ("Returned", .purple)

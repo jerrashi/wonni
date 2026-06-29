@@ -4604,7 +4604,9 @@ final class MercariSaleSyncManager: ObservableObject {
             out.debug += 'step: ' + step + '; ';
             if (step === 'complete') {
                 out.status = 'complete';
-            } else if (step === 'in transit' || step === 'delivery') {
+            } else if (step === 'delivery') {
+                out.status = 'delivered';
+            } else if (step === 'in transit') {
                 out.status = 'shipped';
             } else if (step.includes('cancel')) {
                 out.status = 'cancelled';
@@ -4725,6 +4727,142 @@ final class MercariSaleSyncManager: ObservableObject {
         }
 
         return result
+    }
+
+    // MARK: - New sale discovery
+
+    // Navigates to the Mercari sold-items listings page, ensures "Last updated" sort,
+    // then scrolls and extracts items — stopping once 3 consecutive known order IDs
+    // are encountered. Saves genuinely new items as Sale records.
+    // Both "In Progress" and "Complete" sections are covered because __NEXT_DATA__
+    // and the DOM link fallback operate on the full page regardless of section.
+    func scanForNewSales(knownOrderIds: Set<String>) async {
+        guard let url = URL(string: "https://www.mercari.com/mypage/listings/") else { return }
+        navDelegate.reset()
+        webView.load(URLRequest(url: url))
+        guard await navDelegate.waitForLoad(timeout: 15) else {
+            print("[MercariSaleSync] scanForNewSales: page timed out")
+            return
+        }
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        await ensureLastUpdatedSort()
+
+        let extractJS = """
+        return (function() {
+            var results = [];
+            var seen = new Set();
+            var nd = document.getElementById('__NEXT_DATA__');
+            if (nd) {
+                try {
+                    var pp = JSON.parse(nd.textContent || '').props?.pageProps;
+                    var items = pp?.items || pp?.data?.items || pp?.seller?.items || [];
+                    for (var it of items) {
+                        var sid = String(it.id || '');
+                        if (!sid || seen.has(sid)) continue;
+                        seen.add(sid);
+                        results.push({ id: sid, name: it.name || null,
+                                       price: it.price ? it.price / 100 : null,
+                                       thumbnailUrl: (it.thumbnails && it.thumbnails[0]) || null });
+                    }
+                } catch(e) {}
+            }
+            if (results.length === 0) {
+                for (var link of document.querySelectorAll('a[href*="/us/item/m"]')) {
+                    var m = link.href.match(/\\/us\\/item\\/(m[a-zA-Z0-9]+)/);
+                    if (!m || seen.has(m[1])) continue;
+                    seen.add(m[1]);
+                    var nameEl = link.querySelector('[data-testid="ItemName"],p');
+                    var priceEl = link.querySelector('[data-testid="ItemPrice"],span');
+                    results.push({ id: m[1],
+                                   name: nameEl ? nameEl.innerText.trim() : null,
+                                   price: priceEl ? parseFloat(priceEl.innerText.replace(/[^0-9.]/g,'')) || null : null,
+                                   thumbnailUrl: null });
+                }
+            }
+            return JSON.stringify(results);
+        })();
+        """
+
+        var newItems: [(id: String, name: String?, price: Double?, thumbnailUrl: String?)] = []
+        var consecutiveKnown = 0
+        var lastCount = 0
+        var done = false
+
+        for _ in 0..<30 {
+            guard !done else { break }
+            _ = try? await webView.callJS("window.scrollTo(0, document.body.scrollHeight); return null;")
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+
+            guard let json = (try? await webView.callJS(extractJS)) as? String,
+                  let data = json.data(using: .utf8),
+                  let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { continue }
+
+            if arr.count <= lastCount { break }
+
+            for dict in arr.dropFirst(lastCount) {
+                guard let id = dict["id"] as? String, !id.isEmpty else { continue }
+                if knownOrderIds.contains(id) {
+                    consecutiveKnown += 1
+                    if consecutiveKnown >= 3 { done = true; break }
+                } else {
+                    consecutiveKnown = 0
+                    newItems.append((
+                        id: id,
+                        name: dict["name"] as? String,
+                        price: (dict["price"] as? NSNumber)?.doubleValue,
+                        thumbnailUrl: dict["thumbnailUrl"] as? String
+                    ))
+                }
+            }
+            lastCount = arr.count
+        }
+
+        print("[MercariSaleSync] scanForNewSales: \(newItems.count) new sale(s)")
+        for item in newItems {
+            let sale = Sale(
+                listingTitle: item.name,
+                thumbnailUrl: item.thumbnailUrl,
+                platform: "mercari",
+                platformOrderId: item.id,
+                priceSoldFor: item.price ?? 0,
+                status: .pending,
+                soldAt: Timestamp(date: Date())
+            )
+            try? await SaleRepository.shared.addSale(sale)
+        }
+    }
+
+    private func ensureLastUpdatedSort() async {
+        let checkJS = """
+        return (function() {
+            var btn = document.querySelector('[data-testid="Listings-SortBy"]');
+            return btn ? btn.innerText.trim() : '';
+        })();
+        """
+        guard let current = (try? await webView.callJS(checkJS)) as? String,
+              current.lowercased() != "last updated" else { return }
+
+        _ = try? await webView.callJS("""
+        return (function() {
+            var btn = document.querySelector('[data-testid="Listings-SortBy"]');
+            if (btn) { btn.click(); return true; }
+            return false;
+        })();
+        """)
+        try? await Task.sleep(nanoseconds: 800_000_000)
+
+        _ = try? await webView.callJS("""
+        return (function() {
+            var opts = document.querySelectorAll('[role="option"], [role="listbox"] *');
+            for (var opt of opts) {
+                if (opt.innerText && opt.innerText.trim().toLowerCase() === 'last updated') {
+                    opt.click(); return true;
+                }
+            }
+            return false;
+        })();
+        """)
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
     }
 }
 
