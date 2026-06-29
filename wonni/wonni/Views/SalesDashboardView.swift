@@ -448,9 +448,10 @@ struct SalesDashboardView: View {
     // Add new platforms here as: await nextPlatformSyncManager.sync(sales: sales)
     private func syncWebPlatforms() async {
         let knownMercariIds = Set(sales.compactMap { $0.platform == "mercari" ? $0.platformOrderId : nil })
-        // Stop scanning items older than one day before last sync so we don't re-examine the full history.
+        // Stop at any item dated before the calendar day of the last sync.
+        // e.g. last sync at 6/26 8:42am → stop at items dated 6/25 or earlier.
         let stopDate = lastSyncTimestamp > 0
-            ? Date(timeIntervalSince1970: lastSyncTimestamp - 86_400)
+            ? Calendar.current.startOfDay(for: Date(timeIntervalSince1970: lastSyncTimestamp))
             : nil
         let found = await mercariSaleSyncManager.scanForNewSales(
             knownOrderIds: knownMercariIds,
