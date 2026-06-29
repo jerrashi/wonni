@@ -4751,29 +4751,36 @@ final class MercariSaleSyncManager: ObservableObject {
         }
         try? await Task.sleep(nanoseconds: 3_000_000_000)
 
+        // Extract items from table rows. Each row has an item link and a date <td> with format MM/DD/YY.
+        // We walk rows rather than just links so we can associate each item with its updated date.
         let extractJS = """
         return (function() {
             var results = [];
             var seen = new Set();
-            var nd = document.getElementById('__NEXT_DATA__');
-            if (nd) {
-                try {
-                    var pp = JSON.parse(nd.textContent || '').props?.pageProps;
-                    var items = pp?.items || pp?.data?.items || pp?.seller?.items || [];
-                    for (var it of items) {
-                        var sid = String(it.id || '');
-                        if (!sid || seen.has(sid)) continue;
-                        seen.add(sid);
-                        // updated is seconds or ms; normalise to seconds
-                        var upd = it.updated || it.updatedAt || it.updated_at || null;
-                        if (upd && upd > 1e10) upd = upd / 1000;
-                        results.push({ id: sid, name: it.name || null,
-                                       price: it.price ? it.price / 100 : null,
-                                       thumbnailUrl: (it.thumbnails && it.thumbnails[0]) || null,
-                                       updated: upd });
-                    }
-                } catch(e) {}
+            var dateRe = /^\\d{2}\\/\\d{2}\\/\\d{2,4}$/;
+
+            // Primary: walk <tr> rows to pair item links with their date cell
+            for (var row of document.querySelectorAll('tr')) {
+                var link = row.querySelector('a[href*="/us/item/m"]');
+                if (!link) continue;
+                var m = link.href.match(/\\/us\\/item\\/(m[a-zA-Z0-9]+)/);
+                if (!m || seen.has(m[1])) continue;
+                seen.add(m[1]);
+                var dateTd = Array.from(row.querySelectorAll('td'))
+                    .find(function(td) { return dateRe.test(td.innerText.trim()); });
+                var nameEl = link.querySelector('[data-testid="ItemName"],p');
+                var priceEl = link.querySelector('[data-testid="ItemPrice"],span');
+                var imgEl = link.querySelector('img');
+                results.push({
+                    id: m[1],
+                    name: nameEl ? nameEl.innerText.trim() : null,
+                    price: priceEl ? parseFloat(priceEl.innerText.replace(/[^0-9.]/g,'')) || null : null,
+                    thumbnailUrl: imgEl ? imgEl.src : null,
+                    updatedStr: dateTd ? dateTd.innerText.trim() : null
+                });
             }
+
+            // Fallback: plain link scan with no date (date-based stop won't fire)
             if (results.length === 0) {
                 for (var link of document.querySelectorAll('a[href*="/us/item/m"]')) {
                     var m = link.href.match(/\\/us\\/item\\/(m[a-zA-Z0-9]+)/);
@@ -4784,13 +4791,19 @@ final class MercariSaleSyncManager: ObservableObject {
                     results.push({ id: m[1],
                                    name: nameEl ? nameEl.innerText.trim() : null,
                                    price: priceEl ? parseFloat(priceEl.innerText.replace(/[^0-9.]/g,'')) || null : null,
-                                   thumbnailUrl: null,
-                                   updated: null });
+                                   thumbnailUrl: null, updatedStr: null });
                 }
             }
             return JSON.stringify(results);
         })();
         """
+
+        let dateFormatter: DateFormatter = {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "MM/dd/yy"  // Mercari shows e.g. 06/25/26
+            return f
+        }()
 
         var newItems: [MercariFoundSaleItem] = []
         var lastCount = 0
@@ -4813,11 +4826,12 @@ final class MercariSaleSyncManager: ObservableObject {
                 // Stop at the first sale we already know about — list is newest-first
                 if knownOrderIds.contains(id) { done = true; break }
 
-                // Stop if this item is older than one day before our last sync
+                // Stop once we reach an item updated before the start of the last-sync day
                 if let cutoff = stopBeforeDate,
-                   let updatedSecs = (dict["updated"] as? NSNumber)?.doubleValue {
-                    let itemDate = Date(timeIntervalSince1970: updatedSecs)
-                    if itemDate < cutoff { done = true; break }
+                   let dateStr = dict["updatedStr"] as? String,
+                   let itemDate = dateFormatter.date(from: dateStr),
+                   itemDate < cutoff {
+                    done = true; break
                 }
 
                 let name = dict["name"] as? String
