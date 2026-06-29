@@ -2215,9 +2215,6 @@ struct SettingsSheet: View {
     @AppStorage("saveToCameraRoll") private var saveToCameraRoll: Bool = true
     @AppStorage("showCameraGrid") private var showCameraGrid: Bool = false
     @State private var showSignOutConfirm = false
-    @State private var isMigrating = false
-    @State private var migrationMessage: String? = nil
-    
     @StateObject private var integrationRepo = IntegrationRepository.shared
     @State private var showLinkAlert = false
     @State private var selectedPlatformToLink = ""
@@ -2308,32 +2305,6 @@ struct SettingsSheet: View {
                                 onDisconnect: { disconnectPlatform(platform: integration.platform) }
                             )
                         }
-                    }
-                }
-
-                Section(header: Text("Data")) {
-                    Button {
-                        Task { await migrateSwiftDataItems() }
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Migrate Legacy Listings")
-                                Text("Upload locally-saved listings (imported before this update) to your account.")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            Spacer()
-                            if isMigrating {
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .disabled(isMigrating)
-
-                    if let msg = migrationMessage {
-                        Text(msg)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
                     }
                 }
 
@@ -2787,92 +2758,6 @@ struct SettingsSheet: View {
                 isSavingSettings = false
             }
         }
-    }
-
-    // MARK: - Legacy SwiftData migration
-
-    private func migrateSwiftDataItems() async {
-        guard let userId = Auth.auth().currentUser?.uid else { return }
-        isMigrating = true
-        migrationMessage = nil
-
-        let descriptor = FetchDescriptor<Item>()
-        guard let items = try? modelContext.fetch(descriptor) else {
-            isMigrating = false
-            migrationMessage = "Could not read local data."
-            return
-        }
-
-        let unmigrated = items.filter { $0.firestoreListingId == nil }
-        guard !unmigrated.isEmpty else {
-            isMigrating = false
-            migrationMessage = "No legacy listings found."
-            return
-        }
-
-        var migratedCount = 0
-        for item in unmigrated {
-            let listingId = UUID().uuidString
-            var photoPaths: [String] = []
-
-            if item.isLocalPhotoOnly {
-                for (i, data) in item.photosData.enumerated() {
-                    if let image = UIImage(data: data),
-                       let path = try? await StorageService.shared.uploadListingImage(
-                           image: image, index: i, userId: userId, listingId: listingId
-                       ) {
-                        photoPaths.append(path)
-                    }
-                }
-            } else {
-                photoPaths = item.firebasePhotoPaths ?? []
-            }
-
-            let shippingInfo = ShippingInfo(
-                buyerPaysShipping: item.buyerPaysShipping,
-                handlingFee: item.handlingFee,
-                estimatedShippingDays: item.estimatedShippingDays,
-                weightLbs: item.weightLbs,
-                packageDimensions: {
-                    if let l = item.lengthIn, let w = item.widthIn, let h = item.heightIn {
-                        return PackageDimensions(lengthIn: l, widthIn: w, heightIn: h)
-                    }
-                    return nil
-                }()
-            )
-
-            let condition = mapItemCondition(item.condition)
-            var listing = UserListing(
-                id: listingId,
-                userId: userId,
-                catalogItemId: "",
-                customTitle: item.userEditedTitle ?? item.originalUserTitleBeforeAI,
-                customDescription: item.userEditedDescription ?? item.originalUserDescriptionBeforeAI,
-                price: item.userEditedPrice,
-                currency: "USD",
-                quantity: 1,
-                condition: condition,
-                photoPaths: photoPaths,
-                coverPhotoPath: photoPaths.first,
-                shippingInfo: shippingInfo,
-                status: item.isLocalPhotoOnly ? .active : .draft,
-                createdAt: Timestamp(date: item.createdAt),
-                updatedAt: Timestamp(date: Date())
-            )
-            listing.brand = item.aiSuggestedBrand
-            listing.category = item.aiSuggestedCategory
-            listing.tags = item.tags.isEmpty ? nil : item.tags
-            listing.personalNote = item.personalNote
-
-            if (try? await ListingRepository.shared.saveDraft(listing)) != nil {
-                item.firestoreListingId = listingId
-                try? modelContext.save()
-                migratedCount += 1
-            }
-        }
-
-        isMigrating = false
-        migrationMessage = "Migrated \(migratedCount) of \(unmigrated.count) listing\(unmigrated.count == 1 ? "" : "s")."
     }
 
     private func mapItemCondition(_ raw: String?) -> ItemCondition {
