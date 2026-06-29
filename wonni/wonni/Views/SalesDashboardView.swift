@@ -21,6 +21,7 @@ struct SalesDashboardView: View {
     @State private var filterPlatform: String? = nil
     @State private var showMercariSync = false
     @AppStorage("lastSalesSyncDate") private var lastSyncTimestamp: Double = 0
+    @AppStorage("mercariSalesAutoSync") private var mercariAutoSync: Bool = false
     
     @StateObject private var mercariSaleSyncManager = MercariSaleSyncManager()
 
@@ -339,8 +340,16 @@ struct SalesDashboardView: View {
                 }
             )
             .contextMenu {
-                Button("Check Mercari listings") {
-                    showMercariSync = true
+                Button("Import from Mercari") {
+                    showImportSales = true
+                }
+                Button {
+                    mercariAutoSync.toggle()
+                } label: {
+                    Label(
+                        mercariAutoSync ? "Auto-import Mercari: On" : "Auto-import Mercari: Off",
+                        systemImage: mercariAutoSync ? "checkmark.circle.fill" : "circle"
+                    )
                 }
             }
         }
@@ -440,8 +449,11 @@ struct SalesDashboardView: View {
     // Iterates web-autofill platform managers in order.
     // Add new platforms here as: await nextPlatformSyncManager.sync(sales: sales)
     private func syncWebPlatforms() async {
-        // Update status of existing non-terminal Mercari sales.
-        // New sale discovery is user-initiated via "+" > "Import from Mercari".
+        if mercariAutoSync {
+            let knownMercariIds = Set(sales.compactMap { $0.platform == "mercari" ? $0.platformOrderId : nil })
+            await mercariSaleSyncManager.scanForNewSales(knownOrderIds: knownMercariIds)
+            await reload()
+        }
         await mercariSaleSyncManager.sync(sales: sales)
         // Future: await facebookSaleSyncManager.scanForNewSales(...) / .sync(...)
         await reload()
