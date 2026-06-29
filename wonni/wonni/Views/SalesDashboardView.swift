@@ -28,8 +28,8 @@ struct SalesDashboardView: View {
     @State private var isHiddenSectionExpanded = false
     @State private var isSelectMode = false
     @State private var selectedSaleIds: Set<String> = []
-    @State private var saleToHide: Sale? = nil
-    @State private var showBulkHideConfirmation = false
+    @State private var saleToDelete: Sale? = nil
+    @State private var showBulkDeleteConfirmation = false
     @State private var showAddSale = false
     @State private var showImportSales = false
 
@@ -69,8 +69,9 @@ struct SalesDashboardView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 4) {
                     syncButton
-                    Button {
-                        showAddSale = true
+                    Menu {
+                        Button("Add Manually") { showAddSale = true }
+                        Button("Import from Mercari") { showImportSales = true }
                     } label: {
                         Image(systemName: "plus")
                     }
@@ -91,7 +92,7 @@ struct SalesDashboardView: View {
                 }
                 if isSelectMode && !selectedSaleIds.isEmpty {
                     Button {
-                        showBulkHideConfirmation = true
+                        showBulkDeleteConfirmation = true
                     } label: {
                         let plural = selectedSaleIds.count == 1 ? "" : "s"
                         Text("Hide \(selectedSaleIds.count) sale\(plural)")
@@ -124,35 +125,35 @@ struct SalesDashboardView: View {
                 MercariSalesImportSheet { Task { await reload() } }
             }
             .confirmationDialog(
-                "Hide this sale?",
+                "Delete this sale?",
                 isPresented: Binding(
-                    get: { saleToHide != nil },
-                    set: { if !$0 { saleToHide = nil } }
+                    get: { saleToDelete != nil },
+                    set: { if !$0 { saleToDelete = nil } }
                 ),
                 titleVisibility: .visible
             ) {
-                Button("Hide") {
+                Button("Delete", role: .destructive) {
                     Task {
-                        if let id = saleToHide?.id {
+                        if let id = saleToDelete?.id {
                             try? await SaleRepository.shared.hideSale(id: id)
                             await reload()
                         }
-                        saleToHide = nil
+                        saleToDelete = nil
                     }
                 }
             } message: {
-                Text("The sale will be hidden. You can restore it from the Hidden section.")
+                Text("The sale will be removed from your dashboard. You can restore it from Deleted Sales.")
             }
             .confirmationDialog(
-                "Hide \(selectedSaleIds.count) sale\(selectedSaleIds.count == 1 ? "" : "s")?",
-                isPresented: $showBulkHideConfirmation,
+                "Delete \(selectedSaleIds.count) sale\(selectedSaleIds.count == 1 ? "" : "s")?",
+                isPresented: $showBulkDeleteConfirmation,
                 titleVisibility: .visible
             ) {
-                Button("Hide") {
+                Button("Delete", role: .destructive) {
                     Task { await bulkHide() }
                 }
             } message: {
-                Text("These sales will be hidden. You can restore them from the Hidden section.")
+                Text("These sales will be removed from your dashboard. You can restore them from Deleted Sales.")
             }
         .task { await reload() }
     }
@@ -254,7 +255,7 @@ struct SalesDashboardView: View {
                         withAnimation(.easeInOut(duration: 0.2)) { isHiddenSectionExpanded.toggle() }
                     } label: {
                         HStack {
-                            Text("Hidden (\(hiddenSales.count))")
+                            Text("Deleted (\(hiddenSales.count))")
                             Spacer()
                             Image(systemName: isHiddenSectionExpanded ? "chevron.up" : "chevron.down")
                                 .font(.caption.weight(.bold))
@@ -294,12 +295,11 @@ struct SalesDashboardView: View {
                     .foregroundStyle(.primary)
                     .swipeActions(edge: .trailing) {
                         if !isSelectMode {
-                            Button {
-                                saleToHide = sale
+                            Button(role: .destructive) {
+                                saleToDelete = sale
                             } label: {
-                                Label("Hide", systemImage: "eye.slash")
+                                Label("Delete", systemImage: "trash")
                             }
-                            .tint(.secondary)
                         }
                     }
                 }
@@ -440,12 +440,8 @@ struct SalesDashboardView: View {
     // Iterates web-autofill platform managers in order.
     // Add new platforms here as: await nextPlatformSyncManager.sync(sales: sales)
     private func syncWebPlatforms() async {
-        // Step 1: scan for new sales, stopping early once known sales are reached
-        let knownMercariIds = Set(sales.compactMap { $0.platform == "mercari" ? $0.platformOrderId : nil })
-        await mercariSaleSyncManager.scanForNewSales(knownOrderIds: knownMercariIds)
-        await reload()
-
-        // Step 2: update status of existing non-terminal sales
+        // Update status of existing non-terminal Mercari sales.
+        // New sale discovery is user-initiated via "+" > "Import from Mercari".
         await mercariSaleSyncManager.sync(sales: sales)
         // Future: await facebookSaleSyncManager.scanForNewSales(...) / .sync(...)
         await reload()
@@ -485,18 +481,10 @@ private struct SaleRow: View {
                         .frame(width: 52, height: 52)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 } else if let urlStr = sale.thumbnailUrl, let url = URL(string: urlStr) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let img):
-                            img.resizable().scaledToFill()
-                                .frame(width: 52, height: 52)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                        default:
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color(.systemGray5))
-                                .frame(width: 52, height: 52)
-                        }
-                    }
+                    AsyncExternalImage(url: url, referer: sale.platform == "mercari" ? "https://www.mercari.com" : nil)
+                        .scaledToFill()
+                        .frame(width: 52, height: 52)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                 } else {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(Color(.systemGray5))
@@ -904,7 +892,7 @@ final class MercariSalesPageImporter: ObservableObject {
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         self.webView = wv
-        wv.load(URLRequest(url: URL(string: "https://www.mercari.com/mypage/")!))
+        wv.load(URLRequest(url: URL(string: "https://www.mercari.com/mypage/listings/in_progress/?sortBy=7")!))
     }
 
     func scanCurrentPage() async {
@@ -1040,7 +1028,7 @@ struct MercariSalesImportSheet: View {
                             .lineLimit(1)
                     }
                 } else {
-                    Text("Go to Sold Items, then tap Scan")
+                    Text("Navigate to Sold Items, then tap Scan")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -1124,8 +1112,12 @@ struct MercariSalesImportSheet: View {
     private func importSelected() async {
         isImporting = true
         for item in importer.foundItems where selectedIds.contains(item.id) {
+            let match = await ListingRepository.shared.findListingByMercariId(item.id)
             let sale = Sale(
+                listingId: match?.listingId,
                 listingTitle: item.name,
+                coverPhotoPath: match?.coverPhotoPath,
+                thumbnailUrl: match?.coverPhotoPath == nil ? item.thumbnailUrl : nil,
                 platform: "mercari",
                 platformOrderId: item.id,
                 priceSoldFor: item.price ?? 0,
@@ -1137,6 +1129,32 @@ struct MercariSalesImportSheet: View {
         onImported()
         dismiss()
         isImporting = false
+    }
+}
+
+// MARK: - Async external image loader with optional Referer header
+
+private struct AsyncExternalImage: View {
+    let url: URL
+    var referer: String?
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let img = image {
+                Image(uiImage: img).resizable()
+            } else {
+                Color(.systemGray5)
+            }
+        }
+        .task(id: url) {
+            guard image == nil else { return }
+            var req = URLRequest(url: url)
+            if let ref = referer { req.setValue(ref, forHTTPHeaderField: "Referer") }
+            if let (data, _) = try? await URLSession.shared.data(for: req) {
+                image = UIImage(data: data)
+            }
+        }
     }
 }
 

@@ -4737,7 +4737,9 @@ final class MercariSaleSyncManager: ObservableObject {
     // Both "In Progress" and "Complete" sections are covered because __NEXT_DATA__
     // and the DOM link fallback operate on the full page regardless of section.
     func scanForNewSales(knownOrderIds: Set<String>) async {
-        guard let url = URL(string: "https://www.mercari.com/mypage/listings/") else { return }
+        // sortBy=7 = Last Updated, so we get newest sales first without needing dropdown interaction.
+        // /in_progress/ shows transactions currently being traded — complete ones are already tracked.
+        guard let url = URL(string: "https://www.mercari.com/mypage/listings/in_progress/?sortBy=7") else { return }
         navDelegate.reset()
         webView.load(URLRequest(url: url))
         guard await navDelegate.waitForLoad(timeout: 15) else {
@@ -4745,7 +4747,6 @@ final class MercariSaleSyncManager: ObservableObject {
             return
         }
         try? await Task.sleep(nanoseconds: 3_000_000_000)
-        await ensureLastUpdatedSort()
 
         let extractJS = """
         return (function() {
@@ -4819,12 +4820,18 @@ final class MercariSaleSyncManager: ObservableObject {
 
         print("[MercariSaleSync] scanForNewSales: \(newItems.count) new sale(s)")
         for item in newItems {
+            // Require a name and a non-zero price — guards against extracting active listings
+            // or malformed page data.
+            guard let name = item.name, !name.isEmpty, let price = item.price, price > 0 else {
+                print("[MercariSaleSync] skipping item \(item.id): missing name or price")
+                continue
+            }
             let sale = Sale(
-                listingTitle: item.name,
+                listingTitle: name,
                 thumbnailUrl: item.thumbnailUrl,
                 platform: "mercari",
                 platformOrderId: item.id,
-                priceSoldFor: item.price ?? 0,
+                priceSoldFor: price,
                 status: .pending,
                 soldAt: Timestamp(date: Date())
             )
