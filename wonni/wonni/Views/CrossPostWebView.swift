@@ -4482,6 +4482,7 @@ struct MercariSaleResult {
     var trackingNumber: String?
     var carrier: String?
     var thumbnailUrl: String?
+    var status: SaleStatus?
 }
 
 @MainActor
@@ -4505,7 +4506,11 @@ final class MercariSaleSyncManager: ObservableObject {
     }
     
     func sync(sales: [Sale]) async {
-        let mercariSales = sales.filter { $0.platform == "mercari" && ($0.takeHome == nil || $0.trackingNumber == nil || $0.coverPhotoPath == nil) }
+        // Sync all non-terminal Mercari sales to catch delivery/cancellation changes.
+        let mercariSales = sales.filter {
+            $0.platform == "mercari" &&
+            $0.status != .complete && $0.status != .cancelled && $0.status != .returned
+        }
         guard !mercariSales.isEmpty else {
             print("[MercariSaleSync] No mercari sales needing sync")
             return
@@ -4514,23 +4519,11 @@ final class MercariSaleSyncManager: ObservableObject {
         isRunning = true
         totalCount = mercariSales.count
         currentIndex = 0
-        saleTaskId = UUID()
-        AppTaskQueue.shared.begin(
-            id: saleTaskId,
-            label: "Syncing Mercari sales",
-            detail: "0 of \(mercariSales.count)",
-            progress: 0
-        )
 
         print("[MercariSaleSync] Starting headless sync for \(mercariSales.count) sales")
-        
+
         for (i, sale) in mercariSales.enumerated() {
             currentIndex = i + 1
-            AppTaskQueue.shared.update(
-                id: saleTaskId,
-                detail: "\(i + 1) of \(mercariSales.count)",
-                progress: Double(i + 1) / Double(max(mercariSales.count, 1))
-            )
             guard let platformOrderId = sale.platformOrderId, !platformOrderId.isEmpty else {
                 print("[MercariSaleSync] Skipping sale \(sale.id ?? "?") - no platformOrderId")
                 continue
@@ -4557,6 +4550,10 @@ final class MercariSaleSyncManager: ObservableObject {
                     update["thumbnailUrl"] = photo
                     print("[MercariSaleSync] thumbnailUrl backfilled for \(platformOrderId)")
                 }
+                if let newStatus = result.status, newStatus != sale.status {
+                    update["status"] = newStatus.rawValue
+                    print("[MercariSaleSync] status → \(newStatus.rawValue) for \(platformOrderId)")
+                }
 
                 if !update.isEmpty {
                     update["updatedAt"] = FieldValue.serverTimestamp()
@@ -4571,7 +4568,6 @@ final class MercariSaleSyncManager: ObservableObject {
         currentStatus = "Done"
         print("[MercariSaleSync] Sync complete")
         isRunning = false
-        AppTaskQueue.shared.complete(id: saleTaskId)
     }
     
     private func loadSaleData(itemId: String, fetchPhoto: Bool = false) async -> MercariSaleResult? {
@@ -4592,7 +4588,7 @@ final class MercariSaleSyncManager: ObservableObject {
         
         let jsOrder = """
         (function() {
-            var out = { takeHome: null, hasTracking: false, debug: '' };
+            var out = { takeHome: null, hasTracking: false, status: null, debug: '' };
             var takeHomeEl = document.querySelector('p[data-testid="You-made-value"]');
             if (takeHomeEl) {
                 out.debug += 'Found takeHome: ' + takeHomeEl.innerText + '; ';
@@ -4603,6 +4599,18 @@ final class MercariSaleSyncManager: ObservableObject {
             }
             var trackingBtn = document.querySelector('a[data-testid="ShippingCTAButton"]');
             if (trackingBtn) { out.hasTracking = true; }
+            var stepEl = document.querySelector('[data-testid="TimelineStepName"]');
+            var step = stepEl ? stepEl.innerText.trim().toLowerCase() : '';
+            out.debug += 'step: ' + step + '; ';
+            if (step === 'complete') {
+                out.status = 'complete';
+            } else if (step === 'in transit' || step === 'delivery') {
+                out.status = 'shipped';
+            } else if (step.includes('cancel')) {
+                out.status = 'cancelled';
+            } else if (step.includes('return')) {
+                out.status = 'returned';
+            }
             out.debug += 'url: ' + window.location.href;
             return JSON.stringify(out);
         })();
@@ -4616,9 +4624,10 @@ final class MercariSaleSyncManager: ObservableObject {
                     print("[MercariSaleSync] JS: \(jsResult)")
                     if let data = jsResult.data(using: .utf8),
                        let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                        if dict["takeHome"] != nil || dict["hasTracking"] as? Bool == true {
+                        if dict["takeHome"] != nil || dict["hasTracking"] as? Bool == true || dict["status"] != nil {
                             result.takeHome = dict["takeHome"] as? Double
                             hasTracking = dict["hasTracking"] as? Bool ?? false
+                            if let s = dict["status"] as? String { result.status = SaleStatus(rawValue: s) }
                             break
                         }
                     }

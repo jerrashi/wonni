@@ -271,11 +271,10 @@ async function processSingleEbayOrder(order, uid, accessToken, isSandbox, db, cl
     ]);
 
     if (tracking) {
-      if (tracking.trackingNumber && !existing.trackingNumber) {
+      if (tracking.trackingNumber && existing.trackingNumber !== tracking.trackingNumber) {
         updates.trackingNumber = tracking.trackingNumber;
         updates.carrier = tracking.carrier ?? null;
-        updates.status = "shipped";
-        console.log(`[processSingleEbayOrder] backfilled tracking for order ${orderId}: ${tracking.trackingNumber}`);
+        console.log(`[processSingleEbayOrder] tracking ${existing.trackingNumber ?? "none"} → ${tracking.trackingNumber} for order ${orderId}`);
       }
       if (tracking.allFulfillments?.length) {
         updates.shippingFulfillments = tracking.allFulfillments;
@@ -286,6 +285,22 @@ async function processSingleEbayOrder(order, uid, accessToken, isSandbox, db, cl
     }
     if (freshTakeHome?.labelCost != null) {
       updates.shippingLabelCost = freshTakeHome.labelCost;
+    }
+
+    // Map eBay order lifecycle to our status — cancellation takes priority over fulfillment.
+    const cancelState = order.cancelStatus?.cancelState;
+    const fulfillmentStatus = order.orderFulfillmentStatus;
+    let newStatus = null;
+    if (cancelState === "CANCELED") {
+      newStatus = "cancelled";
+    } else if (fulfillmentStatus === "FULFILLED") {
+      newStatus = "complete";
+    } else if (tracking?.trackingNumber && existing.status === "pending") {
+      newStatus = "shipped";
+    }
+    if (newStatus && existing.status !== newStatus) {
+      updates.status = newStatus;
+      console.log(`[processSingleEbayOrder] status ${existing.status} → ${newStatus} for order ${orderId}`);
     }
     // Backfill item-only price and shipping revenue
     const itemPrice = parseFloat(order.pricingSummary?.priceSubtotal?.value ?? "0");
@@ -508,13 +523,29 @@ async function syncEtsyReceipts(uid, integrationRef, clientId, db, force = false
     const receiptId = String(receipt.receipt_id);
     const existingEtsySaleDoc = await findExistingSaleDoc(db, uid, receiptId);
     if (existingEtsySaleDoc) {
-      if (existingEtsySaleDoc.data().isDeleted) {
-        await existingEtsySaleDoc.ref.update({
-          isDeleted: admin.firestore.FieldValue.delete(),
-          deletedAt: admin.firestore.FieldValue.delete(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
+      const existingData = existingEtsySaleDoc.data();
+      const existingUpdates = {};
+
+      if (existingData.isDeleted) {
+        existingUpdates.isDeleted = admin.firestore.FieldValue.delete();
+        existingUpdates.deletedAt = admin.firestore.FieldValue.delete();
         console.log(`[syncSales] restored soft-deleted Etsy sale for receipt ${receiptId}`);
+      }
+
+      // Map Etsy receipt lifecycle to our status.
+      const etsyStatus = receipt.status; // "open" | "unshipped" | "completed" | "canceled"
+      let newStatus = null;
+      if (etsyStatus === "completed") newStatus = "complete";
+      else if (etsyStatus === "canceled") newStatus = "cancelled";
+      else if (receipt.is_shipped) newStatus = "shipped";
+      if (newStatus && existingData.status !== newStatus) {
+        existingUpdates.status = newStatus;
+        console.log(`[syncSales] Etsy receipt ${receiptId} status ${existingData.status} → ${newStatus}`);
+      }
+
+      if (Object.keys(existingUpdates).length > 0) {
+        existingUpdates.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+        await existingEtsySaleDoc.ref.update(existingUpdates);
       }
       continue;
     }

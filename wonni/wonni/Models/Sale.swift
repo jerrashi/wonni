@@ -10,6 +10,8 @@ enum SaleStatus: String, Codable, CaseIterable {
     case pending   = "pending"    // sold, not yet shipped
     case shipped   = "shipped"    // tracking entered
     case complete  = "complete"   // delivered / closed
+    case cancelled = "cancelled"  // order cancelled
+    case returned  = "returned"   // buyer returned item
 }
 
 struct SaleAddress: Codable, Equatable {
