@@ -4491,6 +4491,7 @@ final class MercariSaleSyncManager: ObservableObject {
     @Published var currentIndex = 0
     @Published var totalCount = 0
     @Published var currentStatus = ""
+    @Published var needsLogin = false
 
     let webView: WKWebView
     private let navDelegate = SaleNavDelegate()
@@ -4750,6 +4751,16 @@ final class MercariSaleSyncManager: ObservableObject {
             print("[MercariSaleSync] scanForNewSales: page timed out")
             return []
         }
+
+        // If Mercari redirected to login, surface the webview so the user can authenticate.
+        let landedUrl = webView.url?.absoluteString ?? ""
+        if landedUrl.contains("/login") || landedUrl.contains("/signup") {
+            print("[MercariSaleSync] Not logged in — redirected to \(landedUrl)")
+            needsLogin = true
+            return []
+        }
+        needsLogin = false
+
         try? await Task.sleep(nanoseconds: 1_500_000_000)
 
         // Mercari item IDs always match /m\d+/. We look for that pattern in any link href
