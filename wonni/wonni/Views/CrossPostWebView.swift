@@ -4813,45 +4813,57 @@ final class MercariSaleSyncManager: ObservableObject {
                 } catch(e) {}
             }
 
+            // Shared helper: given any element, find name + price using data-testid
+            // first (item detail pages), then fall back to $ regex on <p> tags
+            // (in-progress list page which has no data-testid attributes).
+            function extractNamePrice(el) {
+                var priceRe = /^\\$[\\d,\\.]+/;
+                var nameEl = el.querySelector('[data-testid="ItemName"],[data-testid="item-name"]');
+                var priceEl = el.querySelector('[data-testid="ItemPrice"],[data-testid="item-price"]');
+                if (!nameEl || !priceEl) {
+                    var paras = Array.from(el.querySelectorAll('p'));
+                    if (!priceEl) priceEl = paras.find(function(p) { return priceRe.test(p.innerText.trim()); });
+                    if (!nameEl)  nameEl  = paras.find(function(p) {
+                        var t = p.innerText.trim();
+                        return t.length > 3 && !priceRe.test(t);
+                    });
+                }
+                var priceText = priceEl ? priceEl.innerText.replace(/[^0-9\\.]/g,'') : null;
+                return {
+                    name: nameEl ? nameEl.innerText.trim() : null,
+                    price: priceText ? parseFloat(priceText) || null : null
+                };
+            }
+
             // Phase 2: DOM scan — walk <tr> rows first to pair links with date cells
             if (results.length === 0) {
                 for (var row of document.querySelectorAll('tr')) {
-                    // Any anchor whose href contains a Mercari item ID
                     var link = Array.from(row.querySelectorAll('a[href]'))
-                        .find(function(a) { return idRe.test(a.href) && a.href.includes('mercari.com'); });
+                        .find(function(a) { return idRe.test(a.href); });
                     if (!link) continue;
                     var eid = extractId(link.href);
                     if (!eid || seen.has(eid)) continue;
                     seen.add(eid);
                     var dateTd = Array.from(row.querySelectorAll('td'))
                         .find(function(td) { return dateRe.test(td.innerText.trim()); });
-                    var nameEl = row.querySelector('[data-testid="ItemName"],[data-testid="item-name"],td p,td span');
-                    var priceEl = row.querySelector('[data-testid="ItemPrice"],[data-testid="item-price"]');
-                    var priceText = priceEl ? priceEl.innerText.replace(/[^0-9.]/g,'') : null;
-                    var imgEl = row.querySelector('img');
-                    results.push({ id: eid,
-                                   name: nameEl ? nameEl.innerText.trim() : null,
-                                   price: priceText ? parseFloat(priceText) || null : null,
+                    var np = extractNamePrice(link);
+                    var imgEl = link.querySelector('img');
+                    results.push({ id: eid, name: np.name, price: np.price,
                                    thumbnailUrl: imgEl ? imgEl.src : null,
                                    updatedStr: dateTd ? dateTd.innerText.trim() : null });
                 }
             }
 
-            // Phase 3: bare link scan — use a[href] and filter on the JS .href property
-            // (which is always absolute) since HTML attributes may be relative paths
+            // Phase 3: bare link scan — filter on JS .href (always absolute)
             if (results.length === 0) {
                 for (var a of document.querySelectorAll('a[href]')) {
                     if (!idRe.test(a.href)) continue;
                     var eid = extractId(a.href);
                     if (!eid || seen.has(eid)) continue;
                     seen.add(eid);
-                    var nameEl = a.querySelector('[data-testid="ItemName"],p');
-                    var priceEl = a.querySelector('[data-testid="ItemPrice"],span');
+                    var np = extractNamePrice(a);
                     var imgEl = a.querySelector('img');
-                    var priceText = priceEl ? priceEl.innerText.replace(/[^0-9.]/g,'') : null;
-                    results.push({ id: eid,
-                                   name: nameEl ? nameEl.innerText.trim() : null,
-                                   price: priceText ? parseFloat(priceText) || null : null,
+                    results.push({ id: eid, name: np.name, price: np.price,
                                    thumbnailUrl: imgEl ? imgEl.src : null,
                                    updatedStr: null });
                 }
