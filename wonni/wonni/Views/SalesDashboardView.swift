@@ -20,6 +20,7 @@ struct SalesDashboardView: View {
     @State private var selectedSale: Sale?
     @State private var filterPlatform: String? = nil
     @State private var showMercariSync = false
+    @State private var showMercariLogin = false
     @AppStorage("lastSalesSyncDate") private var lastSyncTimestamp: Double = 0
     @State private var mercariAutoImport: Bool = true  // loaded from Firestore in reload()
     
@@ -119,6 +120,14 @@ struct SalesDashboardView: View {
                 MercariProfileSyncSheet {
                     Task { await reload() }
                 }
+            }
+            .sheet(isPresented: $showMercariLogin) {
+                MercariSyncLoginSheet(webView: mercariSaleSyncManager.webView) {
+                    showMercariLogin = false
+                }
+            }
+            .onChange(of: mercariSaleSyncManager.needsLogin) { _, needs in
+                if needs { showMercariLogin = true }
             }
             .sheet(isPresented: $showAddSale, onDismiss: { Task { await reload() } }) {
                 AddSaleView()
@@ -1206,6 +1215,27 @@ private struct AsyncExternalImage: View {
             if let (data, _) = try? await URLSession.shared.data(for: req) {
                 image = UIImage(data: data)
             }
+        }
+    }
+}
+
+// MARK: - Mercari login sheet (shown when sync detects a login redirect)
+
+private struct MercariSyncLoginSheet: View {
+    let webView: WKWebView
+    let onDone: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            MercariSheetWebView(webView: webView)
+                .ignoresSafeArea(edges: .bottom)
+                .navigationTitle("Log in to Mercari")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { onDone() }
+                    }
+                }
         }
     }
 }
