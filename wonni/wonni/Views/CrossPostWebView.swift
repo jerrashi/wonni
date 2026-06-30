@@ -4826,9 +4826,11 @@ final class MercariSaleSyncManager: ObservableObject {
                 }
             }
 
-            // Phase 3: bare link scan (no row context, no dates)
+            // Phase 3: bare link scan — use a[href] and filter on the JS .href property
+            // (which is always absolute) since HTML attributes may be relative paths
             if (results.length === 0) {
-                for (var a of document.querySelectorAll('a[href*="mercari.com"]')) {
+                for (var a of document.querySelectorAll('a[href]')) {
+                    if (!idRe.test(a.href)) continue;
                     var eid = extractId(a.href);
                     if (!eid || seen.has(eid)) continue;
                     seen.add(eid);
@@ -4857,6 +4859,7 @@ final class MercariSaleSyncManager: ObservableObject {
 
         var newItems: [MercariFoundSaleItem] = []
         var lastCount = 0
+        var noChangeStreak = 0
         var done = false
 
         for _ in 0..<30 {
@@ -4871,7 +4874,12 @@ final class MercariSaleSyncManager: ObservableObject {
 
             print("[MercariSaleSync] scan: \(arr.count) items on page, url=\(root["url"] as? String ?? "?")")
 
-            if arr.count <= lastCount { break }
+            if arr.count <= lastCount {
+                noChangeStreak += 1
+                if noChangeStreak >= 3 { break }  // 3 × 1.5s = 4.5s grace for hydration
+                continue
+            }
+            noChangeStreak = 0
 
             for dict in arr.dropFirst(lastCount) {
                 guard let id = dict["id"] as? String, !id.isEmpty else { continue }
