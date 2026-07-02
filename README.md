@@ -1,67 +1,55 @@
 # Wonni
 
-**AI-first marketplace iOS app.** Wonni helps sellers list fast (camera → AI identification → live listing in seconds) and helps buyers discover, save, and buy items.
+Wonni is an **AI-first mobile app** that helps sellers list in seconds with just a photo. One key differentiator is our unique UI design that enables users to upload multiple items at once.
 
 **Author:** Jerry Shi  
-**Stack:** SwiftUI · Firebase (Auth, Firestore, Storage, AI) · Gemini Flash API
+**Stack:** SwiftUI · Firebase Backend (Auth, Firestore, Storage) · Gemini API
 
 ---
 
 ## Project Motivation
 
-As previously mentioned, there already are a few options for sellers looking for an AI-enabled cross-listing app. The differentiator here is that the UI design should make listing even faster. Furthermore, our product roadmap is to implement cross-listing > importing URLs to scrape product info > drop-shipping pipelines > fully fledged catalog of products.
-
-## Project Timeline
-
-With AI, it is easy to get stuck in infinite scope creep. Over the last two days (6/2 - 6/3), I worked on implementing Mercari auto-fill. Eventually, I had to recognize that the feature had to be left in "good enough" mode instead of sucking up all the time to implement one feature.
+Every year, countless items are dumped on the curb when people move. Wonni attempts to address this problem by lowering the friction in re-homing items users no longer need.
 
 ---
 
-## Product Vision
+## Product Roadmap
 
-> **This section documents strategic decisions that are intentionally deferred to post-1.0 but must not be designed around or away from.**
+### MVP (✅)
+Users can
+- Create an account & log in with an Apple account
+- Take & upload photos
+- Generate a description & price using photos
+- Publish listings to wonni
+- Save listings to 
+- Cross-post to ebay & mercari
+- Track sales from ebay & mercari in one dashboard
 
-### The Item Catalog (post-1.0)
+### Improvements (In Progress)
+Users can
+- Message other users about listings
+- Purchase listings using apple pay
+- Search listings with autocomplete & trending searches
+- Create policy "rules" (e.g., `IF Weight > 10 lbs THEN 'Buyer Pays Shipping' and 'No Returns'`) for platforms with policies (etsy, ebay)
 
-The long-term data model for Wonni is **organized by item, not by listing** — closer to Amazon than eBay. A `CatalogItem` is a shared, platform-managed product record (think: "2024 Starbucks Popcorn Bucket, Red Edition"). Multiple sellers can each have a `UserListing` that references the same `CatalogItem`.
+### Item Catalog (Deferred)
+Long-term, we want to switch to a data model organized **by item, not by listing** - think Amazon vs. eBay. 
+A `CatalogItem` is a shared, platform-managed product record (think: "2024 Starbucks Popcorn Bucket, Red Edition"). 
+Multiple sellers can each have a `UserListing` that references the same `CatalogItem`.
+This enables a faster listing process - where users can list from a text search or barcode scan - with less back-end queries for descriptions and pricing.
+In addition, a catalog data model has the following benefits:
+1) A sold-out `CatalogItem` page can enable:
+- A "Notify me when back in stock" function for buyers
+- An auto-purchase option for buyers (first seller who relists at ≤ $X automatically fulfills orders)
 
-This is deferred from 1.0 due to implementation complexity (catalog seeding, matching heuristics, moderation) — but the FK scaffolding is already in place so no migration is needed.
+2) Cancelled order salvage
+When Seller A cancels a transaction, Seller B who has the same `CatalogItem` in stock can fulfill the order automatically - reducing lost sales.
 
-**Why this is the core strategic bet — four compounding benefits:**
+3) Better pricing data 
+Pricing on eBay requires searching "sold listings" manually. A `CatalogItem` accumulates real transaction history across all sellers — sellers can instantly price their items based on the median sale price, 30-day trend, seasonal patterns, lowest current price, etc.
 
-**1. Out-of-stock conversion (buyer side)**  
-On eBay, a sold-out listing is a dead end — the buyer sees "similar items" that may be irrelevant. On Wonni, a sold-out `CatalogItem` page can surface:
-- A "Notify me when back in stock" watchlist button that actually works (we know exactly which item they want)
-- An auto-purchase option (first seller who relists at ≤ $X automatically fulfills it)
-- A real-time count of other sellers currently listing this item
-
-**2. Cancelled order salvage (seller + buyer side)**  
-When Seller A cancels a transaction, Wonni can silently route the order to Seller B who has the same `CatalogItem` in stock — Seller B makes a sale they never would have seen, and the buyer's experience is seamless. This is only possible when you know that two separate `UserListings` represent the same physical item.
-
-**3. Better pricing data (seller side)**  
-Pricing on eBay requires searching "sold listings" manually. A `CatalogItem` accumulates real transaction history across all sellers — median sale price, 30-day trend, seasonal patterns. Wonni can pre-fill a suggested price at listing time with actual confidence. This lowers seller friction and anchors prices to reality.
-
-**4. Demand aggregation for seller acquisition**  
-This is the flywheel nobody sees: when 50 buyers are watching a sold-out `CatalogItem`, that demand signal is invisible to potential sellers today. With the catalog, Wonni can message sellers: *"47 people are actively watching this item and there are 0 in stock — list yours now."* This turns latent buyer demand into direct seller acquisition, without any paid marketing.
-
-**Existing scaffold (already built):**
-- `CatalogItem.swift` — model file exists in `Models/`
-- `UserListing.catalogItemId: String` — FK field present on every listing
-- `SavedItem.catalogItemId: String?` — nil now, ready for catalog migration
-- `InventoryUnit.swift` — per-unit tracking model exists
-- Firestore `favorites` subcollection already stores `catalogItemId` for future watchlist use
-
-**What 1.0 avoids:** Wonni 1.0 ships with `catalogItemId = ""` on all listings (no catalog matching). The UI and data layer treat listings independently. The catalog is introduced post-1.0 via a background matching pass (Gemini identifies item → matches to existing `CatalogItem` or creates a new one) without requiring a client update.
-
-### Multi-Platform Business Policy Architecture (Post-1.0)
-
-To avoid polluting sellers' connected accounts (e.g., eBay) with hundreds of duplicated policies and to simplify cross-platform syncing, Wonni adopts the following architecture:
-
-1. **Sync & Name:** Fetch existing fulfillment, return, and payment policies from the seller's connected accounts. Map these directly in the UI so the seller can pick from native policies they already established, maintaining their naming conventions.
-2. **Immediate Payment Enforcement:** Always enforce "Require Immediate Payment" for eBay listings. This aligns with modern platforms (Etsy, Shopify) and removes unnecessary payment-policy UI clutter for the seller.
-3. **Rules Engine (Stretch Goal):** Instead of a static "Default Policy", settings will evolve into a Rules Engine (e.g., `IF Weight > 10 lbs THEN use 'Heavy Freight Policy' and 'No Returns'`). This automates cross-platform policy selection based on listing properties.
-
----
+4) Demand signals for sellers
+Sellers can easily see of stock items with a large numbers of buyer watching so they know what items to prioritize listing.
 
 ## Building and Running
 
@@ -185,7 +173,7 @@ expiresAt: <Timestamp>   (optional, omit for permanent)
 
 ## Feature Status
 
-### ✅ Completed
+### ✅ = Completed
 
 **Auth & Onboarding**
 - Sign In with Apple + email/password via Firebase Auth
@@ -240,6 +228,8 @@ expiresAt: <Timestamp>   (optional, omit for permanent)
 - `EditListingSheet`: edit title, price, description, condition, shipping, dimensions, and marketplace toggles
 - `EditProfileSheet`: change display name, username, profile photo (Firebase Storage)
 - Sign out with confirmation alert
+- (If user already has ebay and/or etsy account) Import policies, retaining user's naming conventions
+
 
 **Cross-Posting**
 - **eBay**: full API integration via Firebase Cloud Functions (`ebayCreateListing`, `ebayDeleteListing`, `ebayExchangeToken`); OAuth via `ASWebAuthenticationSession`
@@ -271,9 +261,7 @@ expiresAt: <Timestamp>   (optional, omit for permanent)
 
 ---
 
-### 🔄 Product Roadmap (Integrated Backlog)
-
-This roadmap outlines the plan for executing all remaining features, shifting Wonni from a fast "camera app that lists" to a full-scale AI dropshipping and white-labeling empire.
+### 🔄 Backlog
 
 ```mermaid
 graph TD
