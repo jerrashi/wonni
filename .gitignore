@@ -85,3 +85,10 @@ ds-bundle/
 .design-sync/node_modules
 design-system/node_modules/
 design-system/dist/
+
+# Local-only agent/dev-workflow docs — not for the public repo
+/AGENT_TASKS.md
+/CLAUDE.md
+/LEAD_AGENT_PROMPT.md
+/LEAD_AGENT_SETUP.md
+/MERCARI_PHOTO_SYNC_ANALYSIS.md
