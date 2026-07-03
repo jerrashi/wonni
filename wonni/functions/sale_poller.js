@@ -286,6 +286,12 @@ async function processSingleEbayOrder(order, uid, accessToken, isSandbox, db, cl
     if (freshTakeHome?.labelCost != null) {
       updates.shippingLabelCost = freshTakeHome.labelCost;
     }
+    if (!existing.thumbnailUrl) {
+      const matchedItem = (order.lineItems ?? []).find(li => li.sku === `wonni_${existing.listingId}`);
+      if (matchedItem?.image?.imageUrl) {
+        updates.thumbnailUrl = matchedItem.image.imageUrl;
+      }
+    }
 
     // Map eBay order lifecycle to our status — cancellation takes priority over fulfillment.
     const cancelState = order.cancelStatus?.cancelState;
@@ -382,6 +388,10 @@ async function processSingleEbayOrder(order, uid, accessToken, isSandbox, db, cl
       listingId,
       listingTitle: listing?.customTitle ?? item.title ?? null,
       coverPhotoPath: listing?.coverPhotoPath ?? null,
+      // eBay includes the line item's image URL in the order payload already — no extra
+      // API call needed. Client prefers this over coverPhotoPath: it's a pre-sized CDN
+      // thumbnail (no Firebase Storage bandwidth), same as Mercari's thumbnailUrl.
+      thumbnailUrl: item.image?.imageUrl ?? null,
       platform: "ebay",
       platformOrderId: orderId,
       priceSoldFor,

@@ -445,7 +445,25 @@ struct BrowseMercariListingsView: View {
 
     private var resultsView: some View {
         VStack(spacing: 0) {
-            DatePicker("Date sold", selection: $soldAt, displayedComponents: .date)
+            if importer.isEnriching {
+                HStack(spacing: 8) {
+                    ProgressView().scaleEffect(0.8)
+                    Text(importer.scanStatus.isEmpty ? "Fetching order details…" : importer.scanStatus)
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.systemGroupedBackground))
+            }
+            if let err = importer.scanError {
+                Text(err)
+                    .font(.caption).foregroundStyle(.red)
+                    .padding(.horizontal, 16).padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.systemGroupedBackground))
+            }
+
+            DatePicker("Fallback date sold", selection: $soldAt, displayedComponents: .date)
                 .padding(.horizontal, 16).padding(.vertical, 10)
                 .background(Color(.systemGroupedBackground))
 
@@ -460,12 +478,27 @@ struct BrowseMercariListingsView: View {
                             .font(.title3)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.name ?? item.id).font(.subheadline).lineLimit(2)
-                            Text(item.id).font(.caption2).foregroundStyle(.secondary)
+                            HStack(spacing: 6) {
+                                Text(item.id).font(.caption2).foregroundStyle(.secondary)
+                                if let date = item.soldAt {
+                                    Text("·").font(.caption2).foregroundStyle(.secondary)
+                                    Text(date.formatted(.dateTime.month(.abbreviated).day().year()))
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                } else if importer.isEnriching {
+                                    ProgressView().scaleEffect(0.6)
+                                }
+                            }
                         }
                         Spacer()
-                        if let price = item.price {
-                            Text(String(format: "$%.2f", price))
-                                .font(.subheadline.weight(.semibold))
+                        VStack(alignment: .trailing, spacing: 2) {
+                            if let price = item.price {
+                                Text(String(format: "$%.2f", price))
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                            if let th = item.takeHome {
+                                Text(String(format: "≈$%.2f", th))
+                                    .font(.caption).foregroundStyle(.green)
+                            }
                         }
                     }
                 }
@@ -481,7 +514,7 @@ struct BrowseMercariListingsView: View {
                         ProgressView()
                     } else {
                         Button("Import (\(selectedIds.count))") { Task { await importSelected() } }
-                            .disabled(selectedIds.isEmpty)
+                            .disabled(selectedIds.isEmpty || importer.isEnriching)
                     }
                 }
             }
@@ -490,20 +523,48 @@ struct BrowseMercariListingsView: View {
 
     private func importSelected() async {
         isImporting = true
+        var skipped = 0
+        var succeededIds: Set<String> = []
         for item in importer.foundItems where selectedIds.contains(item.id) {
+            guard let name = item.name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let price = item.price, price > 0,
+                  let takeHome = item.takeHome else {
+                print("[Import] Skipping \(item.id): missing title, price, or take-home")
+                skipped += 1
+                continue
+            }
+            let match = await ListingRepository.shared.findListingByMercariId(item.id)
             let sale = Sale(
-                listingTitle: item.name,
-                thumbnailUrl: item.thumbnailUrl,
+                listingId: match?.listingId,
+                listingTitle: name,
+                coverPhotoPath: match?.coverPhotoPath,
+                thumbnailUrl: match?.coverPhotoPath == nil ? item.thumbnailUrl : nil,
                 platform: "mercari",
                 platformOrderId: item.id,
-                priceSoldFor: item.price ?? 0,
+                priceSoldFor: price,
+                takeHome: takeHome,
                 status: .pending,
-                soldAt: Timestamp(date: soldAt)
+                soldAt: item.soldAt.map { Timestamp(date: $0) } ?? Timestamp(date: soldAt)
             )
             try? await SaleRepository.shared.addSale(sale)
+            succeededIds.insert(item.id)
         }
-        onSaved()
         isImporting = false
+        // Drop successfully-imported items so a retry on the still-skipped ones can't
+        // double-save them.
+        importer.foundItems.removeAll { succeededIds.contains($0.id) }
+        selectedIds.subtract(succeededIds)
+        if skipped > 0 {
+            print("[Import] \(skipped) sale(s) skipped due to missing title, price, or take-home")
+            // Keep the sheet open (onSaved() dismisses the whole Add Sale sheet) and surface
+            // the skip count instead — the user needs to know some sales were dropped, not
+            // have the sheet silently close as if everything saved.
+            let plural = skipped == 1 ? "" : "s"
+            importer.scanError = "\(skipped) item\(plural) skipped — still missing price or take-home. Re-scan to retry."
+        } else {
+            onSaved()
+            dismiss()
+        }
     }
 }
 

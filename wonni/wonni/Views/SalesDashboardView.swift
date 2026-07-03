@@ -30,11 +30,15 @@ struct SalesDashboardView: View {
     @State private var isHiddenSectionExpanded = false
     @State private var isSelectMode = false
     @State private var selectedSaleIds: Set<String> = []
-    @State private var saleToDelete: Sale? = nil
     @State private var showBulkDeleteConfirmation = false
     @State private var showAddSale = false
     @State private var showImportSales = false
     @State private var pendingMercariImports: [MercariFoundSaleItem] = []
+    @State private var pendingUndoSale: Sale? = nil
+    @State private var toastAction: (() -> Void)? = nil
+    @State private var toastActionLabel: String = "Undo"
+    @State private var saleToPurge: Sale? = nil
+    @ObservedObject private var taskQueue = AppTaskQueue.shared
 
     private var secondsUntilNextSync: Int {
         let elapsed = Date().timeIntervalSince1970 - lastSyncTimestamp
@@ -81,17 +85,31 @@ struct SalesDashboardView: View {
                 }
             }
         }
+        .onAppear { taskQueue.suppressGlobalPill = true }
+        .onDisappear { taskQueue.suppressGlobalPill = false }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
-                if let toast = syncToast {
-                    Text(toast)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 16).padding(.vertical, 10)
-                        .background(Color.accentColor.opacity(0.92))
-                        .clipShape(Capsule())
-                        .padding(.bottom, 12)
+                if let task = taskQueue.current {
+                    AppTaskQueuePillView(task: task, queueCount: taskQueue.count)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                if let toast = syncToast {
+                    HStack(spacing: 12) {
+                        Text(toast)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.white)
+                        if let action = toastAction {
+                            Spacer()
+                            Button(toastActionLabel) { action() }
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .background(Color.accentColor.opacity(0.92))
+                    .clipShape(Capsule())
+                    .padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 if isSelectMode && !selectedSaleIds.isEmpty {
                     Button {
@@ -110,6 +128,7 @@ struct SalesDashboardView: View {
             }
             .animation(.spring(duration: 0.3), value: syncToast)
             .animation(.spring(duration: 0.25), value: selectedSaleIds.isEmpty)
+            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: taskQueue.current?.id)
         }
             .sheet(item: $selectedSale) { sale in
                 SaleDetailSheet(sale: sale) {
@@ -138,26 +157,6 @@ struct SalesDashboardView: View {
                 }
             }
             .confirmationDialog(
-                "Delete this sale?",
-                isPresented: Binding(
-                    get: { saleToDelete != nil },
-                    set: { if !$0 { saleToDelete = nil } }
-                ),
-                titleVisibility: .visible
-            ) {
-                Button("Delete", role: .destructive) {
-                    Task {
-                        if let id = saleToDelete?.id {
-                            try? await SaleRepository.shared.hideSale(id: id)
-                            await reload()
-                        }
-                        saleToDelete = nil
-                    }
-                }
-            } message: {
-                Text("The sale will be removed from your dashboard. You can restore it from Deleted Sales.")
-            }
-            .confirmationDialog(
                 "Delete \(selectedSaleIds.count) sale\(selectedSaleIds.count == 1 ? "" : "s")?",
                 isPresented: $showBulkDeleteConfirmation,
                 titleVisibility: .visible
@@ -167,6 +166,17 @@ struct SalesDashboardView: View {
                 }
             } message: {
                 Text("These sales will be removed from your dashboard. You can restore them from Deleted Sales.")
+            }
+            .confirmationDialog(
+                "Permanently delete this sale?",
+                isPresented: Binding(get: { saleToPurge != nil }, set: { if !$0 { saleToPurge = nil } }),
+                titleVisibility: .visible
+            ) {
+                Button("Delete Permanently", role: .destructive) {
+                    if let sale = saleToPurge { Task { await purgeSale(sale) } }
+                }
+            } message: {
+                Text("This can't be undone. If it was imported from Mercari, it can be re-scanned on the next sync.")
             }
         .task { await reload() }
     }
@@ -259,6 +269,15 @@ struct SalesDashboardView: View {
                                 .buttonStyle(.bordered)
                                 .controlSize(.mini)
                                 .tint(Color.accentColor)
+                                Button {
+                                    saleToPurge = sale
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .font(.caption.weight(.semibold))
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                                .tint(.red)
                             }
                             .padding(.vertical, 2)
                         }
@@ -308,11 +327,12 @@ struct SalesDashboardView: View {
                     .foregroundStyle(.primary)
                     .swipeActions(edge: .trailing) {
                         if !isSelectMode {
-                            Button(role: .destructive) {
-                                saleToDelete = sale
+                            Button {
+                                deleteSale(sale)
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
+                            .tint(.red)
                         }
                     }
                 }
@@ -426,8 +446,10 @@ struct SalesDashboardView: View {
         }
 
         let toast = await syncAPIPlatforms(force: force)
-        await syncWebPlatforms()
         if let toast { showToast(toast) }
+        // Runs after so a "new Mercari sales found" review banner (if any) shows last and
+        // isn't immediately overwritten by the eBay/Etsy toast above.
+        await syncWebPlatforms()
     }
 
     // Calls the Cloud Function which runs eBay → Etsy in sequence.
@@ -458,7 +480,8 @@ struct SalesDashboardView: View {
     // Iterates web-autofill platform managers in order.
     // Add new platforms here as: await nextPlatformSyncManager.sync(sales: sales)
     private func syncWebPlatforms() async {
-        let knownMercariIds = Set(sales.compactMap { $0.platform == "mercari" ? $0.platformOrderId : nil })
+        // Include deleted (hidden) sales so restored+deleted items never resurface on sync.
+        let knownMercariIds = Set((sales + hiddenSales).compactMap { $0.platform == "mercari" ? $0.platformOrderId : nil })
         // Stop at any item dated before the calendar day of the last sync.
         // e.g. last sync at 6/26 8:42am → stop at items dated 6/25 or earlier.
         let stopDate = lastSyncTimestamp > 0
@@ -471,29 +494,59 @@ struct SalesDashboardView: View {
         if !found.isEmpty {
             if mercariAutoImport {
                 for item in found {
+                    // Enrich before saving so we never write a sale missing take-home or a
+                    // real sold date — scanForNewSales only reads title/price off the list page.
+                    let enrichment = await mercariSaleSyncManager.loadSaleData(itemId: item.id)
+                    guard let name = item.name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                          let price = item.price, price > 0,
+                          let takeHome = enrichment?.takeHome,
+                          let saleDate = enrichment?.soldAt else {
+                        print("[SyncWebPlatforms] Skipping \(item.id): incomplete sale data (name/price/takeHome/soldAt)")
+                        continue
+                    }
                     let match = await ListingRepository.shared.findListingByMercariId(item.id)
                     let sale = Sale(
                         listingId: match?.listingId,
-                        listingTitle: item.name,
+                        listingTitle: name,
                         coverPhotoPath: match?.coverPhotoPath,
-                        thumbnailUrl: match?.coverPhotoPath == nil ? item.thumbnailUrl : nil,
+                        thumbnailUrl: match?.coverPhotoPath == nil ? (enrichment?.thumbnailUrl ?? item.thumbnailUrl) : nil,
                         platform: "mercari",
                         platformOrderId: item.id,
-                        priceSoldFor: item.price ?? 0,
-                        status: .pending,
-                        soldAt: Timestamp(date: Date())
+                        priceSoldFor: price,
+                        takeHome: takeHome,
+                        trackingNumber: enrichment?.trackingNumber,
+                        carrier: enrichment?.carrier,
+                        status: enrichment?.status ?? .pending,
+                        soldAt: Timestamp(date: saleDate)
                     )
                     try? await SaleRepository.shared.addSale(sale)
                 }
                 await reload()
             } else {
-                // Let the user pick — open import sheet pre-populated with found items.
+                // Auto-import is off — surface a banner instead of forcing the sheet open
+                // mid-sync; tapping "Review" opens the import sheet pre-populated with
+                // what was found.
                 pendingMercariImports = found
-                showImportSales = true
+                let count = found.count
+                showToast(
+                    "\(count) new Mercari sale\(count == 1 ? "" : "s") found — review in Import",
+                    actionLabel: "Review",
+                    duration: 8_000_000_000
+                ) {
+                    showImportSales = true
+                }
             }
         }
         await mercariSaleSyncManager.sync(sales: sales)
         // Future: await facebookSaleSyncManager.scanForNewSales(...) / .sync(...)
+        await reload()
+    }
+
+    private func purgeSale(_ sale: Sale) async {
+        guard let id = sale.id else { return }
+        withAnimation { hiddenSales.removeAll { $0.id == id } }
+        try? await SaleRepository.shared.permanentlyDeleteSale(id: id)
+        saleToPurge = nil
         await reload()
     }
 
@@ -507,11 +560,41 @@ struct SalesDashboardView: View {
         await reload()
     }
 
-    private func showToast(_ message: String) {
-        syncToast = message
+    private func showToast(
+        _ message: String,
+        actionLabel: String = "Undo",
+        duration: UInt64? = nil,
+        action: (() -> Void)? = nil
+    ) {
+        withAnimation(.easeInOut) {
+            syncToast = message
+            toastAction = action
+            toastActionLabel = actionLabel
+        }
+        let effectiveDuration = duration ?? (action != nil ? 5_000_000_000 : 3_000_000_000)
         Task {
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            syncToast = nil
+            try? await Task.sleep(nanoseconds: effectiveDuration)
+            withAnimation(.easeInOut) {
+                if syncToast == message {
+                    syncToast = nil
+                    toastAction = nil
+                }
+            }
+        }
+    }
+
+    private func deleteSale(_ sale: Sale) {
+        guard let id = sale.id else { return }
+        withAnimation { sales.removeAll { $0.id == id } }
+        Task {
+            try? await SaleRepository.shared.hideSale(id: id)
+        }
+        showToast("Sale deleted") {
+            withAnimation { sales.insert(sale, at: 0) }
+            Task {
+                try? await SaleRepository.shared.restoreSale(id: id)
+                await reload()
+            }
         }
     }
 }
@@ -523,15 +606,17 @@ private struct SaleRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // Cover photo or placeholder
+            // Cover photo or placeholder. thumbnailUrl (a platform CDN URL) is preferred
+            // over coverPhotoPath (a Firebase Storage path) — it loads directly with no
+            // Storage bandwidth/read cost, and is already sized as a thumbnail.
             Group {
-                if let path = sale.coverPhotoPath {
-                    AsyncFirebaseImage(path: path)
+                if let urlStr = sale.thumbnailUrl, let url = URL(string: urlStr) {
+                    AsyncExternalImage(url: url, referer: sale.platform == "mercari" ? "https://www.mercari.com" : nil)
                         .scaledToFill()
                         .frame(width: 52, height: 52)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
-                } else if let urlStr = sale.thumbnailUrl, let url = URL(string: urlStr) {
-                    AsyncExternalImage(url: url, referer: sale.platform == "mercari" ? "https://www.mercari.com" : nil)
+                } else if let path = sale.coverPhotoPath {
+                    AsyncFirebaseImage(path: path)
                         .scaledToFill()
                         .frame(width: 52, height: 52)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -616,7 +701,10 @@ struct SaleDetailSheet: View {
     @State private var trackingNumber: String
     @State private var carrier: String
     @State private var status: SaleStatus
+    @State private var priceString: String
     @State private var takeHomeString: String
+    @State private var soldAt: Date
+    @State private var addressText: String
     @State private var isSaving = false
 
     init(sale: Sale, onUpdated: @escaping () -> Void) {
@@ -625,6 +713,9 @@ struct SaleDetailSheet: View {
         _trackingNumber = State(initialValue: sale.trackingNumber ?? "")
         _carrier = State(initialValue: sale.carrier ?? "USPS")
         _status = State(initialValue: sale.status)
+        _soldAt = State(initialValue: sale.soldAt.dateValue())
+        _priceString = State(initialValue: String(format: "%.2f", sale.priceSoldFor))
+        _addressText = State(initialValue: sale.buyerAddress?.multiLine ?? "")
         if let take = sale.takeHome {
             _takeHomeString = State(initialValue: String(format: "%.2f", take))
         } else {
@@ -638,7 +729,13 @@ struct SaleDetailSheet: View {
                 Section("Listing") {
                     LabeledContent("Title", value: sale.listingTitle ?? "—")
                     LabeledContent("Platform", value: Sale.platformDisplayName(sale.platform))
-                    LabeledContent("Item price", value: String(format: "$%.2f", sale.priceSoldFor))
+                    HStack {
+                        Text("Item price")
+                        Spacer()
+                        TextField("Amount", text: $priceString)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
                     if let shipping = sale.shippingRevenue {
                         LabeledContent("Shipping charged", value: String(format: "$%.2f", shipping))
                     }
@@ -652,21 +749,26 @@ struct SaleDetailSheet: View {
                             .keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing)
                     }
+                    DatePicker("Date sold", selection: $soldAt, displayedComponents: .date)
                     if let orderId = sale.platformOrderId {
                         LabeledContent("Order ID", value: orderId)
                     }
                 }
 
-                if let addr = sale.buyerAddress, !addr.multiLine.isEmpty {
-                    Section("Buyer address") {
-                        Text(addr.multiLine)
-                            .font(.subheadline)
-                            .contextMenu {
-                                Button {
-                                    UIPasteboard.general.string = addr.multiLine
-                                } label: { Label("Copy", systemImage: "doc.on.doc") }
-                            }
+                Section {
+                    TextField("Paste recipient address (optional)", text: $addressText, axis: .vertical)
+                        .font(.subheadline)
+                        .lineLimit(2...6)
+                    if !addressText.isEmpty {
+                        Button {
+                            UIPasteboard.general.string = addressText
+                        } label: { Label("Copy", systemImage: "doc.on.doc") }
+                            .font(.caption)
                     }
+                } header: {
+                    Text("Buyer address")
+                } footer: {
+                    Text("Mercari doesn't expose a shipping label with the address on it — paste it here if the buyer shared it.")
                 }
 
                 Section("Shipping") {
@@ -713,12 +815,28 @@ struct SaleDetailSheet: View {
         guard let id = sale.id else { return }
         isSaving = true
         var data: [String: Any] = ["status": status.rawValue]
-        
+
+        if !Calendar.current.isDate(soldAt, inSameDayAs: sale.soldAt.dateValue()) {
+            data["soldAt"] = Timestamp(date: soldAt)
+        }
+
         let cleanedTh = takeHomeString.replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
         if let th = Double(cleanedTh) {
             data["takeHome"] = th
         }
-        
+
+        let cleanedPrice = priceString.replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if let price = Double(cleanedPrice), price != sale.priceSoldFor {
+            data["priceSoldFor"] = price
+        }
+
+        let trimmedAddress = addressText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedAddress != (sale.buyerAddress?.multiLine ?? "") {
+            // Dot-path update targets just the line1 field, preserving any structured
+            // name/city/state/zip already synced from eBay/Etsy instead of clobbering them.
+            data["buyerAddress.line1"] = trimmedAddress.isEmpty ? FieldValue.delete() : trimmedAddress
+        }
+
         if !trackingNumber.isEmpty {
             data["trackingNumber"] = trackingNumber
             data["carrier"] = carrier
@@ -921,9 +1039,12 @@ struct AddSaleSheet: View {
 
 struct MercariFoundSaleItem: Identifiable {
     let id: String
-    let name: String?
-    let price: Double?
-    let thumbnailUrl: String?
+    var name: String?
+    var price: Double?
+    var thumbnailUrl: String?
+    var takeHome: Double?
+    var soldAt: Date?
+    var enrichFailed: Bool = false
 }
 
 @MainActor
@@ -932,8 +1053,18 @@ final class MercariSalesPageImporter: ObservableObject {
     @Published var scanStatus = ""
     @Published var foundItems: [MercariFoundSaleItem] = []
     @Published var scanError: String? = nil
+    @Published var isEnriching = false
+    @Published var enrichedCount = 0
 
     let webView: WKWebView
+    private let navDelegate = SaleNavDelegate()
+
+    private static let soldAtFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MM/dd/yy"
+        return f
+    }()
 
     init() {
         let config = WKWebViewConfiguration()
@@ -942,7 +1073,86 @@ final class MercariSalesPageImporter: ObservableObject {
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         self.webView = wv
+        wv.navigationDelegate = navDelegate
         wv.load(URLRequest(url: URL(string: "https://www.mercari.com/mypage/listings/in_progress/?sortBy=7")!))
+    }
+
+    func enrichItems() async {
+        guard !foundItems.isEmpty else { return }
+        isEnriching = true
+        enrichedCount = 0
+        defer { isEnriching = false }
+
+        let js = """
+        (function() {
+            var out = { takeHome: null, soldAt: null };
+            var th = document.querySelector('p[data-testid="You-made-value"]');
+            if (th) {
+                var t = th.innerText.replace(/[^0-9.]/g, '');
+                if (t) out.takeHome = parseFloat(t);
+            }
+            var dateEl = document.querySelector('p[data-testid="ItemSoldTime"]');
+            if (dateEl) {
+                var m = dateEl.innerText.match(/(\\d{2}\\/\\d{2}\\/\\d{2,4})/);
+                if (m) out.soldAt = m[1];
+            }
+            return JSON.stringify(out);
+        })();
+        """
+
+        for i in foundItems.indices {
+            let id = foundItems[i].id
+            scanStatus = "Fetching order details \(i + 1)/\(foundItems.count)…"
+            guard let url = URL(string: "https://www.mercari.com/transaction/order_status/\(id)/") else {
+                foundItems[i].enrichFailed = true
+                enrichedCount = i + 1
+                continue
+            }
+            navDelegate.reset()
+            webView.load(URLRequest(url: url))
+            guard await navDelegate.waitForLoad(timeout: 10) else {
+                print("[Importer] Order page timed out for \(id)")
+                foundItems[i].enrichFailed = true
+                enrichedCount = i + 1
+                continue
+            }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+
+            let deadline = Date().addingTimeInterval(8)
+            var enriched = false
+            while Date() < deadline && !enriched {
+                // JSONSerialization decodes JS `null` as NSNull, not Swift nil — `dict["takeHome"] != nil`
+                // is true even for `{takeHome: null}`, so the two fields must be cast to their real
+                // types (which fail for NSNull) to tell "not yet rendered" from "actually present".
+                if let jsStr = (try? await webView.callJS(js)) as? String,
+                   let data = jsStr.data(using: .utf8),
+                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    let takeHome = (dict["takeHome"] as? NSNumber)?.doubleValue
+                    let soldAtStr = dict["soldAt"] as? String
+                    if takeHome != nil || soldAtStr != nil {
+                        foundItems[i].takeHome = takeHome
+                        if let dateStr = soldAtStr {
+                            let fmt = Self.soldAtFormatter
+                            fmt.dateFormat = "MM/dd/yy"
+                            var parsed = fmt.date(from: dateStr)
+                            if parsed == nil { fmt.dateFormat = "MM/dd/yyyy"; parsed = fmt.date(from: dateStr); fmt.dateFormat = "MM/dd/yy" }
+                            foundItems[i].soldAt = parsed
+                        }
+                        enriched = true
+                    } else {
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    }
+                } else {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            }
+            if !enriched {
+                foundItems[i].enrichFailed = true
+                print("[Importer] Could not enrich \(id) — order page data missing")
+            }
+            enrichedCount = i + 1
+        }
+        scanStatus = ""
     }
 
     func scanCurrentPage() async {
@@ -956,39 +1166,97 @@ final class MercariSalesPageImporter: ObservableObject {
 
         let js = #"""
         return (function() {
-            var results = [];
-            var seen = new Set();
+            // Phase 1: __NEXT_DATA__ — collect IDs and whatever name/price the JSON has.
+            // Use a map (not a Set) so Phase 2 can backfill missing fields for the same item.
+            var byId = {};
             var nd = document.getElementById('__NEXT_DATA__');
             if (nd) {
                 try {
                     var data = JSON.parse(nd.textContent || '');
                     var pp = data.props && data.props.pageProps;
-                    var items = (pp && (pp.items || (pp.data && pp.data.items) ||
-                                 (pp.seller && pp.seller.items))) || [];
+                    // Try every known path across in_progress, sold_out, and other mypage variants.
+                    var items = (pp && (
+                        pp.items ||
+                        pp.soldItems ||
+                        pp.listingItems ||
+                        (pp.data && (pp.data.items || pp.data.soldItems)) ||
+                        (pp.seller && pp.seller.items)
+                    )) || [];
                     for (var item of items) {
                         var sid = String(item.id || '');
-                        if (!sid || seen.has(sid)) continue;
+                        if (!sid || byId[sid]) continue;
                         if (item.status && item.status.toLowerCase() === 'inactive') continue;
-                        seen.add(sid);
-                        results.push({ id: sid, name: item.name || null,
-                                       price: item.price ? item.price / 100 : null });
+                        // Name may be top-level or nested under a product object.
+                        var itemName = item.name ||
+                                       (item.product && item.product.name) ||
+                                       item.productName || null;
+                        // Price may be cents or dollars; >500 heuristic distinguishes them.
+                        var rawPrice = item.price != null ? item.price :
+                                       (item.product && item.product.price != null ? item.product.price : null);
+                        var itemPrice = rawPrice != null ? (rawPrice > 500 ? rawPrice / 100 : rawPrice) : null;
+                        var thumb = null;
+                        if (item.photos && item.photos.length > 0)
+                            thumb = item.photos[0].thumbnailUrl || item.photos[0].url || null;
+                        if (!thumb) thumb = item.thumbnailUrl || item.photo_url ||
+                                           (item.product && (item.product.thumbnailUrl || item.product.photo_url)) || null;
+                        byId[sid] = { id: sid, name: itemName, price: itemPrice, thumbnailUrl: thumb };
                     }
                 } catch(e) {}
             }
-            // DOM fallback: any link pointing to /us/item/m...
+            // Phase 2: DOM links — adds newly seen items AND backfills name/price that Phase 1 left null.
             var links = Array.from(document.querySelectorAll('a[href*="/us/item/m"]'));
             for (var link of links) {
                 var m = link.href.match(/\/us\/item\/(m[a-zA-Z0-9]+)/);
-                if (!m || seen.has(m[1])) continue;
+                if (!m) continue;
+                var sid = m[1];
                 var ribbon = link.querySelector('[class*="RibbonTitle"]');
                 if (ribbon && ribbon.innerText.trim().toLowerCase() === 'inactive') continue;
-                seen.add(m[1]);
-                var nameEl = link.querySelector('[data-testid="ItemName"],[data-testid="item-name"],p');
-                var priceEl = link.querySelector('[data-testid="ItemPrice"],[data-testid="item-price"],span');
-                var name = nameEl ? nameEl.innerText.trim() : null;
-                var priceStr = priceEl ? priceEl.innerText.replace(/[^0-9.]/g,'') : null;
-                results.push({ id: m[1], name: name||null, price: priceStr?parseFloat(priceStr):null });
+                var existing = byId[sid];
+                var needsName = !existing || !existing.name;
+                var needsPrice = !existing || existing.price == null;
+                var needsThumb = !existing || !existing.thumbnailUrl;
+                if (!existing || needsName || needsPrice || needsThumb) {
+                    var domName = null, domPrice = null, domThumb = null;
+                    if (needsName) {
+                        var nameEl = link.querySelector('[data-testid="ItemName"],[data-testid="item-name"],p');
+                        if (nameEl && nameEl.innerText.trim()) domName = nameEl.innerText.trim();
+                        if (!domName) {
+                            var imgs = link.querySelectorAll('img');
+                            for (var i = 0; i < imgs.length; i++) {
+                                if (imgs[i].alt && !imgs[i].alt.toLowerCase().includes('avatar')) {
+                                    domName = imgs[i].alt.trim(); break;
+                                }
+                            }
+                        }
+                    }
+                    if (needsPrice) {
+                        var priceEl = link.querySelector('[data-testid="ItemPrice"],[data-testid="item-price"],span');
+                        var priceStr = priceEl ? priceEl.innerText.replace(/[^0-9.]/g,'') : '';
+                        if (!priceStr) {
+                            var pm = (link.innerText || '').match(/\$\s*([0-9,]+(?:\.[0-9]{2})?)/);
+                            if (pm) priceStr = pm[1].replace(/,/g, '');
+                        }
+                        if (priceStr) domPrice = parseFloat(priceStr);
+                    }
+                    if (needsThumb) {
+                        var imgs2 = link.querySelectorAll('img');
+                        for (var j = 0; j < imgs2.length; j++) {
+                            if (imgs2[j].src && !imgs2[j].src.includes('avatar')) {
+                                domThumb = imgs2[j].src; break;
+                            }
+                        }
+                    }
+                    if (existing) {
+                        if (needsName && domName) existing.name = domName;
+                        if (needsPrice && domPrice != null) existing.price = domPrice;
+                        if (needsThumb && domThumb) existing.thumbnailUrl = domThumb;
+                    } else {
+                        byId[sid] = { id: sid, name: domName, price: domPrice, thumbnailUrl: domThumb };
+                    }
+                }
             }
+            var results = [];
+            for (var k in byId) results.push(byId[k]);
             return JSON.stringify(results);
         })();
         """#
@@ -1007,6 +1275,8 @@ final class MercariSalesPageImporter: ObservableObject {
             }
             if foundItems.isEmpty {
                 scanError = "No items found. Navigate to your Sold Items tab first."
+            } else {
+                Task { await enrichItems() }
             }
         } else {
             scanError = "Couldn't scan — make sure you're on a Mercari page."
@@ -1067,6 +1337,15 @@ struct MercariSalesImportSheet: View {
                 resultsView(items: displayItems)
             }
         }
+        .task {
+            // Preloaded items come from scanForNewSales(), which only reads title/price off
+            // the list page — takeHome/soldAt are never set. Without running them through the
+            // same order-page enrichment as a browser scan, every preloaded item would fail
+            // the title/price/takeHome/soldAt import guard below and silently import nothing.
+            guard importer.foundItems.isEmpty, !preloadedItems.isEmpty else { return }
+            importer.foundItems = preloadedItems
+            await importer.enrichItems()
+        }
     }
 
     private var browserView: some View {
@@ -1118,7 +1397,25 @@ struct MercariSalesImportSheet: View {
 
     private func resultsView(items: [MercariFoundSaleItem]) -> some View {
         VStack(spacing: 0) {
-            DatePicker("Date sold", selection: $soldAt, displayedComponents: .date)
+            if importer.isEnriching {
+                HStack(spacing: 8) {
+                    ProgressView().scaleEffect(0.8)
+                    Text(importer.scanStatus.isEmpty ? "Fetching order details…" : importer.scanStatus)
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.systemGroupedBackground))
+            }
+            if let err = importer.scanError {
+                Text(err)
+                    .font(.caption).foregroundStyle(.red)
+                    .padding(.horizontal, 16).padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.systemGroupedBackground))
+            }
+
+            DatePicker("Fallback date sold", selection: $soldAt, displayedComponents: .date)
                 .padding(.horizontal, 16).padding(.vertical, 10)
                 .background(Color(.systemGroupedBackground))
 
@@ -1133,12 +1430,27 @@ struct MercariSalesImportSheet: View {
                             .font(.title3)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.name ?? item.id).font(.subheadline).lineLimit(2)
-                            Text(item.id).font(.caption2).foregroundStyle(.secondary)
+                            HStack(spacing: 6) {
+                                Text(item.id).font(.caption2).foregroundStyle(.secondary)
+                                if let date = item.soldAt {
+                                    Text("·").font(.caption2).foregroundStyle(.secondary)
+                                    Text(date.formatted(.dateTime.month(.abbreviated).day().year()))
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                } else if importer.isEnriching {
+                                    ProgressView().scaleEffect(0.6)
+                                }
+                            }
                         }
                         Spacer()
-                        if let price = item.price {
-                            Text(String(format: "$%.2f", price))
-                                .font(.subheadline.weight(.semibold))
+                        VStack(alignment: .trailing, spacing: 2) {
+                            if let price = item.price {
+                                Text(String(format: "$%.2f", price))
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                            if let th = item.takeHome {
+                                Text(String(format: "≈$%.2f", th))
+                                    .font(.caption).foregroundStyle(.green)
+                            }
                         }
                     }
                 }
@@ -1150,7 +1462,11 @@ struct MercariSalesImportSheet: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 if preloadedItems.isEmpty {
+                    // Blocked during enrichment: enrichItems() indexes into foundItems by a
+                    // range captured at loop start, so clearing it here for a fresh scan while
+                    // that loop is still running would write past the end of the new array.
                     Button("Back") { importer.foundItems = []; selectedIds.removeAll() }
+                        .disabled(importer.isEnriching)
                 } else {
                     Button("Cancel") { dismiss() }
                 }
@@ -1164,7 +1480,7 @@ struct MercariSalesImportSheet: View {
                     ProgressView()
                 } else {
                     Button("Import (\(selectedIds.count))") { Task { await importSelected(from: items) } }
-                        .disabled(selectedIds.isEmpty)
+                        .disabled(selectedIds.isEmpty || importer.isEnriching)
                 }
             }
         }
@@ -1172,24 +1488,45 @@ struct MercariSalesImportSheet: View {
 
     private func importSelected(from items: [MercariFoundSaleItem]) async {
         isImporting = true
+        var skipped = 0
+        var succeededIds: Set<String> = []
         for item in items where selectedIds.contains(item.id) {
+            guard let name = item.name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let price = item.price, price > 0,
+                  let takeHome = item.takeHome else {
+                print("[Import] Skipping \(item.id): missing title, price, or take-home")
+                skipped += 1
+                continue
+            }
             let match = await ListingRepository.shared.findListingByMercariId(item.id)
             let sale = Sale(
                 listingId: match?.listingId,
-                listingTitle: item.name,
+                listingTitle: name,
                 coverPhotoPath: match?.coverPhotoPath,
                 thumbnailUrl: match?.coverPhotoPath == nil ? item.thumbnailUrl : nil,
                 platform: "mercari",
                 platformOrderId: item.id,
-                priceSoldFor: item.price ?? 0,
+                priceSoldFor: price,
+                takeHome: takeHome,
                 status: .pending,
-                soldAt: Timestamp(date: soldAt)
+                soldAt: item.soldAt.map { Timestamp(date: $0) } ?? Timestamp(date: soldAt)
             )
             try? await SaleRepository.shared.addSale(sale)
+            succeededIds.insert(item.id)
         }
-        onImported()
-        dismiss()
         isImporting = false
+        // Drop successfully-imported items so retrying the still-skipped ones can't
+        // double-save them.
+        importer.foundItems.removeAll { succeededIds.contains($0.id) }
+        selectedIds.subtract(succeededIds)
+        onImported()
+        if skipped > 0 {
+            print("[Import] \(skipped) sale(s) skipped due to missing title, price, or take-home")
+            let plural = skipped == 1 ? "" : "s"
+            importer.scanError = "\(skipped) item\(plural) skipped — still missing price or take-home. Re-scan to retry."
+        } else {
+            dismiss()
+        }
     }
 }
 
