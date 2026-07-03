@@ -70,6 +70,15 @@ class Item {
     }
 
     func image(for assetId: String) -> UIImage? {
+        // `modelContext` becomes nil once this object is deleted from its context, and
+        // checking it doesn't itself touch the (externally-stored) `photosData` attribute.
+        // A SwiftUI row can still be mid-render against a just-deleted Item — e.g. List's
+        // own swipe-to-delete removal animation re-evaluating the outgoing row's body a
+        // beat after the underlying SwiftData delete commits — and reading `photosData` on
+        // a detached object crashes with "backing data was detached from a context without
+        // resolving attribute faults." Bailing out here before touching it is the one
+        // choke point that protects every caller regardless of render timing.
+        guard modelContext != nil else { return nil }
         if let idx = sourceAssetIdentifiers.firstIndex(of: assetId) {
             if idx < photosData.count {
                 return UIImage(data: photosData[idx])
