@@ -31,6 +31,14 @@ class UploadManager: ObservableObject {
     @Published var shouldReturnToRoot = false
     @Published var pendingAutofillJobsCount = 0
     @Published var sessionDraftIDs: [UUID] = []
+    /// IDs of drafts deleted while a background upload/recognition Task for them may
+    /// still be in flight. Those Tasks capture the SwiftData `Item` directly and `await`
+    /// across suspension points (network calls, photo fetches); if the draft is deleted
+    /// from the model context mid-flight and the Task later resumes and touches a model
+    /// property, SwiftData crashes with "backing data detached from a context without
+    /// resolving attribute faults." Every background Task must re-check this set after
+    /// each `await` and bail out before touching the model again.
+    private var deletedDraftIDs: Set<UUID> = []
 
     // ── Active Draft (shared between camera and picker) ──────────────────────
     /// The UUID of the Item currently being built by the user.
@@ -132,12 +140,16 @@ class UploadManager: ObservableObject {
     /// Deletes a draft from the local database, Firestore, and deletes uploaded images from Storage.
     func deleteDraftLocallyAndCloud(draft: Item, modelContext: ModelContext) {
         let listingId = draft.firestoreListingId
+        // Mark first so any in-flight background upload/recognition Task for this draft
+        // (which may be suspended mid-`await` right now) bails out on its next check
+        // instead of touching the model after it's deleted below.
+        deletedDraftIDs.insert(draft.id)
         guard let userId = Auth.auth().currentUser?.uid else {
             modelContext.delete(draft)
             try? modelContext.save()
             return
         }
-        
+
         // 1. Delete from SwiftData context
         modelContext.delete(draft)
         try? modelContext.save()
@@ -201,12 +213,18 @@ class UploadManager: ObservableObject {
         activeUploadCount += 1
         uploadStatuses[draft.id] = .pending
 
+        let draftID = draft.id
+        let assetIdentifiers = draft.sourceAssetIdentifiers
         Task {
-            uploadStatuses[draft.id] = .uploading(0)
+            uploadStatuses[draftID] = .uploading(0)
 
-            print("[UploadManager] Fetching \(draft.sourceAssetIdentifiers.count) images for \(draft.id)...")
+            print("[UploadManager] Fetching \(assetIdentifiers.count) images for \(draftID)...")
             var images: [UIImage] = []
-            for assetId in draft.sourceAssetIdentifiers {
+            for assetId in assetIdentifiers {
+                guard !deletedDraftIDs.contains(draftID) else {
+                    print("[UploadManager] Draft \(draftID) deleted mid-upload — aborting")
+                    return
+                }
                 if let img = draft.image(for: assetId) {
                     images.append(img)
                 } else if let img = await PhotoAsset(identifier: assetId).fullResolutionImage() {
@@ -215,7 +233,11 @@ class UploadManager: ObservableObject {
                     print("[UploadManager] WARNING: Could not fetch image for asset \(assetId)")
                 }
             }
-            print("[UploadManager] Fetched \(images.count)/\(draft.sourceAssetIdentifiers.count) images")
+            guard !deletedDraftIDs.contains(draftID) else {
+                print("[UploadManager] Draft \(draftID) deleted mid-upload — aborting before network upload")
+                return
+            }
+            print("[UploadManager] Fetched \(images.count)/\(assetIdentifiers.count) images")
 
             var photoPaths: [String] = []
             for (imgIdx, image) in images.enumerated() {
@@ -246,12 +268,15 @@ class UploadManager: ObservableObject {
                 }
             }
 
-            draft.firebasePhotoPaths = photoPaths
-            try? modelContext.save()
-            print("[UploadManager] Upload complete for \(draft.id): \(photoPaths.count) paths saved")
-
             let failed = photoPaths.count < images.count
-            uploadStatuses[draft.id] = failed ? .failed : .done
+            if !deletedDraftIDs.contains(draftID) {
+                draft.firebasePhotoPaths = photoPaths
+                try? modelContext.save()
+                print("[UploadManager] Upload complete for \(draftID): \(photoPaths.count) paths saved")
+            } else {
+                print("[UploadManager] Draft \(draftID) deleted mid-upload — discarding \(photoPaths.count) uploaded paths")
+            }
+            uploadStatuses[draftID] = failed ? .failed : .done
             activeUploadCount -= 1
             if activeUploadCount <= 0 {
                 isUploadingPhotos = false
@@ -680,6 +705,7 @@ class UploadManager: ObservableObject {
     func runLocalRecognition(draft: Item, modelContext: ModelContext) {
         guard let assetId = draft.sourceAssetIdentifiers.first else { return }
         let draftRef = draft
+        let draftID = draft.id
         Task {
             let image: UIImage
             if let localImg = draftRef.image(for: assetId) {
@@ -693,6 +719,10 @@ class UploadManager: ObservableObject {
             let title = await Task.detached(priority: .userInitiated) {
                 UploadManager.generateVisionTitle(cgImage: cgImage)
             }.value
+            guard !deletedDraftIDs.contains(draftID) else {
+                print("[UploadManager] Draft \(draftID) deleted mid-recognition — discarding vision title")
+                return
+            }
             draftRef.visionTitle = title
             try? modelContext.save()
         }
