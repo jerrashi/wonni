@@ -623,8 +623,8 @@ class UploadManager: ObservableObject {
 
             if publishedCount > 0 {
                 showProcessResults = false
-                // Transition to CrossPostStatusView is handled by
-                // ProcessResultsOverviewView.onChange(of: isPublishing). shouldReturnToRoot
+                // Transition to CrossPostStatusView is handled by ProcessResultsOverviewView
+                // via the onComplete callback (runPublishContinuationIfReady). shouldReturnToRoot
                 // is set when the user taps Done in CrossPostStatusView (onDone closure).
             } else {
                 publishError = "Could not publish listings. Check your connection and try again."
