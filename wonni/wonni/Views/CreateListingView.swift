@@ -157,10 +157,11 @@ struct CustomPhotoPickerView: View {
             return allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && $0.id != activeID }
         }
 
-        /// All used asset IDs (active + committed) — for the "Hide previously selected" toggle
+        /// Asset IDs already saved into a committed draft — for the "Hide previously selected" toggle.
+        /// Deliberately excludes the active (not-yet-committed) draft's selections, since those
+        /// should stay visible with their number badge until the user commits the draft.
         private var allUsedAssetIDs: Set<String> {
-            let committed = committedDrafts.flatMap { $0.sourceAssetIdentifiers }
-            return activeDraftAssetIDs.union(committed)
+            Set(committedDrafts.flatMap { $0.sourceAssetIdentifiers })
         }
         
         var body: some View {
@@ -310,7 +311,7 @@ struct CustomPhotoPickerView: View {
                 DraftHistoryModal(photoCollection: photoCollection)
             }
             .navigationDestination(isPresented: $navigateToOverview) {
-                BulkListingOverviewView(sessionDraftIDs: uploadManager.sessionDraftIDs)
+                BulkListingOverviewView()
             }
         }
         
@@ -1483,8 +1484,6 @@ private struct DescriptionEditorSheet: View {
 
 // MARK: - BulkListingOverviewView (Drafts)
 struct BulkListingOverviewView: View {
-    var sessionDraftIDs: [UUID] = []
-
     @Environment(\.modelContext) private var modelContext
     @Query(filter: #Predicate<Item> { $0.isDraft == true }, sort: \Item.createdAt, order: .reverse)
     private var allItems: [Item]
@@ -1497,12 +1496,11 @@ struct BulkListingOverviewView: View {
     @State private var selectedItemIDs: Set<UUID> = []
     @State private var showDraftBulkEdit = false
 
+    // Always show every not-yet-published draft with photos, regardless of which
+    // app session created it — sessionDraftIDs only tracks the current session's
+    // drafts for the camera exit "discard?" prompt, not what belongs in this list.
     private var drafts: [Item] {
-        let sessionIDs = Set(uploadManager.sessionDraftIDs)
-        if !sessionIDs.isEmpty {
-            return allItems.filter { sessionIDs.contains($0.id) && !$0.sourceAssetIdentifiers.isEmpty }
-        }
-        return allItems.filter { !$0.sourceAssetIdentifiers.isEmpty }
+        allItems.filter { !$0.sourceAssetIdentifiers.isEmpty }
     }
 
     var body: some View {
