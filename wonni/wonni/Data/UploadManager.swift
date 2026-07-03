@@ -647,6 +647,9 @@ class UploadManager: ObservableObject {
                         // ProcessResultsOverviewView.checkAndStartNextWebJob() deletes when the queue empties.
                         publishedPendingDeletionIDs.insert(draft.id)
                     } else {
+                        // See Item.deletedIDs — mark before deleting so no view can read
+                        // photosData on this object after this point.
+                        Item.deletedIDs.insert(draft.id)
                         modelContext.delete(draft)
                     }
                     // This draft is now a live listing — drop it from the session set so the
