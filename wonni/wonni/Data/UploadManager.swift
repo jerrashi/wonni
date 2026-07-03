@@ -413,7 +413,7 @@ class UploadManager: ObservableObject {
                     print("[UploadManager] Running Gemini for draft \(draft.id)...")
                     let gemini = try await GeminiService.shared.identifyItem(
                         images: Array(images.prefix(3)),
-                        userTitle: draft.userEditedTitle,
+                        userTitle: hasUserTitle ? draft.userEditedTitle : nil,
                         userPrice: draft.userEditedPrice,
                         userDescription: draft.userEditedDescription
                     )
