@@ -51,6 +51,15 @@ Pricing on eBay requires searching "sold listings" manually. A `CatalogItem` acc
 4) Demand signals for sellers
 Sellers can easily see of stock items with a large numbers of buyer watching so they know what items to prioritize listing.
 
+5) Scan to post/identify
+Users can post multiple items at once by taking one photo of a binder sheet of trading cards, for example, and each card can be identified and listed in one step instead of having to take multiple photos. This also enhances seo & social capabilities (i.e. enables social & wiki capabilities similar to biasroom.com)
+
+### Local Map (Deferred)
+Users can
+- geotag their postings for local meetups
+- view local meetup listings on a map
+- filter for free listings (i.e. curb alerts)
+
 ## Building and Running
 
 ```bash
