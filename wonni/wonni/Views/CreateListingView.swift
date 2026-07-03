@@ -563,7 +563,11 @@ struct CustomPhotoPickerView: View {
         @State private var originalPhotoData: Data?
 
         var drafts: [Item] {
-            allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty }
+            // See UploadManager.deletedDraftIDs — deletion is deferred a tick, so this
+            // filter is what actually drops the row from the grid immediately.
+            allItems.filter {
+                $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && !uploadManager.deletedDraftIDs.contains($0.id)
+            }
         }
 
         var body: some View {
@@ -1500,7 +1504,10 @@ struct BulkListingOverviewView: View {
         // `sessionDraftIDs` is in-memory only and resets on every launch, so filtering by
         // it silently hid drafts created before an app restart (issue #41). SwiftData is
         // the source of truth for what's still an unpublished draft.
-        allItems.filter { !$0.sourceAssetIdentifiers.isEmpty }
+        // Excluding `deletedDraftIDs` here matters: deletion is deferred by a run loop tick
+        // (see UploadManager.deleteDraftLocallyAndCloud) to avoid a SwiftData crash, so this
+        // filter is what actually removes the row from the List immediately.
+        allItems.filter { !$0.sourceAssetIdentifiers.isEmpty && !uploadManager.deletedDraftIDs.contains($0.id) }
     }
 
     var body: some View {
@@ -1733,7 +1740,9 @@ struct ProcessResultsOverviewView: View {
     // Only show the items that went through AI processing
     private var results: [Item] {
         let processedSet = Set(uploadManager.processedItemIDs)
-        return allItems.filter { processedSet.contains($0.id) }
+        // See UploadManager.deletedDraftIDs — deletion is deferred a tick, so this filter is
+        // what actually drops the row from the List immediately.
+        return allItems.filter { processedSet.contains($0.id) && !uploadManager.deletedDraftIDs.contains($0.id) }
     }
 
     private var toPublish: [Item] {
