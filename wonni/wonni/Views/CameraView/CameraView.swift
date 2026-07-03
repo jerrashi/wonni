@@ -120,7 +120,7 @@ struct CameraView: View {
                     .onAppear  { model.camera.isPreviewPaused = true }
                     .onDisappear { model.camera.isPreviewPaused = false }
             case .drafts:
-                BulkListingOverviewView(sessionDraftIDs: uploadManager.sessionDraftIDs)
+                BulkListingOverviewView()
                     .onAppear  { model.camera.isPreviewPaused = true }
                     .onDisappear { model.camera.isPreviewPaused = false }
             }

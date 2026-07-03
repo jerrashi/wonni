@@ -504,7 +504,12 @@ class UploadManager: ObservableObject {
 
     /// Posts finished drafts as active listings. Uploads photos first if they
     /// weren't already uploaded (e.g. app was restarted between phases).
-    func publishDrafts(drafts: [Item], modelContext: ModelContext) {
+    /// `onComplete` fires on the main actor after the publish task finishes (success or
+    /// failure). Callers must use it — not `.onChange(of: isPublishing)` — to sequence
+    /// post-publish work: when photos are already uploaded the task completes in
+    /// milliseconds, so `isPublishing` can flip true→false before SwiftUI renders and
+    /// an `.onChange` observer never sees the transition.
+    func publishDrafts(drafts: [Item], modelContext: ModelContext, onComplete: (() -> Void)? = nil) {
         guard !drafts.isEmpty else { return }
         print("[UploadManager] publishDrafts called for \(drafts.count) items")
         isPublishing = true
@@ -523,6 +528,7 @@ class UploadManager: ObservableObject {
             defer {
                 isPublishing = false
                 AppTaskQueue.shared.complete(id: taskId)
+                onComplete?()
             }
 
             guard let userId = Auth.auth().currentUser?.uid else {
