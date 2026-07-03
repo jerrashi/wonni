@@ -4281,10 +4281,21 @@ final class MercariItemLoader: ObservableObject {
                     if (pm) out.price = parseFloat(pm[1]) / 100;
                 }
             }
-            // og:image is a reliable first-photo fallback when __NEXT_DATA__ has no photos array
+            // DOM fallback when __NEXT_DATA__ has no photos array (common for sold-out items,
+            // whose page props omit the photos array): the product image tag carries the
+            // real item ID in its `itemid` attribute, unlike the generic og:image meta tag.
+            if (!out.photo) {
+                var itemImg = document.querySelector('img[itemid]');
+                if (itemImg && itemImg.src) out.photo = itemImg.src;
+            }
+            // og:image is a last resort. Only trust it if it's on Mercari's actual photo CDN
+            // (u-mercari-images.mercdn.net) — the generic brand placeholder is served from
+            // u-web-assets.mercdn.net and must never be accepted as the item's photo.
             if (!out.photo) {
                 var og = document.querySelector('meta[property="og:image"]');
-                if (og && og.content) out.photo = og.content;
+                if (og && og.content && og.content.indexOf('u-mercari-images.mercdn.net') !== -1) {
+                    out.photo = og.content;
+                }
             }
             // DOM query for title is more reliable than NEXT_DATA which often contains the seller name
             var nameEl = document.querySelector('[data-testid="ItemName"]');
@@ -4527,6 +4538,7 @@ struct MercariSaleResult {
     var trackingNumber: String?
     var carrier: String?
     var thumbnailUrl: String?
+    var status: SaleStatus?
     var soldAt: Date?
 }
 
@@ -4536,6 +4548,7 @@ final class MercariSaleSyncManager: ObservableObject {
     @Published var currentIndex = 0
     @Published var totalCount = 0
     @Published var currentStatus = ""
+    @Published var needsLogin = false
 
     let webView: WKWebView
     private let navDelegate = SaleNavDelegate()
@@ -4544,6 +4557,7 @@ final class MercariSaleSyncManager: ObservableObject {
     init() {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.default()
+        config.processPool = mercariProcessPool
         let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
         wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         wv.navigationDelegate = navDelegate
@@ -4551,11 +4565,16 @@ final class MercariSaleSyncManager: ObservableObject {
     }
     
     func sync(sales: [Sale]) async {
+        // Sync non-terminal sales to catch delivery/cancellation changes, plus any sale
+        // (regardless of status) still missing take-home, tracking, or a real photo so
+        // previously-malformed imports get backfilled on the next sync.
         let mercariSales = sales.filter { sale in
             guard sale.platform == "mercari" else { return false }
+            let isActive = sale.status != .complete && sale.status != .cancelled && sale.status != .returned
             let hasRealPhoto = sale.coverPhotoPath != nil ||
                 (sale.thumbnailUrl != nil && sale.thumbnailUrl?.contains("ogp_image") != true)
-            return sale.takeHome == nil || sale.trackingNumber == nil || !hasRealPhoto
+            let isMissingData = sale.takeHome == nil || sale.trackingNumber == nil || !hasRealPhoto
+            return isActive || isMissingData
         }
         guard !mercariSales.isEmpty else {
             print("[MercariSaleSync] No mercari sales needing sync")
@@ -4565,23 +4584,11 @@ final class MercariSaleSyncManager: ObservableObject {
         isRunning = true
         totalCount = mercariSales.count
         currentIndex = 0
-        saleTaskId = UUID()
-        AppTaskQueue.shared.begin(
-            id: saleTaskId,
-            label: "Syncing Mercari sales",
-            detail: "0 of \(mercariSales.count)",
-            progress: 0
-        )
 
         print("[MercariSaleSync] Starting headless sync for \(mercariSales.count) sales")
-        
+
         for (i, sale) in mercariSales.enumerated() {
             currentIndex = i + 1
-            AppTaskQueue.shared.update(
-                id: saleTaskId,
-                detail: "\(i + 1) of \(mercariSales.count)",
-                progress: Double(i + 1) / Double(max(mercariSales.count, 1))
-            )
             guard let platformOrderId = sale.platformOrderId, !platformOrderId.isEmpty else {
                 print("[MercariSaleSync] Skipping sale \(sale.id ?? "?") - no platformOrderId")
                 continue
@@ -4609,9 +4616,14 @@ final class MercariSaleSyncManager: ObservableObject {
                     update["thumbnailUrl"] = photo
                     print("[MercariSaleSync] thumbnailUrl backfilled for \(platformOrderId)")
                 }
-                if let soldAt = result.soldAt {
-                    update["soldAt"] = Timestamp(date: soldAt)
-                    print("[MercariSaleSync] soldAt = \(soldAt) for \(platformOrderId)")
+                if let newStatus = result.status, newStatus != sale.status {
+                    update["status"] = newStatus.rawValue
+                    print("[MercariSaleSync] status → \(newStatus.rawValue) for \(platformOrderId)")
+                }
+                if let newDate = result.soldAt,
+                   !Calendar.current.isDate(sale.soldAt.dateValue(), inSameDayAs: newDate) {
+                    update["soldAt"] = Timestamp(date: newDate)
+                    print("[MercariSaleSync] soldAt → \(newDate) for \(platformOrderId)")
                 }
 
                 if !update.isEmpty {
@@ -4627,10 +4639,9 @@ final class MercariSaleSyncManager: ObservableObject {
         currentStatus = "Done"
         print("[MercariSaleSync] Sync complete")
         isRunning = false
-        AppTaskQueue.shared.complete(id: saleTaskId)
     }
     
-    private func loadSaleData(itemId: String, fetchPhoto: Bool = false) async -> MercariSaleResult? {
+    func loadSaleData(itemId: String, fetchPhoto: Bool = false) async -> MercariSaleResult? {
         guard let url = URL(string: "https://www.mercari.com/transaction/order_status/\(itemId)/") else {
             return nil
         }
@@ -4638,17 +4649,17 @@ final class MercariSaleSyncManager: ObservableObject {
         navDelegate.reset()
         webView.load(URLRequest(url: url))
         
-        let loaded = await navDelegate.waitForLoad(timeout: 15)
+        let loaded = await navDelegate.waitForLoad(timeout: 10)
         if !loaded { print("[MercariSaleSync] Order page timed out for \(itemId)") }
-        
+
         // Wait for React/Next.js hydration
-        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
         
         var result = MercariSaleResult()
         
         let jsOrder = """
         (function() {
-            var out = { takeHome: null, hasTracking: false, soldOn: null, debug: '' };
+            var out = { takeHome: null, hasTracking: false, status: null, soldAt: null, debug: '' };
             var takeHomeEl = document.querySelector('p[data-testid="You-made-value"]');
             if (takeHomeEl) {
                 out.debug += 'Found takeHome: ' + takeHomeEl.innerText + '; ';
@@ -4664,35 +4675,67 @@ final class MercariSaleSyncManager: ObservableObject {
             }
             var trackingBtn = document.querySelector('a[data-testid="ShippingCTAButton"]');
             if (trackingBtn) { out.hasTracking = true; }
+            var stepEl = document.querySelector('[data-testid="TimelineStepName"]');
+            var step = stepEl ? stepEl.innerText.trim().toLowerCase() : '';
+            out.debug += 'step: ' + step + '; ';
+            if (step === 'complete') {
+                out.status = 'complete';
+            } else if (step === 'delivery') {
+                out.status = 'delivered';
+            } else if (step === 'in transit') {
+                out.status = 'shipped';
+            } else if (step.includes('cancel')) {
+                out.status = 'cancelled';
+            } else if (step.includes('return')) {
+                out.status = 'returned';
+            }
+            var dateEl = document.querySelector('p[data-testid="ItemSoldTime"]');
+            if (dateEl) {
+                var m = dateEl.innerText.match(/(\\d{2}\\/\\d{2}\\/\\d{2,4})/);
+                if (m) out.soldAt = m[1];
+            }
             out.debug += 'url: ' + window.location.href;
             return JSON.stringify(out);
         })();
         """
 
+        let soldAtFormatter: DateFormatter = {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "MM/dd/yy"
+            return f
+        }()
+
         var hasTracking = false
-        let deadline = Date().addingTimeInterval(15)
+        let deadline = Date().addingTimeInterval(8)
         while Date() < deadline {
             do {
                 if let jsResult = try await webView.evaluateJavaScript(jsOrder) as? String {
                     print("[MercariSaleSync] JS: \(jsResult)")
                     if let data = jsResult.data(using: .utf8),
                        let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                        if dict["takeHome"] != nil || dict["hasTracking"] as? Bool == true {
-                            result.takeHome = dict["takeHome"] as? Double
-                            hasTracking = dict["hasTracking"] as? Bool ?? false
-                            if let soldOn = dict["soldOn"] as? String {
-                                result.soldAt = Self.parseMercariSoldDate(soldOn)
-                                break
-                            }
-                            // takeHome found but ItemSoldTime not yet rendered — one extra poll
-                            if Date().addingTimeInterval(2) < deadline {
-                                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                                if let jsResult2 = try? await webView.evaluateJavaScript(jsOrder) as? String,
-                                   let d2 = jsResult2.data(using: .utf8),
-                                   let dict2 = try? JSONSerialization.jsonObject(with: d2) as? [String: Any],
-                                   let soldOn = dict2["soldOn"] as? String {
-                                    result.soldAt = Self.parseMercariSoldDate(soldOn)
-                                }
+                        // JSONSerialization decodes JS `null` as NSNull, not Swift nil — casting to
+                        // the real expected type (which fails for NSNull) is what actually tells
+                        // "not yet rendered" from "rendered". `dict["x"] != nil` is true even when
+                        // the JS value is null, since the key itself is always present in `out`.
+                        // (An earlier version of this loop on main worked around the same bug with
+                        // a single hardcoded extra poll for soldAt — no longer needed once the loop
+                        // itself correctly keeps retrying until real data actually appears.)
+                        let takeHomeVal = dict["takeHome"] as? Double
+                        let hasTrackingVal = dict["hasTracking"] as? Bool ?? false
+                        let statusStr = dict["status"] as? String
+                        let soldAtStr = dict["soldAt"] as? String
+                        if takeHomeVal != nil || hasTrackingVal || statusStr != nil || soldAtStr != nil {
+                            result.takeHome = takeHomeVal
+                            hasTracking = hasTrackingVal
+                            if let s = statusStr { result.status = SaleStatus(rawValue: s) }
+                            if let dateStr = soldAtStr {
+                                result.soldAt = soldAtFormatter.date(from: dateStr) ?? {
+                                    soldAtFormatter.dateFormat = "MM/dd/yyyy"
+                                    let d = soldAtFormatter.date(from: dateStr)
+                                    soldAtFormatter.dateFormat = "MM/dd/yy"
+                                    return d
+                                }()
                             }
                             break
                         }
@@ -4712,11 +4755,11 @@ final class MercariSaleSyncManager: ObservableObject {
             
             navDelegate.reset()
             webView.load(URLRequest(url: trackingUrl))
-            let trackingLoaded = await navDelegate.waitForLoad(timeout: 15)
+            let trackingLoaded = await navDelegate.waitForLoad(timeout: 10)
             if !trackingLoaded { print("[MercariSaleSync] Tracking page timed out") }
-            
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            
+
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+
             let jsTracking = """
             (function() {
                 var out = { trackingNumber: null, carrier: null };
@@ -4728,15 +4771,18 @@ final class MercariSaleSyncManager: ObservableObject {
             })();
             """
             
-            let trackingDeadline = Date().addingTimeInterval(15)
+            let trackingDeadline = Date().addingTimeInterval(8)
             while Date() < trackingDeadline {
                 do {
                     if let jsResult = try await webView.evaluateJavaScript(jsTracking) as? String {
                         print("[MercariSaleSync] Tracking JS: \(jsResult)")
                         if let data = jsResult.data(using: .utf8),
                            let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                            if dict["trackingNumber"] != nil {
-                                result.trackingNumber = dict["trackingNumber"] as? String
+                            // Same NSNull-vs-nil pitfall as above: `trackingNumber` is always a
+                            // present key (initialized to null), so only a successful String cast
+                            // means the tracking number actually rendered.
+                            if let trackingNumber = dict["trackingNumber"] as? String {
+                                result.trackingNumber = trackingNumber
                                 result.carrier = dict["carrier"] as? String
                                 break
                             }
@@ -4780,6 +4826,14 @@ final class MercariSaleSyncManager: ObservableObject {
                             }
                         } catch(e) {}
                     }
+                    // DOM fallback — sold-out items often omit the photos array from
+                    // __NEXT_DATA__ page props. Prefer the product image tag carrying the
+                    // real item ID in its `itemid` attribute; fall back to any Mercari CDN
+                    // image if that specific tag isn't present.
+                    if (!out.photo) {
+                        var itemImg = document.querySelector('img[itemid]');
+                        if (itemImg && itemImg.src && !isOGP(itemImg.src)) out.photo = itemImg.src;
+                    }
                     if (!out.photo) {
                         var imgs = document.querySelectorAll('img');
                         for (var i = 0; i < imgs.length; i++) {
@@ -4787,10 +4841,16 @@ final class MercariSaleSyncManager: ObservableObject {
                             if (src.indexOf('static.mercdn.net') !== -1 && !isOGP(src)) { out.photo = src; break; }
                         }
                     }
+                    // og:image is a last resort. Only trust it if it's on Mercari's actual photo
+                    // CDN (u-mercari-images.mercdn.net) and isn't the generic brand placeholder —
+                    // the placeholder is served from u-web-assets.mercdn.net and must never be
+                    // accepted as the item's photo.
                     if (!out.photo) {
                         var og = document.querySelector('meta[property="og:image"]');
                         var ogSrc = og && og.content ? og.content : null;
-                        if (ogSrc && !isOGP(ogSrc)) out.photo = ogSrc;
+                        if (ogSrc && ogSrc.indexOf('u-mercari-images.mercdn.net') !== -1 && !isOGP(ogSrc)) {
+                            out.photo = ogSrc;
+                        }
                     }
                     var soldTimeEl = document.querySelector('[data-testid="ItemSoldTime"]');
                     if (soldTimeEl) {
@@ -4822,6 +4882,246 @@ final class MercariSaleSyncManager: ObservableObject {
         return result
     }
 
+    // MARK: - New sale discovery
+
+    // Navigates to the Mercari sold-items listings page, ensures "Last updated" sort,
+    // then scrolls and extracts items — stopping once 3 consecutive known order IDs
+    // are encountered. Saves genuinely new items as Sale records.
+    // Both "In Progress" and "Complete" sections are covered because __NEXT_DATA__
+    // and the DOM link fallback operate on the full page regardless of section.
+    /// Scans Mercari's in-progress transactions and returns newly discovered items.
+    /// Stops at the first known order ID or when an item's updated date is before `stopBeforeDate`.
+    /// Callers decide whether to auto-save or present for manual selection.
+    func scanForNewSales(knownOrderIds: Set<String>, stopBeforeDate: Date? = nil) async -> [MercariFoundSaleItem] {
+        // sortBy=7 = Last Updated, so we get newest sales first without needing dropdown interaction.
+        // /in_progress/ shows transactions currently being traded — complete ones are already tracked.
+        guard let url = URL(string: "https://www.mercari.com/mypage/listings/in_progress/?sortBy=7") else { return [] }
+        navDelegate.reset()
+        webView.load(URLRequest(url: url))
+        guard await navDelegate.waitForLoad(timeout: 10) else {
+            print("[MercariSaleSync] scanForNewSales: page timed out")
+            return []
+        }
+
+        // If Mercari redirected to login, surface the webview so the user can authenticate.
+        let landedUrl = webView.url?.absoluteString ?? ""
+        if landedUrl.contains("/login") || landedUrl.contains("/signup") {
+            print("[MercariSaleSync] Not logged in — redirected to \(landedUrl)")
+            needsLogin = true
+            return []
+        }
+        needsLogin = false
+
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+
+        // Mercari item IDs always match /m\d+/. We look for that pattern in any link href
+        // since the in-progress page may link to /transaction/order_status/m[id]/ rather
+        // than /us/item/m[id]/, and the URL scheme can vary by page/experiment.
+        let extractJS = """
+        return (function() {
+            var results = [];
+            var seen = new Set();
+            var dateRe = /^\\d{2}\\/\\d{2}\\/\\d{2,4}$/;
+            var idRe = /(m\\d+)/;
+
+            function extractId(href) {
+                var m = href.match(idRe);
+                return m ? m[1] : null;
+            }
+
+            // Phase 1: try __NEXT_DATA__ — broadest search across all known key paths
+            var nd = document.getElementById('__NEXT_DATA__');
+            if (nd) {
+                try {
+                    var root = JSON.parse(nd.textContent || '');
+                    // Flatten everything under pageProps into candidate arrays
+                    var pp = root.props && root.props.pageProps;
+                    var candidates = [];
+                    if (pp) {
+                        // Walk all top-level and one-level-deep keys looking for arrays of objects with id+name
+                        for (var k in pp) {
+                            var v = pp[k];
+                            if (Array.isArray(v) && v.length && v[0] && v[0].id) candidates = candidates.concat(v);
+                            else if (v && typeof v === 'object') {
+                                for (var k2 in v) {
+                                    var v2 = v[k2];
+                                    if (Array.isArray(v2) && v2.length && v2[0] && v2[0].id) candidates = candidates.concat(v2);
+                                }
+                            }
+                        }
+                    }
+                    for (var it of candidates) {
+                        var sid = String(it.id || '');
+                        var extractedId = extractId(sid) || extractId(it.itemId || '');
+                        if (!extractedId || seen.has(extractedId)) continue;
+                        seen.add(extractedId);
+                        var upd = it.updated || it.updatedAt || it.updated_at || null;
+                        var price = it.price ? (it.price > 1000 ? it.price / 100 : it.price) : null;
+                        results.push({ id: extractedId, name: it.name || null,
+                                       price: price, thumbnailUrl: (it.thumbnails && it.thumbnails[0]) || it.thumbnailUrl || null,
+                                       updatedStr: null });
+                    }
+                } catch(e) {}
+            }
+
+            // Shared helper: given any element, find name + price using data-testid
+            // first (item detail pages), then fall back to $ regex on <p> tags
+            // (in-progress list page which has no data-testid attributes).
+            function extractNamePrice(el) {
+                var priceRe = /^\\$[\\d,\\.]+/;
+                var nameEl = el.querySelector('[data-testid="ItemName"],[data-testid="item-name"]');
+                var priceEl = el.querySelector('[data-testid="ItemPrice"],[data-testid="item-price"]');
+                if (!nameEl || !priceEl) {
+                    var paras = Array.from(el.querySelectorAll('p'));
+                    if (!priceEl) priceEl = paras.find(function(p) { return priceRe.test(p.innerText.trim()); });
+                    if (!nameEl)  nameEl  = paras.find(function(p) {
+                        var t = p.innerText.trim();
+                        return t.length > 3 && !priceRe.test(t);
+                    });
+                }
+                var priceText = priceEl ? priceEl.innerText.replace(/[^0-9\\.]/g,'') : null;
+                return {
+                    name: nameEl ? nameEl.innerText.trim() : null,
+                    price: priceText ? parseFloat(priceText) || null : null
+                };
+            }
+
+            // Phase 2: DOM scan — walk <tr> rows first to pair links with date cells
+            if (results.length === 0) {
+                for (var row of document.querySelectorAll('tr')) {
+                    var link = Array.from(row.querySelectorAll('a[href]'))
+                        .find(function(a) { return idRe.test(a.href); });
+                    if (!link) continue;
+                    var eid = extractId(link.href);
+                    if (!eid || seen.has(eid)) continue;
+                    seen.add(eid);
+                    var dateTd = Array.from(row.querySelectorAll('td'))
+                        .find(function(td) { return dateRe.test(td.innerText.trim()); });
+                    var np = extractNamePrice(link);
+                    var imgEl = link.querySelector('img');
+                    results.push({ id: eid, name: np.name, price: np.price,
+                                   thumbnailUrl: imgEl ? imgEl.src : null,
+                                   updatedStr: dateTd ? dateTd.innerText.trim() : null });
+                }
+            }
+
+            // Phase 3: bare link scan — filter on JS .href (always absolute)
+            if (results.length === 0) {
+                for (var a of document.querySelectorAll('a[href]')) {
+                    if (!idRe.test(a.href)) continue;
+                    var eid = extractId(a.href);
+                    if (!eid || seen.has(eid)) continue;
+                    seen.add(eid);
+                    var np = extractNamePrice(a);
+                    var imgEl = a.querySelector('img');
+                    results.push({ id: eid, name: np.name, price: np.price,
+                                   thumbnailUrl: imgEl ? imgEl.src : null,
+                                   updatedStr: null });
+                }
+            }
+
+            return JSON.stringify({ items: results, url: window.location.href, count: results.length });
+        })();
+        """
+
+        let dateFormatter: DateFormatter = {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "MM/dd/yy"  // Mercari shows e.g. 06/25/26
+            return f
+        }()
+
+        var newItems: [MercariFoundSaleItem] = []
+        var lastCount = 0
+        var noChangeStreak = 0
+        var done = false
+
+        for _ in 0..<30 {
+            guard !done else { break }
+            _ = try? await webView.callJS("window.scrollTo(0, document.body.scrollHeight); return null;")
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+
+            guard let json = (try? await webView.callJS(extractJS)) as? String,
+                  let data = json.data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let arr = root["items"] as? [[String: Any]] else { continue }
+
+            print("[MercariSaleSync] scan: \(arr.count) items on page, url=\(root["url"] as? String ?? "?")")
+
+            if arr.count <= lastCount {
+                noChangeStreak += 1
+                if noChangeStreak >= 3 { break }  // 3 × 1.5s = 4.5s grace for hydration
+                continue
+            }
+            noChangeStreak = 0
+
+            for dict in arr.dropFirst(lastCount) {
+                guard let id = dict["id"] as? String, !id.isEmpty else { continue }
+
+                // Stop at the first sale we already know about — list is newest-first
+                if knownOrderIds.contains(id) { done = true; break }
+
+                // Stop once we reach an item updated before the start of the last-sync day
+                if let cutoff = stopBeforeDate,
+                   let dateStr = dict["updatedStr"] as? String,
+                   let itemDate = dateFormatter.date(from: dateStr),
+                   itemDate < cutoff {
+                    done = true; break
+                }
+
+                let name = dict["name"] as? String
+                let price = (dict["price"] as? NSNumber)?.doubleValue
+                guard let n = name, !n.isEmpty, let p = price, p > 0 else {
+                    print("[MercariSaleSync] skipping item \(id): missing name or price")
+                    continue
+                }
+                newItems.append(MercariFoundSaleItem(
+                    id: id,
+                    name: n,
+                    price: p,
+                    thumbnailUrl: dict["thumbnailUrl"] as? String
+                ))
+            }
+            lastCount = arr.count
+        }
+
+        print("[MercariSaleSync] scanForNewSales: \(newItems.count) new item(s)")
+        return newItems
+    }
+
+    private func ensureLastUpdatedSort() async {
+        let checkJS = """
+        return (function() {
+            var btn = document.querySelector('[data-testid="Listings-SortBy"]');
+            return btn ? btn.innerText.trim() : '';
+        })();
+        """
+        guard let current = (try? await webView.callJS(checkJS)) as? String,
+              current.lowercased() != "last updated" else { return }
+
+        _ = try? await webView.callJS("""
+        return (function() {
+            var btn = document.querySelector('[data-testid="Listings-SortBy"]');
+            if (btn) { btn.click(); return true; }
+            return false;
+        })();
+        """)
+        try? await Task.sleep(nanoseconds: 800_000_000)
+
+        _ = try? await webView.callJS("""
+        return (function() {
+            var opts = document.querySelectorAll('[role="option"], [role="listbox"] *');
+            for (var opt of opts) {
+                if (opt.innerText && opt.innerText.trim().toLowerCase() === 'last updated') {
+                    opt.click(); return true;
+                }
+            }
+            return false;
+        })();
+        """)
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+    }
+
     private static func parseMercariSoldDate(_ raw: String) -> Date? {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -4835,7 +5135,7 @@ final class MercariSaleSyncManager: ObservableObject {
 
 // MARK: - Navigation Delegate for waiting on page loads
 
-private class SaleNavDelegate: NSObject, WKNavigationDelegate {
+final class SaleNavDelegate: NSObject, WKNavigationDelegate {
     private var continuation: CheckedContinuation<Bool, Never>?
     private var didFinish = false
     

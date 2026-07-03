@@ -82,6 +82,13 @@ class SaleRepository: ObservableObject {
         ])
     }
 
+    // Hard-deletes a sale doc. Used for permanently purging malformed/incorrect imports —
+    // unlike hideSale, this removes the platformOrderId from knownMercariIds entirely,
+    // so the item can be re-scanned and re-imported on the next sync.
+    func permanentlyDeleteSale(id: String) async throws {
+        try await db.collection(col).document(id).delete()
+    }
+
     func addSale(_ sale: Sale) async throws {
         guard let userId = Auth.auth().currentUser?.uid else {
             throw NSError(domain: "SaleRepository", code: 401,
