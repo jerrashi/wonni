@@ -166,7 +166,7 @@ struct AppTaskQueuePillContent: View {
     @ObservedObject private var queue = AppTaskQueue.shared
 
     var body: some View {
-        if queue.hasActiveTasks, let task = queue.current {
+        if queue.hasActiveTasks, !queue.suppressGlobalPill, let task = queue.current {
             AppTaskQueuePillView(task: task, queueCount: queue.count)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
         }

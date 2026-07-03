@@ -4249,10 +4249,21 @@ final class MercariItemLoader: ObservableObject {
                     if (pm) out.price = parseFloat(pm[1]) / 100;
                 }
             }
-            // og:image is a reliable first-photo fallback when __NEXT_DATA__ has no photos array
+            // DOM fallback when __NEXT_DATA__ has no photos array (common for sold-out items,
+            // whose page props omit the photos array): the product image tag carries the
+            // real item ID in its `itemid` attribute, unlike the generic og:image meta tag.
+            if (!out.photo) {
+                var itemImg = document.querySelector('img[itemid]');
+                if (itemImg && itemImg.src) out.photo = itemImg.src;
+            }
+            // og:image is a last resort. Only trust it if it's on Mercari's actual photo CDN
+            // (u-mercari-images.mercdn.net) — the generic brand placeholder is served from
+            // u-web-assets.mercdn.net and must never be accepted as the item's photo.
             if (!out.photo) {
                 var og = document.querySelector('meta[property="og:image"]');
-                if (og && og.content) out.photo = og.content;
+                if (og && og.content && og.content.indexOf('u-mercari-images.mercdn.net') !== -1) {
+                    out.photo = og.content;
+                }
             }
             // DOM query for title is more reliable than NEXT_DATA which often contains the seller name
             var nameEl = document.querySelector('[data-testid="ItemName"]');
@@ -4483,6 +4494,7 @@ struct MercariSaleResult {
     var carrier: String?
     var thumbnailUrl: String?
     var status: SaleStatus?
+    var soldAt: Date?
 }
 
 @MainActor
@@ -4556,6 +4568,11 @@ final class MercariSaleSyncManager: ObservableObject {
                     update["status"] = newStatus.rawValue
                     print("[MercariSaleSync] status → \(newStatus.rawValue) for \(platformOrderId)")
                 }
+                if let newDate = result.soldAt,
+                   !Calendar.current.isDate(sale.soldAt.dateValue(), inSameDayAs: newDate) {
+                    update["soldAt"] = Timestamp(date: newDate)
+                    print("[MercariSaleSync] soldAt → \(newDate) for \(platformOrderId)")
+                }
 
                 if !update.isEmpty {
                     update["updatedAt"] = FieldValue.serverTimestamp()
@@ -4572,7 +4589,7 @@ final class MercariSaleSyncManager: ObservableObject {
         isRunning = false
     }
     
-    private func loadSaleData(itemId: String, fetchPhoto: Bool = false) async -> MercariSaleResult? {
+    func loadSaleData(itemId: String, fetchPhoto: Bool = false) async -> MercariSaleResult? {
         guard let url = URL(string: "https://www.mercari.com/transaction/order_status/\(itemId)/") else {
             return nil
         }
@@ -4590,7 +4607,7 @@ final class MercariSaleSyncManager: ObservableObject {
         
         let jsOrder = """
         (function() {
-            var out = { takeHome: null, hasTracking: false, status: null, debug: '' };
+            var out = { takeHome: null, hasTracking: false, status: null, soldAt: null, debug: '' };
             var takeHomeEl = document.querySelector('p[data-testid="You-made-value"]');
             if (takeHomeEl) {
                 out.debug += 'Found takeHome: ' + takeHomeEl.innerText + '; ';
@@ -4615,10 +4632,22 @@ final class MercariSaleSyncManager: ObservableObject {
             } else if (step.includes('return')) {
                 out.status = 'returned';
             }
+            var dateEl = document.querySelector('p[data-testid="ItemSoldTime"]');
+            if (dateEl) {
+                var m = dateEl.innerText.match(/(\\d{2}\\/\\d{2}\\/\\d{2,4})/);
+                if (m) out.soldAt = m[1];
+            }
             out.debug += 'url: ' + window.location.href;
             return JSON.stringify(out);
         })();
         """
+
+        let soldAtFormatter: DateFormatter = {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "MM/dd/yy"
+            return f
+        }()
 
         var hasTracking = false
         let deadline = Date().addingTimeInterval(8)
@@ -4628,10 +4657,26 @@ final class MercariSaleSyncManager: ObservableObject {
                     print("[MercariSaleSync] JS: \(jsResult)")
                     if let data = jsResult.data(using: .utf8),
                        let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                        if dict["takeHome"] != nil || dict["hasTracking"] as? Bool == true || dict["status"] != nil {
-                            result.takeHome = dict["takeHome"] as? Double
-                            hasTracking = dict["hasTracking"] as? Bool ?? false
-                            if let s = dict["status"] as? String { result.status = SaleStatus(rawValue: s) }
+                        // JSONSerialization decodes JS `null` as NSNull, not Swift nil — casting to
+                        // the real expected type (which fails for NSNull) is what actually tells
+                        // "not yet rendered" from "rendered". `dict["x"] != nil` is true even when
+                        // the JS value is null, since the key itself is always present in `out`.
+                        let takeHomeVal = dict["takeHome"] as? Double
+                        let hasTrackingVal = dict["hasTracking"] as? Bool ?? false
+                        let statusStr = dict["status"] as? String
+                        let soldAtStr = dict["soldAt"] as? String
+                        if takeHomeVal != nil || hasTrackingVal || statusStr != nil || soldAtStr != nil {
+                            result.takeHome = takeHomeVal
+                            hasTracking = hasTrackingVal
+                            if let s = statusStr { result.status = SaleStatus(rawValue: s) }
+                            if let dateStr = soldAtStr {
+                                result.soldAt = soldAtFormatter.date(from: dateStr) ?? {
+                                    soldAtFormatter.dateFormat = "MM/dd/yyyy"
+                                    let d = soldAtFormatter.date(from: dateStr)
+                                    soldAtFormatter.dateFormat = "MM/dd/yy"
+                                    return d
+                                }()
+                            }
                             break
                         }
                     }
@@ -4673,8 +4718,11 @@ final class MercariSaleSyncManager: ObservableObject {
                         print("[MercariSaleSync] Tracking JS: \(jsResult)")
                         if let data = jsResult.data(using: .utf8),
                            let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                            if dict["trackingNumber"] != nil {
-                                result.trackingNumber = dict["trackingNumber"] as? String
+                            // Same NSNull-vs-nil pitfall as above: `trackingNumber` is always a
+                            // present key (initialized to null), so only a successful String cast
+                            // means the tracking number actually rendered.
+                            if let trackingNumber = dict["trackingNumber"] as? String {
+                                result.trackingNumber = trackingNumber
                                 result.carrier = dict["carrier"] as? String
                                 break
                             }
@@ -4714,8 +4762,18 @@ final class MercariSaleSyncManager: ObservableObject {
                             }
                         } catch(e) {}
                     }
+                    // DOM fallback — sold-out items often omit the photos array from
+                    // __NEXT_DATA__ page props, but the product image tag (with the real
+                    // item ID in its `itemid` attribute) is still rendered.
+                    var itemImg = document.querySelector('img[itemid]');
+                    if (itemImg && itemImg.src) return itemImg.src;
+                    // og:image is a last resort. Only trust it if it's on Mercari's actual photo
+                    // CDN (u-mercari-images.mercdn.net) — the generic brand placeholder is served
+                    // from u-web-assets.mercdn.net and must never be accepted as the item's photo.
                     var og = document.querySelector('meta[property="og:image"]');
-                    if (og && og.content) return og.content;
+                    if (og && og.content && og.content.indexOf('u-mercari-images.mercdn.net') !== -1) {
+                        return og.content;
+                    }
                     return null;
                 })();
                 """
@@ -4974,7 +5032,7 @@ final class MercariSaleSyncManager: ObservableObject {
 
 // MARK: - Navigation Delegate for waiting on page loads
 
-private class SaleNavDelegate: NSObject, WKNavigationDelegate {
+final class SaleNavDelegate: NSObject, WKNavigationDelegate {
     private var continuation: CheckedContinuation<Bool, Never>?
     private var didFinish = false
     

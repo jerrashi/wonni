@@ -39,8 +39,8 @@ struct Sale: Identifiable, Codable {
     var userId: String
     var listingId: String?
     var listingTitle: String?          // snapshot at time of sale
-    var coverPhotoPath: String?        // Firebase Storage path snapshot
-    var thumbnailUrl: String?          // external CDN URL (set when no Storage path is available)
+    var coverPhotoPath: String?        // Firebase Storage path snapshot — fallback, costs Storage bandwidth to load
+    var thumbnailUrl: String?          // platform CDN thumbnail (eBay/Mercari) — preferred display source, no Storage cost
 
     var platform: String               // "ebay" | "mercari" | "etsy"
     var platformOrderId: String?
