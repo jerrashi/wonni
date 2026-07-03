@@ -31,14 +31,17 @@ class UploadManager: ObservableObject {
     @Published var shouldReturnToRoot = false
     @Published var pendingAutofillJobsCount = 0
     @Published var sessionDraftIDs: [UUID] = []
-    /// IDs of drafts deleted while a background upload/recognition Task for them may
-    /// still be in flight. Those Tasks capture the SwiftData `Item` directly and `await`
-    /// across suspension points (network calls, photo fetches); if the draft is deleted
-    /// from the model context mid-flight and the Task later resumes and touches a model
-    /// property, SwiftData crashes with "backing data detached from a context without
-    /// resolving attribute faults." Every background Task must re-check this set after
-    /// each `await` and bail out before touching the model again.
-    private var deletedDraftIDs: Set<UUID> = []
+    /// IDs of drafts marked for deletion. Populated synchronously by
+    /// `deleteDraftLocallyAndCloud`, before the underlying SwiftData delete actually runs
+    /// (deferred by one run loop tick — see that function). Two things depend on this:
+    /// 1. Any in-flight background upload/recognition Task for the draft (which captures
+    ///    the `Item` directly and `await`s across suspension points) re-checks this set
+    ///    after each `await` and bails out rather than touching a model that may now be
+    ///    detached from its context.
+    /// 2. Draft-list views (`BulkListingOverviewView.drafts`, `ProcessResultsOverviewView`)
+    ///    filter it out of their next render immediately, so SwiftUI never re-renders a row
+    ///    against an `Item` whose backing store the deferred delete is about to invalidate.
+    @Published private(set) var deletedDraftIDs: Set<UUID> = []
 
     // ── Active Draft (shared between camera and picker) ──────────────────────
     /// The UUID of the Item currently being built by the user.
@@ -140,21 +143,31 @@ class UploadManager: ObservableObject {
     /// Deletes a draft from the local database, Firestore, and deletes uploaded images from Storage.
     func deleteDraftLocallyAndCloud(draft: Item, modelContext: ModelContext) {
         let listingId = draft.firestoreListingId
-        // Mark first so any in-flight background upload/recognition Task for this draft
-        // (which may be suspended mid-`await` right now) bails out on its next check
-        // instead of touching the model after it's deleted below.
+        let userId = Auth.auth().currentUser?.uid
+        // Mark immediately (synchronously) so:
+        // 1. Any in-flight background upload/recognition Task for this draft (which may be
+        //    suspended mid-`await` right now) bails out on its next check instead of
+        //    touching the model after it's deleted below.
+        // 2. List rows watching this set (BulkListingOverviewView.drafts,
+        //    ProcessResultsOverviewView.results) can exclude it from their next render.
         deletedDraftIDs.insert(draft.id)
-        guard let userId = Auth.auth().currentUser?.uid else {
+
+        // Defer the actual SwiftData delete + save by one run loop tick. Calling
+        // modelContext.delete()+save() synchronously from a List's .onDelete handler races
+        // SwiftUI's own swipe/removal animation: the row can still be mid-render against
+        // `draft` in the same frame SwiftData invalidates its backing store, which crashes
+        // with "backing data was detached from a context without resolving attribute
+        // faults" the next time the row body reads a model property (e.g. photosData).
+        // Deferring lets that frame finish before the object is actually torn down.
+        DispatchQueue.main.async { [weak modelContext] in
+            guard let modelContext else { return }
             modelContext.delete(draft)
             try? modelContext.save()
-            return
         }
 
-        // 1. Delete from SwiftData context
-        modelContext.delete(draft)
-        try? modelContext.save()
-        
-        // 2. Perform background cleanups if uploaded
+        guard let userId else { return }
+
+        // Perform background cleanups if uploaded
         if let listingId = listingId {
             Task {
                 print("[UploadManager] Cleaning up Cloud files for discarded draft \(listingId)")
