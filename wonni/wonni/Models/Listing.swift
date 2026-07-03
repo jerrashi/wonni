@@ -69,16 +69,23 @@ class Item {
         self.condition = condition
     }
 
+    /// Marked by `UploadManager.deleteDraftLocallyAndCloud` the instant a delete is
+    /// requested — a `modelContext != nil` check turned out NOT to reliably reflect
+    /// deletion in practice, so this is the one signal `image(for:)` actually trusts.
+    /// `nonisolated(unsafe)` because every reader/writer is on the main thread (SwiftUI
+    /// view bodies, `@MainActor` UploadManager) by construction, just not provably so to
+    /// the compiler across this static/instance-method boundary.
+    nonisolated(unsafe) static var deletedIDs: Set<UUID> = []
+
     func image(for assetId: String) -> UIImage? {
-        // `modelContext` becomes nil once this object is deleted from its context, and
-        // checking it doesn't itself touch the (externally-stored) `photosData` attribute.
         // A SwiftUI row can still be mid-render against a just-deleted Item — e.g. List's
-        // own swipe-to-delete removal animation re-evaluating the outgoing row's body a
-        // beat after the underlying SwiftData delete commits — and reading `photosData` on
-        // a detached object crashes with "backing data was detached from a context without
-        // resolving attribute faults." Bailing out here before touching it is the one
-        // choke point that protects every caller regardless of render timing.
-        guard modelContext != nil else { return nil }
+        // own swipe-to-delete removal animation, or a sibling carousel/stack view driven
+        // by an independent @Query, re-evaluating a row's body a beat after the underlying
+        // SwiftData delete commits. Reading `photosData` (externally stored) on a detached
+        // object crashes with "backing data was detached from a context without resolving
+        // attribute faults." Checking `Item.deletedIDs` here is the one choke point that
+        // protects every caller regardless of which view rendered it or render timing.
+        guard !Item.deletedIDs.contains(id) else { return nil }
         if let idx = sourceAssetIdentifiers.firstIndex(of: assetId) {
             if idx < photosData.count {
                 return UIImage(data: photosData[idx])

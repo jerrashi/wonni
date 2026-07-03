@@ -26,15 +26,22 @@ struct ActiveDraftCarouselView: View {
 
     // Active draft — the Item currently being built
     private var activeDraft: Item? {
-        guard let id = uploadManager.activeDraftID else { return nil }
+        guard let id = uploadManager.activeDraftID, !uploadManager.deletedDraftIDs.contains(id) else { return nil }
         return allItems.first { $0.id == id }
     }
 
     // Committed drafts — exclude the active draft, sorted newest first
     private var committedDrafts: [Item] {
         let activeID = uploadManager.activeDraftID
+        // Exclude drafts mid-deletion — see UploadManager.deleteDraftLocallyAndCloud /
+        // Item.deletedIDs. This carousel is always visible on the camera screen and is
+        // driven by its own independent @Query, so it needs the same exclusion the other
+        // draft-list views apply.
         return allItems
-            .filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && $0.id != activeID }
+            .filter {
+                $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && $0.id != activeID
+                    && !uploadManager.deletedDraftIDs.contains($0.id)
+            }
             .sorted { $0.createdAt > $1.createdAt }
     }
 
