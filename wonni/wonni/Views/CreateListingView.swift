@@ -1927,8 +1927,8 @@ struct ProcessResultsOverviewView: View {
             if !attemptedPlatforms.isEmpty {
                 uploadManager.crossPostStatusPending = true
             }
-            // Defer API cross-posts to onChange(of: isPublishing) so the Firestore write
-            // completes before the Cloud Function tries to read the listing document.
+            // Defer API cross-posts to the publish completion (runPublishContinuationIfReady)
+            // so the Firestore write completes before the Cloud Function reads the listing.
             let apiPlatforms = selectedPlatforms.filter { $0 == "ebay" || $0 == "etsy" }
             if !apiPlatforms.isEmpty {
                 pendingAPITriggers = toPublish.compactMap { item in
@@ -2738,9 +2738,10 @@ struct PublishConfirmationSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var integrationRepo = IntegrationRepository.shared
     @State private var selectedPlatforms: Set<String> = []
-    /// True once the user has touched any toggle. The async `.task` default-selection
-    /// must never overwrite explicit user choices made while integrations were loading.
-    @State private var userModifiedPlatforms = false
+    /// Platforms whose toggle the user has explicitly touched. The async `.task`
+    /// default-selection may still seed the others, but must never overwrite an
+    /// explicit user choice made while integrations were loading.
+    @State private var touchedPlatforms: Set<String> = []
     @State private var showAddressSetupSheet = false
     @State private var platformToEnableAfterAddressSetup = ""
     
@@ -2771,7 +2772,7 @@ struct PublishConfirmationSheet: View {
                             Toggle(isOn: Binding(
                                 get: { selectedPlatforms.contains(integration.platform) },
                                 set: { isSelected in
-                                    userModifiedPlatforms = true
+                                    touchedPlatforms.insert(integration.platform)
                                     if isSelected {
                                         if isAPI && SellingSettingsRepository.shared.settings?.defaultLocation.postalCode.isEmpty != false {
                                             platformToEnableAfterAddressSetup = integration.platform
@@ -2830,10 +2831,12 @@ struct PublishConfirmationSheet: View {
             .task {
                 await integrationRepo.loadIntegrations()
                 await SellingSettingsRepository.shared.loadSettings()
-                // Default toggle connected API platforms — but never clobber toggles the
-                // user already changed while the async load was in flight (issue #8).
-                if !userModifiedPlatforms {
-                    selectedPlatforms = Set(integrationRepo.integrations.filter { $0.isConnected }.map { $0.platform })
+                // Default-select connected API platforms, but only those the user hasn't
+                // explicitly toggled while the async load was in flight (issue #8) — a
+                // blanket reassignment here used to wipe the user's in-flight choices.
+                for platform in integrationRepo.integrations.filter({ $0.isConnected }).map({ $0.platform })
+                where !touchedPlatforms.contains(platform) {
+                    selectedPlatforms.insert(platform)
                 }
             }
             .sheet(isPresented: $showAddressSetupSheet) {
