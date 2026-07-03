@@ -310,7 +310,7 @@ struct CustomPhotoPickerView: View {
                 DraftHistoryModal(photoCollection: photoCollection)
             }
             .navigationDestination(isPresented: $navigateToOverview) {
-                BulkListingOverviewView(sessionDraftIDs: uploadManager.sessionDraftIDs)
+                BulkListingOverviewView()
             }
         }
         
@@ -1483,8 +1483,6 @@ private struct DescriptionEditorSheet: View {
 
 // MARK: - BulkListingOverviewView (Drafts)
 struct BulkListingOverviewView: View {
-    var sessionDraftIDs: [UUID] = []
-
     @Environment(\.modelContext) private var modelContext
     @Query(filter: #Predicate<Item> { $0.isDraft == true }, sort: \Item.createdAt, order: .reverse)
     private var allItems: [Item]
@@ -1498,11 +1496,11 @@ struct BulkListingOverviewView: View {
     @State private var showDraftBulkEdit = false
 
     private var drafts: [Item] {
-        let sessionIDs = Set(uploadManager.sessionDraftIDs)
-        if !sessionIDs.isEmpty {
-            return allItems.filter { sessionIDs.contains($0.id) && !$0.sourceAssetIdentifiers.isEmpty }
-        }
-        return allItems.filter { !$0.sourceAssetIdentifiers.isEmpty }
+        // Show ALL persisted drafts, not just the ones committed this app session.
+        // `sessionDraftIDs` is in-memory only and resets on every launch, so filtering by
+        // it silently hid drafts created before an app restart (issue #41). SwiftData is
+        // the source of truth for what's still an unpublished draft.
+        allItems.filter { !$0.sourceAssetIdentifiers.isEmpty }
     }
 
     var body: some View {
@@ -1720,10 +1718,17 @@ struct ProcessResultsOverviewView: View {
     @State private var webAutofillQueue: [CrossPostJob] = []
     @State private var activeAutofillJob: CrossPostJob? = nil
     @State private var crossPostError: String? = nil
-    /// eBay/Etsy cross-posts deferred until `isPublishing` becomes false, ensuring the
+    /// eBay/Etsy cross-posts deferred until publishing completes, ensuring the
     /// Firestore listing document exists before the Cloud Function tries to read it.
     /// Stores title for error messages since the SwiftData Item may be deleted by then.
     @State private var pendingAPITriggers: [(listingId: String, title: String, platforms: [String])] = []
+    /// Post-publish continuation gating. The continuation (API cross-post triggers, web
+    /// autofill jobs, sheet transitions) may only run once BOTH the publish task has
+    /// finished AND the confirmation sheet is fully dismissed — mutating sheet state while
+    /// another sheet is mid-dismissal makes UIKit drop the transition and strands the
+    /// modal on screen with its binding out of sync.
+    @State private var pendingPublishContinuation = false
+    @State private var confirmationSheetVisible = false
 
     // Only show the items that went through AI processing
     private var results: [Item] {
@@ -1762,6 +1767,21 @@ struct ProcessResultsOverviewView: View {
             .onAppear { selectedIDs = Set(results.map { $0.id }) }
 
             // ── Bottom action bar ────────────────────────────────────────
+            // The Mercari autofill pill lives in MainView, underneath this sheet — surface
+            // its activity here so the user isn't staring at a seemingly frozen screen.
+            if uploadManager.globalMercariJob != nil {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Posting to Mercari in the background… This screen closes when it finishes.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+                .background(Color.purple.opacity(0.08))
+            }
             Divider()
             HStack(spacing: 16) {
                 Button(selectedIDs.count == results.count ? "Deselect All" : "Select All") {
@@ -1778,6 +1798,7 @@ struct ProcessResultsOverviewView: View {
                 Button {
                     focusedField = nil
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        confirmationSheetVisible = true
                         showPublishConfirmation = true
                     }
                 } label: {
@@ -1844,7 +1865,12 @@ struct ProcessResultsOverviewView: View {
         } message: {
             Text(crossPostError ?? "")
         }
-        .sheet(isPresented: $showPublishConfirmation) {
+        .sheet(isPresented: $showPublishConfirmation, onDismiss: {
+            // Fires once the sheet is FULLY gone — only now is it safe to run the
+            // post-publish continuation that mutates other sheet state.
+            confirmationSheetVisible = false
+            runPublishContinuationIfReady()
+        }) {
             publishConfirmationSheetContent
         }
         .sheet(item: $activeAutofillJob, onDismiss: {
@@ -1856,40 +1882,6 @@ struct ProcessResultsOverviewView: View {
                 listingDescription: job.description,
                 listingPrice: job.price
             )
-        }
-        .onChange(of: uploadManager.isPublishing) { _, isPublishing in
-            guard !isPublishing else { return }
-            // Fire deferred API cross-posts now that the Firestore write has completed.
-            if !pendingAPITriggers.isEmpty {
-                let triggers = pendingAPITriggers
-                pendingAPITriggers = []
-                Task {
-                    var errorMessages: [String] = []
-                    for trigger in triggers {
-                        do {
-                            try await IntegrationRepository.shared.triggerCrossPost(
-                                listingId: trigger.listingId,
-                                platforms: trigger.platforms
-                            )
-                        } catch {
-                            errorMessages.append(formatCrossPostError(error, title: trigger.title, platforms: trigger.platforms))
-                        }
-                    }
-                    if !errorMessages.isEmpty {
-                        crossPostError = errorMessages.joined(separator: "\n\n")
-                    }
-                }
-            }
-            // Start web autofill jobs (Mercari, Facebook) after publish completes. If there are
-            // none (e.g. eBay-only), transition to the global CrossPostStatusView sheet.
-            if !webAutofillQueue.isEmpty {
-                checkAndStartNextWebJob()
-            } else {
-                uploadManager.showResultsOverview = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    uploadManager.showCrossPostStatus = true
-                }
-            }
         }
         .interactiveDismissDisabled(uploadManager.isPublishing || activeAutofillJob != nil)
     }
@@ -1945,9 +1937,56 @@ struct ProcessResultsOverviewView: View {
                     return (listingId: listingId, title: title, platforms: Array(apiPlatforms))
                 }
             }
-            uploadManager.publishDrafts(drafts: toPublish, modelContext: modelContext)
+            uploadManager.publishDrafts(drafts: toPublish, modelContext: modelContext) {
+                // Explicit completion — do NOT observe isPublishing for this: the publish
+                // task can finish before SwiftUI renders the true state, so an .onChange
+                // observer may never fire (true→false coalesces to no change).
+                pendingPublishContinuation = true
+                runPublishContinuationIfReady()
+            }
         }
-        .presentationDetents([.fraction(0.75), .large])
+        .presentationDetents([.large])
+    }
+
+    /// Runs post-publish work (deferred API cross-posts, web autofill jobs, sheet
+    /// transitions) once publishing has finished AND the confirmation sheet is fully
+    /// dismissed, whichever happens last.
+    private func runPublishContinuationIfReady() {
+        guard pendingPublishContinuation, !confirmationSheetVisible else { return }
+        pendingPublishContinuation = false
+        // Fire deferred API cross-posts now that the Firestore write has completed.
+        if !pendingAPITriggers.isEmpty {
+            let triggers = pendingAPITriggers
+            pendingAPITriggers = []
+            Task {
+                var errorMessages: [String] = []
+                for trigger in triggers {
+                    do {
+                        try await IntegrationRepository.shared.triggerCrossPost(
+                            listingId: trigger.listingId,
+                            platforms: trigger.platforms
+                        )
+                    } catch {
+                        errorMessages.append(formatCrossPostError(error, title: trigger.title, platforms: trigger.platforms))
+                    }
+                }
+                if !errorMessages.isEmpty {
+                    crossPostError = errorMessages.joined(separator: "\n\n")
+                }
+            }
+        }
+        // Start web autofill jobs (Mercari, Facebook) after publish completes. If there are
+        // none (e.g. eBay-only), transition to the global CrossPostStatusView sheet.
+        if !webAutofillQueue.isEmpty {
+            checkAndStartNextWebJob()
+        } else if uploadManager.publishError == nil {
+            uploadManager.showResultsOverview = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                uploadManager.showCrossPostStatus = true
+            }
+        }
+        // On total publish failure with no web jobs queued, stay on this screen so the
+        // "Publish Failed" alert (attached to this view) can actually present.
     }
 
     private func checkAndStartNextWebJob() {
@@ -2699,6 +2738,9 @@ struct PublishConfirmationSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var integrationRepo = IntegrationRepository.shared
     @State private var selectedPlatforms: Set<String> = []
+    /// True once the user has touched any toggle. The async `.task` default-selection
+    /// must never overwrite explicit user choices made while integrations were loading.
+    @State private var userModifiedPlatforms = false
     @State private var showAddressSetupSheet = false
     @State private var platformToEnableAfterAddressSetup = ""
     
@@ -2729,6 +2771,7 @@ struct PublishConfirmationSheet: View {
                             Toggle(isOn: Binding(
                                 get: { selectedPlatforms.contains(integration.platform) },
                                 set: { isSelected in
+                                    userModifiedPlatforms = true
                                     if isSelected {
                                         if isAPI && SellingSettingsRepository.shared.settings?.defaultLocation.postalCode.isEmpty != false {
                                             platformToEnableAfterAddressSetup = integration.platform
@@ -2787,8 +2830,11 @@ struct PublishConfirmationSheet: View {
             .task {
                 await integrationRepo.loadIntegrations()
                 await SellingSettingsRepository.shared.loadSettings()
-                // Default toggle connected API platforms
-                selectedPlatforms = Set(integrationRepo.integrations.filter { $0.isConnected }.map { $0.platform })
+                // Default toggle connected API platforms — but never clobber toggles the
+                // user already changed while the async load was in flight (issue #8).
+                if !userModifiedPlatforms {
+                    selectedPlatforms = Set(integrationRepo.integrations.filter { $0.isConnected }.map { $0.platform })
+                }
             }
             .sheet(isPresented: $showAddressSetupSheet) {
                 AddressSetupSheet {
