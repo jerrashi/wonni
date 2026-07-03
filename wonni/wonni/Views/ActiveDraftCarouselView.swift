@@ -23,6 +23,7 @@ struct ActiveDraftCarouselView: View {
     @State private var showingDraftHistory = false
     @State private var draggedAssetId: String? = nil
     @State private var stackBouncing = false
+    @State private var isTrashTargeted = false
 
     // Active draft — the Item currently being built
     private var activeDraft: Item? {
@@ -75,29 +76,42 @@ struct ActiveDraftCarouselView: View {
                     .padding(.vertical, 8)
                 }
 
-                // ── "+" commit button ───────────────────────────────────
+                // ── "+" commit button, replaced by a trash drop target while dragging ──
                 let hasActive = activeDraft?.sourceAssetIdentifiers.isEmpty == false
-                Button {
-                    guard hasActive else { return }
-                    withAnimation(.easeIn(duration: 0.18)) {
-                        uploadManager.commitActiveDraft(modelContext: modelContext)
-                        onCommit?()
-                        stackBouncing = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                            stackBouncing = false
-                        }
-                    }
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(.white)
+                if draggedAssetId != nil {
+                    Image(systemName: isTrashTargeted ? "trash.circle.fill" : "trash.circle")
+                        .font(.system(size: 30))
+                        .foregroundStyle(.red)
+                        .scaleEffect(isTrashTargeted ? 1.15 : 1.0)
+                        .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isTrashTargeted)
                         .frame(width: 44, height: 44)
-                        .background(hasActive ? Color.blue : Color.gray.opacity(0.35))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .padding(.trailing, 12)
+                        .onDrop(of: [.text], isTargeted: $isTrashTargeted) { _ in
+                            deleteDraggedPhoto()
+                        }
+                } else {
+                    Button {
+                        guard hasActive else { return }
+                        withAnimation(.easeIn(duration: 0.18)) {
+                            uploadManager.commitActiveDraft(modelContext: modelContext)
+                            onCommit?()
+                            stackBouncing = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                                stackBouncing = false
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(width: 44, height: 44)
+                            .background(hasActive ? Color.blue : Color.gray.opacity(0.35))
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .disabled(!hasActive)
+                    .padding(.trailing, 12)
+                    .animation(.easeInOut(duration: 0.15), value: hasActive)
                 }
-                .disabled(!hasActive)
-                .padding(.trailing, 12)
-                .animation(.easeInOut(duration: 0.15), value: hasActive)
             }
             .sheet(isPresented: $showingDraftHistory) {
                 DraftHistoryModal(photoCollection: PhotoCollection(smartAlbum: .smartAlbumUserLibrary))
@@ -143,6 +157,14 @@ struct ActiveDraftCarouselView: View {
             draggedAssetId: $draggedAssetId,
             modelContext: modelContext
         ))
+    }
+
+    @discardableResult
+    private func deleteDraggedPhoto() -> Bool {
+        guard let assetId = draggedAssetId else { return false }
+        uploadManager.removePhotoFromActiveDraft(assetId: assetId, modelContext: modelContext)
+        draggedAssetId = nil
+        return true
     }
 }
 
