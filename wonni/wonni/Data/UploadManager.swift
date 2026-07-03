@@ -144,25 +144,33 @@ class UploadManager: ObservableObject {
     func deleteDraftLocallyAndCloud(draft: Item, modelContext: ModelContext) {
         let listingId = draft.firestoreListingId
         let userId = Auth.auth().currentUser?.uid
-        // Mark immediately (synchronously) so:
-        // 1. Any in-flight background upload/recognition Task for this draft (which may be
-        //    suspended mid-`await` right now) bails out on its next check instead of
-        //    touching the model after it's deleted below.
-        // 2. List rows watching this set (BulkListingOverviewView.drafts,
-        //    ProcessResultsOverviewView.results, ActiveDraftCarouselView.committedDrafts)
-        //    can exclude it from their next render.
-        // 3. Item.image(for:) refuses to read photosData for it regardless of which view
-        //    (if any) still renders it and regardless of render timing — see Item.deletedIDs.
+        // Mark immediately (synchronously) so any in-flight background upload/recognition
+        // Task for this draft (which may be suspended mid-`await` right now) bails out on
+        // its next check instead of touching the model after it's deleted below, and so
+        // list views can exclude it from their next render.
         deletedDraftIDs.insert(draft.id)
         Item.deletedIDs.insert(draft.id)
 
-        // Defer the actual SwiftData delete + save by one run loop tick. Calling
-        // modelContext.delete()+save() synchronously from a List's .onDelete handler races
-        // SwiftUI's own swipe/removal animation: the row can still be mid-render against
-        // `draft` in the same frame SwiftData invalidates its backing store, which crashes
-        // with "backing data was detached from a context without resolving attribute
-        // faults" the next time the row body reads a model property (e.g. photosData).
-        // Deferring lets that frame finish before the object is actually torn down.
+        // Wipe the photo data on the object itself WHILE it's still fully valid — i.e.
+        // before it's actually deleted from the context below. SwiftData's @Model macro
+        // backs property access with Swift's Observation framework, so this mutation is
+        // picked up synchronously by any view reading these properties. That matters
+        // because tracking "this draft is deleted" in an external set (Item.deletedIDs,
+        // above) turned out not to be sufficient on its own: a SwiftUI row can still hold
+        // a stale reference to this exact object (e.g. mid removal-animation) and re-read
+        // ITS properties directly, bypassing any lookup keyed by `id` — and once an object
+        // is truly detached from its context, EVERY property on it becomes unreadable, not
+        // just the externally-stored photosData that was actually crashing (confirmed by
+        // even `id` itself faulting once detached). Clearing sourceAssetIdentifiers here
+        // means every current photo-rendering call site — which all gate on
+        // sourceAssetIdentifiers being non-empty before ever calling image(for:) — simply
+        // has nothing to iterate, so photosData is never touched again for this object,
+        // regardless of whether some other reference to it is still floating around a view.
+        draft.sourceAssetIdentifiers = []
+        draft.photosData = []
+
+        // Defer the actual SwiftData delete + save by one run loop tick — belt-and-braces
+        // on top of the clearing above, so nothing else races the removal animation either.
         DispatchQueue.main.async { [weak modelContext] in
             guard let modelContext else { return }
             modelContext.delete(draft)
@@ -647,9 +655,13 @@ class UploadManager: ObservableObject {
                         // ProcessResultsOverviewView.checkAndStartNextWebJob() deletes when the queue empties.
                         publishedPendingDeletionIDs.insert(draft.id)
                     } else {
-                        // See Item.deletedIDs — mark before deleting so no view can read
-                        // photosData on this object after this point.
+                        // See deleteDraftLocallyAndCloud — mark and clear before deleting so
+                        // no stale view reference can read photosData after this point. Only
+                        // safe here because this is the branch where nothing else (no
+                        // pending cross-post job) still needs the photos.
                         Item.deletedIDs.insert(draft.id)
+                        draft.sourceAssetIdentifiers = []
+                        draft.photosData = []
                         modelContext.delete(draft)
                     }
                     // This draft is now a live listing — drop it from the session set so the
