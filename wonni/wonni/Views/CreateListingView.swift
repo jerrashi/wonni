@@ -1773,7 +1773,7 @@ struct ProcessResultsOverviewView: View {
                 HStack(spacing: 10) {
                     ProgressView()
                         .scaleEffect(0.8)
-                    Text("Posting to Mercari in the background… This screen closes when it finishes.")
+                    Text("Posting to Mercari in the background…")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -1954,6 +1954,17 @@ struct ProcessResultsOverviewView: View {
     private func runPublishContinuationIfReady() {
         guard pendingPublishContinuation, !confirmationSheetVisible else { return }
         pendingPublishContinuation = false
+        // Total publish failure: none of the listings were written to Firestore, so
+        // cross-posting them (API or web autofill) would only produce confusing secondary
+        // errors. Drop the queued jobs and stay on this screen so the "Publish Failed"
+        // alert (attached to this view) can present and the user can retry.
+        if uploadManager.publishError != nil {
+            pendingAPITriggers = []
+            webAutofillQueue = []
+            uploadManager.pendingAutofillJobsCount = 0
+            uploadManager.crossPostStatusPending = false
+            return
+        }
         // Fire deferred API cross-posts now that the Firestore write has completed.
         if !pendingAPITriggers.isEmpty {
             let triggers = pendingAPITriggers
@@ -1979,14 +1990,12 @@ struct ProcessResultsOverviewView: View {
         // none (e.g. eBay-only), transition to the global CrossPostStatusView sheet.
         if !webAutofillQueue.isEmpty {
             checkAndStartNextWebJob()
-        } else if uploadManager.publishError == nil {
+        } else {
             uploadManager.showResultsOverview = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 uploadManager.showCrossPostStatus = true
             }
         }
-        // On total publish failure with no web jobs queued, stay on this screen so the
-        // "Publish Failed" alert (attached to this view) can actually present.
     }
 
     private func checkAndStartNextWebJob() {
