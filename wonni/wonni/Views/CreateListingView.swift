@@ -1746,7 +1746,6 @@ struct ProcessResultsOverviewView: View {
     @State private var showPublishConfirmation = false
     @State private var webAutofillQueue: [CrossPostJob] = []
     @State private var activeAutofillJob: CrossPostJob? = nil
-    @State private var crossPostError: String? = nil
     /// eBay/Etsy cross-posts deferred until publishing completes, ensuring the
     /// Firestore listing document exists before the Cloud Function tries to read it.
     /// Stores title for error messages since the SwiftData Item may be deleted by then.
@@ -1885,18 +1884,12 @@ struct ProcessResultsOverviewView: View {
         } message: {
             Text(uploadManager.publishError ?? "")
         }
-        // Only surface the eBay/API error once no web-autofill sheet is up. The Mercari sheet is
-        // presented from this same view, and you can't show an alert underneath an active sheet —
-        // that's why the error used to flash and vanish the instant Mercari opened. Gating on
-        // `activeAutofillJob == nil` holds the error until the web queue drains, then shows it.
-        .alert("Cross-Post Failed", isPresented: Binding(
-            get: { crossPostError != nil && activeAutofillJob == nil && uploadManager.globalMercariJob == nil },
-            set: { if !$0 { crossPostError = nil } }
-        )) {
-            Button("OK", role: .cancel) { crossPostError = nil }
-        } message: {
-            Text(crossPostError ?? "")
-        }
+        // The eBay/Etsy cross-post error (crossPostError) is NOT surfaced here — see
+        // UploadManager.crossPostError. The API-trigger Task that sets it typically completes
+        // after this view has already been dismissed (showResultsOverview = false runs
+        // immediately once publish succeeds and there's no web-autofill queue to wait on), so
+        // a local alert here would silently discard it. It's shown from CrossPostStatusView
+        // instead, which is reliably the next screen the user lands on either way.
         .sheet(isPresented: $showPublishConfirmation, onDismiss: {
             // Fires once the sheet is FULLY gone — only now is it safe to run the
             // post-publish continuation that mutates other sheet state.
@@ -2014,7 +2007,10 @@ struct ProcessResultsOverviewView: View {
                     }
                 }
                 if !errorMessages.isEmpty {
-                    crossPostError = errorMessages.joined(separator: "\n\n")
+                    // See UploadManager.crossPostError — this view is very likely already
+                    // dismissed by the time this Task resolves, so the error must live
+                    // somewhere that outlives it.
+                    uploadManager.crossPostError = errorMessages.joined(separator: "\n\n")
                 }
             }
         }
@@ -2220,6 +2216,20 @@ struct CrossPostStatusView: View {
                 listingDescription: job.description,
                 listingPrice: job.price
             )
+        }
+        // See UploadManager.crossPostError — surfaced here (not on ProcessResultsOverviewView)
+        // because this is reliably the screen the user is on by the time an eBay/Etsy
+        // cross-post Task resolves, regardless of how quickly the previous screen dismissed.
+        // The live status badge below (via startListeners' Firestore listener) already shows
+        // "Failed" + Retry per-row from the Cloud Function's own crossPostStatus write, so this
+        // alert exists mainly to explain WHY it failed the moment it happens, once, per attempt.
+        .alert("Cross-Post Failed", isPresented: Binding(
+            get: { uploadManager.crossPostError != nil },
+            set: { if !$0 { uploadManager.crossPostError = nil } }
+        )) {
+            Button("OK", role: .cancel) { uploadManager.crossPostError = nil }
+        } message: {
+            Text(uploadManager.crossPostError ?? "")
         }
     }
 

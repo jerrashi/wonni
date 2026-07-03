@@ -74,6 +74,13 @@ class UploadManager: ObservableObject {
     @Published var publishError: String? = nil
     @Published var publishedPendingDeletionIDs: Set<UUID> = []
     @Published var crossPostStatusPending = false
+    /// Owned here (not as local @State on ProcessResultsOverviewView) because the eBay/Etsy
+    /// API cross-post Task that sets this can complete well after that view has already been
+    /// dismissed (showResultsOverview = false runs immediately once publish succeeds and
+    /// there's no web-autofill queue to wait on — the common case for an API-only publish).
+    /// A local @State there would silently discard the error into a torn-down view. Surfaced
+    /// from CrossPostStatusView, which is reliably the next screen shown after any publish.
+    @Published var crossPostError: String? = nil
     /// Populated just before publishDrafts is called (by ProcessResultsOverviewView).
     /// Kept in UploadManager so MainView can show CrossPostStatusView globally.
     @Published var sessionCrossPostItems: [CrossPostSessionItem] = []
@@ -716,6 +723,7 @@ class UploadManager: ObservableObject {
         sessionCrossPostItems = []
         showCrossPostStatus = false
         publishError = nil
+        crossPostError = nil
         uploadProgress = 0
         uploadStatuses.removeAll()
         uploadedAssetIDs.removeAll()
