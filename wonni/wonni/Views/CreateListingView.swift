@@ -2028,11 +2028,14 @@ struct ProcessResultsOverviewView: View {
             // that were held alive so startPosting() could read their photos.
             let pendingIDs = uploadManager.publishedPendingDeletionIDs
             if !pendingIDs.isEmpty {
-                // Mark before deleting — see Item.deletedIDs / UploadManager.deleteDraftLocallyAndCloud.
+                // Mark and clear before deleting — see UploadManager.deleteDraftLocallyAndCloud.
                 // This delete didn't go through that function (these items were kept alive
-                // deliberately for the cross-post jobs above), so nothing else marks them.
-                for id in pendingIDs { Item.deletedIDs.insert(id) }
+                // deliberately for the cross-post jobs, which have now all finished), so
+                // nothing else marks or clears them.
                 for item in allItems where pendingIDs.contains(item.id) {
+                    Item.deletedIDs.insert(item.id)
+                    item.sourceAssetIdentifiers = []
+                    item.photosData = []
                     modelContext.delete(item)
                 }
                 try? modelContext.save()
