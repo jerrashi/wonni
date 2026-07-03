@@ -980,7 +980,7 @@ struct TitleCharCountView: View {
 }
 
 // MARK: - DraftRow (redesigned)
-struct DraftRow: View {
+struct DraftRow: View, Equatable {
     let item: Item
     var focusedField: FocusState<DraftFocusField?>.Binding
     let cache: CachedImageManager
@@ -993,6 +993,27 @@ struct DraftRow: View {
     @State private var titleText: String = ""
     @State private var showDescriptionEditor = false
 
+    // BulkListingOverviewView.body re-evaluates on every uploadManager @Published change
+    // (isProcessing/processProgress are read directly there) — which fires repeatedly while
+    // background photo uploads are still finishing, i.e. exactly while the user might be
+    // typing on this screen. That reconstructs every row with a fresh `onToggle` closure,
+    // and SwiftUI's default diffing treats closures as always "changed," so every row's body
+    // re-evaluates on every tick regardless of whether it has anything to do with that row.
+    // Equatable + `.equatable()` at the call site lets SwiftUI skip re-evaluating a row whose
+    // actual rendered inputs haven't changed. Compares every `item` field this row reads —
+    // add to this list if the body starts reading a new one.
+    static func == (lhs: DraftRow, rhs: DraftRow) -> Bool {
+        lhs.isSelectable == rhs.isSelectable &&
+        lhs.isSelected == rhs.isSelected &&
+        lhs.focusedField.wrappedValue == rhs.focusedField.wrappedValue &&
+        lhs.item.sourceAssetIdentifiers == rhs.item.sourceAssetIdentifiers &&
+        lhs.item.userEditedTitle == rhs.item.userEditedTitle &&
+        lhs.item.userEditedDescription == rhs.item.userEditedDescription &&
+        lhs.item.aiSuggestedDescription == rhs.item.aiSuggestedDescription &&
+        lhs.item.originalUserTitleBeforeAI == rhs.item.originalUserTitleBeforeAI &&
+        lhs.item.originalUserDescriptionBeforeAI == rhs.item.originalUserDescriptionBeforeAI &&
+        lhs.item.processedAt == rhs.item.processedAt
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1554,6 +1575,7 @@ struct BulkListingOverviewView: View {
                                 else { selectedItemIDs.insert(item.id) }
                             }
                         )
+                        .equatable()
                         .id(item.id)
                     }
                     .onDelete { offsets in
@@ -1762,6 +1784,7 @@ struct ProcessResultsOverviewView: View {
                         isGeminiFailed: uploadManager.processingFailedIDs.contains(item.id),
                         descriptionLineLimit: descriptionLineLimit
                     )
+                    .equatable()
                 }
                 .onDelete { offsets in
                     for i in offsets {
@@ -2412,7 +2435,7 @@ private struct AIUndoToastView: View {
 
 // MARK: - ResultDraftRow
 
-struct ResultDraftRow: View {
+struct ResultDraftRow: View, Equatable {
     let item: Item
     let cache: CachedImageManager
     let isSelected: Bool
@@ -2421,6 +2444,32 @@ struct ResultDraftRow: View {
     var isGeminiFailed: Bool = false
     /// Minimum lines for the description field; computed from available screen height.
     var descriptionLineLimit: Int = 4
+
+    // ProcessResultsOverviewView.body re-evaluates on every uploadManager @Published change
+    // (isUploadingPhotos, isPublishing, processingFailedIDs are all read there directly) —
+    // which fires repeatedly while background photo uploads are still finishing, i.e.
+    // exactly while the user is typing on this screen. That reconstructs every row with a
+    // fresh `onToggle` closure, and SwiftUI's default diffing treats closures as always
+    // "changed," so every row's body re-evaluates on every tick regardless of whether it has
+    // anything to do with that row. Equatable + `.equatable()` at the call site lets SwiftUI
+    // skip re-evaluating a row whose actual rendered inputs haven't changed. Compares every
+    // `item` field this row reads — add to this list if the body starts reading a new one.
+    static func == (lhs: ResultDraftRow, rhs: ResultDraftRow) -> Bool {
+        lhs.isSelected == rhs.isSelected &&
+        lhs.isGeminiFailed == rhs.isGeminiFailed &&
+        lhs.descriptionLineLimit == rhs.descriptionLineLimit &&
+        lhs.focusedField.wrappedValue == rhs.focusedField.wrappedValue &&
+        lhs.item.sourceAssetIdentifiers == rhs.item.sourceAssetIdentifiers &&
+        lhs.item.userEditedTitle == rhs.item.userEditedTitle &&
+        lhs.item.aiSuggestedTitle == rhs.item.aiSuggestedTitle &&
+        lhs.item.visionTitle == rhs.item.visionTitle &&
+        lhs.item.userEditedPrice == rhs.item.userEditedPrice &&
+        lhs.item.aiSuggestedPrice == rhs.item.aiSuggestedPrice &&
+        lhs.item.userEditedDescription == rhs.item.userEditedDescription &&
+        lhs.item.aiSuggestedDescription == rhs.item.aiSuggestedDescription &&
+        lhs.item.originalUserTitleBeforeAI == rhs.item.originalUserTitleBeforeAI &&
+        lhs.item.originalUserDescriptionBeforeAI == rhs.item.originalUserDescriptionBeforeAI
+    }
 
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var uploadManager: UploadManager
