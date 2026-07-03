@@ -885,7 +885,7 @@ struct AddSaleSheet: View {
             Form {
                 Section {
                     HStack(spacing: 8) {
-                        TextField("Paste Mercari item URL", text: $urlString)
+                        TextField("Paste order status URL, listing URL, or item ID", text: $urlString)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .keyboardType(.URL)
@@ -904,7 +904,7 @@ struct AddSaleSheet: View {
                 } header: {
                     Text("Import from URL")
                 } footer: {
-                    Text("Paste a Mercari listing URL to auto-fill title and price.")
+                    Text("Paste a Mercari order status URL, listing URL, or item ID to auto-fill.")
                 }
 
                 Section("Details") {
@@ -969,42 +969,99 @@ struct AddSaleSheet: View {
     }
 
     private func fetchFromURL() async {
-        let url = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let input = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         isFetching = true; fetchError = nil
 
-        if url.contains("mercari.com") {
+        if input.range(of: #"^m[a-zA-Z0-9]+$"#, options: .regularExpression) != nil {
+            // Raw Mercari item ID — fetch order status data first, then item page for title
             platform = "mercari"
-            let pattern = #"/item/(m[a-zA-Z0-9]+)"#
-            if let range = url.range(of: pattern, options: .regularExpression),
-               let idRange = url[range].range(of: #"m[a-zA-Z0-9]+"#, options: .regularExpression) {
-                let itemId = String(url[range][idRange])
+            platformOrderId = input
+            await fetchFromOrderStatusPage(itemId: input)
+            await loader.load(itemId: input)
+            if loader.phase == .loaded {
+                if let n = loader.name, !n.isEmpty { title = n }
+                if let date = loader.soldAt { soldAt = date }
+                let match = await ListingRepository.shared.findListingByMercariId(input)
+                matchedListingId = match?.listingId
+                matchedCoverPhotoPath = match?.coverPhotoPath
+            }
+        } else if input.contains("mercari.com") {
+            platform = "mercari"
+
+            // Check if it's an order status URL
+            let orderStatusPattern = #"/transaction/order_status/(m[a-zA-Z0-9]+)"#
+            if let range = input.range(of: orderStatusPattern, options: .regularExpression),
+               let idRange = input[range].range(of: #"m[a-zA-Z0-9]+"#, options: .regularExpression) {
+                let itemId = String(input[range][idRange])
                 platformOrderId = itemId
                 await loader.load(itemId: itemId)
                 if loader.phase == .loaded {
                     if let n = loader.name, !n.isEmpty { title = n }
-                    if let p = loader.priceDollars { priceString = String(format: "%.2f", p) }
+                    if let date = loader.soldAt { soldAt = date }
                     let match = await ListingRepository.shared.findListingByMercariId(itemId)
                     matchedListingId = match?.listingId
                     matchedCoverPhotoPath = match?.coverPhotoPath
-                } else {
-                    fetchError = "Couldn't load item — make sure you're logged in to Mercari."
                 }
+                await fetchFromOrderStatusPage(itemId: itemId)
             } else {
-                fetchError = "Couldn't find an item ID in that URL."
+                // Check if it's an item listing URL
+                let itemPattern = #"/item/(m[a-zA-Z0-9]+)"#
+                if let range = input.range(of: itemPattern, options: .regularExpression),
+                   let idRange = input[range].range(of: #"m[a-zA-Z0-9]+"#, options: .regularExpression) {
+                    let itemId = String(input[range][idRange])
+                    platformOrderId = itemId
+                    await loader.load(itemId: itemId)
+                    if loader.phase == .loaded {
+                        if let n = loader.name, !n.isEmpty { title = n }
+                        if let date = loader.soldAt { soldAt = date }
+                        let match = await ListingRepository.shared.findListingByMercariId(itemId)
+                        matchedListingId = match?.listingId
+                        matchedCoverPhotoPath = match?.coverPhotoPath
+                    }
+                    await fetchFromOrderStatusPage(itemId: itemId)
+                } else {
+                    fetchError = "Couldn't find a Mercari listing URL or order status URL."
+                }
             }
-        } else if url.contains("ebay.com") {
+        } else if input.contains("ebay.com") {
             platform = "ebay"
-            if let range = url.range(of: #"\d{10,}"#, options: .regularExpression) {
-                platformOrderId = String(url[range])
+            if let range = input.range(of: #"\d{10,}"#, options: .regularExpression) {
+                platformOrderId = String(input[range])
             }
             fetchError = "eBay details can't be scraped — fill in the fields manually."
-        } else if url.contains("etsy.com") {
+        } else if input.contains("etsy.com") {
             platform = "etsy"
             fetchError = "Etsy details can't be scraped — fill in the fields manually."
         } else {
             fetchError = "Paste a Mercari, eBay, or Etsy URL."
         }
         isFetching = false
+    }
+
+    private func fetchFromOrderStatusPage(itemId: String) async {
+        await withCheckedContinuation { continuation in
+            let scraper = MercariTakeHomeScraper(mercariId: itemId, onSuccess: { data in
+                if let price = data.soldPrice {
+                    self.priceString = String(format: "%.2f", price)
+                }
+                if let takeHome = data.takeHome {
+                    self.takeHomeString = String(format: "%.2f", takeHome)
+                }
+                if let tracking = data.trackingNumber {
+                    self.trackingNumber = tracking
+                }
+                if let carrier = data.carrier {
+                    self.carrier = carrier
+                }
+                if let date = data.soldDate {
+                    self.soldAt = date
+                }
+                continuation.resume()
+            }, onFail: {
+                continuation.resume()
+            })
+            scraper.start()
+        }
     }
 
     private func save() async {
@@ -1194,14 +1251,19 @@ final class MercariSalesPageImporter: ObservableObject {
                         var rawPrice = item.price != null ? item.price :
                                        (item.product && item.product.price != null ? item.product.price : null);
                         var itemPrice = rawPrice != null ? (rawPrice > 500 ? rawPrice / 100 : rawPrice) : null;
+                        // Check every image field name seen across Mercari's JSON structure variants.
                         var thumb = null;
                         if (item.photos && item.photos.length > 0)
                             thumb = item.photos[0].thumbnailUrl || item.photos[0].url || null;
-                        if (!thumb) thumb = item.thumbnailUrl || item.photo_url ||
+                        if (!thumb) thumb = item.thumbnailUrl || item.photo_url || item.image || item.imageUrl ||
+                                           item.thumbnail || item.photo ||
                                            (item.product && (item.product.thumbnailUrl || item.product.photo_url)) || null;
+                        if (Array.isArray(thumb) && thumb.length > 0) thumb = thumb[0];
                         byId[sid] = { id: sid, name: itemName, price: itemPrice, thumbnailUrl: thumb };
                     }
-                } catch(e) {}
+                } catch(e) {
+                    console.log('Error parsing __NEXT_DATA__:', e);
+                }
             }
             // Phase 2: DOM links — adds newly seen items AND backfills name/price that Phase 1 left null.
             var links = Array.from(document.querySelectorAll('a[href*="/us/item/m"]'));
@@ -1239,10 +1301,21 @@ final class MercariSalesPageImporter: ObservableObject {
                         if (priceStr) domPrice = parseFloat(priceStr);
                     }
                     if (needsThumb) {
+                        // Check src, data-src/data-image (lazy-load), filtering out placeholder
+                        // data URIs and any Mercari-CDN image so noise doesn't win over a real photo.
                         var imgs2 = link.querySelectorAll('img');
                         for (var j = 0; j < imgs2.length; j++) {
-                            if (imgs2[j].src && !imgs2[j].src.includes('avatar')) {
-                                domThumb = imgs2[j].src; break;
+                            var src2 = imgs2[j].src || imgs2[j].getAttribute('data-src') ||
+                                       imgs2[j].getAttribute('data-image') || '';
+                            if (!src2 || src2.includes('avatar') || src2.startsWith('data:') || src2.length < 20) continue;
+                            domThumb = src2; break;
+                        }
+                        if (!domThumb) {
+                            for (var k = 0; k < imgs2.length; k++) {
+                                var src3 = imgs2[k].src || '';
+                                if (src3.indexOf('mercdn.net') !== -1 || src3.indexOf('mercari-images') !== -1) {
+                                    domThumb = src3; break;
+                                }
                             }
                         }
                     }
@@ -1264,14 +1337,23 @@ final class MercariSalesPageImporter: ObservableObject {
         if let json = (try? await webView.callJS(js)) as? String,
            let data = json.data(using: .utf8),
            let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            // DEBUG: Log raw JSON from JavaScript extraction
+            print("[MercariSalesPageImporter] Raw JSON from JS: \(json)")
+
             foundItems = arr.compactMap { dict in
                 guard let id = dict["id"] as? String, !id.isEmpty else { return nil }
-                return MercariFoundSaleItem(
+                let item = MercariFoundSaleItem(
                     id: id,
                     name: dict["name"] as? String,
                     price: (dict["price"] as? NSNumber)?.doubleValue,
                     thumbnailUrl: dict["thumbnailUrl"] as? String
                 )
+                // DEBUG: Log parsed items
+                print("[MercariSalesPageImporter] Parsed item ID: \(id)")
+                print("[MercariSalesPageImporter]   name: \(item.name ?? "nil")")
+                print("[MercariSalesPageImporter]   price: \(item.price ?? 0)")
+                print("[MercariSalesPageImporter]   thumbnailUrl: \(item.thumbnailUrl ?? "nil")")
+                return item
             }
             if foundItems.isEmpty {
                 scanError = "No items found. Navigate to your Sold Items tab first."
@@ -1511,8 +1593,12 @@ struct MercariSalesImportSheet: View {
                 status: .pending,
                 soldAt: item.soldAt.map { Timestamp(date: $0) } ?? Timestamp(date: soldAt)
             )
-            try? await SaleRepository.shared.addSale(sale)
-            succeededIds.insert(item.id)
+            do {
+                try await SaleRepository.shared.addSale(sale)
+                succeededIds.insert(item.id)
+            } catch {
+                print("[Import] Failed to save sale for \(item.id): \(error)")
+            }
         }
         isImporting = false
         // Drop successfully-imported items so retrying the still-skipped ones can't
