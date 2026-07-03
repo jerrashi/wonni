@@ -149,8 +149,12 @@ class UploadManager: ObservableObject {
         //    suspended mid-`await` right now) bails out on its next check instead of
         //    touching the model after it's deleted below.
         // 2. List rows watching this set (BulkListingOverviewView.drafts,
-        //    ProcessResultsOverviewView.results) can exclude it from their next render.
+        //    ProcessResultsOverviewView.results, ActiveDraftCarouselView.committedDrafts)
+        //    can exclude it from their next render.
+        // 3. Item.image(for:) refuses to read photosData for it regardless of which view
+        //    (if any) still renders it and regardless of render timing — see Item.deletedIDs.
         deletedDraftIDs.insert(draft.id)
+        Item.deletedIDs.insert(draft.id)
 
         // Defer the actual SwiftData delete + save by one run loop tick. Calling
         // modelContext.delete()+save() synchronously from a List's .onDelete handler races
