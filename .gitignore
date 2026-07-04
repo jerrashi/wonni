@@ -68,6 +68,7 @@ wonni/functions/node_modules/
 
 # Claude Code local settings
 .claude/settings.local.json
+.claude/worktrees/
 
 # macOS
 **/.DS_Store
@@ -92,3 +93,4 @@ design-system/dist/
 /LEAD_AGENT_PROMPT.md
 /LEAD_AGENT_SETUP.md
 /MERCARI_PHOTO_SYNC_ANALYSIS.md
+config.bat
