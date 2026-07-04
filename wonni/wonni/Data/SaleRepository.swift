@@ -37,16 +37,6 @@ class SaleRepository: ObservableObject {
             .compactMap { try? $0.data(as: Sale.self) }
             .filter { !($0.isDeleted == true) }
 
-        // DEBUG: Log thumbnailUrl retrieval
-        for sale in sales {
-            if sale.platform == "mercari" {
-                print("[SaleRepository.fetchSales] Mercari sale ID: \(sale.id ?? "nil")")
-                print("[SaleRepository.fetchSales]   Title: \(sale.listingTitle ?? "nil")")
-                print("[SaleRepository.fetchSales]   coverPhotoPath: \(sale.coverPhotoPath ?? "nil")")
-                print("[SaleRepository.fetchSales]   thumbnailUrl: \(sale.thumbnailUrl ?? "nil")")
-            }
-        }
-
         return sales
     }
 
@@ -98,13 +88,6 @@ class SaleRepository: ObservableObject {
         s.userId = userId
         s.createdAt = Timestamp(date: Date())
         s.updatedAt = Timestamp(date: Date())
-
-        // DEBUG: Log what we're about to save to Firestore
-        print("[SaleRepository.addSale] Saving sale with:")
-        print("[SaleRepository.addSale]   platform: \(s.platform)")
-        print("[SaleRepository.addSale]   listingTitle: \(s.listingTitle ?? "nil")")
-        print("[SaleRepository.addSale]   coverPhotoPath: \(s.coverPhotoPath ?? "nil")")
-        print("[SaleRepository.addSale]   thumbnailUrl: \(s.thumbnailUrl ?? "nil")")
 
         try db.collection(col).document().setData(from: s)
         print("[SaleRepository.addSale] Sale saved successfully")

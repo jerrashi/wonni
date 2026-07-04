@@ -1337,23 +1337,14 @@ final class MercariSalesPageImporter: ObservableObject {
         if let json = (try? await webView.callJS(js)) as? String,
            let data = json.data(using: .utf8),
            let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-            // DEBUG: Log raw JSON from JavaScript extraction
-            print("[MercariSalesPageImporter] Raw JSON from JS: \(json)")
-
             foundItems = arr.compactMap { dict in
                 guard let id = dict["id"] as? String, !id.isEmpty else { return nil }
-                let item = MercariFoundSaleItem(
+                return MercariFoundSaleItem(
                     id: id,
                     name: dict["name"] as? String,
                     price: (dict["price"] as? NSNumber)?.doubleValue,
                     thumbnailUrl: dict["thumbnailUrl"] as? String
                 )
-                // DEBUG: Log parsed items
-                print("[MercariSalesPageImporter] Parsed item ID: \(id)")
-                print("[MercariSalesPageImporter]   name: \(item.name ?? "nil")")
-                print("[MercariSalesPageImporter]   price: \(item.price ?? 0)")
-                print("[MercariSalesPageImporter]   thumbnailUrl: \(item.thumbnailUrl ?? "nil")")
-                return item
             }
             if foundItems.isEmpty {
                 scanError = "No items found. Navigate to your Sold Items tab first."
