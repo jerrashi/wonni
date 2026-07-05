@@ -31,6 +31,13 @@ class UploadManager: ObservableObject {
     @Published var shouldReturnToRoot = false
     @Published var pendingAutofillJobsCount = 0
     @Published var sessionDraftIDs: [UUID] = []
+    /// Set when something (a saved-search notification row, a deep link) wants Search
+    /// to run a specific query, alongside switching selectedTab to Search.
+    /// SearchView observes this to pre-fill and run the query, then clears it.
+    @Published var pendingSearchQuery: String? = nil
+    /// Set by the Home search bar on tap, alongside switching selectedTab to Search.
+    /// SearchView observes this to focus its text field, then clears it.
+    @Published var pendingSearchFocus = false
 
     // ── Active Draft (shared between camera and picker) ──────────────────────
     /// The UUID of the Item currently being built by the user.
