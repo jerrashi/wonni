@@ -81,6 +81,10 @@ class UploadManager: ObservableObject {
     /// A local @State there would silently discard the error into a torn-down view. Surfaced
     /// from CrossPostStatusView, which is reliably the next screen shown after any publish.
     @Published var crossPostError: String? = nil
+    /// Set when Storage/Firestore cleanup fails during `deleteDraftLocallyAndCloud` —
+    /// surfaced as a toast from MainView instead of being silently swallowed, mirroring
+    /// `crossPostError` above.
+    @Published var cleanupError: String? = nil
     /// Populated just before publishDrafts is called (by ProcessResultsOverviewView).
     /// Kept in UploadManager so MainView can show CrossPostStatusView globally.
     @Published var sessionCrossPostItems: [CrossPostSessionItem] = []
@@ -136,10 +140,12 @@ class UploadManager: ObservableObject {
     }
 
     /// Removes a photo from the active draft (deselect in picker, or delete in carousel).
+    /// Safe to discard the removed Storage path here — the active draft hasn't started
+    /// its background upload yet, so it never has one.
     func removePhotoFromActiveDraft(assetId: String, modelContext: ModelContext) {
         guard let id = activeDraftID,
               let draft = (try? modelContext.fetch(FetchDescriptor<Item>()))?.first(where: { $0.id == id }) else { return }
-        _ = draft.removePhoto(assetId: assetId)
+        draft.removePhoto(assetId: assetId)
         if draft.sourceAssetIdentifiers.isEmpty {
             deleteDraftLocallyAndCloud(draft: draft, modelContext: modelContext)
             activeDraftID = nil
@@ -151,6 +157,7 @@ class UploadManager: ObservableObject {
     func deleteDraftLocallyAndCloud(draft: Item, modelContext: ModelContext) {
         let listingId = draft.firestoreListingId
         let userId = Auth.auth().currentUser?.uid
+        cleanupError = nil
         // Mark immediately (synchronously) so any in-flight background upload/recognition
         // Task for this draft (which may be suspended mid-`await` right now) bails out on
         // its next check instead of touching the model after it's deleted below, and so
@@ -184,16 +191,20 @@ class UploadManager: ObservableObject {
             try? modelContext.save()
         }
 
-        guard let userId else { return }
+        guard userId != nil else { return }
 
-        // Perform background cleanups if uploaded
+        // Perform background cleanups if uploaded. deleteListing itself deletes Storage
+        // photos first, then the Firestore document — so a failed Storage cleanup leaves
+        // the document in place as a retry marker instead of orphaning the photos for good.
         if let listingId = listingId {
-            Task {
+            Task { [weak self] in
                 print("[UploadManager] Cleaning up Cloud files for discarded draft \(listingId)")
-                // Delete photos from Storage
-                try? await StorageService.shared.deleteListingImages(userId: userId, listingId: listingId)
-                // Delete document from Firestore
-                try? await ListingRepository.shared.deleteListing(id: listingId)
+                do {
+                    try await ListingRepository.shared.deleteListing(id: listingId)
+                } catch {
+                    print("[UploadManager] Cleanup failed for \(listingId): \(error)")
+                    self?.cleanupError = "Couldn't fully delete this draft's photos. It may still be using storage — please try deleting it again."
+                }
             }
         }
     }
@@ -251,16 +262,18 @@ class UploadManager: ObservableObject {
             uploadStatuses[draftID] = .uploading(0)
 
             print("[UploadManager] Fetching \(assetIdentifiers.count) images for \(draftID)...")
-            var images: [UIImage] = []
+            // Paired with assetId (not a bare [UIImage]) so a fetch failure partway through
+            // doesn't shift later images out of sync with the assetId they belong to.
+            var images: [(assetId: String, image: UIImage)] = []
             for assetId in assetIdentifiers {
                 guard !deletedDraftIDs.contains(draftID) else {
                     print("[UploadManager] Draft \(draftID) deleted mid-upload — aborting")
                     return
                 }
                 if let img = draft.image(for: assetId) {
-                    images.append(img)
+                    images.append((assetId, img))
                 } else if let img = await PhotoAsset(identifier: assetId).fullResolutionImage() {
-                    images.append(img)
+                    images.append((assetId, img))
                 } else {
                     print("[UploadManager] WARNING: Could not fetch image for asset \(assetId)")
                 }
@@ -271,21 +284,21 @@ class UploadManager: ObservableObject {
             }
             print("[UploadManager] Fetched \(images.count)/\(assetIdentifiers.count) images")
 
-            var photoPaths: [String] = []
-            for (imgIdx, image) in images.enumerated() {
+            var photoPathsByAsset: [String: String] = [:]
+            for (imgIdx, entry) in images.enumerated() {
                 var success = false
                 var attempts = 0
                 let maxAttempts = 5
                 var delaySeconds = 2.0
-                
+
                 while !success && attempts < maxAttempts && !Task.isCancelled {
                     attempts += 1
                     do {
                         print("[UploadManager] Uploading image \(imgIdx+1)/\(images.count) for \(draft.id) (attempt \(attempts))...")
                         let path = try await StorageService.shared.uploadListingImage(
-                            image: image, index: imgIdx, userId: userId, listingId: listingId
+                            image: entry.image, index: imgIdx, userId: userId, listingId: listingId
                         )
-                        photoPaths.append(path)
+                        photoPathsByAsset[entry.assetId] = path
                         uploadStatuses[draft.id] = .uploading(Double(imgIdx + 1) / Double(images.count))
                         recalcUploadProgress()
                         success = true
@@ -300,13 +313,13 @@ class UploadManager: ObservableObject {
                 }
             }
 
-            let failed = photoPaths.count < images.count
+            let failed = photoPathsByAsset.count < images.count
             if !deletedDraftIDs.contains(draftID) {
-                draft.firebasePhotoPaths = photoPaths
+                draft.firebasePhotoPathsByAsset = photoPathsByAsset
                 try? modelContext.save()
-                print("[UploadManager] Upload complete for \(draftID): \(photoPaths.count) paths saved")
+                print("[UploadManager] Upload complete for \(draftID): \(photoPathsByAsset.count) paths saved")
             } else {
-                print("[UploadManager] Draft \(draftID) deleted mid-upload — discarding \(photoPaths.count) uploaded paths")
+                print("[UploadManager] Draft \(draftID) deleted mid-upload — discarding \(photoPathsByAsset.count) uploaded paths")
             }
             uploadStatuses[draftID] = failed ? .failed : .done
             activeUploadCount -= 1
@@ -522,6 +535,7 @@ class UploadManager: ObservableObject {
 
     /// Uploads photos for a draft that missed the background upload (e.g. after app restart).
     /// Uses the pre-generated listing UUID — no Firestore round-trip needed.
+    @discardableResult
     private func uploadPhotosForDraft(_ draft: Item, userId: String, modelContext: ModelContext) async -> [String] {
         if draft.firestoreListingId == nil {
             draft.firestoreListingId = UUID().uuidString
@@ -530,8 +544,9 @@ class UploadManager: ObservableObject {
         let listingId = draft.firestoreListingId!
         print("[UploadManager] Inline upload starting for \(draft.id) → listing \(listingId)")
 
-        var paths: [String] = []
+        var pathsByAsset: [String: String] = draft.firebasePhotoPathsByAsset ?? [:]
         for (idx, assetId) in draft.sourceAssetIdentifiers.enumerated() {
+            if pathsByAsset[assetId] != nil { continue } // already uploaded
             let img: UIImage
             if let localImg = draft.image(for: assetId) {
                 img = localImg
@@ -545,16 +560,16 @@ class UploadManager: ObservableObject {
                 let path = try await StorageService.shared.uploadListingImage(
                     image: img, index: idx, userId: userId, listingId: listingId
                 )
-                paths.append(path)
+                pathsByAsset[assetId] = path
                 print("[UploadManager] Inline uploaded photo \(idx): \(path)")
             } catch {
                 print("[UploadManager] Inline upload failed for photo \(idx): \(error)")
             }
         }
 
-        draft.firebasePhotoPaths = paths
+        draft.firebasePhotoPathsByAsset = pathsByAsset
         try? modelContext.save()
-        return paths
+        return draft.orderedFirebasePhotoPaths
     }
 
     // MARK: – Phase 3: Publish to Firestore
@@ -601,7 +616,7 @@ class UploadManager: ObservableObject {
                 print("[UploadManager] Publishing draft \(draft.id)")
 
                 // Upload photos if background upload didn't complete fully
-                var photoPaths = draft.firebasePhotoPaths ?? []
+                var photoPaths = draft.orderedFirebasePhotoPaths
                 if photoPaths.count < draft.sourceAssetIdentifiers.count {
                     print("[UploadManager] Incomplete photo paths (\(photoPaths.count)/\(draft.sourceAssetIdentifiers.count)) for \(draft.id) — uploading now")
                     photoPaths = await uploadPhotosForDraft(draft, userId: userId, modelContext: modelContext)

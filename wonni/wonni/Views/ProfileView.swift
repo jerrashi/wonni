@@ -39,6 +39,8 @@ struct ProfileView: View {
     @State private var selectedSort: ListingSortOption = .newest
     @State private var crossPostErrorMessage: String? = nil
     @State private var showCrossPostError = false
+    @State private var deleteErrorMessage: String? = nil
+    @State private var showDeleteError = false
     @State private var showImportSheet = false
     @State private var showBulkImportSheet = false
     
@@ -288,6 +290,11 @@ struct ProfileView: View {
                     Task { await performBulkDelete() }
                 }
                 Button("Cancel", role: .cancel) {}
+            }
+            .alert("Delete Failed", isPresented: $showDeleteError, presenting: deleteErrorMessage) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { message in
+                Text(message)
             }
             // Hold the eBay/API error until no web-autofill sheet is up — an alert can't show
             // beneath an active sheet, so without this gate it would be swallowed the moment the
@@ -695,6 +702,8 @@ struct ProfileView: View {
             listings.removeAll { $0.id == id }
         } catch {
             print("[ProfileView] Failed to delete listing: \(error)")
+            deleteErrorMessage = "Couldn't fully delete this listing's photos, so it was kept — please try again."
+            showDeleteError = true
         }
     }
 
@@ -785,12 +794,17 @@ struct ProfileView: View {
     private func performBulkDelete() async {
         do {
             try await ListingRepository.shared.bulkDelete(listingIds: Array(selectedListings))
-            editMode = .inactive
-            selectedListings.removeAll()
-            await loadListings()
         } catch {
+            // bulkDelete may throw after partially succeeding (some listings' Storage
+            // cleanup failed and were left in place) — always reload below to reflect
+            // whichever documents actually got deleted.
             print("[ProfileView] Failed to bulk delete listings: \(error)")
+            deleteErrorMessage = error.localizedDescription
+            showDeleteError = true
         }
+        editMode = .inactive
+        selectedListings.removeAll()
+        await loadListings()
     }
     
     private func bulkPostListings(platforms: Set<String>) {
@@ -1902,9 +1916,17 @@ struct EditListingSheet: View {
             
             let pathsToDelete = listing.photoPaths.filter { !finalPhotoPaths.contains($0) }
             if !pathsToDelete.isEmpty {
+                let userId = listing.userId
                 Task {
                     for path in pathsToDelete {
-                        try? await Storage.storage().reference().child(path).delete()
+                        do {
+                            try await StorageService.shared.deletePhoto(path: path, userId: userId)
+                        } catch {
+                            print("[EditListingSheet] Failed to delete photo at \(path): \(error)")
+                            await MainActor.run {
+                                UploadManager.shared.cleanupError = "Couldn't fully delete a removed photo. It may still be using storage."
+                            }
+                        }
                     }
                 }
             }
