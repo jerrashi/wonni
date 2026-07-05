@@ -138,6 +138,17 @@ struct MainView: View {
         } message: {
             Text("\(uploadManager.uploadedAssetIDs.count) photo(s) were uploaded to Wonni. You can remove them from your Photos library to free up space.")
         }
+        // Global surface for a failed Storage/Firestore cleanup after a draft/photo delete —
+        // these can be triggered from several different screens, so this catches all of them
+        // rather than being wired into each one individually.
+        .alert("Delete Failed", isPresented: Binding(
+            get: { uploadManager.cleanupError != nil },
+            set: { if !$0 { uploadManager.cleanupError = nil } }
+        )) {
+            Button("OK", role: .cancel) { uploadManager.cleanupError = nil }
+        } message: {
+            Text(uploadManager.cleanupError ?? "")
+        }
     }
 
     private func deleteUploadedPhotos(_ assetIDs: [String]) {

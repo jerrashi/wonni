@@ -32,7 +32,11 @@ class Item {
     var sourceAssetIdentifiers: [String]
     var tags: [String]
     var personalNote: String?
-    var firebasePhotoPaths: [String]?
+    /// Maps a photo's local asset identifier to its uploaded Storage path. Keyed by
+    /// assetId (not position) so it stays correct across `movePhoto`/`removePhoto`/
+    /// `insertPhoto` — a plain positional array would silently desync from
+    /// `sourceAssetIdentifiers` the moment a photo is reordered.
+    var firebasePhotoPathsByAsset: [String: String]?
     var firestoreListingId: String?
     var processedAt: Date?
     var visionTitle: String?
@@ -41,7 +45,7 @@ class Item {
     var aiSuggestedBrand: String?
     var condition: String? // Maps to ItemCondition rawValue
 
-    init(id: UUID = UUID(), createdAt: Date = Date(), photosData: [Data] = [], blurb: String = "", buyerPaysShipping: Bool = true, handlingFee: Double = 0.0, estimatedShippingDays: Int = 3, weightLbs: Double? = nil, lengthIn: Double? = nil, widthIn: Double? = nil, heightIn: Double? = nil, isDraft: Bool = true, sourceAssetIdentifiers: [String] = [], tags: [String] = [], personalNote: String? = nil, firebasePhotoPaths: [String]? = nil, firestoreListingId: String? = nil, processedAt: Date? = nil, visionTitle: String? = nil, isLocalPhotoOnly: Bool = false, originalUserTitleBeforeAI: String? = nil, originalUserDescriptionBeforeAI: String? = nil, aiSuggestedCategory: String? = nil, aiSuggestedBrand: String? = nil, condition: String? = nil) {
+    init(id: UUID = UUID(), createdAt: Date = Date(), photosData: [Data] = [], blurb: String = "", buyerPaysShipping: Bool = true, handlingFee: Double = 0.0, estimatedShippingDays: Int = 3, weightLbs: Double? = nil, lengthIn: Double? = nil, widthIn: Double? = nil, heightIn: Double? = nil, isDraft: Bool = true, sourceAssetIdentifiers: [String] = [], tags: [String] = [], personalNote: String? = nil, firebasePhotoPathsByAsset: [String: String]? = nil, firestoreListingId: String? = nil, processedAt: Date? = nil, visionTitle: String? = nil, isLocalPhotoOnly: Bool = false, originalUserTitleBeforeAI: String? = nil, originalUserDescriptionBeforeAI: String? = nil, aiSuggestedCategory: String? = nil, aiSuggestedBrand: String? = nil, condition: String? = nil) {
         self.id = id
         self.createdAt = createdAt
         self.photosData = photosData
@@ -57,7 +61,7 @@ class Item {
         self.sourceAssetIdentifiers = sourceAssetIdentifiers
         self.tags = tags
         self.personalNote = personalNote
-        self.firebasePhotoPaths = firebasePhotoPaths
+        self.firebasePhotoPathsByAsset = firebasePhotoPathsByAsset
         self.firestoreListingId = firestoreListingId
         self.processedAt = processedAt
         self.visionTitle = visionTitle
@@ -94,29 +98,47 @@ class Item {
         return nil
     }
 
+    /// `sourceAssetIdentifiers` reflects the user's current photo order (drag-to-reorder
+    /// mutates it directly); this resolves that order into Storage paths via the
+    /// assetId-keyed map, so publish/cover-photo logic always matches what's on screen.
+    var orderedFirebasePhotoPaths: [String] {
+        sourceAssetIdentifiers.compactMap { firebasePhotoPathsByAsset?[$0] }
+    }
+
     func movePhoto(from: Int, to: Int) {
         var ids = sourceAssetIdentifiers
         ids.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
         sourceAssetIdentifiers = ids
-        
+
         if isLocalPhotoOnly && from < photosData.count && to < photosData.count {
             var data = photosData
             data.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
             photosData = data
         }
+        // No firebasePhotoPathsByAsset change needed — it's keyed by assetId, not position.
     }
 
-    func removePhoto(assetId: String) -> Data? {
-        guard let idx = sourceAssetIdentifiers.firstIndex(of: assetId) else { return nil }
+    /// Removes a photo from this draft. Returns the local photo bytes (if this draft
+    /// keeps them locally) and the photo's uploaded Storage path (if it had one), so
+    /// callers can either re-insert both elsewhere (cross-draft move) or delete the
+    /// Storage path for good (permanent removal).
+    @discardableResult
+    func removePhoto(assetId: String) -> (data: Data?, firebasePhotoPath: String?) {
+        guard let idx = sourceAssetIdentifiers.firstIndex(of: assetId) else { return (nil, nil) }
         sourceAssetIdentifiers.remove(at: idx)
-        
+        let path = firebasePhotoPathsByAsset?.removeValue(forKey: assetId)
+
         if isLocalPhotoOnly && idx < photosData.count {
-            return photosData.remove(at: idx)
+            return (photosData.remove(at: idx), path)
         }
-        return nil
+        return (nil, path)
     }
 
-    func insertPhoto(assetId: String, data: Data?, at index: Int) {
+    /// Inserts a photo into this draft. Pass `firebasePhotoPath` when relocating an
+    /// already-uploaded photo from another draft, so the map continues to resolve it —
+    /// note the underlying Storage object still physically lives under the source
+    /// draft's listing ID until/unless it's explicitly re-uploaded.
+    func insertPhoto(assetId: String, data: Data?, at index: Int, firebasePhotoPath: String? = nil) {
         if index >= sourceAssetIdentifiers.count {
             sourceAssetIdentifiers.append(assetId)
             if let data = data {
@@ -127,6 +149,10 @@ class Item {
             if let data = data {
                 photosData.insert(data, at: index)
             }
+        }
+        if let firebasePhotoPath {
+            if firebasePhotoPathsByAsset == nil { firebasePhotoPathsByAsset = [:] }
+            firebasePhotoPathsByAsset?[assetId] = firebasePhotoPath
         }
     }
 }

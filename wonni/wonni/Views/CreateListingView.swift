@@ -424,8 +424,8 @@ struct CustomPhotoPickerView: View {
                 if let sourceDraft = drafts.first(where: { $0.id.uuidString == sourceDraftId }) {
                     let toIdx = draft.sourceAssetIdentifiers.firstIndex(of: targetAssetId) ?? draft.sourceAssetIdentifiers.count
                     withAnimation {
-                        let data = sourceDraft.removePhoto(assetId: assetId)
-                        draft.insertPhoto(assetId: assetId, data: data, at: toIdx)
+                        let removed = sourceDraft.removePhoto(assetId: assetId)
+                        draft.insertPhoto(assetId: assetId, data: removed.data, at: toIdx, firebasePhotoPath: removed.firebasePhotoPath)
                         draggedCompositeId = "\(draft.id.uuidString)|\(assetId)"
                     }
                 }
@@ -464,8 +464,8 @@ struct CustomPhotoPickerView: View {
             if sourceDraftId != draft.id.uuidString {
                 if let sourceDraft = allDrafts.first(where: { $0.id.uuidString == sourceDraftId }) {
                     withAnimation {
-                        let data = sourceDraft.removePhoto(assetId: assetId)
-                        draft.insertPhoto(assetId: assetId, data: data, at: draft.sourceAssetIdentifiers.count)
+                        let removed = sourceDraft.removePhoto(assetId: assetId)
+                        draft.insertPhoto(assetId: assetId, data: removed.data, at: draft.sourceAssetIdentifiers.count, firebasePhotoPath: removed.firebasePhotoPath)
                         draggedCompositeId = "\(draft.id.uuidString)|\(assetId)"
                     }
                 }
@@ -517,9 +517,9 @@ struct CustomPhotoPickerView: View {
                 if currentDraftId != origID.uuidString || drafts.first(where: { $0.id == origID })?.sourceAssetIdentifiers.firstIndex(of: assetId) != origIdx {
                     withAnimation {
                         if let currentDraft = drafts.first(where: { $0.id.uuidString == currentDraftId }) {
-                            let data = currentDraft.removePhoto(assetId: assetId)
+                            let removed = currentDraft.removePhoto(assetId: assetId)
                             if let origDraft = drafts.first(where: { $0.id == origID }) {
-                                origDraft.insertPhoto(assetId: origAsset, data: data ?? originalPhotoData, at: origIdx)
+                                origDraft.insertPhoto(assetId: origAsset, data: removed.data ?? originalPhotoData, at: origIdx, firebasePhotoPath: removed.firebasePhotoPath)
                             }
                         }
                     }
@@ -861,7 +861,10 @@ struct CustomPhotoPickerView: View {
                             }
                         }
                         for assetId in toRemove {
-                            _ = draft.removePhoto(assetId: assetId)
+                            let removed = draft.removePhoto(assetId: assetId)
+                            if let path = removed.firebasePhotoPath {
+                                deletePhotoFromStorage(path: path)
+                            }
                         }
                     }
                 }
@@ -898,14 +901,33 @@ struct CustomPhotoPickerView: View {
             guard parts.count == 2 else { return false }
             let sourceDraftId = parts[0], assetId = parts[1]
             if let sourceDraft = allItems.first(where: { $0.id.uuidString == sourceDraftId }) {
-                _ = sourceDraft.removePhoto(assetId: assetId)
+                let removed = sourceDraft.removePhoto(assetId: assetId)
                 if sourceDraft.sourceAssetIdentifiers.isEmpty {
+                    // Whole draft is now empty — deleteDraftLocallyAndCloud wipes its entire
+                    // Storage folder (including this photo), so no separate delete needed.
                     uploadManager.deleteDraftLocallyAndCloud(draft: sourceDraft, modelContext: modelContext)
+                } else if let path = removed.firebasePhotoPath {
+                    deletePhotoFromStorage(path: path)
                 }
                 try? modelContext.save()
             }
             draggedCompositeId = nil
             return true
+        }
+
+        /// Permanently deletes one already-uploaded photo from Storage (not a whole-draft
+        /// wipe). Best-effort background call — failures surface via the same
+        /// `cleanupError` toast as `deleteDraftLocallyAndCloud`.
+        private func deletePhotoFromStorage(path: String) {
+            guard let userId = Auth.auth().currentUser?.uid else { return }
+            Task {
+                do {
+                    try await StorageService.shared.deletePhoto(path: path, userId: userId)
+                } catch {
+                    print("[DraftHistoryModal] Failed to delete photo at \(path): \(error)")
+                    uploadManager.cleanupError = "Couldn't fully delete a removed photo. It may still be using storage."
+                }
+            }
         }
     }
 
@@ -998,12 +1020,17 @@ struct DraftRow: View, Equatable {
     var isSelectable: Bool = false
     var isSelected: Bool = false
     var onToggle: (() -> Void)? = nil
+    /// Called when the description sheet — opened via arrow-key navigation landing on this
+    /// row's description slot, not a direct tap — is dismissed. Lets the keyboard toolbar's
+    /// up/down arrows continue on to the next field instead of stopping dead at description,
+    /// which (unlike title/price) isn't a real focusable text field.
+    var onDescriptionAutoAdvance: (() -> Void)? = nil
 
     @Environment(\.modelContext) private var modelContext
     @State private var priceText: String = ""
     @State private var titleText: String = ""
     @State private var showDescriptionEditor = false
-    @State private var showTitleEditor = false
+    @State private var descriptionEditorOpenedViaFocus = false
 
     // BulkListingOverviewView.body re-evaluates on every uploadManager @Published change
     // (isProcessing/processProgress are read directly there) — which fires repeatedly while
@@ -1063,21 +1090,24 @@ struct DraftRow: View, Equatable {
 
                 // Title + price (constrained to photo height)
                 VStack(alignment: .leading, spacing: 6) {
-                    Button { showTitleEditor = true } label: {
-                        Text(titleText.isEmpty ? "Add title…" : titleText)
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(item.userEditedTitle != nil ? .primary : .secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .lineLimit(2)
-                    }
-                    .buttonStyle(.plain)
-                    .sheet(isPresented: $showTitleEditor) {
-                        TitleEditorSheet(initialText: titleText) { newText in
-                            titleText = newText
-                            let v = String(newText.prefix(140))
-                            item.userEditedTitle = v.isEmpty ? nil : v
+                    TextField("Add title…", text: $titleText, axis: .vertical)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(item.userEditedTitle != nil ? .primary : .secondary)
+                        .lineLimit(2)
+                        .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .title))
+                        .onReceive(NotificationCenter.default.publisher(for: UITextField.textDidBeginEditingNotification)) { notification in
+                            // Scoped to this row's own title field — the original version of
+                            // this fired unconditionally, so every draft row in the list
+                            // subscribed to every UITextField gaining focus anywhere in the
+                            // view (any row's title *or* price field), each dispatching a
+                            // select-all. With many drafts on screen that's O(rows) redundant
+                            // work on every single focus change — a real source of the
+                            // lagginess reported when editing. Matches the guard
+                            // `DraftHistoryTitleField` already uses correctly.
+                            guard focusedField.wrappedValue == DraftFocusField(itemID: item.id, field: .title),
+                                  let tf = notification.object as? UITextField else { return }
+                            DispatchQueue.main.async { tf.selectAll(nil) }
                         }
-                    }
 
                     TitleCharCountView(count: titleText.count)
 
@@ -1165,6 +1195,13 @@ struct DraftRow: View, Equatable {
             if oldFocus?.itemID == item.id && newFocus?.itemID != item.id {
                 saveLocalStateToModel()
             }
+            // Description isn't a real focusable field (it's a button that opens a sheet),
+            // so the keyboard arrows can't land real focus there. Landing "on" it via arrow
+            // navigation instead opens the sheet directly, so up/down keeps working through it.
+            if newFocus == DraftFocusField(itemID: item.id, field: .description) {
+                descriptionEditorOpenedViaFocus = true
+                showDescriptionEditor = true
+            }
         }
         .onChange(of: item.userEditedTitle) { _, newVal in
             // Sync local title state when the model is updated externally (e.g. bulk edit)
@@ -1176,6 +1213,14 @@ struct DraftRow: View, Equatable {
                 priceText = String(format: "%.2f", p)
             } else {
                 priceText = ""
+            }
+        }
+        .onChange(of: showDescriptionEditor) { _, isShowing in
+            // Fires whether the sheet was saved or swiped away — either way, continue the
+            // arrow-key flow onward once the user's done with the description.
+            if !isShowing && descriptionEditorOpenedViaFocus {
+                descriptionEditorOpenedViaFocus = false
+                onDescriptionAutoAdvance?()
             }
         }
         .onDisappear {
@@ -1538,39 +1583,6 @@ private struct DescriptionEditorSheet: View {
     }
 }
 
-// MARK: - TitleEditorSheet
-private struct TitleEditorSheet: View {
-    var initialText: String
-    var onSave: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @FocusState private var focused: Bool
-    @State private var localText: String = ""
-
-    var body: some View {
-        NavigationStack {
-            TextField("Title", text: $localText, axis: .vertical)
-                .focused($focused)
-                .font(.body)
-                .padding(.horizontal, 12)
-                .padding(.top, 4)
-                .navigationTitle("Title")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") {
-                            onSave(localText)
-                            dismiss()
-                        }
-                    }
-                }
-        }
-        .onAppear {
-            localText = initialText
-            focused = true
-        }
-    }
-}
-
 // MARK: - BulkListingOverviewView (Drafts)
 struct BulkListingOverviewView: View {
     @Environment(\.modelContext) private var modelContext
@@ -1584,6 +1596,9 @@ struct BulkListingOverviewView: View {
     @State private var isSelectMode = false
     @State private var selectedItemIDs: Set<UUID> = []
     @State private var showDraftBulkEdit = false
+    /// Direction of the last arrow-key move, so continuing past a description slot (see
+    /// DraftRow.onDescriptionAutoAdvance) keeps going the same way the user was already moving.
+    @State private var lastFocusMoveDelta = 1
 
     // Always show every not-yet-published draft with photos, regardless of which
     // app session created it — sessionDraftIDs only tracks the current session's
@@ -1641,7 +1656,8 @@ struct BulkListingOverviewView: View {
                             onToggle: {
                                 if selectedItemIDs.contains(item.id) { selectedItemIDs.remove(item.id) }
                                 else { selectedItemIDs.insert(item.id) }
-                            }
+                            },
+                            onDescriptionAutoAdvance: { moveFocus(by: lastFocusMoveDelta) }
                         )
                         .equatable()
                         .id(item.id)
@@ -1772,6 +1788,7 @@ struct BulkListingOverviewView: View {
     }
 
     private func moveFocus(by delta: Int) {
+        lastFocusMoveDelta = delta
         guard let current = focusedIndex else { return }
         let next = current + delta
         let maxIndex = drafts.count * 3 - 1
@@ -1810,6 +1827,9 @@ struct ProcessResultsOverviewView: View {
     @FocusState private var focusedField: DraftFocusField?
     /// Measured height of the List container, used to compute per-item description size.
     @State private var listHeight: CGFloat = 0
+    /// Direction of the last arrow-key move, so continuing past a description slot (see
+    /// ResultDraftRow.onDescriptionAutoAdvance) keeps going the same way the user was already moving.
+    @State private var lastFocusMoveDelta = 1
 
     @State private var showPublishConfirmation = false
     @State private var webAutofillQueue: [CrossPostJob] = []
@@ -1849,7 +1869,8 @@ struct ProcessResultsOverviewView: View {
                         onToggle: { toggleSelection(item) },
                         focusedField: $focusedField,
                         isGeminiFailed: uploadManager.processingFailedIDs.contains(item.id),
-                        descriptionLineLimit: descriptionLineLimit
+                        descriptionLineLimit: descriptionLineLimit,
+                        onDescriptionAutoAdvance: { moveFocus(by: lastFocusMoveDelta) }
                     )
                     .equatable()
                 }
@@ -2011,8 +2032,8 @@ struct ProcessResultsOverviewView: View {
                     title: item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled",
                     description: item.userEditedDescription ?? item.aiSuggestedDescription ?? "",
                     price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
-                    coverPhotoPath: item.firebasePhotoPaths?.first,
-                    photoPaths: item.firebasePhotoPaths ?? [],
+                    coverPhotoPath: item.orderedFirebasePhotoPaths.first,
+                    photoPaths: item.orderedFirebasePhotoPaths,
                     platforms: attemptedPlatforms,
                     buyerPaysShipping: item.buyerPaysShipping
                 )
@@ -2167,6 +2188,7 @@ struct ProcessResultsOverviewView: View {
     }
 
     private func moveFocus(by delta: Int) {
+        lastFocusMoveDelta = delta
         guard let current = focusedIndex else { return }
         let next = current + delta
         let maxIndex = results.count * 3 - 1
@@ -2522,6 +2544,11 @@ struct ResultDraftRow: View, Equatable {
     var isGeminiFailed: Bool = false
     /// Minimum lines for the description field; computed from available screen height.
     var descriptionLineLimit: Int = 4
+    /// Called when the description sheet — opened via arrow-key navigation landing on this
+    /// row's description slot, not a direct tap — is dismissed. Lets the keyboard toolbar's
+    /// up/down arrows continue on to the next field instead of stopping dead at description,
+    /// which (unlike title/price) isn't a real focusable text field.
+    var onDescriptionAutoAdvance: (() -> Void)? = nil
 
     // ProcessResultsOverviewView.body re-evaluates on every uploadManager @Published change
     // (isUploadingPhotos, isPublishing, processingFailedIDs are all read there directly) —
@@ -2556,6 +2583,7 @@ struct ResultDraftRow: View, Equatable {
     @State private var descriptionText: String = ""
     @State private var showEditSheet = false
     @State private var showDescriptionEditor = false
+    @State private var descriptionEditorOpenedViaFocus = false
     @State private var undoneAITitle: String? = nil
     @State private var undoneAIDescription: String? = nil
     @State private var toastMessage: String? = nil
@@ -2698,6 +2726,21 @@ struct ResultDraftRow: View, Equatable {
         .onChange(of: focusedField.wrappedValue) { oldFocus, newFocus in
             if oldFocus?.itemID == item.id && newFocus?.itemID != item.id {
                 saveLocalStateToModel()
+            }
+            // Description isn't a real focusable field (it's a button that opens a sheet),
+            // so the keyboard arrows can't land real focus there. Landing "on" it via arrow
+            // navigation instead opens the sheet directly, so up/down keeps working through it.
+            if newFocus == DraftFocusField(itemID: item.id, field: .description) {
+                descriptionEditorOpenedViaFocus = true
+                showDescriptionEditor = true
+            }
+        }
+        .onChange(of: showDescriptionEditor) { _, isShowing in
+            // Fires whether the sheet was saved or swiped away — either way, continue the
+            // arrow-key flow onward once the user's done with the description.
+            if !isShowing && descriptionEditorOpenedViaFocus {
+                descriptionEditorOpenedViaFocus = false
+                onDescriptionAutoAdvance?()
             }
         }
         .onDisappear {

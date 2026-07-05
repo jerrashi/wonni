@@ -246,13 +246,15 @@ class ListingRepository: ObservableObject {
         return try? doc.data(as: UserListing.self)
     }
 
-    /// Deletes a listing from Firestore and its photos from Storage.
+    /// Deletes a listing's photos from Storage, then the Firestore document. Storage runs
+    /// first and is allowed to throw — if it fails, the document is left in place instead
+    /// of being deleted anyway, so a failed cleanup has a retry marker instead of turning
+    /// into a permanently orphaned set of files.
     func deleteListing(id: String) async throws {
-        let userId = Auth.auth().currentUser?.uid
-        try await db.collection(listingsCollection).document(id).delete()
-        if let uid = userId {
-            try? await StorageService.shared.deleteListingImages(userId: uid, listingId: id)
+        if let uid = Auth.auth().currentUser?.uid {
+            try await StorageService.shared.deleteListingImages(userId: uid, listingId: id)
         }
+        try await db.collection(listingsCollection).document(id).delete()
     }
     
     /// Updates a listing with data received from Gemini identification.
@@ -294,20 +296,38 @@ class ListingRepository: ObservableObject {
 
     // MARK: - Bulk Operations
     
-    /// Bulk deletes multiple listings in a batch and deletes their photos from Storage.
+    /// Bulk deletes multiple listings. Deletes each listing's Storage photos first; only
+    /// listings whose Storage cleanup succeeds get their Firestore document deleted, so a
+    /// failure leaves that one document in place as a retry marker instead of silently
+    /// orphaning its photos.
     func bulkDelete(listingIds: [String]) async throws {
-        let userId = Auth.auth().currentUser?.uid
-        let batch = db.batch()
-        for id in listingIds {
-            let ref = db.collection(listingsCollection).document(id)
-            batch.deleteDocument(ref)
+        guard let userId = Auth.auth().currentUser?.uid else {
+            throw NSError(domain: "ListingRepository", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
-        try await batch.commit()
-        
-        if let uid = userId {
-            for id in listingIds {
-                try? await StorageService.shared.deleteListingImages(userId: uid, listingId: id)
+
+        var succeededIds: [String] = []
+        var failures: [String: Error] = [:]
+        for id in listingIds {
+            do {
+                try await StorageService.shared.deleteListingImages(userId: userId, listingId: id)
+                succeededIds.append(id)
+            } catch {
+                failures[id] = error
             }
+        }
+
+        if !succeededIds.isEmpty {
+            let batch = db.batch()
+            for id in succeededIds {
+                batch.deleteDocument(db.collection(listingsCollection).document(id))
+            }
+            try await batch.commit()
+        }
+
+        if !failures.isEmpty {
+            throw NSError(domain: "ListingRepository", code: 500, userInfo: [
+                NSLocalizedDescriptionKey: "\(failures.count) of \(listingIds.count) listings' photos couldn't be fully deleted; those were left in place for retry."
+            ])
         }
     }
     
