@@ -15,6 +15,24 @@ class SearchViewModel: ObservableObject {
     @Published var savedSearches: [SavedSearch] = []
     @Published var isSearching = false
     @Published var hasSearched = false
+    @Published var suggestions: [String] = []
+    private var suggestTask: Task<Void, Never>?
+
+    func updateSuggestions(query: String) {
+        suggestTask?.cancel()
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else {
+            suggestions = []
+            return
+        }
+        suggestTask = Task {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled else { return }
+            let results = (try? await SearchRepository.shared.search(query: trimmed)) ?? []
+            guard !Task.isCancelled else { return }
+            suggestions = Array(results.compactMap { $0.customTitle }.prefix(5))
+        }
+    }
 
     func loadInitial() async {
         async let trendFetch  = SearchRepository.shared.fetchTrending()
@@ -46,6 +64,22 @@ class SearchViewModel: ObservableObject {
         savedSearches = (try? await SearchRepository.shared.fetchSavedSearches()) ?? []
     }
 
+    func savedEntry(for query: String) -> SavedSearch? {
+        let key = query.lowercased().trimmingCharacters(in: .whitespaces)
+        return savedSearches.first { $0.id == key }
+    }
+
+    /// Toggle target for the "Save search?" switch in results — saves or un-saves
+    /// depending on which way the toggle was flipped, fixing the bookmark button
+    /// that previously only ever saved (github issue #58).
+    func setSaved(_ isOn: Bool, query: String) async {
+        if isOn {
+            await saveSearch(query: query)
+        } else if let entry = savedEntry(for: query) {
+            await removeSaved(entry: entry)
+        }
+    }
+
     func removeHistory(entry: SearchHistoryEntry) async {
         try? await SearchRepository.shared.removeFromHistory(entry: entry)
         history = (try? await SearchRepository.shared.fetchHistory()) ?? []
@@ -60,6 +94,7 @@ class SearchViewModel: ObservableObject {
 // MARK: - Search View
 
 struct SearchView: View {
+    @EnvironmentObject private var uploadManager: UploadManager
     @StateObject private var vm = SearchViewModel()
     @State private var searchText = ""
     @FocusState private var isFocused: Bool
@@ -77,13 +112,41 @@ struct SearchView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if vm.hasSearched {
                     resultsView
+                } else if isFocused && !searchText.isEmpty {
+                    suggestionList
                 } else {
                     idleView
                 }
             }
+            .onChange(of: searchText) { _, newValue in
+                vm.updateSuggestions(query: newValue)
+            }
         }
         .toolbar(.hidden, for: .navigationBar)
         .task { await vm.loadInitial() }
+        .onChange(of: uploadManager.pendingSearchQuery) { _, newQuery in
+            consumePendingQuery(newQuery)
+        }
+        .onChange(of: uploadManager.pendingSearchFocus) { _, requested in
+            consumePendingFocus(requested)
+        }
+        .onAppear {
+            consumePendingQuery(uploadManager.pendingSearchQuery)
+            consumePendingFocus(uploadManager.pendingSearchFocus)
+        }
+    }
+
+    private func consumePendingQuery(_ query: String?) {
+        guard let query else { return }
+        uploadManager.pendingSearchQuery = nil
+        searchText = query
+        Task { await vm.search(query: query) }
+    }
+
+    private func consumePendingFocus(_ requested: Bool) {
+        guard requested else { return }
+        uploadManager.pendingSearchFocus = false
+        isFocused = true
     }
 
     // MARK: Search Bar
@@ -103,17 +166,10 @@ struct SearchView: View {
 
                 if !searchText.isEmpty {
                     Button {
-                        Task { await vm.saveSearch(query: searchText) }
-                    } label: {
-                        Image(systemName: savedIcon)
-                            .foregroundStyle(.blue)
-                    }
-                    .transition(.opacity)
-
-                    Button {
                         searchText = ""
                         vm.hasSearched = false
                         vm.results = []
+                        vm.suggestions = []
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
@@ -132,6 +188,7 @@ struct SearchView: View {
                     isFocused = false
                     vm.hasSearched = false
                     vm.results = []
+                    vm.suggestions = []
                 }
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             } else {
@@ -154,10 +211,41 @@ struct SearchView: View {
         .animation(.easeInOut(duration: 0.15), value: searchText.isEmpty)
     }
 
-    private var savedIcon: String {
-        let key = searchText.lowercased().trimmingCharacters(in: .whitespaces)
-        let alreadySaved = vm.savedSearches.contains { $0.id == key }
-        return alreadySaved ? "bookmark.fill" : "bookmark"
+    // MARK: Suggestion List (autocomplete + trending while typing)
+
+    private var suggestionList: some View {
+        List {
+            if !vm.suggestions.isEmpty {
+                Section("Suggestions") {
+                    ForEach(vm.suggestions, id: \.self) { title in
+                        Button {
+                            searchText = title
+                            Task { await submitSearch() }
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "magnifyingglass")
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 20)
+                                Text(title)
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                Image(systemName: "arrow.up.left")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                }
+            }
+            if !vm.trending.isEmpty {
+                Section("Trending") {
+                    ForEach(vm.trending) { trend in
+                        trendingRow(trend)
+                    }
+                }
+            }
+        }
+        .listStyle(.plain)
     }
 
     // MARK: Idle View (saved / recent / trending)
@@ -308,32 +396,48 @@ struct SearchView: View {
 
     // MARK: Results View
 
-    @ViewBuilder
     private var resultsView: some View {
-        if vm.results.isEmpty {
-            VStack(spacing: 12) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 48)).foregroundStyle(.secondary)
-                Text("No results for \"\(searchText)\"")
-                    .font(.headline)
-                Text("Try a different search term.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.top, 60)
-        } else {
-            ScrollView {
-                LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(vm.results) { listing in
-                        NavigationLink(destination: ListingDetailView(listing: listing)) {
-                            FeedListingCard(listing: listing)
-                        }
-                        .buttonStyle(.plain)
-                    }
+        VStack(spacing: 0) {
+            saveSearchRow
+            Divider()
+
+            if vm.results.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 48)).foregroundStyle(.secondary)
+                    Text("No results for \"\(searchText)\"")
+                        .font(.headline)
+                    Text("Try a different search term.")
+                        .font(.subheadline).foregroundStyle(.secondary)
                 }
-                .padding(16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.top, 60)
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 12) {
+                        ForEach(vm.results) { listing in
+                            NavigationLink(destination: ListingDetailView(listing: listing)) {
+                                FeedListingCard(listing: listing)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(16)
+                }
             }
         }
+    }
+
+    private var saveSearchRow: some View {
+        Toggle(isOn: Binding(
+            get: { vm.savedEntry(for: searchText) != nil },
+            set: { newValue in Task { await vm.setSaved(newValue, query: searchText) } }
+        )) {
+            Text("Save search?")
+                .font(.subheadline.weight(.medium))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 
     // MARK: Helpers
@@ -351,16 +455,16 @@ private struct FeedListingCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Group {
-                if let path = listing.coverPhotoPath {
-                    StorageImage(path: path).scaledToFill()
-                } else {
-                    Rectangle().fill(Color.secondary.opacity(0.12))
+            Color.clear
+                .aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    if let path = listing.coverPhotoPath {
+                        StorageImage(path: path).scaledToFill()
+                    } else {
+                        Rectangle().fill(Color.secondary.opacity(0.12))
+                    }
                 }
-            }
-            .aspectRatio(1, contentMode: .fill)
-            .clipped()
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             if let price = listing.price {
                 Text(String(format: "$%.0f", price))
