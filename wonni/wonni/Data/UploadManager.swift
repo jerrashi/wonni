@@ -51,17 +51,47 @@ class UploadManager: ObservableObject {
 
     // ── Photo Upload Phase ─────────────────────────────────────────────────
     @Published var isUploadingPhotos = false
-    @Published var uploadProgress: Double = 0
-    @Published var uploadStatuses: [UUID: DraftUploadStatus] = [:]
+    // uploadProgress/uploadStatuses tick once per photo (often several times a second
+    // across a batch). Screens like BulkListingOverviewView hold this object via
+    // @EnvironmentObject to call its methods, which means SwiftUI's whole-object
+    // ObservableObject invalidation re-runs their entire body — reconstructing the drafts
+    // List — on every single tick, even though that screen doesn't display upload progress
+    // at all. Backed by plain vars with a throttled objectWillChange (below) instead of
+    // @Published, so internal reads stay perfectly current but external re-renders are
+    // capped at a sane rate instead of firing dozens of times a second.
+    var uploadProgress: Double {
+        get { _uploadProgress }
+        set { _uploadProgress = newValue; scheduleThrottledChangeNotify() }
+    }
+    private var _uploadProgress: Double = 0
+    var uploadStatuses: [UUID: DraftUploadStatus] {
+        get { _uploadStatuses }
+        set { _uploadStatuses = newValue; scheduleThrottledChangeNotify() }
+    }
+    private var _uploadStatuses: [UUID: DraftUploadStatus] = [:]
     @Published var uploadedAssetIDs: [String] = []
     @Published var showDeletePhotosPrompt = false
     @Published var uploadStartTime: Date? = nil
 
     // ── AI Processing Phase ─────────────────────────────────────────────────
     @Published var isProcessing = false
-    @Published var processProgress: Double = 0
-    @Published var processStatuses: [UUID: DraftUploadStatus] = [:]
-    @Published var processCurrentIndex = 0
+    // Same throttling rationale as uploadProgress/uploadStatuses above — these tick
+    // several times per draft as it moves through identify/analyze/describe.
+    var processProgress: Double {
+        get { _processProgress }
+        set { _processProgress = newValue; scheduleThrottledChangeNotify() }
+    }
+    private var _processProgress: Double = 0
+    var processStatuses: [UUID: DraftUploadStatus] {
+        get { _processStatuses }
+        set { _processStatuses = newValue; scheduleThrottledChangeNotify() }
+    }
+    private var _processStatuses: [UUID: DraftUploadStatus] = [:]
+    var processCurrentIndex: Int {
+        get { _processCurrentIndex }
+        set { _processCurrentIndex = newValue; scheduleThrottledChangeNotify() }
+    }
+    private var _processCurrentIndex = 0
     @Published var processTotalCount = 0
     @Published var showProcessResults = false
     @Published var showResultsOverview = false
@@ -106,6 +136,31 @@ class UploadManager: ObservableObject {
     private var processTask: Task<Void, Never>?
     private var processingTaskId = UUID()
     private var publishTaskId = UUID()
+
+    // ── Throttled change notifications (perf) ───────────────────────────────
+    private var lastChangeNotify: Date = .distantPast
+    private var pendingChangeNotify: Task<Void, Never>?
+    private let changeNotifyInterval: TimeInterval = 0.15
+
+    /// Shared by uploadProgress/uploadStatuses/processProgress/processStatuses/
+    /// processCurrentIndex's setters. Coalesces however many ticks land within the window
+    /// into a single objectWillChange, so views like BulkListingOverviewView — which hold
+    /// this object just to call its methods, not to display these properties — don't
+    /// reconstruct their whole body (and the drafts List inside it) on every single tick.
+    private func scheduleThrottledChangeNotify() {
+        guard pendingChangeNotify == nil else { return }
+        let elapsed = Date().timeIntervalSince(lastChangeNotify)
+        let delay = max(0, changeNotifyInterval - elapsed)
+        pendingChangeNotify = Task { @MainActor [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+            guard let self else { return }
+            self.lastChangeNotify = Date()
+            self.objectWillChange.send()
+            self.pendingChangeNotify = nil
+        }
+    }
 
     // ── ETA helper ─────────────────────────────────────────────────────────
     var uploadEtaString: String? {

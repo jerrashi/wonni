@@ -1669,9 +1669,13 @@ struct BulkListingOverviewView: View {
                     }
                 }
                 .listStyle(.plain)
-                .onChange(of: focusedField) { _, newValue in
+                .onChange(of: focusedField) { oldValue, newValue in
                     try? modelContext.save()
-                    if let fv = newValue {
+                    // Only re-center when focus actually lands on a *different draft* — title,
+                    // price, and description of the same row are already all visible together,
+                    // so scrolling on every sub-field move (as this used to) fought the user's
+                    // own scroll gesture on every single field-to-field tap or arrow press.
+                    if let fv = newValue, fv.itemID != oldValue?.itemID {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                             withAnimation(.easeOut(duration: 0.2)) {
                                 proxy.scrollTo(fv.itemID, anchor: .center)
