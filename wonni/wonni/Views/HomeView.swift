@@ -105,6 +105,7 @@ class FeedViewModel: ObservableObject {
 // MARK: - Home View
 
 struct HomeView: View {
+    @EnvironmentObject private var uploadManager: UploadManager
     @StateObject private var vm = FeedViewModel()
     @State private var carouselIndex = 0
 
@@ -114,8 +115,11 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                SearchBarView()
-                    .padding(.vertical, 8)
+                SearchBarView {
+                    uploadManager.pendingSearchFocus = true
+                    uploadManager.selectedTab = 1
+                }
+                .padding(.vertical, 8)
                 Divider()
 
                 ScrollView {
