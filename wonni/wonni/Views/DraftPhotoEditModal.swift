@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import FirebaseAuth
 
 struct DraftPhotoEditModal: View {
     let item: Item
@@ -135,6 +136,9 @@ struct DraftPhotoEditModal: View {
     }
 
     private func syncChangesToItem() {
+        let removedAssetIds = Set(item.sourceAssetIdentifiers).subtracting(localAssetIds)
+        let pathsToDelete = removedAssetIds.compactMap { item.firebasePhotoPathsByAsset?[$0] }
+
         var newPhotosData: [Data] = []
         for assetId in localAssetIds {
             if let idx = item.sourceAssetIdentifiers.firstIndex(of: assetId) {
@@ -143,13 +147,30 @@ struct DraftPhotoEditModal: View {
                 }
             }
         }
-        
+
         item.sourceAssetIdentifiers = localAssetIds
         if item.isLocalPhotoOnly || !item.photosData.isEmpty {
             item.photosData = newPhotosData
         }
-        
+        for assetId in removedAssetIds {
+            item.firebasePhotoPathsByAsset?.removeValue(forKey: assetId)
+        }
+
         try? modelContext.save()
+
+        guard !pathsToDelete.isEmpty, let userId = Auth.auth().currentUser?.uid else { return }
+        Task {
+            for path in pathsToDelete {
+                do {
+                    try await StorageService.shared.deletePhoto(path: path, userId: userId)
+                } catch {
+                    print("[DraftPhotoEditModal] Failed to delete photo at \(path): \(error)")
+                    await MainActor.run {
+                        UploadManager.shared.cleanupError = "Couldn't fully delete a removed photo. It may still be using storage."
+                    }
+                }
+            }
+        }
     }
 }
 

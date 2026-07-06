@@ -8,6 +8,7 @@
 import Foundation
 import FirebaseStorage
 import FirebaseAuth
+import FirebaseFirestore
 import UIKit
 
 class StorageService: ObservableObject {
@@ -69,12 +70,59 @@ class StorageService: ObservableObject {
         return try await storage.child(path).data(maxSize: 10 * 1024 * 1024)
     }
 
-    /// Deletes all images for a listing.
+    /// True if a Sale record still snapshots this exact Storage path as its cover photo —
+    /// e.g. a sold listing that never got a working platform (eBay/Mercari) CDN thumbnail
+    /// and is still falling back to the Wonni-hosted copy. Deleting the path out from under
+    /// it would break the Sales dashboard's photo.
+    private func isPhotoReferencedBySale(path: String, userId: String) async throws -> Bool {
+        let snap = try await Firestore.firestore().collection("sales")
+            .whereField("userId", isEqualTo: userId)
+            .whereField("coverPhotoPath", isEqualTo: path)
+            .limit(to: 1)
+            .getDocuments()
+        return !snap.documents.isEmpty
+    }
+
+    /// True if a Conversation record still snapshots this exact Storage path as its cover
+    /// photo (same shared-reference risk as Sales, above).
+    private func isPhotoReferencedByConversation(path: String, userId: String) async throws -> Bool {
+        let snap = try await Firestore.firestore().collection("conversations")
+            .whereField("participants", arrayContains: userId)
+            .whereField("snapshotCoverPath", isEqualTo: path)
+            .limit(to: 1)
+            .getDocuments()
+        return !snap.documents.isEmpty
+    }
+
+    private func isPhotoReferenced(path: String, userId: String) async throws -> Bool {
+        if try await isPhotoReferencedBySale(path: path, userId: userId) { return true }
+        if try await isPhotoReferencedByConversation(path: path, userId: userId) { return true }
+        return false
+    }
+
+    /// Deletes a single photo, unless a Sale or Conversation still references it — in which
+    /// case it's left in place (no-op) so that record doesn't end up with a broken image.
+    func deletePhoto(path: String, userId: String) async throws {
+        guard try await !isPhotoReferenced(path: path, userId: userId) else {
+            print("[StorageService] Skipping delete of \(path) — still referenced by a Sale/Conversation")
+            return
+        }
+        try await storage.child(path).delete()
+    }
+
+    /// Deletes all images for a listing, except any still referenced by a Sale or
+    /// Conversation snapshot (see `isPhotoReferenced`). Throws on the first real failure —
+    /// callers should treat a thrown error as "cleanup did not fully complete" rather than
+    /// swallowing it, so orphaned files don't go undetected.
     func deleteListingImages(userId: String, listingId: String) async throws {
         let listRef = storage.child("users/\(userId)/\(listingId)")
         let result = try await listRef.listAll()
-        
+
         for item in result.items {
+            if try await isPhotoReferenced(path: item.fullPath, userId: userId) {
+                print("[StorageService] Skipping delete of \(item.fullPath) — still referenced by a Sale/Conversation")
+                continue
+            }
             try await item.delete()
         }
     }

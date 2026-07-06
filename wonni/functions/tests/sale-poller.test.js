@@ -277,6 +277,7 @@ describe("deduplication", () => {
       empty: false,
       docs: [{
         data: () => ({
+          status: "pending",
           trackingNumber: null,
           priceSoldFor: 29.99,
           shippingRevenue: null,
@@ -367,6 +368,7 @@ describe("soft-delete restore", () => {
       empty: false,
       docs: [{
         data: () => ({
+          status: "pending",
           isDeleted: true,
           deletedAt: "2026-06-01",
           trackingNumber: null,

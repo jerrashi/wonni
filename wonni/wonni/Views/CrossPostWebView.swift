@@ -2835,7 +2835,11 @@ struct MercariSyncSheet: View {
                     }
                     .padding()
                 case .loaded:
-                    resultList
+                    if loader.statusRaw == "inactive" {
+                        inactiveView
+                    } else {
+                        resultList
+                    }
                 }
             }
             .navigationTitle("Sync from Mercari")
@@ -2919,6 +2923,73 @@ struct MercariSyncSheet: View {
     }
 
     private func money(_ v: Double) -> String { String(format: "$%.2f", v) }
+
+    // Shown when Mercari serves the "no longer for sale" page — the listing was deactivated or
+    // sold there. The action depends on why: a pending-deactivation listing just needs the stale
+    // reminder cleared; an otherwise-active listing can be marked sold out across platforms.
+    @ViewBuilder private var inactiveView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "minus.circle.fill")
+                .font(.system(size: 44)).foregroundStyle(.orange)
+            Text("No longer active on Mercari").font(.headline)
+            if listing.pendingMercariDeactivation == true {
+                Text("This sold on another platform and you'd been asked to deactivate it on Mercari. It's now inactive — you're all set.")
+                    .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button { Task { await markHandled() } } label: {
+                    HStack { if isApplying { ProgressView() }; Text("Mark as handled") }
+                        .fontWeight(.semibold).frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent).tint(.orange).disabled(isApplying)
+            } else if listing.status != .sold {
+                Text("This listing is inactive on Mercari but still active on Wonni. If it sold, mark it sold out to end it everywhere.")
+                    .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button { Task { await markSoldOut() } } label: {
+                    HStack { if isApplying { ProgressView() }; Text("Mark sold out in Wonni") }
+                        .fontWeight(.semibold).frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent).tint(.red).disabled(isApplying)
+            } else {
+                Text("Already sold out in Wonni — nothing to do.")
+                    .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+            if let url = URL(string: "https://www.mercari.com/us/item/\(mercariId)/") {
+                Link("Open on Mercari", destination: url).font(.subheadline)
+            }
+            if let err = applyError { Text(err).font(.caption).foregroundStyle(.red) }
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // Clears the stale "deactivate on Mercari" reminder once Mercari confirms the item is inactive.
+    private func markHandled() async {
+        guard let listingId = listing.id else { return }
+        isApplying = true; applyError = nil
+        do {
+            try await Firestore.firestore().collection("listings").document(listingId)
+                .updateData(["pendingMercariDeactivation": FieldValue.delete(),
+                             "updatedAt": Timestamp(date: Date())])
+            onApplied()
+            dismiss()
+        } catch { applyError = "Couldn't update the listing. Try again." }
+        isApplying = false
+    }
+
+    // Marks an otherwise-active listing sold out and cascades qty=0 to eBay/Etsy.
+    private func markSoldOut() async {
+        guard let listingId = listing.id else { return }
+        isApplying = true; applyError = nil
+        do {
+            _ = try await callCloudFunction("markSoldOutAndCascade", ["listingId": listingId])
+            // markSoldOutAndCascade re-flags Mercari for deactivation, but Mercari is already
+            // inactive here, so clear that flag to avoid a phantom "Action needed" entry.
+            try? await Firestore.firestore().collection("listings").document(listingId)
+                .updateData(["pendingMercariDeactivation": FieldValue.delete()])
+            onApplied()
+            dismiss()
+        } catch { applyError = "Couldn't mark sold out. Try again." }
+        isApplying = false
+    }
 
     private func apply() async {
         guard let listingId = listing.id else { return }
@@ -3020,6 +3091,8 @@ struct MercariProfileSyncSheet: View {
     @State private var listingToSync: UserListing?
     @State private var listingToDeactivate: UserListing?
     @State private var listingToRelist: CrossPostJob?
+    @State private var deactivateSelectMode = false
+    @State private var selectedDeactivateIds: Set<String> = []
 
     private var pendingListings: [UserListing] {
         listings.filter { $0.pendingMercariDeactivation == true || $0.pendingMercariRelist == true }
@@ -3050,9 +3123,41 @@ struct MercariProfileSyncSheet: View {
                                 ForEach(pendingListings) { listing in
                                     pendingRow(listing)
                                 }
+                                if deactivateSelectMode && !selectedDeactivateIds.isEmpty {
+                                    Button {
+                                        Task {
+                                            for id in selectedDeactivateIds {
+                                                await clearFlag("pendingMercariDeactivation", for: id)
+                                            }
+                                            selectedDeactivateIds = []
+                                            deactivateSelectMode = false
+                                            onComplete()
+                                        }
+                                    } label: {
+                                        Label("Mark \(selectedDeactivateIds.count) as Handled", systemImage: "checkmark.circle.fill")
+                                            .font(.subheadline.weight(.semibold))
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(.orange)
+                                    .listRowBackground(Color.clear)
+                                }
                             } header: {
-                                Label("Action needed", systemImage: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.orange).textCase(nil)
+                                HStack {
+                                    Label("Action needed", systemImage: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.orange).textCase(nil)
+                                    Spacer()
+                                    if deactivateSelectMode {
+                                        Button("Cancel") {
+                                            deactivateSelectMode = false
+                                            selectedDeactivateIds = []
+                                        }
+                                        .font(.caption).foregroundStyle(.orange)
+                                    } else {
+                                        Button("Select") { deactivateSelectMode = true }
+                                            .font(.caption).foregroundStyle(.orange)
+                                    }
+                                }
                             }
                         }
                         Section("All Mercari listings (\(normalListings.count))") {
@@ -3144,58 +3249,90 @@ struct MercariProfileSyncSheet: View {
 
     @ViewBuilder private func pendingRow(_ listing: UserListing) -> some View {
         let isDeactivate = listing.pendingMercariDeactivation == true
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(listing.customTitle ?? "Untitled")
-                        .font(.subheadline.weight(.semibold)).lineLimit(1)
-                    if let price = listing.price {
-                        Text(String(format: "$%.2f", price))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+        let listingId = listing.id ?? ""
+        let isSelected = selectedDeactivateIds.contains(listingId)
+        HStack(alignment: .top, spacing: 10) {
+            if deactivateSelectMode && isDeactivate {
+                Button {
+                    if isSelected { selectedDeactivateIds.remove(listingId) }
+                    else { selectedDeactivateIds.insert(listingId) }
+                } label: {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3).foregroundStyle(isSelected ? .orange : .secondary)
                 }
-                Spacer()
-                Label(
-                    isDeactivate ? "Deactivate needed" : "Re-list needed",
-                    systemImage: isDeactivate ? "minus.circle.fill" : "arrow.up.circle.fill"
-                )
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(isDeactivate ? .red : .blue)
-                .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
+                .padding(.top, 12)
             }
-            if isDeactivate {
-                Text("This listing sold elsewhere (qty=0). Deactivate it on Mercari.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button {
-                    listingToDeactivate = listing
-                } label: {
-                    Label("Deactivate on Mercari", systemImage: "minus.circle")
-                        .font(.caption.weight(.semibold))
+            // Photo thumbnail
+            Group {
+                if let path = listing.photoPaths.first ?? listing.coverPhotoPath {
+                    StorageImage(path: path).frame(width: 52, height: 52).cornerRadius(8)
+                } else {
+                    Color(.systemGray5).frame(width: 52, height: 52).cornerRadius(8)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.red)
-            } else {
-                Text("This Mercari listing sold. Re-list it since you still have stock.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button {
-                    listingToRelist = CrossPostJob(
-                        platform: "mercari",
-                        title: listing.customTitle ?? "",
-                        description: listing.customDescription ?? "",
-                        price: listing.price ?? 0,
-                        listingId: listing.id,
-                        photoFirebasePaths: listing.photoPaths,
-                        buyerPaysShipping: listing.shippingInfo?.buyerPaysShipping ?? false
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(listing.customTitle ?? "Untitled")
+                            .font(.subheadline.weight(.semibold)).lineLimit(1)
+                        if let price = listing.price {
+                            Text(String(format: "$%.2f", price))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Label(
+                        isDeactivate ? "Deactivate needed" : "Re-list needed",
+                        systemImage: isDeactivate ? "minus.circle.fill" : "arrow.up.circle.fill"
                     )
-                } label: {
-                    Label("Re-list on Mercari", systemImage: "arrow.up.circle")
-                        .font(.caption.weight(.semibold))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(isDeactivate ? .red : .blue)
+                    .labelStyle(.iconOnly)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
+                if isDeactivate {
+                    Text("Sold elsewhere (qty=0). Deactivate on Mercari.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if !deactivateSelectMode {
+                        Button {
+                            listingToDeactivate = listing
+                        } label: {
+                            Label("Deactivate on Mercari", systemImage: "minus.circle")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                    }
+                } else {
+                    Text("Sold on Mercari. Re-list since you still have stock.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button {
+                        listingToRelist = CrossPostJob(
+                            platform: "mercari",
+                            title: listing.customTitle ?? "",
+                            description: listing.customDescription ?? "",
+                            price: listing.price ?? 0,
+                            listingId: listing.id,
+                            photoFirebasePaths: listing.photoPaths,
+                            buyerPaysShipping: listing.shippingInfo?.buyerPaysShipping ?? false
+                        )
+                    } label: {
+                        Label("Re-list on Mercari", systemImage: "arrow.up.circle")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                }
             }
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if deactivateSelectMode && isDeactivate {
+                if isSelected { selectedDeactivateIds.remove(listingId) }
+                else { selectedDeactivateIds.insert(listingId) }
+            }
+        }
     }
 
     private func reload() async {
@@ -3230,8 +3367,10 @@ struct MercariProfileSyncSheet: View {
 
 struct MercariTransactionData {
     let takeHome: Double?
+    let soldPrice: Double?
     let trackingNumber: String?
     let carrier: String?
+    let soldDate: Date?
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -3327,7 +3466,7 @@ struct MercariTransactionLoader: UIViewRepresentable {
                             webView.load(URLRequest(url: url))
                         } else {
                             self.extracted = true
-                            self.onDataFound(MercariTransactionData(takeHome: takeHome, trackingNumber: nil, carrier: nil))
+                            self.onDataFound(MercariTransactionData(takeHome: takeHome, soldPrice: nil, trackingNumber: nil, carrier: nil, soldDate: nil))
                         }
                     } else if attempt < 1 {
                         self.extractTransactionData(webView: webView, attempt: attempt + 1)
@@ -3353,8 +3492,10 @@ struct MercariTransactionLoader: UIViewRepresentable {
                         self.extracted = true
                         self.onDataFound(MercariTransactionData(
                             takeHome: self.pendingTakeHome,
+                            soldPrice: nil,
                             trackingNumber: trackingNumber,
-                            carrier: carrier
+                            carrier: carrier,
+                            soldDate: nil
                         ))
                     } else {
                         self.extractTrackingData(webView: webView, attempt: attempt + 1)
@@ -3380,6 +3521,8 @@ final class MercariTakeHomeScraper: NSObject, WKNavigationDelegate {
     private var webView: WKWebView?
     private var phase: Phase = .transactionPage
     private var pendingTakeHome: Double?
+    private var pendingSoldPrice: Double?
+    private var pendingSoldDate: Date?
     private var extracted = false
     // Strong self-reference so ARC doesn't deallocate us before callbacks fire.
     private var retainCycle: MercariTakeHomeScraper?
@@ -3462,15 +3605,21 @@ final class MercariTakeHomeScraper: NSObject, WKNavigationDelegate {
                 (function() {
                     var el = document.querySelector('[data-testid="You-made-value"]');
                     var takeHome = el ? el.textContent : null;
+                    var priceEl = document.querySelector('[data-testid="Sold-price-value"]');
+                    var soldPrice = priceEl ? priceEl.textContent : null;
                     var btn = document.querySelector('[data-testid="ShippingCTAButton"]');
                     var trackingHref = btn ? btn.getAttribute('href') : null;
-                    return { takeHome: takeHome, trackingHref: trackingHref };
+                    var soldTimeEl = document.querySelector('[data-testid="ItemSoldTime"]');
+                    var soldOn = soldTimeEl ? soldTimeEl.textContent.trim() : null;
+                    return { takeHome: takeHome, soldPrice: soldPrice, trackingHref: trackingHref, soldOn: soldOn };
                 })()
                 """
             webView.evaluateJavaScript(js) { [weak self, weak webView] result, _ in
                 guard let self, let webView else { return }
                 var takeHome: Double? = nil
+                var soldPrice: Double? = nil
                 var trackingHref: String? = nil
+                var soldDate: Date? = nil
                 if let dict = result as? [String: Any] {
                     if let text = dict["takeHome"] as? String {
                         let cleaned = text.trimmingCharacters(in: .whitespaces)
@@ -3478,16 +3627,33 @@ final class MercariTakeHomeScraper: NSObject, WKNavigationDelegate {
                             .replacingOccurrences(of: ",", with: "")
                         takeHome = Double(cleaned).flatMap { $0 > 0 ? $0 : nil }
                     }
+                    if let text = dict["soldPrice"] as? String {
+                        let cleaned = text.trimmingCharacters(in: .whitespaces)
+                            .replacingOccurrences(of: "$", with: "")
+                            .replacingOccurrences(of: ",", with: "")
+                        soldPrice = Double(cleaned).flatMap { $0 > 0 ? $0 : nil }
+                    }
                     trackingHref = dict["trackingHref"] as? String
+                    if let rawDate = dict["soldOn"] as? String {
+                        let fmt = DateFormatter()
+                        fmt.locale = Locale(identifier: "en_US_POSIX")
+                        let text = rawDate.replacingOccurrences(of: "Sold on ", with: "")
+                        for format in ["MM/dd/yy", "MM/dd/yyyy"] {
+                            fmt.dateFormat = format
+                            if let d = fmt.date(from: text) { soldDate = d; break }
+                        }
+                    }
                 }
-                if takeHome != nil || trackingHref != nil {
+                if takeHome != nil || trackingHref != nil || soldPrice != nil {
                     self.pendingTakeHome = takeHome
+                    self.pendingSoldPrice = soldPrice
+                    self.pendingSoldDate = soldDate
                     if let href = trackingHref, let url = URL(string: href.hasPrefix("http") ? href : "https://www.mercari.com\(href)") {
                         self.phase = .trackingPage
                         webView.load(URLRequest(url: url))
                     } else {
                         self.extracted = true
-                        self.finish { self.onSuccess(MercariTransactionData(takeHome: takeHome, trackingNumber: nil, carrier: nil)) }
+                        self.finish { self.onSuccess(MercariTransactionData(takeHome: takeHome, soldPrice: soldPrice, trackingNumber: nil, carrier: nil, soldDate: soldDate)) }
                     }
                 } else if attempt < 1 {
                     self.extractTransactionData(webView: webView, attempt: attempt + 1)
@@ -3513,8 +3679,10 @@ final class MercariTakeHomeScraper: NSObject, WKNavigationDelegate {
                     self.extracted = true
                     self.finish { self.onSuccess(MercariTransactionData(
                         takeHome: self.pendingTakeHome,
+                        soldPrice: self.pendingSoldPrice,
                         trackingNumber: trackingNumber,
-                        carrier: carrier
+                        carrier: carrier,
+                        soldDate: self.pendingSoldDate
                     )) }
                 } else {
                     self.extractTrackingData(webView: webView, attempt: attempt + 1)
@@ -3578,7 +3746,7 @@ private struct MercariDeactivateActionSheet: View {
 /// helpers if anything goes wrong.
 @MainActor
 final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelegate {
-    enum Phase {
+    enum Phase: Equatable {
         case navigating, injecting, success, manualFallback(String)
     }
 
@@ -3587,6 +3755,7 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
 
     let webView: WKWebView
     private var hasStarted = false
+    private var taskId = UUID()
 
     let mercariItemId: String
     let title: String
@@ -3620,13 +3789,28 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
         hasStarted = true
         self.photoBase64Strings = photoBase64Strings
         self.photosWereUpdated = photosWereUpdated
+        if manualReason == nil {
+            AppTaskQueue.shared.begin(id: taskId, label: "Updating Mercari listing…")
+        }
         let urlStr = "https://www.mercari.com/sell/edit/\(mercariItemId)/"
         if let url = URL(string: urlStr) {
             webView.load(URLRequest(url: url))
         } else {
+            AppTaskQueue.shared.complete(id: taskId)
             phase = .manualFallback("Invalid Mercari item ID")
             isWebViewVisible = true
         }
+    }
+
+    func restart() {
+        guard manualReason == nil else { return }
+        let savedPhotos = photoBase64Strings
+        let savedPhotosUpdated = photosWereUpdated
+        hasStarted = false
+        taskId = UUID()
+        phase = .navigating
+        isWebViewVisible = false
+        start(photoBase64Strings: savedPhotos, photosWereUpdated: savedPhotosUpdated)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -3634,6 +3818,7 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        AppTaskQueue.shared.complete(id: taskId)
         phase = .manualFallback("Page failed to load — edit manually")
         isWebViewVisible = true
     }
@@ -3673,6 +3858,7 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
         if manualReason != nil { return }
         guard case .navigating = phase else { return }
         phase = .injecting
+        defer { AppTaskQueue.shared.complete(id: taskId) }
 
         // Wait for the edit form to mount (same Title field check as create flow)
         let deadline = Date().addingTimeInterval(30)
@@ -3820,9 +4006,32 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
         """
         let saveResult = (try? await webView.callJS(saveJS)) as? String ?? "error"
         if saveResult == "submitted" {
-            // Brief wait then check for success (URL change or success element)
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            phase = .success
+            // Poll for navigation away from the edit URL or a success signal on the page.
+            // Mercari may redirect to the listing detail or show an inline success toast.
+            let successDeadline = Date().addingTimeInterval(15)
+            var editSucceeded = false
+            while Date() < successDeadline {
+                try? await Task.sleep(nanoseconds: 750_000_000)
+                let check = (try? await webView.callJS("""
+                    return (function() {
+                        var url = location.href.toLowerCase();
+                        if (url.indexOf('/sell/edit/') === -1) return 'navigated';
+                        var body = document.body ? document.body.innerText : '';
+                        if (/updated|changes saved|listing updated/i.test(body)) return 'success-text';
+                        return 'wait';
+                    })();
+                """)) as? String ?? "wait"
+                if check == "navigated" || check == "success-text" {
+                    editSucceeded = true
+                    break
+                }
+            }
+            if editSucceeded {
+                phase = .success
+            } else {
+                phase = .manualFallback("Mercari didn't confirm the update — check your listing manually")
+                isWebViewVisible = true
+            }
         } else {
             phase = .manualFallback("Couldn't find the save button — tap it manually")
             isWebViewVisible = true
@@ -3886,6 +4095,7 @@ struct MercariAutoEditSheet: View {
 
     @StateObject private var state: MercariAutoEditState
     @Environment(\.dismiss) private var dismiss
+    @State private var sheetDetent: PresentationDetent = .height(80)
 
     let photosWereUpdated: Bool
 
@@ -3914,21 +4124,26 @@ struct MercariAutoEditSheet: View {
                     statusContent
                 }
             }
-            .navigationTitle("Update Mercari Listing")
+            .navigationTitle(state.isWebViewVisible ? "Update Mercari Listing" : "")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { onDone(); dismiss() }
-                }
                 if state.isWebViewVisible {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close") { onDone(); dismiss() }
+                    }
                     ToolbarItem(placement: .primaryAction) {
                         Button { state.webView.reload() } label: {
                             Image(systemName: "arrow.clockwise")
                         }
                     }
+                } else if case .manualFallback = state.phase {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close") { onDone(); dismiss() }
+                    }
                 }
             }
         }
+        .presentationDetents([.height(80), .large], selection: $sheetDetent)
         .task {
             if photosWereUpdated {
                 var base64Photos: [String] = []
@@ -3942,38 +4157,52 @@ struct MercariAutoEditSheet: View {
                 state.start()
             }
         }
+        .onChange(of: state.phase) { _, newPhase in
+            switch newPhase {
+            case .success:
+                onDone()
+                dismiss()
+            case .manualFallback:
+                sheetDetent = .large
+            default:
+                break
+            }
+        }
     }
 
     @ViewBuilder
     private var statusContent: some View {
         switch state.phase {
         case .navigating, .injecting:
-            VStack(spacing: 16) {
-                ProgressView()
-                let label: String = { if case .navigating = state.phase { return "Loading Mercari edit form…" } else { return "Filling in updated details…" } }()
-                Text(label)
-                    .font(.subheadline).foregroundStyle(.secondary)
-            }
+            // Progress is shown in the shared AppTaskQueue pill bar — nothing to show here.
+            Color.clear
         case .success:
-            VStack(spacing: 16) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 56)).foregroundStyle(.green)
-                Text("Mercari listing updated!").font(.title3.weight(.semibold))
-                Button("Done") { onDone(); dismiss() }
-                    .buttonStyle(.borderedProminent)
-            }
+            Color.clear
         case .manualFallback(let reason):
-            VStack(spacing: 12) {
-                Image(systemName: "hand.tap.fill")
-                    .font(.system(size: 40)).foregroundStyle(.orange)
-                Text("Finish manually").font(.title3.weight(.semibold))
-                Text(reason).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Button("Show Mercari form") {
-                    state.isWebViewVisible = true
+            VStack(spacing: 20) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 44))
+                    .foregroundStyle(.orange)
+                Text("Update Failed")
+                    .font(.title2.weight(.bold))
+                Text(reason)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                VStack(spacing: 12) {
+                    Button("Retry") {
+                        sheetDetent = .height(80)
+                        state.restart()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button("Edit Manually in Browser") {
+                        state.isWebViewVisible = true
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.borderedProminent)
             }
             .padding(.horizontal, 32)
+            .padding(.top, 24)
         }
     }
 }
@@ -3995,27 +4224,32 @@ final class MercariItemLoader: ObservableObject {
     @Published var name: String?
     @Published var descriptionText: String?
     @Published var thumbnailUrl: String?
+    @Published var soldAt: Date?
 
     let webView: WKWebView
+    private let navDelegate = SaleNavDelegate()
 
     init() {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.default()
         webView = WKWebView(frame: .zero, configuration: config)
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        webView.navigationDelegate = navDelegate
     }
 
     func load(itemId: String) async {
         phase = .loading
-        priceDollars = nil; isSold = false; statusRaw = nil; name = nil; descriptionText = nil; thumbnailUrl = nil
+        priceDollars = nil; isSold = false; statusRaw = nil; name = nil; descriptionText = nil; thumbnailUrl = nil; soldAt = nil
         guard let url = URL(string: "https://www.mercari.com/us/item/\(itemId)/") else {
             phase = .failed; return
         }
+        navDelegate.reset()
         webView.load(URLRequest(url: url))
+        _ = await navDelegate.waitForLoad(timeout: 20)
 
         let js = #"""
         return (function() {
-            var out = { price: null, status: null, name: null, description: null, photo: null };
+            var out = { price: null, status: null, name: null, description: null, photo: null, soldOn: null };
             var nd = document.getElementById('__NEXT_DATA__');
             var text = nd ? (nd.textContent || '') : '';
             if (text) {
@@ -4047,10 +4281,21 @@ final class MercariItemLoader: ObservableObject {
                     if (pm) out.price = parseFloat(pm[1]) / 100;
                 }
             }
-            // og:image is a reliable first-photo fallback when __NEXT_DATA__ has no photos array
+            // DOM fallback when __NEXT_DATA__ has no photos array (common for sold-out items,
+            // whose page props omit the photos array): the product image tag carries the
+            // real item ID in its `itemid` attribute, unlike the generic og:image meta tag.
+            if (!out.photo) {
+                var itemImg = document.querySelector('img[itemid]');
+                if (itemImg && itemImg.src) out.photo = itemImg.src;
+            }
+            // og:image is a last resort. Only trust it if it's on Mercari's actual photo CDN
+            // (u-mercari-images.mercdn.net) — the generic brand placeholder is served from
+            // u-web-assets.mercdn.net and must never be accepted as the item's photo.
             if (!out.photo) {
                 var og = document.querySelector('meta[property="og:image"]');
-                if (og && og.content) out.photo = og.content;
+                if (og && og.content && og.content.indexOf('u-mercari-images.mercdn.net') !== -1) {
+                    out.photo = og.content;
+                }
             }
             // DOM query for title is more reliable than NEXT_DATA which often contains the seller name
             var nameEl = document.querySelector('[data-testid="ItemName"]');
@@ -4072,6 +4317,12 @@ final class MercariItemLoader: ObservableObject {
             }
             // Body-text status fallback intentionally omitted — too many false positives
             // (e.g. "47 items sold" in seller stats). Trust __NEXT_DATA__ status only.
+            // Product ribbon check: "Inactive" ribbon means the listing was deactivated (not sold).
+            // Must run before the CTA button fallback so it takes priority.
+            if (!out.status) {
+                var ribbonEl = document.querySelector('[class*="RibbonTitle"]');
+                if (ribbonEl && ribbonEl.innerText) out.status = ribbonEl.innerText.trim().toLowerCase();
+            }
             // CTA button fallback: "item sold" (not logged in) or "view order" (seller
             // logged in) are exact button labels only present when the item is sold.
             if (!out.status) {
@@ -4080,6 +4331,20 @@ final class MercariItemLoader: ObservableObject {
                     var t = (b.innerText || b.textContent || '').trim().toLowerCase();
                     if (t === 'item sold' || t === 'view order') { out.status = 'sold_out'; break; }
                 }
+            }
+            // Removed/deactivated listing: Mercari serves a generic "no longer for sale" page with
+            // no __NEXT_DATA__ item. Detect that copy so the loader returns a definitive "inactive"
+            // status instead of timing out and reporting a generic read failure.
+            if (!out.status && out.price === null) {
+                var bodyText = ((document.body && document.body.innerText) || '').toLowerCase();
+                if (/no longer (for sale|available)/.test(bodyText)) {
+                    out.status = 'inactive';
+                }
+            }
+            var soldTimeEl = document.querySelector('[data-testid="ItemSoldTime"]');
+            if (soldTimeEl) {
+                var stm = soldTimeEl.innerText.match(/(\d{2}\/\d{2}\/\d{2,4})/);
+                if (stm) out.soldOn = stm[1];
             }
             return JSON.stringify(out);
         })();
@@ -4098,6 +4363,14 @@ final class MercariItemLoader: ObservableObject {
                     name = obj["name"] as? String
                     descriptionText = obj["description"] as? String
                     thumbnailUrl = obj["photo"] as? String
+                    if let rawDate = obj["soldOn"] as? String {
+                        let fmt = DateFormatter()
+                        fmt.locale = Locale(identifier: "en_US_POSIX")
+                        for format in ["MM/dd/yy", "MM/dd/yyyy"] {
+                            fmt.dateFormat = format
+                            if let d = fmt.date(from: rawDate) { soldAt = d; break }
+                        }
+                    }
                     let s = (status ?? "").lowercased()
                     // Match exact Mercari status strings; contains("sold") was triggering on
                     // seller-stats text ("47 items sold") when the body fallback ran.
@@ -4191,6 +4464,15 @@ class MercariSyncManager: ObservableObject {
                 statusRaw: loader.statusRaw
             )
             self.syncResults[listingId] = result
+
+            // This listing was flagged "go deactivate on Mercari" (it sold on another platform).
+            // Mercari now confirms it's inactive/sold, so the user already handled it — clear the
+            // stale flag here so the "Action needed" list stops nagging about it.
+            if listing.pendingMercariDeactivation == true && (result.statusRaw == "inactive" || result.isSold) {
+                try? await Firestore.firestore().collection("listings").document(listingId)
+                    .updateData(["pendingMercariDeactivation": FieldValue.delete(),
+                                 "updatedAt": FieldValue.serverTimestamp()])
+            }
         }
         self.isFinished = true
     }
@@ -4202,7 +4484,8 @@ class MercariSyncManager: ObservableObject {
             let mercariIsSold = result.isSold
             let ebayIsPosted = listing.crossPostStatus?["ebay"] == "posted"
 
-            if applyStatus && listing.pendingMercariDeactivation == true && mercariIsSold {
+            let mercariIsInactive = result.statusRaw == "inactive"
+            if applyStatus && listing.pendingMercariDeactivation == true && (mercariIsSold || mercariIsInactive) {
                 try? await Firestore.firestore().collection("listings").document(listingId)
                     .updateData(["pendingMercariDeactivation": FieldValue.delete(),
                                  "updatedAt": FieldValue.serverTimestamp()])
@@ -4232,7 +4515,7 @@ class MercariSyncManager: ObservableObject {
                 }
                 if soldDiff {
                     let sale = Sale(
-                        userId: "",
+                        userId: listing.userId,
                         listingId: listingId,
                         listingTitle: listing.customTitle,
                         coverPhotoPath: listing.coverPhotoPath,
@@ -4254,6 +4537,9 @@ struct MercariSaleResult {
     var takeHome: Double?
     var trackingNumber: String?
     var carrier: String?
+    var thumbnailUrl: String?
+    var status: SaleStatus?
+    var soldAt: Date?
 }
 
 @MainActor
@@ -4262,6 +4548,7 @@ final class MercariSaleSyncManager: ObservableObject {
     @Published var currentIndex = 0
     @Published var totalCount = 0
     @Published var currentStatus = ""
+    @Published var needsLogin = false
 
     let webView: WKWebView
     private let navDelegate = SaleNavDelegate()
@@ -4270,6 +4557,7 @@ final class MercariSaleSyncManager: ObservableObject {
     init() {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.default()
+        config.processPool = mercariProcessPool
         let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
         wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         wv.navigationDelegate = navDelegate
@@ -4277,7 +4565,17 @@ final class MercariSaleSyncManager: ObservableObject {
     }
     
     func sync(sales: [Sale]) async {
-        let mercariSales = sales.filter { $0.platform == "mercari" && ($0.takeHome == nil || $0.trackingNumber == nil) }
+        // Sync non-terminal sales to catch delivery/cancellation changes, plus any sale
+        // (regardless of status) still missing take-home, tracking, or a real photo so
+        // previously-malformed imports get backfilled on the next sync.
+        let mercariSales = sales.filter { sale in
+            guard sale.platform == "mercari" else { return false }
+            let isActive = sale.status != .complete && sale.status != .cancelled && sale.status != .returned
+            let hasRealPhoto = sale.coverPhotoPath != nil ||
+                (sale.thumbnailUrl != nil && sale.thumbnailUrl?.contains("ogp_image") != true)
+            let isMissingData = sale.takeHome == nil || sale.trackingNumber == nil || !hasRealPhoto
+            return isActive || isMissingData
+        }
         guard !mercariSales.isEmpty else {
             print("[MercariSaleSync] No mercari sales needing sync")
             return
@@ -4286,23 +4584,11 @@ final class MercariSaleSyncManager: ObservableObject {
         isRunning = true
         totalCount = mercariSales.count
         currentIndex = 0
-        saleTaskId = UUID()
-        AppTaskQueue.shared.begin(
-            id: saleTaskId,
-            label: "Syncing Mercari sales",
-            detail: "0 of \(mercariSales.count)",
-            progress: 0
-        )
 
         print("[MercariSaleSync] Starting headless sync for \(mercariSales.count) sales")
-        
+
         for (i, sale) in mercariSales.enumerated() {
             currentIndex = i + 1
-            AppTaskQueue.shared.update(
-                id: saleTaskId,
-                detail: "\(i + 1) of \(mercariSales.count)",
-                progress: Double(i + 1) / Double(max(mercariSales.count, 1))
-            )
             guard let platformOrderId = sale.platformOrderId, !platformOrderId.isEmpty else {
                 print("[MercariSaleSync] Skipping sale \(sale.id ?? "?") - no platformOrderId")
                 continue
@@ -4311,7 +4597,9 @@ final class MercariSaleSyncManager: ObservableObject {
             currentStatus = "Syncing \(i + 1)/\(mercariSales.count)..."
             print("[MercariSaleSync] Loading order page for item \(platformOrderId)")
             
-            if let result = await loadSaleData(itemId: platformOrderId) {
+            let needsPhoto = sale.coverPhotoPath == nil &&
+                (sale.thumbnailUrl == nil || sale.thumbnailUrl?.contains("ogp_image") == true)
+            if let result = await loadSaleData(itemId: platformOrderId, fetchPhoto: needsPhoto) {
                 var update: [String: Any] = [:]
                 if let th = result.takeHome, sale.takeHome != th {
                     update["takeHome"] = th
@@ -4324,7 +4612,20 @@ final class MercariSaleSyncManager: ObservableObject {
                 if let c = result.carrier, sale.carrier != c {
                     update["carrier"] = c
                 }
-                
+                if let photo = result.thumbnailUrl, sale.coverPhotoPath == nil {
+                    update["thumbnailUrl"] = photo
+                    print("[MercariSaleSync] thumbnailUrl backfilled for \(platformOrderId)")
+                }
+                if let newStatus = result.status, newStatus != sale.status {
+                    update["status"] = newStatus.rawValue
+                    print("[MercariSaleSync] status → \(newStatus.rawValue) for \(platformOrderId)")
+                }
+                if let newDate = result.soldAt,
+                   !Calendar.current.isDate(sale.soldAt.dateValue(), inSameDayAs: newDate) {
+                    update["soldAt"] = Timestamp(date: newDate)
+                    print("[MercariSaleSync] soldAt → \(newDate) for \(platformOrderId)")
+                }
+
                 if !update.isEmpty {
                     update["updatedAt"] = FieldValue.serverTimestamp()
                     if let id = sale.id {
@@ -4338,10 +4639,9 @@ final class MercariSaleSyncManager: ObservableObject {
         currentStatus = "Done"
         print("[MercariSaleSync] Sync complete")
         isRunning = false
-        AppTaskQueue.shared.complete(id: saleTaskId)
     }
     
-    private func loadSaleData(itemId: String) async -> MercariSaleResult? {
+    func loadSaleData(itemId: String, fetchPhoto: Bool = false) async -> MercariSaleResult? {
         guard let url = URL(string: "https://www.mercari.com/transaction/order_status/\(itemId)/") else {
             return nil
         }
@@ -4349,17 +4649,17 @@ final class MercariSaleSyncManager: ObservableObject {
         navDelegate.reset()
         webView.load(URLRequest(url: url))
         
-        let loaded = await navDelegate.waitForLoad(timeout: 15)
+        let loaded = await navDelegate.waitForLoad(timeout: 10)
         if !loaded { print("[MercariSaleSync] Order page timed out for \(itemId)") }
-        
+
         // Wait for React/Next.js hydration
-        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
         
         var result = MercariSaleResult()
         
         let jsOrder = """
         (function() {
-            var out = { takeHome: null, hasTracking: false, debug: '' };
+            var out = { takeHome: null, hasTracking: false, status: null, soldAt: null, debug: '' };
             var takeHomeEl = document.querySelector('p[data-testid="You-made-value"]');
             if (takeHomeEl) {
                 out.debug += 'Found takeHome: ' + takeHomeEl.innerText + '; ';
@@ -4368,24 +4668,75 @@ final class MercariSaleSyncManager: ObservableObject {
             } else {
                 out.debug += 'No takeHome el; ';
             }
+            var soldTimeEl = document.querySelector('[data-testid="ItemSoldTime"]');
+            if (soldTimeEl) {
+                var m = soldTimeEl.innerText.match(/(\\d{2}\\/\\d{2}\\/\\d{2,4})/);
+                if (m) out.soldOn = m[1];
+            }
             var trackingBtn = document.querySelector('a[data-testid="ShippingCTAButton"]');
             if (trackingBtn) { out.hasTracking = true; }
+            var stepEl = document.querySelector('[data-testid="TimelineStepName"]');
+            var step = stepEl ? stepEl.innerText.trim().toLowerCase() : '';
+            out.debug += 'step: ' + step + '; ';
+            if (step === 'complete') {
+                out.status = 'complete';
+            } else if (step === 'delivery') {
+                out.status = 'delivered';
+            } else if (step === 'in transit') {
+                out.status = 'shipped';
+            } else if (step.includes('cancel')) {
+                out.status = 'cancelled';
+            } else if (step.includes('return')) {
+                out.status = 'returned';
+            }
+            var dateEl = document.querySelector('p[data-testid="ItemSoldTime"]');
+            if (dateEl) {
+                var m = dateEl.innerText.match(/(\\d{2}\\/\\d{2}\\/\\d{2,4})/);
+                if (m) out.soldAt = m[1];
+            }
             out.debug += 'url: ' + window.location.href;
             return JSON.stringify(out);
         })();
         """
-        
+
+        let soldAtFormatter: DateFormatter = {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "MM/dd/yy"
+            return f
+        }()
+
         var hasTracking = false
-        let deadline = Date().addingTimeInterval(15)
+        let deadline = Date().addingTimeInterval(8)
         while Date() < deadline {
             do {
                 if let jsResult = try await webView.evaluateJavaScript(jsOrder) as? String {
                     print("[MercariSaleSync] JS: \(jsResult)")
                     if let data = jsResult.data(using: .utf8),
                        let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                        if dict["takeHome"] != nil || dict["hasTracking"] as? Bool == true {
-                            result.takeHome = dict["takeHome"] as? Double
-                            hasTracking = dict["hasTracking"] as? Bool ?? false
+                        // JSONSerialization decodes JS `null` as NSNull, not Swift nil — casting to
+                        // the real expected type (which fails for NSNull) is what actually tells
+                        // "not yet rendered" from "rendered". `dict["x"] != nil` is true even when
+                        // the JS value is null, since the key itself is always present in `out`.
+                        // (An earlier version of this loop on main worked around the same bug with
+                        // a single hardcoded extra poll for soldAt — no longer needed once the loop
+                        // itself correctly keeps retrying until real data actually appears.)
+                        let takeHomeVal = dict["takeHome"] as? Double
+                        let hasTrackingVal = dict["hasTracking"] as? Bool ?? false
+                        let statusStr = dict["status"] as? String
+                        let soldAtStr = dict["soldAt"] as? String
+                        if takeHomeVal != nil || hasTrackingVal || statusStr != nil || soldAtStr != nil {
+                            result.takeHome = takeHomeVal
+                            hasTracking = hasTrackingVal
+                            if let s = statusStr { result.status = SaleStatus(rawValue: s) }
+                            if let dateStr = soldAtStr {
+                                result.soldAt = soldAtFormatter.date(from: dateStr) ?? {
+                                    soldAtFormatter.dateFormat = "MM/dd/yyyy"
+                                    let d = soldAtFormatter.date(from: dateStr)
+                                    soldAtFormatter.dateFormat = "MM/dd/yy"
+                                    return d
+                                }()
+                            }
                             break
                         }
                     }
@@ -4404,11 +4755,11 @@ final class MercariSaleSyncManager: ObservableObject {
             
             navDelegate.reset()
             webView.load(URLRequest(url: trackingUrl))
-            let trackingLoaded = await navDelegate.waitForLoad(timeout: 15)
+            let trackingLoaded = await navDelegate.waitForLoad(timeout: 10)
             if !trackingLoaded { print("[MercariSaleSync] Tracking page timed out") }
-            
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            
+
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+
             let jsTracking = """
             (function() {
                 var out = { trackingNumber: null, carrier: null };
@@ -4420,15 +4771,18 @@ final class MercariSaleSyncManager: ObservableObject {
             })();
             """
             
-            let trackingDeadline = Date().addingTimeInterval(15)
+            let trackingDeadline = Date().addingTimeInterval(8)
             while Date() < trackingDeadline {
                 do {
                     if let jsResult = try await webView.evaluateJavaScript(jsTracking) as? String {
                         print("[MercariSaleSync] Tracking JS: \(jsResult)")
                         if let data = jsResult.data(using: .utf8),
                            let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                            if dict["trackingNumber"] != nil {
-                                result.trackingNumber = dict["trackingNumber"] as? String
+                            // Same NSNull-vs-nil pitfall as above: `trackingNumber` is always a
+                            // present key (initialized to null), so only a successful String cast
+                            // means the tracking number actually rendered.
+                            if let trackingNumber = dict["trackingNumber"] as? String {
+                                result.trackingNumber = trackingNumber
                                 result.carrier = dict["carrier"] as? String
                                 break
                             }
@@ -4440,14 +4794,348 @@ final class MercariSaleSyncManager: ObservableObject {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
             }
         }
-        
+
+        // Load the item page to get the cover photo — the order page's og:image is a
+        // generic Mercari brand image, so the item page is the reliable photo source.
+        if fetchPhoto, let itemUrl = URL(string: "https://www.mercari.com/us/item/\(itemId)/") {
+            navDelegate.reset()
+            webView.load(URLRequest(url: itemUrl))
+            let itemLoaded = await navDelegate.waitForLoad(timeout: 15)
+            if itemLoaded {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                let jsPhoto = """
+                (function() {
+                    function isOGP(url) {
+                        return !url || url.indexOf('ogp_image') !== -1 || url.indexOf('assets/common') !== -1;
+                    }
+                    var out = { photo: null, soldOn: null };
+                    var nd = document.getElementById('__NEXT_DATA__');
+                    if (nd) {
+                        try {
+                            var jd = JSON.parse(nd.textContent || '');
+                            var pp = jd && jd.props && jd.props.pageProps;
+                            var item = (pp && (pp.item || (pp.data && pp.data.item) || (pp.meta && pp.meta.item)));
+                            if (item) {
+                                var photos = item.photos || [];
+                                if (photos.length > 0) {
+                                    var p = photos[0].thumbnailUrl || photos[0].url || null;
+                                    if (p && !isOGP(p)) out.photo = p;
+                                }
+                                if (!out.photo && item.thumbnailUrl && !isOGP(item.thumbnailUrl)) out.photo = item.thumbnailUrl;
+                                if (!out.photo && item.photo_url && !isOGP(item.photo_url)) out.photo = item.photo_url;
+                            }
+                        } catch(e) {}
+                    }
+                    // DOM fallback — sold-out items often omit the photos array from
+                    // __NEXT_DATA__ page props. Prefer the product image tag carrying the
+                    // real item ID in its `itemid` attribute; fall back to any Mercari CDN
+                    // image if that specific tag isn't present.
+                    if (!out.photo) {
+                        var itemImg = document.querySelector('img[itemid]');
+                        if (itemImg && itemImg.src && !isOGP(itemImg.src)) out.photo = itemImg.src;
+                    }
+                    if (!out.photo) {
+                        var imgs = document.querySelectorAll('img');
+                        for (var i = 0; i < imgs.length; i++) {
+                            var src = imgs[i].src || '';
+                            if (src.indexOf('static.mercdn.net') !== -1 && !isOGP(src)) { out.photo = src; break; }
+                        }
+                    }
+                    // og:image is a last resort. Only trust it if it's on Mercari's actual photo
+                    // CDN (u-mercari-images.mercdn.net) and isn't the generic brand placeholder —
+                    // the placeholder is served from u-web-assets.mercdn.net and must never be
+                    // accepted as the item's photo.
+                    if (!out.photo) {
+                        var og = document.querySelector('meta[property="og:image"]');
+                        var ogSrc = og && og.content ? og.content : null;
+                        if (ogSrc && ogSrc.indexOf('u-mercari-images.mercdn.net') !== -1 && !isOGP(ogSrc)) {
+                            out.photo = ogSrc;
+                        }
+                    }
+                    var soldTimeEl = document.querySelector('[data-testid="ItemSoldTime"]');
+                    if (soldTimeEl) {
+                        var stm = soldTimeEl.innerText.match(/(\\d{2}\\/\\d{2}\\/\\d{2,4})/);
+                        if (stm) out.soldOn = stm[1];
+                    }
+                    return JSON.stringify(out);
+                })();
+                """
+                if let json = (try? await webView.evaluateJavaScript(jsPhoto)) as? String,
+                   let jdata = json.data(using: .utf8),
+                   let obj = try? JSONSerialization.jsonObject(with: jdata) as? [String: Any] {
+                    if let photo = obj["photo"] as? String, !photo.isEmpty {
+                        result.thumbnailUrl = photo
+                        print("[MercariSaleSync] Got photo from item page for \(itemId)")
+                    } else {
+                        print("[MercariSaleSync] No real photo found on item page for \(itemId)")
+                    }
+                    if result.soldAt == nil, let soldOn = obj["soldOn"] as? String {
+                        result.soldAt = Self.parseMercariSoldDate(soldOn)
+                        if let d = result.soldAt {
+                            print("[MercariSaleSync] soldAt from item page for \(itemId): \(d)")
+                        }
+                    }
+                }
+            }
+        }
+
         return result
+    }
+
+    // MARK: - New sale discovery
+
+    // Navigates to the Mercari sold-items listings page, ensures "Last updated" sort,
+    // then scrolls and extracts items — stopping once 3 consecutive known order IDs
+    // are encountered. Saves genuinely new items as Sale records.
+    // Both "In Progress" and "Complete" sections are covered because __NEXT_DATA__
+    // and the DOM link fallback operate on the full page regardless of section.
+    /// Scans Mercari's in-progress transactions and returns newly discovered items.
+    /// Stops at the first known order ID or when an item's updated date is before `stopBeforeDate`.
+    /// Callers decide whether to auto-save or present for manual selection.
+    func scanForNewSales(knownOrderIds: Set<String>, stopBeforeDate: Date? = nil) async -> [MercariFoundSaleItem] {
+        // sortBy=7 = Last Updated, so we get newest sales first without needing dropdown interaction.
+        // /in_progress/ shows transactions currently being traded — complete ones are already tracked.
+        guard let url = URL(string: "https://www.mercari.com/mypage/listings/in_progress/?sortBy=7") else { return [] }
+        navDelegate.reset()
+        webView.load(URLRequest(url: url))
+        guard await navDelegate.waitForLoad(timeout: 10) else {
+            print("[MercariSaleSync] scanForNewSales: page timed out")
+            return []
+        }
+
+        // If Mercari redirected to login, surface the webview so the user can authenticate.
+        let landedUrl = webView.url?.absoluteString ?? ""
+        if landedUrl.contains("/login") || landedUrl.contains("/signup") {
+            print("[MercariSaleSync] Not logged in — redirected to \(landedUrl)")
+            needsLogin = true
+            return []
+        }
+        needsLogin = false
+
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+
+        // Mercari item IDs always match /m\d+/. We look for that pattern in any link href
+        // since the in-progress page may link to /transaction/order_status/m[id]/ rather
+        // than /us/item/m[id]/, and the URL scheme can vary by page/experiment.
+        let extractJS = """
+        return (function() {
+            var results = [];
+            var seen = new Set();
+            var dateRe = /^\\d{2}\\/\\d{2}\\/\\d{2,4}$/;
+            var idRe = /(m\\d+)/;
+
+            function extractId(href) {
+                var m = href.match(idRe);
+                return m ? m[1] : null;
+            }
+
+            // Phase 1: try __NEXT_DATA__ — broadest search across all known key paths
+            var nd = document.getElementById('__NEXT_DATA__');
+            if (nd) {
+                try {
+                    var root = JSON.parse(nd.textContent || '');
+                    // Flatten everything under pageProps into candidate arrays
+                    var pp = root.props && root.props.pageProps;
+                    var candidates = [];
+                    if (pp) {
+                        // Walk all top-level and one-level-deep keys looking for arrays of objects with id+name
+                        for (var k in pp) {
+                            var v = pp[k];
+                            if (Array.isArray(v) && v.length && v[0] && v[0].id) candidates = candidates.concat(v);
+                            else if (v && typeof v === 'object') {
+                                for (var k2 in v) {
+                                    var v2 = v[k2];
+                                    if (Array.isArray(v2) && v2.length && v2[0] && v2[0].id) candidates = candidates.concat(v2);
+                                }
+                            }
+                        }
+                    }
+                    for (var it of candidates) {
+                        var sid = String(it.id || '');
+                        var extractedId = extractId(sid) || extractId(it.itemId || '');
+                        if (!extractedId || seen.has(extractedId)) continue;
+                        seen.add(extractedId);
+                        var upd = it.updated || it.updatedAt || it.updated_at || null;
+                        var price = it.price ? (it.price > 1000 ? it.price / 100 : it.price) : null;
+                        results.push({ id: extractedId, name: it.name || null,
+                                       price: price, thumbnailUrl: (it.thumbnails && it.thumbnails[0]) || it.thumbnailUrl || null,
+                                       updatedStr: null });
+                    }
+                } catch(e) {}
+            }
+
+            // Shared helper: given any element, find name + price using data-testid
+            // first (item detail pages), then fall back to $ regex on <p> tags
+            // (in-progress list page which has no data-testid attributes).
+            function extractNamePrice(el) {
+                var priceRe = /^\\$[\\d,\\.]+/;
+                var nameEl = el.querySelector('[data-testid="ItemName"],[data-testid="item-name"]');
+                var priceEl = el.querySelector('[data-testid="ItemPrice"],[data-testid="item-price"]');
+                if (!nameEl || !priceEl) {
+                    var paras = Array.from(el.querySelectorAll('p'));
+                    if (!priceEl) priceEl = paras.find(function(p) { return priceRe.test(p.innerText.trim()); });
+                    if (!nameEl)  nameEl  = paras.find(function(p) {
+                        var t = p.innerText.trim();
+                        return t.length > 3 && !priceRe.test(t);
+                    });
+                }
+                var priceText = priceEl ? priceEl.innerText.replace(/[^0-9\\.]/g,'') : null;
+                return {
+                    name: nameEl ? nameEl.innerText.trim() : null,
+                    price: priceText ? parseFloat(priceText) || null : null
+                };
+            }
+
+            // Phase 2: DOM scan — walk <tr> rows first to pair links with date cells
+            if (results.length === 0) {
+                for (var row of document.querySelectorAll('tr')) {
+                    var link = Array.from(row.querySelectorAll('a[href]'))
+                        .find(function(a) { return idRe.test(a.href); });
+                    if (!link) continue;
+                    var eid = extractId(link.href);
+                    if (!eid || seen.has(eid)) continue;
+                    seen.add(eid);
+                    var dateTd = Array.from(row.querySelectorAll('td'))
+                        .find(function(td) { return dateRe.test(td.innerText.trim()); });
+                    var np = extractNamePrice(link);
+                    var imgEl = link.querySelector('img');
+                    results.push({ id: eid, name: np.name, price: np.price,
+                                   thumbnailUrl: imgEl ? imgEl.src : null,
+                                   updatedStr: dateTd ? dateTd.innerText.trim() : null });
+                }
+            }
+
+            // Phase 3: bare link scan — filter on JS .href (always absolute)
+            if (results.length === 0) {
+                for (var a of document.querySelectorAll('a[href]')) {
+                    if (!idRe.test(a.href)) continue;
+                    var eid = extractId(a.href);
+                    if (!eid || seen.has(eid)) continue;
+                    seen.add(eid);
+                    var np = extractNamePrice(a);
+                    var imgEl = a.querySelector('img');
+                    results.push({ id: eid, name: np.name, price: np.price,
+                                   thumbnailUrl: imgEl ? imgEl.src : null,
+                                   updatedStr: null });
+                }
+            }
+
+            return JSON.stringify({ items: results, url: window.location.href, count: results.length });
+        })();
+        """
+
+        let dateFormatter: DateFormatter = {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "MM/dd/yy"  // Mercari shows e.g. 06/25/26
+            return f
+        }()
+
+        var newItems: [MercariFoundSaleItem] = []
+        var lastCount = 0
+        var noChangeStreak = 0
+        var done = false
+
+        for _ in 0..<30 {
+            guard !done else { break }
+            _ = try? await webView.callJS("window.scrollTo(0, document.body.scrollHeight); return null;")
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+
+            guard let json = (try? await webView.callJS(extractJS)) as? String,
+                  let data = json.data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let arr = root["items"] as? [[String: Any]] else { continue }
+
+            print("[MercariSaleSync] scan: \(arr.count) items on page, url=\(root["url"] as? String ?? "?")")
+
+            if arr.count <= lastCount {
+                noChangeStreak += 1
+                if noChangeStreak >= 3 { break }  // 3 × 1.5s = 4.5s grace for hydration
+                continue
+            }
+            noChangeStreak = 0
+
+            for dict in arr.dropFirst(lastCount) {
+                guard let id = dict["id"] as? String, !id.isEmpty else { continue }
+
+                // Stop at the first sale we already know about — list is newest-first
+                if knownOrderIds.contains(id) { done = true; break }
+
+                // Stop once we reach an item updated before the start of the last-sync day
+                if let cutoff = stopBeforeDate,
+                   let dateStr = dict["updatedStr"] as? String,
+                   let itemDate = dateFormatter.date(from: dateStr),
+                   itemDate < cutoff {
+                    done = true; break
+                }
+
+                let name = dict["name"] as? String
+                let price = (dict["price"] as? NSNumber)?.doubleValue
+                guard let n = name, !n.isEmpty, let p = price, p > 0 else {
+                    print("[MercariSaleSync] skipping item \(id): missing name or price")
+                    continue
+                }
+                newItems.append(MercariFoundSaleItem(
+                    id: id,
+                    name: n,
+                    price: p,
+                    thumbnailUrl: dict["thumbnailUrl"] as? String
+                ))
+            }
+            lastCount = arr.count
+        }
+
+        print("[MercariSaleSync] scanForNewSales: \(newItems.count) new item(s)")
+        return newItems
+    }
+
+    private func ensureLastUpdatedSort() async {
+        let checkJS = """
+        return (function() {
+            var btn = document.querySelector('[data-testid="Listings-SortBy"]');
+            return btn ? btn.innerText.trim() : '';
+        })();
+        """
+        guard let current = (try? await webView.callJS(checkJS)) as? String,
+              current.lowercased() != "last updated" else { return }
+
+        _ = try? await webView.callJS("""
+        return (function() {
+            var btn = document.querySelector('[data-testid="Listings-SortBy"]');
+            if (btn) { btn.click(); return true; }
+            return false;
+        })();
+        """)
+        try? await Task.sleep(nanoseconds: 800_000_000)
+
+        _ = try? await webView.callJS("""
+        return (function() {
+            var opts = document.querySelectorAll('[role="option"], [role="listbox"] *');
+            for (var opt of opts) {
+                if (opt.innerText && opt.innerText.trim().toLowerCase() === 'last updated') {
+                    opt.click(); return true;
+                }
+            }
+            return false;
+        })();
+        """)
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+    }
+
+    private static func parseMercariSoldDate(_ raw: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        for format in ["MM/dd/yy", "MM/dd/yyyy"] {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: raw) { return date }
+        }
+        return nil
     }
 }
 
 // MARK: - Navigation Delegate for waiting on page loads
 
-private class SaleNavDelegate: NSObject, WKNavigationDelegate {
+final class SaleNavDelegate: NSObject, WKNavigationDelegate {
     private var continuation: CheckedContinuation<Bool, Never>?
     private var didFinish = false
     

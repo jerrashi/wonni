@@ -271,11 +271,10 @@ async function processSingleEbayOrder(order, uid, accessToken, isSandbox, db, cl
     ]);
 
     if (tracking) {
-      if (tracking.trackingNumber && !existing.trackingNumber) {
+      if (tracking.trackingNumber && existing.trackingNumber !== tracking.trackingNumber) {
         updates.trackingNumber = tracking.trackingNumber;
         updates.carrier = tracking.carrier ?? null;
-        updates.status = "shipped";
-        console.log(`[processSingleEbayOrder] backfilled tracking for order ${orderId}: ${tracking.trackingNumber}`);
+        console.log(`[processSingleEbayOrder] tracking ${existing.trackingNumber ?? "none"} → ${tracking.trackingNumber} for order ${orderId}`);
       }
       if (tracking.allFulfillments?.length) {
         updates.shippingFulfillments = tracking.allFulfillments;
@@ -286,6 +285,28 @@ async function processSingleEbayOrder(order, uid, accessToken, isSandbox, db, cl
     }
     if (freshTakeHome?.labelCost != null) {
       updates.shippingLabelCost = freshTakeHome.labelCost;
+    }
+    if (!existing.thumbnailUrl) {
+      const matchedItem = (order.lineItems ?? []).find(li => li.sku === `wonni_${existing.listingId}`);
+      if (matchedItem?.image?.imageUrl) {
+        updates.thumbnailUrl = matchedItem.image.imageUrl;
+      }
+    }
+
+    // Map eBay order lifecycle to our status — cancellation takes priority over fulfillment.
+    const cancelState = order.cancelStatus?.cancelState;
+    const fulfillmentStatus = order.orderFulfillmentStatus;
+    let newStatus = null;
+    if (cancelState === "CANCELED") {
+      newStatus = "cancelled";
+    } else if (fulfillmentStatus === "FULFILLED") {
+      newStatus = "complete";
+    } else if (tracking?.trackingNumber && existing.status === "pending") {
+      newStatus = "shipped";
+    }
+    if (newStatus && existing.status !== newStatus) {
+      updates.status = newStatus;
+      console.log(`[processSingleEbayOrder] status ${existing.status} → ${newStatus} for order ${orderId}`);
     }
     // Backfill item-only price and shipping revenue
     const itemPrice = parseFloat(order.pricingSummary?.priceSubtotal?.value ?? "0");
@@ -367,6 +388,10 @@ async function processSingleEbayOrder(order, uid, accessToken, isSandbox, db, cl
       listingId,
       listingTitle: listing?.customTitle ?? item.title ?? null,
       coverPhotoPath: listing?.coverPhotoPath ?? null,
+      // eBay includes the line item's image URL in the order payload already — no extra
+      // API call needed. Client prefers this over coverPhotoPath: it's a pre-sized CDN
+      // thumbnail (no Firebase Storage bandwidth), same as Mercari's thumbnailUrl.
+      thumbnailUrl: item.image?.imageUrl ?? null,
       platform: "ebay",
       platformOrderId: orderId,
       priceSoldFor,
@@ -464,9 +489,48 @@ async function syncEbayOrders(uid, integrationRef, clientId, certId, db, force =
     if (result.isNew) newCount += result.count ?? 1;
   }
 
+  // Refresh non-terminal sales that may be outside the lookback window.
+  // The window fetch only discovers new orders — existing pending/shipped sales
+  // need a direct per-order lookup to pick up tracking and status changes.
+  await refreshExistingEbaySales(uid, db, accessToken, isSandbox, clientId, certId, etsyClientId.value());
+
   await integrationRef.update({ lastEbayPollAt: admin.firestore.Timestamp.now() });
   console.log(`[syncSales] eBay uid=${uid}: ${newCount} new sales from ${orders.length} orders`);
   return newCount;
+}
+
+async function refreshExistingEbaySales(uid, db, accessToken, isSandbox, clientId, certId, etsyClientIdVal) {
+  const snap = await db.collection("sales")
+    .where("userId", "==", uid)
+    .where("platform", "==", "ebay")
+    .where("status", "in", ["pending", "shipped", "delivered"])
+    .get();
+  if (snap.empty) return;
+
+  console.log(`[refreshExistingEbaySales] uid=${uid}: refreshing ${snap.docs.length} non-terminal eBay sales`);
+  for (const doc of snap.docs) {
+    const orderId = doc.data().platformOrderId;
+    if (!orderId) continue;
+
+    const res = await makeRequest({
+      hostname: isSandbox ? "api.sandbox.ebay.com" : "api.ebay.com",
+      path: `/sell/fulfillment/v1/order/${encodeURIComponent(orderId)}`,
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+      },
+    });
+
+    if (res.statusCode !== 200) {
+      console.warn(`[refreshExistingEbaySales] order=${orderId} status=${res.statusCode} — skipping`);
+      continue;
+    }
+
+    const order = JSON.parse(res.body);
+    await processSingleEbayOrder(order, uid, accessToken, isSandbox, db, clientId, certId, etsyClientIdVal);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -508,13 +572,29 @@ async function syncEtsyReceipts(uid, integrationRef, clientId, db, force = false
     const receiptId = String(receipt.receipt_id);
     const existingEtsySaleDoc = await findExistingSaleDoc(db, uid, receiptId);
     if (existingEtsySaleDoc) {
-      if (existingEtsySaleDoc.data().isDeleted) {
-        await existingEtsySaleDoc.ref.update({
-          isDeleted: admin.firestore.FieldValue.delete(),
-          deletedAt: admin.firestore.FieldValue.delete(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
+      const existingData = existingEtsySaleDoc.data();
+      const existingUpdates = {};
+
+      if (existingData.isDeleted) {
+        existingUpdates.isDeleted = admin.firestore.FieldValue.delete();
+        existingUpdates.deletedAt = admin.firestore.FieldValue.delete();
         console.log(`[syncSales] restored soft-deleted Etsy sale for receipt ${receiptId}`);
+      }
+
+      // Map Etsy receipt lifecycle to our status.
+      const etsyStatus = receipt.status; // "open" | "unshipped" | "completed" | "canceled"
+      let newStatus = null;
+      if (etsyStatus === "completed") newStatus = "complete";
+      else if (etsyStatus === "canceled") newStatus = "cancelled";
+      else if (receipt.is_shipped) newStatus = "shipped";
+      if (newStatus && existingData.status !== newStatus) {
+        existingUpdates.status = newStatus;
+        console.log(`[syncSales] Etsy receipt ${receiptId} status ${existingData.status} → ${newStatus}`);
+      }
+
+      if (Object.keys(existingUpdates).length > 0) {
+        existingUpdates.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+        await existingEtsySaleDoc.ref.update(existingUpdates);
       }
       continue;
     }

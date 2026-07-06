@@ -1,0 +1,14 @@
+{
+  "pkg": "@wonni/design-system",
+  "projectId": "adeac9ae-a315-4495-9c89-257ae7426231",
+  "globalName": "WonniDS",
+  "shape": "package",
+  "buildCmd": "cd design-system && npm run build",
+  "cssEntry": "src/wonni.css",
+  "runtimeFontPrefixes": ["SF Pro Text", "Inter"],
+  "readmeHeader": ".design-sync/conventions.md",
+  "overrides": {
+    "CrossPostStatusCard": { "cardMode": "column" },
+    "ListingCard":         { "cardMode": "column" }
+  }
+}

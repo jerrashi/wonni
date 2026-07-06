@@ -157,10 +157,11 @@ struct CustomPhotoPickerView: View {
             return allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && $0.id != activeID }
         }
 
-        /// All used asset IDs (active + committed) — for the "Hide previously selected" toggle
+        /// Asset IDs already saved into a committed draft — for the "Hide previously selected" toggle.
+        /// Deliberately excludes the active (not-yet-committed) draft's selections, since those
+        /// should stay visible with their number badge until the user commits the draft.
         private var allUsedAssetIDs: Set<String> {
-            let committed = committedDrafts.flatMap { $0.sourceAssetIdentifiers }
-            return activeDraftAssetIDs.union(committed)
+            Set(committedDrafts.flatMap { $0.sourceAssetIdentifiers })
         }
         
         var body: some View {
@@ -310,7 +311,7 @@ struct CustomPhotoPickerView: View {
                 DraftHistoryModal(photoCollection: photoCollection)
             }
             .navigationDestination(isPresented: $navigateToOverview) {
-                BulkListingOverviewView(sessionDraftIDs: uploadManager.sessionDraftIDs)
+                BulkListingOverviewView()
             }
         }
         
@@ -423,8 +424,8 @@ struct CustomPhotoPickerView: View {
                 if let sourceDraft = drafts.first(where: { $0.id.uuidString == sourceDraftId }) {
                     let toIdx = draft.sourceAssetIdentifiers.firstIndex(of: targetAssetId) ?? draft.sourceAssetIdentifiers.count
                     withAnimation {
-                        let data = sourceDraft.removePhoto(assetId: assetId)
-                        draft.insertPhoto(assetId: assetId, data: data, at: toIdx)
+                        let removed = sourceDraft.removePhoto(assetId: assetId)
+                        draft.insertPhoto(assetId: assetId, data: removed.data, at: toIdx, firebasePhotoPath: removed.firebasePhotoPath)
                         draggedCompositeId = "\(draft.id.uuidString)|\(assetId)"
                     }
                 }
@@ -463,8 +464,8 @@ struct CustomPhotoPickerView: View {
             if sourceDraftId != draft.id.uuidString {
                 if let sourceDraft = allDrafts.first(where: { $0.id.uuidString == sourceDraftId }) {
                     withAnimation {
-                        let data = sourceDraft.removePhoto(assetId: assetId)
-                        draft.insertPhoto(assetId: assetId, data: data, at: draft.sourceAssetIdentifiers.count)
+                        let removed = sourceDraft.removePhoto(assetId: assetId)
+                        draft.insertPhoto(assetId: assetId, data: removed.data, at: draft.sourceAssetIdentifiers.count, firebasePhotoPath: removed.firebasePhotoPath)
                         draggedCompositeId = "\(draft.id.uuidString)|\(assetId)"
                     }
                 }
@@ -516,9 +517,9 @@ struct CustomPhotoPickerView: View {
                 if currentDraftId != origID.uuidString || drafts.first(where: { $0.id == origID })?.sourceAssetIdentifiers.firstIndex(of: assetId) != origIdx {
                     withAnimation {
                         if let currentDraft = drafts.first(where: { $0.id.uuidString == currentDraftId }) {
-                            let data = currentDraft.removePhoto(assetId: assetId)
+                            let removed = currentDraft.removePhoto(assetId: assetId)
                             if let origDraft = drafts.first(where: { $0.id == origID }) {
-                                origDraft.insertPhoto(assetId: origAsset, data: data ?? originalPhotoData, at: origIdx)
+                                origDraft.insertPhoto(assetId: origAsset, data: removed.data ?? originalPhotoData, at: origIdx, firebasePhotoPath: removed.firebasePhotoPath)
                             }
                         }
                     }
@@ -563,7 +564,11 @@ struct CustomPhotoPickerView: View {
         @State private var originalPhotoData: Data?
 
         var drafts: [Item] {
-            allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty }
+            // See UploadManager.deletedDraftIDs — deletion is deferred a tick, so this
+            // filter is what actually drops the row from the grid immediately.
+            allItems.filter {
+                $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && !uploadManager.deletedDraftIDs.contains($0.id)
+            }
         }
 
         var body: some View {
@@ -622,16 +627,7 @@ struct CustomPhotoPickerView: View {
                                                         }
                                                     }
                                             } else {
-                                                TextField("Add title…", text: draftTitleBinding(for: draft))
-                                                    .font(.subheadline.weight(.semibold))
-                                                    .foregroundStyle(hasUserTitle ? .primary : .secondary)
-                                                    .focused($focusedDraftID, equals: draft.id)
-                                                    .onReceive(NotificationCenter.default.publisher(
-                                                        for: UITextField.textDidBeginEditingNotification
-                                                    )) { notification in
-                                                        guard let tf = notification.object as? UITextField else { return }
-                                                        DispatchQueue.main.async { tf.selectAll(nil) }
-                                                    }
+                                                DraftHistoryTitleField(draft: draft, focusedDraftID: $focusedDraftID)
                                             }
                                         }
                                         .padding(.horizontal)
@@ -811,6 +807,9 @@ struct CustomPhotoPickerView: View {
                         Button("Done") { focusedDraftID = nil }
                     }
                 }
+                .onChange(of: focusedDraftID) { _, _ in
+                    try? modelContext.save()
+                }
                 .alert("Delete Selected?", isPresented: $showingDeleteConfirm) {
                     Button("Cancel", role: .cancel) { }
                     Button("Delete", role: .destructive) {
@@ -837,15 +836,6 @@ struct CustomPhotoPickerView: View {
             }
         }
 
-        private func draftTitleBinding(for draft: Item) -> Binding<String> {
-            Binding(
-                get: { draft.userEditedTitle ?? draft.visionTitle ?? draft.aiSuggestedTitle ?? "" },
-                set: {
-                    draft.userEditedTitle = $0.isEmpty ? nil : $0
-                    try? modelContext.save()
-                }
-            )
-        }
 
         private func moveFocusByDraft(_ delta: Int) {
             guard let current = focusedDraftID,
@@ -871,7 +861,10 @@ struct CustomPhotoPickerView: View {
                             }
                         }
                         for assetId in toRemove {
-                            _ = draft.removePhoto(assetId: assetId)
+                            let removed = draft.removePhoto(assetId: assetId)
+                            if let path = removed.firebasePhotoPath {
+                                deletePhotoFromStorage(path: path)
+                            }
                         }
                     }
                 }
@@ -908,18 +901,81 @@ struct CustomPhotoPickerView: View {
             guard parts.count == 2 else { return false }
             let sourceDraftId = parts[0], assetId = parts[1]
             if let sourceDraft = allItems.first(where: { $0.id.uuidString == sourceDraftId }) {
-                _ = sourceDraft.removePhoto(assetId: assetId)
+                let removed = sourceDraft.removePhoto(assetId: assetId)
                 if sourceDraft.sourceAssetIdentifiers.isEmpty {
+                    // Whole draft is now empty — deleteDraftLocallyAndCloud wipes its entire
+                    // Storage folder (including this photo), so no separate delete needed.
                     uploadManager.deleteDraftLocallyAndCloud(draft: sourceDraft, modelContext: modelContext)
+                } else if let path = removed.firebasePhotoPath {
+                    deletePhotoFromStorage(path: path)
                 }
                 try? modelContext.save()
             }
             draggedCompositeId = nil
             return true
         }
+
+        /// Permanently deletes one already-uploaded photo from Storage (not a whole-draft
+        /// wipe). Best-effort background call — failures surface via the same
+        /// `cleanupError` toast as `deleteDraftLocallyAndCloud`.
+        private func deletePhotoFromStorage(path: String) {
+            guard let userId = Auth.auth().currentUser?.uid else { return }
+            Task {
+                do {
+                    try await StorageService.shared.deletePhoto(path: path, userId: userId)
+                } catch {
+                    print("[DraftHistoryModal] Failed to delete photo at \(path): \(error)")
+                    uploadManager.cleanupError = "Couldn't fully delete a removed photo. It may still be using storage."
+                }
+            }
+        }
     }
 
-// MARK: - Title character-count warning
+struct DraftHistoryTitleField: View {
+    let draft: Item
+    var focusedDraftID: FocusState<UUID?>.Binding
+    @State private var localTitle: String = ""
+
+    var body: some View {
+        TextField("Add title…", text: $localTitle)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(draft.userEditedTitle != nil ? .primary : .secondary)
+            .focused(focusedDraftID, equals: draft.id)
+            .onReceive(NotificationCenter.default.publisher(for: UITextField.textDidBeginEditingNotification)) { notification in
+                guard let tf = notification.object as? UITextField else { return }
+                if focusedDraftID.wrappedValue == draft.id {
+                    DispatchQueue.main.async { tf.selectAll(nil) }
+                }
+            }
+            .onAppear {
+                localTitle = draft.userEditedTitle ?? draft.visionTitle ?? draft.aiSuggestedTitle ?? ""
+            }
+            .onChange(of: focusedDraftID.wrappedValue) { oldFocus, newFocus in
+                if oldFocus == draft.id && newFocus != draft.id {
+                    commitLocalTitle()
+                }
+            }
+            .onDisappear {
+                commitLocalTitle()
+            }
+    }
+
+    private func commitLocalTitle() {
+        let v = localTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let placeholder = draft.visionTitle ?? draft.aiSuggestedTitle ?? ""
+        if v.isEmpty {
+            // User cleared the field — remove user title.
+            if draft.userEditedTitle != nil { draft.userEditedTitle = nil }
+        } else if v != placeholder || draft.userEditedTitle != nil {
+            // Commit if it differs from the placeholder, or if there was already a user title.
+            // If v == placeholder and userEditedTitle == nil, the user just tapped and left —
+            // don't turn an untouched AI/vision suggestion into a "user edited" title.
+            if draft.userEditedTitle != v {
+                draft.userEditedTitle = v
+            }
+        }
+    }
+}
 // eBay & Mercari: 80 chars · Facebook: 99 · Etsy: 140
 struct TitleCharCountView: View {
     let count: Int
@@ -957,30 +1013,46 @@ struct TitleCharCountView: View {
 }
 
 // MARK: - DraftRow (redesigned)
-struct DraftRow: View {
+struct DraftRow: View, Equatable {
     let item: Item
     var focusedField: FocusState<DraftFocusField?>.Binding
     let cache: CachedImageManager
     var isSelectable: Bool = false
     var isSelected: Bool = false
     var onToggle: (() -> Void)? = nil
+    /// Called when the description sheet — opened via arrow-key navigation landing on this
+    /// row's description slot, not a direct tap — is dismissed. Lets the keyboard toolbar's
+    /// up/down arrows continue on to the next field instead of stopping dead at description,
+    /// which (unlike title/price) isn't a real focusable text field.
+    var onDescriptionAutoAdvance: (() -> Void)? = nil
 
     @Environment(\.modelContext) private var modelContext
     @State private var priceText: String = ""
+    @State private var titleText: String = ""
     @State private var showDescriptionEditor = false
+    @State private var descriptionEditorOpenedViaFocus = false
 
-    private var titleBinding: Binding<String> {
-        Binding(
-            get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? "" },
-            set: { let v = String($0.prefix(140)); item.userEditedTitle = v.isEmpty ? nil : v }
-        )
-    }
-
-    private var descriptionBinding: Binding<String> {
-        Binding(
-            get: { item.userEditedDescription ?? item.aiSuggestedDescription ?? "" },
-            set: { item.userEditedDescription = $0.isEmpty ? nil : $0 }
-        )
+    // BulkListingOverviewView.body re-evaluates on every uploadManager @Published change
+    // (isProcessing/processProgress are read directly there) — which fires repeatedly while
+    // background photo uploads are still finishing, i.e. exactly while the user might be
+    // typing on this screen. That reconstructs every row with a fresh `onToggle` closure,
+    // and SwiftUI's default diffing treats closures as always "changed," so every row's body
+    // re-evaluates on every tick regardless of whether it has anything to do with that row.
+    // Equatable + `.equatable()` at the call site lets SwiftUI skip re-evaluating a row whose
+    // actual rendered inputs haven't changed. Compares every `item` field this row reads —
+    // add to this list if the body starts reading a new one.
+    static func == (lhs: DraftRow, rhs: DraftRow) -> Bool {
+        lhs.isSelectable == rhs.isSelectable &&
+        lhs.isSelected == rhs.isSelected &&
+        lhs.focusedField.wrappedValue == rhs.focusedField.wrappedValue &&
+        lhs.item.sourceAssetIdentifiers == rhs.item.sourceAssetIdentifiers &&
+        lhs.item.userEditedTitle == rhs.item.userEditedTitle &&
+        lhs.item.userEditedPrice == rhs.item.userEditedPrice &&
+        lhs.item.userEditedDescription == rhs.item.userEditedDescription &&
+        lhs.item.aiSuggestedDescription == rhs.item.aiSuggestedDescription &&
+        lhs.item.originalUserTitleBeforeAI == rhs.item.originalUserTitleBeforeAI &&
+        lhs.item.originalUserDescriptionBeforeAI == rhs.item.originalUserDescriptionBeforeAI &&
+        lhs.item.processedAt == rhs.item.processedAt
     }
 
     var body: some View {
@@ -1018,16 +1090,26 @@ struct DraftRow: View {
 
                 // Title + price (constrained to photo height)
                 VStack(alignment: .leading, spacing: 6) {
-                    TextField("Add title…", text: titleBinding)
+                    TextField("Add title…", text: $titleText, axis: .vertical)
                         .font(.body.weight(.semibold))
                         .foregroundStyle(item.userEditedTitle != nil ? .primary : .secondary)
+                        .lineLimit(2)
                         .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .title))
                         .onReceive(NotificationCenter.default.publisher(for: UITextField.textDidBeginEditingNotification)) { notification in
-                            guard let tf = notification.object as? UITextField else { return }
+                            // Scoped to this row's own title field — the original version of
+                            // this fired unconditionally, so every draft row in the list
+                            // subscribed to every UITextField gaining focus anywhere in the
+                            // view (any row's title *or* price field), each dispatching a
+                            // select-all. With many drafts on screen that's O(rows) redundant
+                            // work on every single focus change — a real source of the
+                            // lagginess reported when editing. Matches the guard
+                            // `DraftHistoryTitleField` already uses correctly.
+                            guard focusedField.wrappedValue == DraftFocusField(itemID: item.id, field: .title),
+                                  let tf = notification.object as? UITextField else { return }
                             DispatchQueue.main.async { tf.selectAll(nil) }
                         }
 
-                    TitleCharCountView(count: titleBinding.wrappedValue.count)
+                    TitleCharCountView(count: titleText.count)
 
                     HStack(spacing: 3) {
                         Text("$").font(.subheadline).foregroundStyle(.secondary)
@@ -1035,17 +1117,13 @@ struct DraftRow: View {
                             .font(.subheadline)
                             .keyboardType(.decimalPad)
                             .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .price))
-                            .onChange(of: priceText) { _, newValue in
-                                let cleaned = newValue.filter { $0.isNumber || $0 == "." }
-                                item.userEditedPrice = cleaned.isEmpty ? nil : Double(cleaned)
-                            }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             // ── Description (full width) ────────────────────────────────────
-            let descText = descriptionBinding.wrappedValue
+            let descText = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
             Button { showDescriptionEditor = true } label: {
                 Text(descText.isEmpty ? "Add description…" : descText)
                     .lineLimit(2)
@@ -1062,8 +1140,15 @@ struct DraftRow: View {
             }
             .buttonStyle(.plain)
             .sheet(isPresented: $showDescriptionEditor) {
-                DescriptionEditorSheet(text: descriptionBinding, hasAIPurple: item.originalUserDescriptionBeforeAI != nil)
+                DescriptionEditorSheet(
+                    initialText: descText,
+                    onSave: { newText in
+                        item.userEditedDescription = newText.isEmpty ? nil : newText
+                    },
+                    hasAIPurple: item.originalUserDescriptionBeforeAI != nil
+                )
             }
+
 
             // ── AI badge / undo row ─────────────────────────────────────────
             let hasAIEdits = item.originalUserTitleBeforeAI != nil || item.originalUserDescriptionBeforeAI != nil
@@ -1100,328 +1185,381 @@ struct DraftRow: View {
         }
         .padding(.vertical, 8)
         .onAppear {
+            titleText = item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? ""
             if let p = item.userEditedPrice {
                 priceText = String(format: "%.2f", p)
             }
+        }
+        .onChange(of: focusedField.wrappedValue) { oldFocus, newFocus in
+            // When focus changes from this item's title/price to somewhere else or nil, save
+            if oldFocus?.itemID == item.id && newFocus?.itemID != item.id {
+                saveLocalStateToModel()
+            }
+            // Description isn't a real focusable field (it's a button that opens a sheet),
+            // so the keyboard arrows can't land real focus there. Landing "on" it via arrow
+            // navigation instead opens the sheet directly, so up/down keeps working through it.
+            if newFocus == DraftFocusField(itemID: item.id, field: .description) {
+                descriptionEditorOpenedViaFocus = true
+                showDescriptionEditor = true
+            }
+        }
+        .onChange(of: item.userEditedTitle) { _, newVal in
+            // Sync local title state when the model is updated externally (e.g. bulk edit)
+            titleText = newVal ?? item.aiSuggestedTitle ?? item.visionTitle ?? ""
+        }
+        .onChange(of: item.userEditedPrice) { _, newVal in
+            // Sync local price state when the model is updated externally (e.g. bulk edit)
+            if let p = newVal {
+                priceText = String(format: "%.2f", p)
+            } else {
+                priceText = ""
+            }
+        }
+        .onChange(of: showDescriptionEditor) { _, isShowing in
+            // Fires whether the sheet was saved or swiped away — either way, continue the
+            // arrow-key flow onward once the user's done with the description.
+            if !isShowing && descriptionEditorOpenedViaFocus {
+                descriptionEditorOpenedViaFocus = false
+                onDescriptionAutoAdvance?()
+            }
+        }
+        .onDisappear {
+            saveLocalStateToModel()
+        }
+    }
+
+    private func saveLocalStateToModel() {
+        let v = String(titleText.prefix(140))
+        if item.userEditedTitle != (v.isEmpty ? nil : v) {
+            item.userEditedTitle = v.isEmpty ? nil : v
+        }
+        
+        let cleaned = priceText.filter { $0.isNumber || $0 == "." }
+        let newPrice = cleaned.isEmpty ? nil : Double(cleaned)
+        if item.userEditedPrice != newPrice {
+            item.userEditedPrice = newPrice
         }
     }
 }
 
 // MARK: - DraftEditSheet (full listing editor)
 struct DraftEditSheet: View {
-        let item: Item
-        @Environment(\.dismiss) private var dismiss
-        @Environment(\.modelContext) private var modelContext
+    let item: Item
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
 
-        @State private var cache = CachedImageManager()
-        @State private var title: String = ""
-        @State private var priceText: String = ""
-        @State private var description: String = ""
-        @State private var personalNote: String = ""
-        @State private var buyerPaysShipping: Bool = true
-        @State private var handlingFee: String = ""
-        @State private var estimatedDays: String = ""
-        @State private var selectedCondition: ItemCondition = .good
-        @State private var tagsText: String = ""
+    @State private var cache = CachedImageManager()
+    @State private var title: String = ""
+    @State private var priceText: String = ""
+    @State private var description: String = ""
+    @State private var personalNote: String = ""
+    @State private var buyerPaysShipping: Bool = true
+    @State private var handlingFee: String = ""
+    @State private var estimatedDays: String = ""
+    @State private var selectedCondition: ItemCondition = .good
+    @State private var tagsText: String = ""
 
-        @State private var showPhotoEditModal = false
-        @State private var selectedItems: [PhotosPickerItem] = []
+    @State private var showPhotoEditModal = false
+    @State private var selectedItems: [PhotosPickerItem] = []
 
-        // Shipping & Dimensions state
-        @State private var weightText: String = ""
-        @State private var lengthText: String = ""
-        @State private var widthText: String = ""
-        @State private var heightText: String = ""
+    // Shipping & Dimensions state
+    @State private var weightText: String = ""
+    @State private var lengthText: String = ""
+    @State private var widthText: String = ""
+    @State private var heightText: String = ""
 
-        @State private var showTemplatePicker = false
-        @State private var isApplyingTemplate = false
+    @State private var showTemplatePicker = false
+    @State private var isApplyingTemplate = false
 
-        var body: some View {
-            NavigationStack {
-                Form {
-                    Section {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Text("Photos")
-                                    .font(.headline)
-                                Spacer()
-                                if !item.sourceAssetIdentifiers.isEmpty {
-                                    Button {
-                                        showPhotoEditModal = true
-                                    } label: {
-                                        Image(systemName: "pencil")
-                                    }
-                                }
-                            }
-                            
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 12) {
-                                    ForEach(item.sourceAssetIdentifiers, id: \.self) { assetId in
-                                        ZStack(alignment: .topTrailing) {
-                                            Group {
-                                                if let uiImage = item.image(for: assetId) {
-                                                    Image(uiImage: uiImage)
-                                                        .resizable()
-                                                        .scaledToFill()
-                                                } else {
-                                                    PhotoItemView(
-                                                        asset: PhotoAsset(identifier: assetId),
-                                                        cache: cache,
-                                                        imageSize: CGSize(width: 160, height: 160)
-                                                    )
-                                                }
-                                            }
-                                            .frame(width: 80, height: 80)
-                                            .cornerRadius(8)
-                                            .clipped()
-                                        }
-                                    }
-                                    
-                                    PhotosPicker(selection: $selectedItems, matching: .images) {
-                                            VStack {
-                                                Image(systemName: "plus.circle")
-                                                    .font(.title2)
-                                                Text("Add Photo")
-                                                    .font(.caption2)
-                                            }
-                                            .foregroundColor(.accentColor)
-                                            .frame(width: 80, height: 80)
-                                            .background(Color(.systemGray6))
-                                            .cornerRadius(8)
-                                        }
-                                        .onChange(of: selectedItems) { _, newItems in
-                                            Task {
-                                                for phItem in newItems {
-                                                    if let data = try? await phItem.loadTransferable(type: Data.self) {
-                                                        let assetId = UUID().uuidString
-                                                        item.insertPhoto(assetId: assetId, data: data, at: item.sourceAssetIdentifiers.count)
-                                                    }
-                                                }
-                                                selectedItems = []
-                                                try? modelContext.save()
-                                            }
-                                        }
-                                }
-                                .padding(.vertical, 4)
-                            }
-                        }
-                    }
-
-                    Section("Title & Price") {
-                        TextField("Title", text: $title)
-                            .font(.body.weight(.medium))
-                            .onChange(of: title) { _, v in
-                                if v.count > 140 { title = String(v.prefix(140)) }
-                            }
-                        TitleCharCountView(count: title.count)
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Text("$")
-                            TextField("0.00", text: $priceText)
-                                .keyboardType(.decimalPad)
-                        }
-                    }
-
-                    Section("Description") {
-                        TextEditor(text: $description)
-                            .frame(minHeight: 80)
-                    }
-
-                    Section("Condition") {
-                        Picker("Condition", selection: $selectedCondition) {
-                            ForEach(ItemCondition.allCases, id: \.self) { c in
-                                Text(c.displayName).tag(c)
-                            }
-                        }
-                    }
-
-                    Section("Tags") {
-                        TextField("e.g. photocard, kpop, sealed", text: $tagsText)
-                    }
-
-                    Section("Note (hidden from buyer)") {
-                        TextField("e.g. stored in basement", text: $personalNote)
-                    }
-
-                    Section("Shipping & Dimensions") {
-                        Toggle("Buyer pays shipping", isOn: $buyerPaysShipping)
-                        if !buyerPaysShipping {
-                            HStack {
-                                Text("Handling fee")
-                                Spacer()
-                                Text("$")
-                                TextField("0.00", text: $handlingFee)
-                                    .keyboardType(.decimalPad)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(width: 80)
-                            }
-                        }
-                        HStack {
-                            Text("Est. shipping days")
+                            Text("Photos")
+                                .font(.headline)
                             Spacer()
-                            TextField("3", text: $estimatedDays)
-                                .keyboardType(.numberPad)
-                                .multilineTextAlignment(.trailing)
-                                .frame(width: 60)
+                            if !item.sourceAssetIdentifiers.isEmpty {
+                                Button {
+                                    showPhotoEditModal = true
+                                } label: {
+                                    Image(systemName: "pencil")
+                                }
+                            }
                         }
                         
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 12) {
+                                ForEach(item.sourceAssetIdentifiers, id: \.self) { assetId in
+                                    ZStack(alignment: .topTrailing) {
+                                        Group {
+                                            if let uiImage = item.image(for: assetId) {
+                                                Image(uiImage: uiImage)
+                                                    .resizable()
+                                                    .scaledToFill()
+                                            } else {
+                                                PhotoItemView(
+                                                    asset: PhotoAsset(identifier: assetId),
+                                                    cache: cache,
+                                                    imageSize: CGSize(width: 160, height: 160)
+                                                )
+                                            }
+                                        }
+                                        .frame(width: 80, height: 80)
+                                        .cornerRadius(8)
+                                        .clipped()
+                                    }
+                                }
+                                
+                                PhotosPicker(selection: $selectedItems, matching: .images) {
+                                        VStack {
+                                            Image(systemName: "plus.circle")
+                                                .font(.title2)
+                                            Text("Add Photo")
+                                                .font(.caption2)
+                                        }
+                                        .foregroundColor(.accentColor)
+                                        .frame(width: 80, height: 80)
+                                        .background(Color(.systemGray6))
+                                        .cornerRadius(8)
+                                    }
+                                    .onChange(of: selectedItems) { _, newItems in
+                                        Task {
+                                            for phItem in newItems {
+                                                if let data = try? await phItem.loadTransferable(type: Data.self) {
+                                                    let assetId = UUID().uuidString
+                                                    item.insertPhoto(assetId: assetId, data: data, at: item.sourceAssetIdentifiers.count)
+                                                }
+                                            }
+                                            selectedItems = []
+                                            try? modelContext.save()
+                                        }
+                                    }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+
+                Section("Title & Price") {
+                    TextField("Title", text: $title)
+                        .font(.body.weight(.medium))
+                        .onChange(of: title) { _, v in
+                            if v.count > 140 { title = String(v.prefix(140)) }
+                        }
+                    TitleCharCountView(count: title.count)
+                    HStack {
+                        Text("$")
+                        TextField("0.00", text: $priceText)
+                            .keyboardType(.decimalPad)
+                    }
+                }
+
+                Section("Description") {
+                    TextEditor(text: $description)
+                        .frame(minHeight: 80)
+                }
+
+                Section("Condition") {
+                    Picker("Condition", selection: $selectedCondition) {
+                        ForEach(ItemCondition.allCases, id: \.self) { c in
+                            Text(c.displayName).tag(c)
+                        }
+                    }
+                }
+
+                Section("Tags") {
+                    TextField("e.g. photocard, kpop, sealed", text: $tagsText)
+                }
+
+                Section("Note (hidden from buyer)") {
+                    TextField("e.g. stored in basement", text: $personalNote)
+                }
+
+                Section("Shipping & Dimensions") {
+                    Toggle("Buyer pays shipping", isOn: $buyerPaysShipping)
+                    if !buyerPaysShipping {
                         HStack {
-                            Text("Weight (lbs)")
+                            Text("Handling fee")
                             Spacer()
-                            TextField("lbs", text: $weightText)
+                            Text("$")
+                            TextField("0.00", text: $handlingFee)
                                 .keyboardType(.decimalPad)
                                 .multilineTextAlignment(.trailing)
                                 .frame(width: 80)
                         }
+                    }
+                    HStack {
+                        Text("Est. shipping days")
+                        Spacer()
+                        TextField("3", text: $estimatedDays)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 60)
+                    }
+                    
+                    HStack {
+                        Text("Weight (lbs)")
+                        Spacer()
+                        TextField("lbs", text: $weightText)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 80)
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Dimensions (inches)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                         
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Dimensions (inches)")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                            
-                            HStack(spacing: 12) {
-                                HStack {
-                                    Text("L:")
-                                    TextField("Length", text: $lengthText)
-                                        .keyboardType(.decimalPad)
-                                        .textFieldStyle(.roundedBorder)
-                                        .multilineTextAlignment(.center)
-                                }
-                                HStack {
-                                    Text("W:")
-                                    TextField("Width", text: $widthText)
-                                        .keyboardType(.decimalPad)
-                                        .textFieldStyle(.roundedBorder)
-                                        .multilineTextAlignment(.center)
-                                }
-                                HStack {
-                                    Text("H:")
-                                    TextField("Height", text: $heightText)
-                                        .keyboardType(.decimalPad)
-                                        .textFieldStyle(.roundedBorder)
-                                        .multilineTextAlignment(.center)
-                                }
+                        HStack(spacing: 12) {
+                            HStack {
+                                Text("L:")
+                                TextField("Length", text: $lengthText)
+                                    .keyboardType(.decimalPad)
+                                    .textFieldStyle(.roundedBorder)
+                                    .multilineTextAlignment(.center)
+                            }
+                            HStack {
+                                Text("W:")
+                                TextField("Width", text: $widthText)
+                                    .keyboardType(.decimalPad)
+                                    .textFieldStyle(.roundedBorder)
+                                    .multilineTextAlignment(.center)
+                            }
+                            HStack {
+                                Text("H:")
+                                TextField("Height", text: $heightText)
+                                    .keyboardType(.decimalPad)
+                                    .textFieldStyle(.roundedBorder)
+                                    .multilineTextAlignment(.center)
                             }
                         }
-                        .padding(.vertical, 4)
                     }
+                    .padding(.vertical, 4)
                 }
-                .navigationTitle("Edit Draft")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Button("Cancel") { dismiss() }
-                    }
-                    ToolbarItem(placement: .bottomBar) {
-                        Button {
-                            showTemplatePicker = true
-                        } label: {
-                            Label("Templates", systemImage: "doc.on.doc")
-                                .font(.caption.weight(.semibold))
-                        }
-                    }
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Save") {
-                            saveToDraft()
-                            dismiss()
-                        }
-                        .fontWeight(.semibold)
-                    }
-                }
-                .sheet(isPresented: $showTemplatePicker) {
-                    TemplatePickerSheet { template in
-                        applyTemplateToDraft(template)
-                    }
-                }
-                .fullScreenCover(isPresented: $showPhotoEditModal) {
-                    DraftPhotoEditModal(item: item)
-                }
-                .onAppear { loadFromDraft() }
             }
+            .navigationTitle("Edit Draft")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .bottomBar) {
+                    Button {
+                        showTemplatePicker = true
+                    } label: {
+                        Label("Templates", systemImage: "doc.on.doc")
+                            .font(.caption.weight(.semibold))
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") {
+                        saveToDraft()
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+            .sheet(isPresented: $showTemplatePicker) {
+                TemplatePickerSheet { template in
+                    applyTemplateToDraft(template)
+                }
+            }
+            .fullScreenCover(isPresented: $showPhotoEditModal) {
+                DraftPhotoEditModal(item: item)
+            }
+            .onAppear { loadFromDraft() }
         }
+    }
 
 
-        private func applyTemplateToDraft(_ template: ListingTemplate) {
-            if let t = template.title, !t.isEmpty { title = t }
-            if let d = template.customDescription, !d.isEmpty { description = d }
-            if let c = template.condition, let cond = ItemCondition(rawValue: c) { selectedCondition = cond }
-            if let free = template.isFreeShipping { buyerPaysShipping = !free }
-            if let w = template.weightLbs { weightText = String(format: "%.2f", w) }
-            if let dims = template.packageDimensions {
-                lengthText = String(format: "%.2f", dims.lengthIn)
-                widthText = String(format: "%.2f", dims.widthIn)
-                heightText = String(format: "%.2f", dims.heightIn)
-            }
-            guard !template.photoPaths.isEmpty else { return }
-            isApplyingTemplate = true
-            Task {
-                for path in template.photoPaths {
-                    if let data = try? await StorageService.shared.downloadImageData(path: path),
-                       let img = UIImage(data: data) {
-                        let fakeId = "tpl_\(UUID().uuidString)"
-                        item.insertPhoto(assetId: fakeId, data: img.jpegData(compressionQuality: 0.85), at: item.sourceAssetIdentifiers.count)
-                        try? modelContext.save()
-                    }
+    private func applyTemplateToDraft(_ template: ListingTemplate) {
+        if let t = template.title, !t.isEmpty { title = t }
+        if let d = template.customDescription, !d.isEmpty { description = d }
+        if let c = template.condition, let cond = ItemCondition(rawValue: c) { selectedCondition = cond }
+        if let free = template.isFreeShipping { buyerPaysShipping = !free }
+        if let w = template.weightLbs { weightText = String(format: "%.2f", w) }
+        if let dims = template.packageDimensions {
+            lengthText = String(format: "%.2f", dims.lengthIn)
+            widthText = String(format: "%.2f", dims.widthIn)
+            heightText = String(format: "%.2f", dims.heightIn)
+        }
+        guard !template.photoPaths.isEmpty else { return }
+        isApplyingTemplate = true
+        Task {
+            for path in template.photoPaths {
+                if let data = try? await StorageService.shared.downloadImageData(path: path),
+                   let img = UIImage(data: data) {
+                    let fakeId = "tpl_\(UUID().uuidString)"
+                    item.insertPhoto(assetId: fakeId, data: img.jpegData(compressionQuality: 0.85), at: item.sourceAssetIdentifiers.count)
+                    try? modelContext.save()
                 }
-                isApplyingTemplate = false
             }
+            isApplyingTemplate = false
         }
+    }
 
-        private func loadFromDraft() {
-            title = item.userEditedTitle ?? item.aiSuggestedTitle ?? ""
-            if let p = item.userEditedPrice {
-                priceText = String(format: "%.2f", p)
-            }
-            description = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
-            personalNote = item.personalNote ?? ""
-            if let c = item.condition, let parsed = ItemCondition(rawValue: c) {
-                selectedCondition = parsed
-            } else {
-                selectedCondition = .good
-            }
-            buyerPaysShipping = item.buyerPaysShipping
-            handlingFee = item.handlingFee > 0 ? String(format: "%.2f", item.handlingFee) : ""
-            estimatedDays = "\(item.estimatedShippingDays)"
-            tagsText = item.tags.joined(separator: ", ")
-            
-            // Dimensions & Weight
-            if let w = item.weightLbs { weightText = String(format: "%.2f", w) } else { weightText = "" }
-            if let l = item.lengthIn { lengthText = String(format: "%.2f", l) } else { lengthText = "" }
-            if let w = item.widthIn { widthText = String(format: "%.2f", w) } else { widthText = "" }
-            if let h = item.heightIn { heightText = String(format: "%.2f", h) } else { heightText = "" }
+    private func loadFromDraft() {
+        title = item.userEditedTitle ?? item.aiSuggestedTitle ?? ""
+        if let p = item.userEditedPrice {
+            priceText = String(format: "%.2f", p)
         }
+        description = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
+        personalNote = item.personalNote ?? ""
+        if let c = item.condition, let parsed = ItemCondition(rawValue: c) {
+            selectedCondition = parsed
+        } else {
+            selectedCondition = .good
+        }
+        buyerPaysShipping = item.buyerPaysShipping
+        handlingFee = item.handlingFee > 0 ? String(format: "%.2f", item.handlingFee) : ""
+        estimatedDays = "\(item.estimatedShippingDays)"
+        tagsText = item.tags.joined(separator: ", ")
+        
+        // Dimensions & Weight
+        if let w = item.weightLbs { weightText = String(format: "%.2f", w) } else { weightText = "" }
+        if let l = item.lengthIn { lengthText = String(format: "%.2f", l) } else { lengthText = "" }
+        if let w = item.widthIn { widthText = String(format: "%.2f", w) } else { widthText = "" }
+        if let h = item.heightIn { heightText = String(format: "%.2f", h) } else { heightText = "" }
+    }
 
-        private func saveToDraft() {
-            item.userEditedTitle = title.isEmpty ? nil : title
-            item.userEditedPrice = Double(priceText.filter { $0.isNumber || $0 == "." })
-            item.userEditedDescription = description.isEmpty ? nil : description
-            item.personalNote = personalNote.isEmpty ? nil : personalNote
-            item.condition = selectedCondition.rawValue
-            item.buyerPaysShipping = buyerPaysShipping
-            item.handlingFee = Double(handlingFee.filter { $0.isNumber || $0 == "." }) ?? 0
-            item.estimatedShippingDays = Int(estimatedDays) ?? 3
-            item.tags = tagsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-            
-            // Dimensions & Weight
-            item.weightLbs = Double(weightText.filter { $0.isNumber || $0 == "." })
-            item.lengthIn = Double(lengthText.filter { $0.isNumber || $0 == "." })
-            item.widthIn = Double(widthText.filter { $0.isNumber || $0 == "." })
-            item.heightIn = Double(heightText.filter { $0.isNumber || $0 == "." })
-            
-            try? modelContext.save()
-        }
+    private func saveToDraft() {
+        item.userEditedTitle = title.isEmpty ? nil : title
+        item.userEditedPrice = Double(priceText.filter { $0.isNumber || $0 == "." })
+        item.userEditedDescription = description.isEmpty ? nil : description
+        item.personalNote = personalNote.isEmpty ? nil : personalNote
+        item.condition = selectedCondition.rawValue
+        item.buyerPaysShipping = buyerPaysShipping
+        item.handlingFee = Double(handlingFee.filter { $0.isNumber || $0 == "." }) ?? 0
+        item.estimatedShippingDays = Int(estimatedDays) ?? 3
+        item.tags = tagsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        
+        // Dimensions & Weight
+        item.weightLbs = Double(weightText.filter { $0.isNumber || $0 == "." })
+        item.lengthIn = Double(lengthText.filter { $0.isNumber || $0 == "." })
+        item.widthIn = Double(widthText.filter { $0.isNumber || $0 == "." })
+        item.heightIn = Double(heightText.filter { $0.isNumber || $0 == "." })
+        
+        try? modelContext.save()
+    }
     }
 
 
 // MARK: - DescriptionEditorSheet
 private struct DescriptionEditorSheet: View {
-    var text: Binding<String>
+    var initialText: String
+    var onSave: (String) -> Void
     var hasAIPurple: Bool
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focused: Bool
+    
+    @State private var localText: String = ""
 
     var body: some View {
         NavigationStack {
-            TextEditor(text: text)
+            TextEditor(text: $localText)
                 .focused($focused)
                 .font(.body)
                 .padding(.horizontal, 12)
@@ -1431,18 +1569,22 @@ private struct DescriptionEditorSheet: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
+                        Button("Done") {
+                            onSave(localText)
+                            dismiss()
+                        }
                     }
                 }
         }
-        .onAppear { focused = true }
+        .onAppear {
+            localText = initialText
+            focused = true
+        }
     }
 }
 
 // MARK: - BulkListingOverviewView (Drafts)
 struct BulkListingOverviewView: View {
-    var sessionDraftIDs: [UUID] = []
-
     @Environment(\.modelContext) private var modelContext
     @Query(filter: #Predicate<Item> { $0.isDraft == true }, sort: \Item.createdAt, order: .reverse)
     private var allItems: [Item]
@@ -1450,14 +1592,26 @@ struct BulkListingOverviewView: View {
 
     @FocusState private var focusedField: DraftFocusField?
     @State private var cache = CachedImageManager()
-    @State private var navigateToResults = false
     @State private var showProcessFullScreen = false
     @State private var isSelectMode = false
     @State private var selectedItemIDs: Set<UUID> = []
     @State private var showDraftBulkEdit = false
+    /// Direction of the last arrow-key move, so continuing past a description slot (see
+    /// DraftRow.onDescriptionAutoAdvance) keeps going the same way the user was already moving.
+    @State private var lastFocusMoveDelta = 1
 
+    // Always show every not-yet-published draft with photos, regardless of which
+    // app session created it — sessionDraftIDs only tracks the current session's
+    // drafts for the camera exit "discard?" prompt, not what belongs in this list.
     private var drafts: [Item] {
-        allItems.filter { !$0.sourceAssetIdentifiers.isEmpty }
+        // Show ALL persisted drafts, not just the ones committed this app session.
+        // `sessionDraftIDs` is in-memory only and resets on every launch, so filtering by
+        // it silently hid drafts created before an app restart (issue #41). SwiftData is
+        // the source of truth for what's still an unpublished draft.
+        // Excluding `deletedDraftIDs` here matters: deletion is deferred by a run loop tick
+        // (see UploadManager.deleteDraftLocallyAndCloud) to avoid a SwiftData crash, so this
+        // filter is what actually removes the row from the List immediately.
+        allItems.filter { !$0.sourceAssetIdentifiers.isEmpty && !uploadManager.deletedDraftIDs.contains($0.id) }
     }
 
     var body: some View {
@@ -1502,8 +1656,10 @@ struct BulkListingOverviewView: View {
                             onToggle: {
                                 if selectedItemIDs.contains(item.id) { selectedItemIDs.remove(item.id) }
                                 else { selectedItemIDs.insert(item.id) }
-                            }
+                            },
+                            onDescriptionAutoAdvance: { moveFocus(by: lastFocusMoveDelta) }
                         )
+                        .equatable()
                         .id(item.id)
                     }
                     .onDelete { offsets in
@@ -1513,9 +1669,13 @@ struct BulkListingOverviewView: View {
                     }
                 }
                 .listStyle(.plain)
-                .onChange(of: focusedField) { _, newValue in
+                .onChange(of: focusedField) { oldValue, newValue in
                     try? modelContext.save()
-                    if let fv = newValue {
+                    // Only re-center when focus actually lands on a *different draft* — title,
+                    // price, and description of the same row are already all visible together,
+                    // so scrolling on every sub-field move (as this used to) fought the user's
+                    // own scroll gesture on every single field-to-field tap or arrow press.
+                    if let fv = newValue, fv.itemID != oldValue?.itemID {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                             withAnimation(.easeOut(duration: 0.2)) {
                                 proxy.scrollTo(fv.itemID, anchor: .center)
@@ -1576,20 +1736,15 @@ struct BulkListingOverviewView: View {
                 }
             }
         }
-        .navigationDestination(isPresented: $navigateToResults) {
-            ProcessResultsOverviewView()
-        }
-        .onChange(of: uploadManager.showProcessResults) { _, show in
-            if show {
-                showProcessFullScreen = false
-                navigateToResults = true
-            }
-        }
         .fullScreenCover(isPresented: $showProcessFullScreen) {
             NavigationStack {
                 ProcessProgressView(onMinimize: {
                     showProcessFullScreen = false
-                    uploadManager.selectedTab = 0
+                    // Defer the tab switch past the cover dismiss animation so
+                    // SwiftUI doesn't get two simultaneous nav mutations in one frame.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        uploadManager.selectedTab = 0
+                    }
                 })
             }
             .environmentObject(uploadManager)
@@ -1637,6 +1792,7 @@ struct BulkListingOverviewView: View {
     }
 
     private func moveFocus(by delta: Int) {
+        lastFocusMoveDelta = delta
         guard let current = focusedIndex else { return }
         let next = current + delta
         let maxIndex = drafts.count * 3 - 1
@@ -1675,25 +1831,31 @@ struct ProcessResultsOverviewView: View {
     @FocusState private var focusedField: DraftFocusField?
     /// Measured height of the List container, used to compute per-item description size.
     @State private var listHeight: CGFloat = 0
+    /// Direction of the last arrow-key move, so continuing past a description slot (see
+    /// ResultDraftRow.onDescriptionAutoAdvance) keeps going the same way the user was already moving.
+    @State private var lastFocusMoveDelta = 1
 
     @State private var showPublishConfirmation = false
     @State private var webAutofillQueue: [CrossPostJob] = []
     @State private var activeAutofillJob: CrossPostJob? = nil
-    @State private var crossPostError: String? = nil
-    /// eBay/Etsy cross-posts deferred until `isPublishing` becomes false, ensuring the
+    /// eBay/Etsy cross-posts deferred until publishing completes, ensuring the
     /// Firestore listing document exists before the Cloud Function tries to read it.
     /// Stores title for error messages since the SwiftData Item may be deleted by then.
     @State private var pendingAPITriggers: [(listingId: String, title: String, platforms: [String])] = []
-    /// Per-listing cross-post info captured at publish time, driving the post-publish status
-    /// overview. Captured before the SwiftData drafts are deleted so the overview can read live
-    /// platform status from Firestore and offer retries.
-    @State private var sessionCrossPostItems: [CrossPostSessionItem] = []
-    @State private var showStatusOverview = false
+    /// Post-publish continuation gating. The continuation (API cross-post triggers, web
+    /// autofill jobs, sheet transitions) may only run once BOTH the publish task has
+    /// finished AND the confirmation sheet is fully dismissed — mutating sheet state while
+    /// another sheet is mid-dismissal makes UIKit drop the transition and strands the
+    /// modal on screen with its binding out of sync.
+    @State private var pendingPublishContinuation = false
+    @State private var confirmationSheetVisible = false
 
     // Only show the items that went through AI processing
     private var results: [Item] {
         let processedSet = Set(uploadManager.processedItemIDs)
-        return allItems.filter { processedSet.contains($0.id) }
+        // See UploadManager.deletedDraftIDs — deletion is deferred a tick, so this filter is
+        // what actually drops the row from the List immediately.
+        return allItems.filter { processedSet.contains($0.id) && !uploadManager.deletedDraftIDs.contains($0.id) }
     }
 
     private var toPublish: [Item] {
@@ -1711,8 +1873,10 @@ struct ProcessResultsOverviewView: View {
                         onToggle: { toggleSelection(item) },
                         focusedField: $focusedField,
                         isGeminiFailed: uploadManager.processingFailedIDs.contains(item.id),
-                        descriptionLineLimit: descriptionLineLimit
+                        descriptionLineLimit: descriptionLineLimit,
+                        onDescriptionAutoAdvance: { moveFocus(by: lastFocusMoveDelta) }
                     )
+                    .equatable()
                 }
                 .onDelete { offsets in
                     for i in offsets {
@@ -1727,6 +1891,21 @@ struct ProcessResultsOverviewView: View {
             .onAppear { selectedIDs = Set(results.map { $0.id }) }
 
             // ── Bottom action bar ────────────────────────────────────────
+            // The Mercari autofill pill lives in MainView, underneath this sheet — surface
+            // its activity here so the user isn't staring at a seemingly frozen screen.
+            if uploadManager.globalMercariJob != nil {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Posting to Mercari in the background…")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+                .background(Color.purple.opacity(0.08))
+            }
             Divider()
             HStack(spacing: 16) {
                 Button(selectedIDs.count == results.count ? "Deselect All" : "Select All") {
@@ -1741,7 +1920,11 @@ struct ProcessResultsOverviewView: View {
                 Spacer()
 
                 Button {
-                    showPublishConfirmation = true
+                    focusedField = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        confirmationSheetVisible = true
+                        showPublishConfirmation = true
+                    }
                 } label: {
                     HStack(spacing: 8) {
                         let busy = uploadManager.isUploadingPhotos || uploadManager.isPublishing
@@ -1794,73 +1977,31 @@ struct ProcessResultsOverviewView: View {
         } message: {
             Text(uploadManager.publishError ?? "")
         }
-        // Only surface the eBay/API error once no web-autofill sheet is up. The Mercari sheet is
-        // presented from this same view, and you can't show an alert underneath an active sheet —
-        // that's why the error used to flash and vanish the instant Mercari opened. Gating on
-        // `activeAutofillJob == nil` holds the error until the web queue drains, then shows it.
-        .alert("Cross-Post Failed", isPresented: Binding(
-            get: { crossPostError != nil && activeAutofillJob == nil },
-            set: { if !$0 { crossPostError = nil } }
-        )) {
-            Button("OK", role: .cancel) { crossPostError = nil }
-        } message: {
-            Text(crossPostError ?? "")
-        }
-        .sheet(isPresented: $showPublishConfirmation) {
+        // The eBay/Etsy cross-post error (crossPostError) is NOT surfaced here — see
+        // UploadManager.crossPostError. The API-trigger Task that sets it typically completes
+        // after this view has already been dismissed (showResultsOverview = false runs
+        // immediately once publish succeeds and there's no web-autofill queue to wait on), so
+        // a local alert here would silently discard it. It's shown from CrossPostStatusView
+        // instead, which is reliably the next screen the user lands on either way.
+        .sheet(isPresented: $showPublishConfirmation, onDismiss: {
+            // Fires once the sheet is FULLY gone — only now is it safe to run the
+            // post-publish continuation that mutates other sheet state.
+            confirmationSheetVisible = false
+            runPublishContinuationIfReady()
+        }) {
             publishConfirmationSheetContent
         }
         .sheet(item: $activeAutofillJob, onDismiss: {
             checkAndStartNextWebJob()
         }) { job in
-            if job.platform == "mercari" {
-                MercariAutoPosterView(job: job)
-            } else {
-                CrossPostContainerView(
-                    platformName: "Facebook Marketplace",
-                    listingTitle: job.title,
-                    listingDescription: job.description,
-                    listingPrice: job.price
-                )
-            }
+            CrossPostContainerView(
+                platformName: "Facebook Marketplace",
+                listingTitle: job.title,
+                listingDescription: job.description,
+                listingPrice: job.price
+            )
         }
-        .onChange(of: uploadManager.isPublishing) { _, isPublishing in
-            guard !isPublishing else { return }
-            // Fire deferred API cross-posts now that the Firestore write has completed.
-            if !pendingAPITriggers.isEmpty {
-                let triggers = pendingAPITriggers
-                pendingAPITriggers = []
-                Task {
-                    var errorMessages: [String] = []
-                    for trigger in triggers {
-                        do {
-                            try await IntegrationRepository.shared.triggerCrossPost(
-                                listingId: trigger.listingId,
-                                platforms: trigger.platforms
-                            )
-                        } catch {
-                            errorMessages.append(formatCrossPostError(error, title: trigger.title, platforms: trigger.platforms))
-                        }
-                    }
-                    if !errorMessages.isEmpty {
-                        crossPostError = errorMessages.joined(separator: "\n\n")
-                    }
-                }
-            }
-            // Start web autofill jobs (Mercari, Facebook) after publish completes. If there are
-            // none (e.g. eBay-only), jump straight to the status overview — eBay status fills in
-            // live as the Cloud Function calls above complete.
-            if !webAutofillQueue.isEmpty {
-                checkAndStartNextWebJob()
-            } else if !sessionCrossPostItems.isEmpty {
-                showStatusOverview = true
-            }
-        }
-        .navigationDestination(isPresented: $showStatusOverview) {
-            CrossPostStatusView(items: sessionCrossPostItems) {
-                uploadManager.crossPostStatusPending = false
-                uploadManager.shouldReturnToRoot = true
-            }
-        }
+        .interactiveDismissDisabled(uploadManager.isPublishing || activeAutofillJob != nil)
     }
     
     @ViewBuilder private var publishConfirmationSheetContent: some View {
@@ -1886,24 +2027,26 @@ struct ProcessResultsOverviewView: View {
             // Capture per-listing cross-post info now (before the drafts are deleted) so the
             // post-publish status overview can show per-platform status and offer retries.
             let attemptedPlatforms = Array(selectedPlatforms).sorted()
+            // Always populate so CrossPostStatusView (global sheet) can show at minimum
+            // "Wonni - posted" even when no cross-posting was selected.
+            uploadManager.sessionCrossPostItems = toPublish.compactMap { item in
+                guard let listingId = item.firestoreListingId else { return nil }
+                return CrossPostSessionItem(
+                    id: listingId,
+                    title: item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled",
+                    description: item.userEditedDescription ?? item.aiSuggestedDescription ?? "",
+                    price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
+                    coverPhotoPath: item.orderedFirebasePhotoPaths.first,
+                    photoPaths: item.orderedFirebasePhotoPaths,
+                    platforms: attemptedPlatforms,
+                    buyerPaysShipping: item.buyerPaysShipping
+                )
+            }
             if !attemptedPlatforms.isEmpty {
-                sessionCrossPostItems = toPublish.compactMap { item in
-                    guard let listingId = item.firestoreListingId else { return nil }
-                    return CrossPostSessionItem(
-                        id: listingId,
-                        title: item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled",
-                        description: item.userEditedDescription ?? item.aiSuggestedDescription ?? "",
-                        price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
-                        coverPhotoPath: item.firebasePhotoPaths?.first,
-                        photoPaths: item.firebasePhotoPaths ?? [],
-                        platforms: attemptedPlatforms,
-                        buyerPaysShipping: item.buyerPaysShipping
-                    )
-                }
                 uploadManager.crossPostStatusPending = true
             }
-            // Defer API cross-posts to onChange(of: isPublishing) so the Firestore write
-            // completes before the Cloud Function tries to read the listing document.
+            // Defer API cross-posts to the publish completion (runPublishContinuationIfReady)
+            // so the Firestore write completes before the Cloud Function reads the listing.
             let apiPlatforms = selectedPlatforms.filter { $0 == "ebay" || $0 == "etsy" }
             if !apiPlatforms.isEmpty {
                 pendingAPITriggers = toPublish.compactMap { item in
@@ -1912,40 +2055,108 @@ struct ProcessResultsOverviewView: View {
                     return (listingId: listingId, title: title, platforms: Array(apiPlatforms))
                 }
             }
-            uploadManager.publishDrafts(drafts: toPublish, modelContext: modelContext)
+            uploadManager.publishDrafts(drafts: toPublish, modelContext: modelContext) {
+                // Explicit completion — do NOT observe isPublishing for this: the publish
+                // task can finish before SwiftUI renders the true state, so an .onChange
+                // observer may never fire (true→false coalesces to no change).
+                pendingPublishContinuation = true
+                runPublishContinuationIfReady()
+            }
         }
-        .presentationDetents([.fraction(0.75), .large])
+        .presentationDetents([.large])
+    }
+
+    /// Runs post-publish work (deferred API cross-posts, web autofill jobs, sheet
+    /// transitions) once publishing has finished AND the confirmation sheet is fully
+    /// dismissed, whichever happens last.
+    private func runPublishContinuationIfReady() {
+        guard pendingPublishContinuation, !confirmationSheetVisible else { return }
+        pendingPublishContinuation = false
+        // Total publish failure: none of the listings were written to Firestore, so
+        // cross-posting them (API or web autofill) would only produce confusing secondary
+        // errors. Drop the queued jobs and stay on this screen so the "Publish Failed"
+        // alert (attached to this view) can present and the user can retry.
+        if uploadManager.publishError != nil {
+            pendingAPITriggers = []
+            webAutofillQueue = []
+            uploadManager.pendingAutofillJobsCount = 0
+            uploadManager.crossPostStatusPending = false
+            return
+        }
+        // Fire deferred API cross-posts now that the Firestore write has completed.
+        if !pendingAPITriggers.isEmpty {
+            let triggers = pendingAPITriggers
+            pendingAPITriggers = []
+            Task {
+                var errorMessages: [String] = []
+                for trigger in triggers {
+                    do {
+                        try await IntegrationRepository.shared.triggerCrossPost(
+                            listingId: trigger.listingId,
+                            platforms: trigger.platforms
+                        )
+                    } catch {
+                        errorMessages.append(formatCrossPostError(error, title: trigger.title, platforms: trigger.platforms))
+                    }
+                }
+                if !errorMessages.isEmpty {
+                    // See UploadManager.crossPostError — this view is very likely already
+                    // dismissed by the time this Task resolves, so the error must live
+                    // somewhere that outlives it.
+                    uploadManager.crossPostError = errorMessages.joined(separator: "\n\n")
+                }
+            }
+        }
+        // Start web autofill jobs (Mercari, Facebook) after publish completes. If there are
+        // none (e.g. eBay-only), transition to the global CrossPostStatusView sheet.
+        if !webAutofillQueue.isEmpty {
+            checkAndStartNextWebJob()
+        } else {
+            uploadManager.showResultsOverview = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                uploadManager.showCrossPostStatus = true
+            }
+        }
     }
 
     private func checkAndStartNextWebJob() {
-        guard activeAutofillJob == nil else { return }
+        guard activeAutofillJob == nil, uploadManager.globalMercariJob == nil else { return }
         if !webAutofillQueue.isEmpty {
             let nextJob = webAutofillQueue.removeFirst()
             uploadManager.pendingAutofillJobsCount = webAutofillQueue.count + 1
-            // Defer so the just-dismissed sheet fully tears down before the next presents. Setting
-            // a new .sheet(item:) value synchronously inside onDismiss is silently dropped by
-            // SwiftUI — that's why the second Mercari sheet never appeared.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                activeAutofillJob = nextJob
+            if nextJob.platform == "mercari" {
+                // Mercari runs headlessly — show as a pill above the tab bar via MainView.
+                uploadManager.globalMercariJob = nextJob
+                uploadManager.onMercariJobComplete = { checkAndStartNextWebJob() }
+            } else {
+                // Facebook and other web platforms require a visible sheet.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                    activeAutofillJob = nextJob
+                }
             }
         } else {
             uploadManager.pendingAutofillJobsCount = 0
-            // All cross-posting jobs finished — now safe to delete SwiftData items
+            // All web cross-posting jobs finished — now safe to delete SwiftData items
             // that were held alive so startPosting() could read their photos.
             let pendingIDs = uploadManager.publishedPendingDeletionIDs
             if !pendingIDs.isEmpty {
+                // Mark and clear before deleting — see UploadManager.deleteDraftLocallyAndCloud.
+                // This delete didn't go through that function (these items were kept alive
+                // deliberately for the cross-post jobs, which have now all finished), so
+                // nothing else marks or clears them.
                 for item in allItems where pendingIDs.contains(item.id) {
+                    Item.deletedIDs.insert(item.id)
+                    item.sourceAssetIdentifiers = []
+                    item.photosData = []
                     modelContext.delete(item)
                 }
                 try? modelContext.save()
                 uploadManager.publishedPendingDeletionIDs.removeAll()
             }
-            // Show the per-platform status overview instead of bouncing home. Its Done button
-            // performs the actual return-to-root.
-            if !sessionCrossPostItems.isEmpty {
-                showStatusOverview = true
-            } else if uploadManager.shouldReturnToRoot == false {
-                uploadManager.shouldReturnToRoot = true
+            // Close the results sheet and open CrossPostStatusView globally from MainView.
+            uploadManager.showResultsOverview = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                uploadManager.showCrossPostStatus = true
             }
         }
     }
@@ -1981,6 +2192,7 @@ struct ProcessResultsOverviewView: View {
     }
 
     private func moveFocus(by delta: Int) {
+        lastFocusMoveDelta = delta
         guard let current = focusedIndex else { return }
         let next = current + delta
         let maxIndex = results.count * 3 - 1
@@ -2046,6 +2258,7 @@ struct CrossPostStatusView: View {
     @State private var listeners: [ListenerRegistration] = []
     @State private var retryJob: CrossPostJob? = nil
     @State private var retryingEbay: Set<String> = []
+    @EnvironmentObject private var uploadManager: UploadManager
 
     var body: some View {
         VStack(spacing: 0) {
@@ -2091,16 +2304,26 @@ struct CrossPostStatusView: View {
         .onAppear(perform: startListeners)
         .onDisappear(perform: stopListeners)
         .sheet(item: $retryJob) { job in
-            if job.platform == "mercari" {
-                MercariAutoPosterView(job: job)
-            } else {
-                CrossPostContainerView(
-                    platformName: "Facebook Marketplace",
-                    listingTitle: job.title,
-                    listingDescription: job.description,
-                    listingPrice: job.price
-                )
-            }
+            CrossPostContainerView(
+                platformName: "Facebook Marketplace",
+                listingTitle: job.title,
+                listingDescription: job.description,
+                listingPrice: job.price
+            )
+        }
+        // See UploadManager.crossPostError — surfaced here (not on ProcessResultsOverviewView)
+        // because this is reliably the screen the user is on by the time an eBay/Etsy
+        // cross-post Task resolves, regardless of how quickly the previous screen dismissed.
+        // The live status badge below (via startListeners' Firestore listener) already shows
+        // "Failed" + Retry per-row from the Cloud Function's own crossPostStatus write, so this
+        // alert exists mainly to explain WHY it failed the moment it happens, once, per attempt.
+        .alert("Cross-Post Failed", isPresented: Binding(
+            get: { uploadManager.crossPostError != nil },
+            set: { if !$0 { uploadManager.crossPostError = nil } }
+        )) {
+            Button("OK", role: .cancel) { uploadManager.crossPostError = nil }
+        } message: {
+            Text(uploadManager.crossPostError ?? "")
         }
     }
 
@@ -2170,8 +2393,20 @@ struct CrossPostStatusView: View {
                 try? await IntegrationRepository.shared.triggerCrossPost(listingId: item.id, platforms: [platform])
                 retryingEbay.remove(item.id)
             }
-        case "mercari", "facebook":
-            // Re-run the web autofill from the published listing's Storage photos.
+        case "mercari":
+            let job = CrossPostJob(
+                platform: platform,
+                title: item.title,
+                description: item.description,
+                price: item.price,
+                listingId: item.id,
+                photoFirebasePaths: item.photoPaths,
+                buyerPaysShipping: item.buyerPaysShipping
+            )
+            uploadManager.globalMercariJob = job
+            uploadManager.onMercariJobComplete = nil
+        case "facebook":
+            // Facebook requires a visible full-screen sheet.
             retryJob = CrossPostJob(
                 platform: platform,
                 title: item.title,
@@ -2304,7 +2539,7 @@ private struct AIUndoToastView: View {
 
 // MARK: - ResultDraftRow
 
-struct ResultDraftRow: View {
+struct ResultDraftRow: View, Equatable {
     let item: Item
     let cache: CachedImageManager
     let isSelected: Bool
@@ -2313,34 +2548,50 @@ struct ResultDraftRow: View {
     var isGeminiFailed: Bool = false
     /// Minimum lines for the description field; computed from available screen height.
     var descriptionLineLimit: Int = 4
+    /// Called when the description sheet — opened via arrow-key navigation landing on this
+    /// row's description slot, not a direct tap — is dismissed. Lets the keyboard toolbar's
+    /// up/down arrows continue on to the next field instead of stopping dead at description,
+    /// which (unlike title/price) isn't a real focusable text field.
+    var onDescriptionAutoAdvance: (() -> Void)? = nil
+
+    // ProcessResultsOverviewView.body re-evaluates on every uploadManager @Published change
+    // (isUploadingPhotos, isPublishing, processingFailedIDs are all read there directly) —
+    // which fires repeatedly while background photo uploads are still finishing, i.e.
+    // exactly while the user is typing on this screen. That reconstructs every row with a
+    // fresh `onToggle` closure, and SwiftUI's default diffing treats closures as always
+    // "changed," so every row's body re-evaluates on every tick regardless of whether it has
+    // anything to do with that row. Equatable + `.equatable()` at the call site lets SwiftUI
+    // skip re-evaluating a row whose actual rendered inputs haven't changed. Compares every
+    // `item` field this row reads — add to this list if the body starts reading a new one.
+    static func == (lhs: ResultDraftRow, rhs: ResultDraftRow) -> Bool {
+        lhs.isSelected == rhs.isSelected &&
+        lhs.isGeminiFailed == rhs.isGeminiFailed &&
+        lhs.descriptionLineLimit == rhs.descriptionLineLimit &&
+        lhs.focusedField.wrappedValue == rhs.focusedField.wrappedValue &&
+        lhs.item.sourceAssetIdentifiers == rhs.item.sourceAssetIdentifiers &&
+        lhs.item.userEditedTitle == rhs.item.userEditedTitle &&
+        lhs.item.aiSuggestedTitle == rhs.item.aiSuggestedTitle &&
+        lhs.item.visionTitle == rhs.item.visionTitle &&
+        lhs.item.userEditedPrice == rhs.item.userEditedPrice &&
+        lhs.item.aiSuggestedPrice == rhs.item.aiSuggestedPrice &&
+        lhs.item.userEditedDescription == rhs.item.userEditedDescription &&
+        lhs.item.aiSuggestedDescription == rhs.item.aiSuggestedDescription &&
+        lhs.item.originalUserTitleBeforeAI == rhs.item.originalUserTitleBeforeAI &&
+        lhs.item.originalUserDescriptionBeforeAI == rhs.item.originalUserDescriptionBeforeAI
+    }
 
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var uploadManager: UploadManager
+    @State private var titleText: String = ""
     @State private var priceText: String = ""
+    @State private var descriptionText: String = ""
     @State private var showEditSheet = false
     @State private var showDescriptionEditor = false
+    @State private var descriptionEditorOpenedViaFocus = false
     @State private var undoneAITitle: String? = nil
     @State private var undoneAIDescription: String? = nil
     @State private var toastMessage: String? = nil
     @State private var toastRestoreAction: (() -> Void)? = nil
-
-    private var titleBinding: Binding<String> {
-        Binding(
-            get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? "" },
-            set: { let v = String($0.prefix(140)); item.userEditedTitle = v.isEmpty ? nil : v; try? modelContext.save() }
-        )
-    }
-
-    private var descriptionBinding: Binding<String> {
-        Binding(
-            get: { item.userEditedDescription ?? item.aiSuggestedDescription ?? "" },
-            set: {
-                item.userEditedDescription = $0.isEmpty ? nil : $0
-                try? modelContext.save()
-                uploadManager.syncDraftData(item)
-            }
-        )
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2370,21 +2621,18 @@ struct ResultDraftRow: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     if let origTitle = item.originalUserTitleBeforeAI {
-                        WordDiffView(before: origTitle, after: titleBinding.wrappedValue)
+                        WordDiffView(before: origTitle, after: titleText)
                         Button("Undo AI title edits") { undoAITitle() }
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.blue)
                             .buttonStyle(.plain)
                     }
 
-                    TextField("Title", text: titleBinding)
+                    TextField("Title", text: $titleText)
                         .font(.body.weight(.semibold))
                         .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .title))
-                        .onChange(of: titleBinding.wrappedValue) { _, _ in
-                            uploadManager.syncDraftData(item)
-                        }
 
-                    TitleCharCountView(count: titleBinding.wrappedValue.count)
+                    TitleCharCountView(count: titleText.count)
 
                     HStack(spacing: 3) {
                         Text("$").font(.subheadline).foregroundStyle(.secondary)
@@ -2392,12 +2640,6 @@ struct ResultDraftRow: View {
                             .font(.subheadline)
                             .keyboardType(.decimalPad)
                             .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .price))
-                            .onChange(of: priceText) { _, v in
-                                let cleaned = v.filter { $0.isNumber || $0 == "." }
-                                item.userEditedPrice = cleaned.isEmpty ? nil : Double(cleaned)
-                                try? modelContext.save()
-                                uploadManager.syncDraftData(item)
-                            }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2415,7 +2657,7 @@ struct ResultDraftRow: View {
 
             // ── Description (full width) ────────────────────────────────────
             if let origDesc = item.originalUserDescriptionBeforeAI {
-                WordDiffView(before: origDesc, after: descriptionBinding.wrappedValue)
+                WordDiffView(before: origDesc, after: descriptionText)
                     .padding(.horizontal, 4)
                 Button("Undo AI description edits") { undoAIDescription() }
                     .font(.caption2.weight(.medium))
@@ -2424,12 +2666,11 @@ struct ResultDraftRow: View {
                     .padding(.leading, 4)
             }
 
-            let descText = descriptionBinding.wrappedValue
             Button { showDescriptionEditor = true } label: {
-                Text(descText.isEmpty ? "Add description…" : descText)
+                Text(descriptionText.isEmpty ? "Add description…" : descriptionText)
                     .lineLimit(3)
                     .font(.caption)
-                    .foregroundStyle(descText.isEmpty
+                    .foregroundStyle(descriptionText.isEmpty
                         ? Color(.placeholderText)
                         : (item.userEditedDescription != nil ? .primary : .secondary))
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -2445,8 +2686,13 @@ struct ResultDraftRow: View {
             }
             .buttonStyle(.plain)
             .sheet(isPresented: $showDescriptionEditor) {
-                DescriptionEditorSheet(text: descriptionBinding,
-                                       hasAIPurple: item.originalUserDescriptionBeforeAI != nil)
+                DescriptionEditorSheet(
+                    initialText: descriptionText,
+                    onSave: { newText in
+                        item.userEditedDescription = newText.isEmpty ? nil : newText
+                    },
+                    hasAIPurple: item.originalUserDescriptionBeforeAI != nil
+                )
             }
 
             // ── AI badge row ────────────────────────────────────────────────
@@ -2475,13 +2721,58 @@ struct ResultDraftRow: View {
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: toastMessage != nil)
         .onAppear {
+            titleText = item.userEditedTitle ?? item.aiSuggestedTitle ?? ""
+            descriptionText = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
             if let p = item.userEditedPrice ?? item.aiSuggestedPrice {
                 priceText = String(format: "%.2f", p)
             }
         }
+        .onChange(of: focusedField.wrappedValue) { oldFocus, newFocus in
+            if oldFocus?.itemID == item.id && newFocus?.itemID != item.id {
+                saveLocalStateToModel()
+            }
+            // Description isn't a real focusable field (it's a button that opens a sheet),
+            // so the keyboard arrows can't land real focus there. Landing "on" it via arrow
+            // navigation instead opens the sheet directly, so up/down keeps working through it.
+            if newFocus == DraftFocusField(itemID: item.id, field: .description) {
+                descriptionEditorOpenedViaFocus = true
+                showDescriptionEditor = true
+            }
+        }
+        .onChange(of: showDescriptionEditor) { _, isShowing in
+            // Fires whether the sheet was saved or swiped away — either way, continue the
+            // arrow-key flow onward once the user's done with the description.
+            if !isShowing && descriptionEditorOpenedViaFocus {
+                descriptionEditorOpenedViaFocus = false
+                onDescriptionAutoAdvance?()
+            }
+        }
+        .onDisappear {
+            saveLocalStateToModel()
+        }
         .sheet(isPresented: $showEditSheet) {
             DraftEditSheet(item: item)
         }
+    }
+
+    private func saveLocalStateToModel() {
+        let v = String(titleText.prefix(140))
+        if item.userEditedTitle != (v.isEmpty ? nil : v) {
+            item.userEditedTitle = v.isEmpty ? nil : v
+        }
+
+        if item.userEditedDescription != (descriptionText.isEmpty ? nil : descriptionText) {
+            item.userEditedDescription = descriptionText.isEmpty ? nil : descriptionText
+        }
+
+        let cleaned = priceText.filter { $0.isNumber || $0 == "." }
+        let newPrice = cleaned.isEmpty ? nil : Double(cleaned)
+        if item.userEditedPrice != newPrice {
+            item.userEditedPrice = newPrice
+        }
+
+        try? modelContext.save()
+        uploadManager.syncDraftData(item)
     }
 
     private func undoAITitle() {
@@ -2567,21 +2858,9 @@ struct PublishedRow: View {
     let cache: CachedImageManager
 
     @Environment(\.modelContext) private var modelContext
+    @State private var titleText: String = ""
     @State private var priceText: String = ""
-
-    private var titleBinding: Binding<String> {
-        Binding(
-            get: { item.userEditedTitle ?? item.aiSuggestedTitle ?? "" },
-            set: { item.userEditedTitle = $0; try? modelContext.save() }
-        )
-    }
-
-    private var descriptionBinding: Binding<String> {
-        Binding(
-            get: { item.userEditedDescription ?? item.aiSuggestedDescription ?? "" },
-            set: { item.userEditedDescription = $0; try? modelContext.save() }
-        )
-    }
+    @State private var descriptionText: String = ""
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -2601,7 +2880,7 @@ struct PublishedRow: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                TextField("Title…", text: titleBinding)
+                TextField("Title…", text: $titleText)
                     .font(.headline)
 
                 HStack(spacing: 2) {
@@ -2612,7 +2891,7 @@ struct PublishedRow: View {
                 }
                 .font(.subheadline)
 
-                TextField("Description…", text: descriptionBinding, axis: .vertical)
+                TextField("Description…", text: $descriptionText, axis: .vertical)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2...4)
@@ -2620,15 +2899,33 @@ struct PublishedRow: View {
         }
         .padding(.vertical, 4)
         .onAppear {
+            titleText = item.userEditedTitle ?? item.aiSuggestedTitle ?? ""
+            descriptionText = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
             if let p = item.userEditedPrice ?? item.aiSuggestedPrice {
                 priceText = String(format: "%.2f", p)
             }
         }
-        .onChange(of: priceText) { _, newValue in
-            let cleaned = newValue.filter { $0.isNumber || $0 == "." }
-            item.userEditedPrice = cleaned.isEmpty ? nil : Double(cleaned)
-            try? modelContext.save()
+        .onDisappear {
+            saveLocalStateToModel()
         }
+    }
+
+    private func saveLocalStateToModel() {
+        if item.userEditedTitle != titleText {
+            item.userEditedTitle = titleText
+        }
+
+        if item.userEditedDescription != descriptionText {
+            item.userEditedDescription = descriptionText
+        }
+
+        let cleaned = priceText.filter { $0.isNumber || $0 == "." }
+        let newPrice = cleaned.isEmpty ? nil : Double(cleaned)
+        if item.userEditedPrice != newPrice {
+            item.userEditedPrice = newPrice
+        }
+
+        try? modelContext.save()
     }
 }
 
@@ -2636,10 +2933,14 @@ struct PublishedRow: View {
 struct PublishConfirmationSheet: View {
     let itemsToPublish: [Item]
     let onConfirm: (Set<String>) -> Void
-    
+
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var integrationRepo = IntegrationRepository.shared
+    @ObservedObject private var integrationRepo = IntegrationRepository.shared
     @State private var selectedPlatforms: Set<String> = []
+    /// Platforms whose toggle the user has explicitly touched. The async `.task`
+    /// default-selection may still seed the others, but must never overwrite an
+    /// explicit user choice made while integrations were loading.
+    @State private var touchedPlatforms: Set<String> = []
     @State private var showAddressSetupSheet = false
     @State private var platformToEnableAfterAddressSetup = ""
     
@@ -2670,6 +2971,7 @@ struct PublishConfirmationSheet: View {
                             Toggle(isOn: Binding(
                                 get: { selectedPlatforms.contains(integration.platform) },
                                 set: { isSelected in
+                                    touchedPlatforms.insert(integration.platform)
                                     if isSelected {
                                         if isAPI && SellingSettingsRepository.shared.settings?.defaultLocation.postalCode.isEmpty != false {
                                             platformToEnableAfterAddressSetup = integration.platform
@@ -2728,8 +3030,13 @@ struct PublishConfirmationSheet: View {
             .task {
                 await integrationRepo.loadIntegrations()
                 await SellingSettingsRepository.shared.loadSettings()
-                // Default toggle connected API platforms
-                selectedPlatforms = Set(integrationRepo.integrations.filter { $0.isConnected }.map { $0.platform })
+                // Default-select connected API platforms, but only those the user hasn't
+                // explicitly toggled while the async load was in flight (issue #8) — a
+                // blanket reassignment here used to wipe the user's in-flight choices.
+                for platform in integrationRepo.integrations.filter({ $0.isConnected }).map({ $0.platform })
+                where !touchedPlatforms.contains(platform) {
+                    selectedPlatforms.insert(platform)
+                }
             }
             .sheet(isPresented: $showAddressSetupSheet) {
                 AddressSetupSheet {
