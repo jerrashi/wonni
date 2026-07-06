@@ -31,6 +31,24 @@ class UploadManager: ObservableObject {
     @Published var shouldReturnToRoot = false
     @Published var pendingAutofillJobsCount = 0
     @Published var sessionDraftIDs: [UUID] = []
+    /// IDs of drafts marked for deletion. Populated synchronously by
+    /// `deleteDraftLocallyAndCloud`, before the underlying SwiftData delete actually runs
+    /// (deferred by one run loop tick — see that function). Two things depend on this:
+    /// 1. Any in-flight background upload/recognition Task for the draft (which captures
+    ///    the `Item` directly and `await`s across suspension points) re-checks this set
+    ///    after each `await` and bails out rather than touching a model that may now be
+    ///    detached from its context.
+    /// 2. Draft-list views (`BulkListingOverviewView.drafts`, `ProcessResultsOverviewView`)
+    ///    filter it out of their next render immediately, so SwiftUI never re-renders a row
+    ///    against an `Item` whose backing store the deferred delete is about to invalidate.
+    @Published private(set) var deletedDraftIDs: Set<UUID> = []
+    /// Set when something (a saved-search notification row, a deep link) wants Search
+    /// to run a specific query, alongside switching selectedTab to Search.
+    /// SearchView observes this to pre-fill and run the query, then clears it.
+    @Published var pendingSearchQuery: String? = nil
+    /// Set by the Home search bar on tap, alongside switching selectedTab to Search.
+    /// SearchView observes this to focus its text field, then clears it.
+    @Published var pendingSearchFocus = false
 
     // ── Active Draft (shared between camera and picker) ──────────────────────
     /// The UUID of the Item currently being built by the user.
@@ -40,19 +58,50 @@ class UploadManager: ObservableObject {
 
     // ── Photo Upload Phase ─────────────────────────────────────────────────
     @Published var isUploadingPhotos = false
-    @Published var uploadProgress: Double = 0
-    @Published var uploadStatuses: [UUID: DraftUploadStatus] = [:]
+    // uploadProgress/uploadStatuses tick once per photo (often several times a second
+    // across a batch). Screens like BulkListingOverviewView hold this object via
+    // @EnvironmentObject to call its methods, which means SwiftUI's whole-object
+    // ObservableObject invalidation re-runs their entire body — reconstructing the drafts
+    // List — on every single tick, even though that screen doesn't display upload progress
+    // at all. Backed by plain vars with a throttled objectWillChange (below) instead of
+    // @Published, so internal reads stay perfectly current but external re-renders are
+    // capped at a sane rate instead of firing dozens of times a second.
+    var uploadProgress: Double {
+        get { _uploadProgress }
+        set { _uploadProgress = newValue; scheduleThrottledChangeNotify() }
+    }
+    private var _uploadProgress: Double = 0
+    var uploadStatuses: [UUID: DraftUploadStatus] {
+        get { _uploadStatuses }
+        set { _uploadStatuses = newValue; scheduleThrottledChangeNotify() }
+    }
+    private var _uploadStatuses: [UUID: DraftUploadStatus] = [:]
     @Published var uploadedAssetIDs: [String] = []
     @Published var showDeletePhotosPrompt = false
     @Published var uploadStartTime: Date? = nil
 
     // ── AI Processing Phase ─────────────────────────────────────────────────
     @Published var isProcessing = false
-    @Published var processProgress: Double = 0
-    @Published var processStatuses: [UUID: DraftUploadStatus] = [:]
-    @Published var processCurrentIndex = 0
+    // Same throttling rationale as uploadProgress/uploadStatuses above — these tick
+    // several times per draft as it moves through identify/analyze/describe.
+    var processProgress: Double {
+        get { _processProgress }
+        set { _processProgress = newValue; scheduleThrottledChangeNotify() }
+    }
+    private var _processProgress: Double = 0
+    var processStatuses: [UUID: DraftUploadStatus] {
+        get { _processStatuses }
+        set { _processStatuses = newValue; scheduleThrottledChangeNotify() }
+    }
+    private var _processStatuses: [UUID: DraftUploadStatus] = [:]
+    var processCurrentIndex: Int {
+        get { _processCurrentIndex }
+        set { _processCurrentIndex = newValue; scheduleThrottledChangeNotify() }
+    }
+    private var _processCurrentIndex = 0
     @Published var processTotalCount = 0
     @Published var showProcessResults = false
+    @Published var showResultsOverview = false
     @Published var processedItemIDs: [UUID] = []
     @Published var processingFailedIDs: Set<UUID> = []
     @Published var processQueuedIDs: [UUID] = []
@@ -60,23 +109,65 @@ class UploadManager: ObservableObject {
     // ── Publish Phase ───────────────────────────────────────────────────────
     @Published var isPublishing = false
     @Published var publishError: String? = nil
-    /// IDs of SwiftData drafts that have been published to Firestore but whose
-    /// deletion is deferred until all cross-posting jobs for the session complete.
     @Published var publishedPendingDeletionIDs: Set<UUID> = []
-    /// True while a cross-post status overview is owed to the user. Suppresses the automatic
-    /// return-to-root after publish so the overview can be shown first (its Done button performs
-    /// the actual return). Set when any platform is cross-posted; cleared by the overview / reset.
     @Published var crossPostStatusPending = false
+    /// Owned here (not as local @State on ProcessResultsOverviewView) because the eBay/Etsy
+    /// API cross-post Task that sets this can complete well after that view has already been
+    /// dismissed (showResultsOverview = false runs immediately once publish succeeds and
+    /// there's no web-autofill queue to wait on — the common case for an API-only publish).
+    /// A local @State there would silently discard the error into a torn-down view. Surfaced
+    /// from CrossPostStatusView, which is reliably the next screen shown after any publish.
+    @Published var crossPostError: String? = nil
+    /// Set when Storage/Firestore cleanup fails during `deleteDraftLocallyAndCloud` —
+    /// surfaced as a toast from MainView instead of being silently swallowed, mirroring
+    /// `crossPostError` above.
+    @Published var cleanupError: String? = nil
+    /// Populated just before publishDrafts is called (by ProcessResultsOverviewView).
+    /// Kept in UploadManager so MainView can show CrossPostStatusView globally.
+    @Published var sessionCrossPostItems: [CrossPostSessionItem] = []
+    /// Drives the global CrossPostStatusView sheet in MainView.
+    @Published var showCrossPostStatus = false
 
     // ── Legacy / Pill visibility ─────────────────────────────────────────────
     @Published var isPillVisible = false
     @Published var isProcessPillVisible = false
     @Published var showProgressSheet = false
 
+    // ── Global Mercari cross-post job (shown as pill above tab bar from MainView) ──
+    @Published var globalMercariJob: CrossPostJob? = nil
+    /// Called by MainView's MercariAutoPosterView onDismiss to advance the queue in the originating view.
+    var onMercariJobComplete: (() -> Void)? = nil
+
     // ── Internal tracking ───────────────────────────────────────────────────
     private var activeUploadCount = 0
     private var processTask: Task<Void, Never>?
     private var processingTaskId = UUID()
+    private var publishTaskId = UUID()
+
+    // ── Throttled change notifications (perf) ───────────────────────────────
+    private var lastChangeNotify: Date = .distantPast
+    private var pendingChangeNotify: Task<Void, Never>?
+    private let changeNotifyInterval: TimeInterval = 0.15
+
+    /// Shared by uploadProgress/uploadStatuses/processProgress/processStatuses/
+    /// processCurrentIndex's setters. Coalesces however many ticks land within the window
+    /// into a single objectWillChange, so views like BulkListingOverviewView — which hold
+    /// this object just to call its methods, not to display these properties — don't
+    /// reconstruct their whole body (and the drafts List inside it) on every single tick.
+    private func scheduleThrottledChangeNotify() {
+        guard pendingChangeNotify == nil else { return }
+        let elapsed = Date().timeIntervalSince(lastChangeNotify)
+        let delay = max(0, changeNotifyInterval - elapsed)
+        pendingChangeNotify = Task { @MainActor [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+            guard let self else { return }
+            self.lastChangeNotify = Date()
+            self.objectWillChange.send()
+            self.pendingChangeNotify = nil
+        }
+    }
 
     // ── ETA helper ─────────────────────────────────────────────────────────
     var uploadEtaString: String? {
@@ -111,10 +202,12 @@ class UploadManager: ObservableObject {
     }
 
     /// Removes a photo from the active draft (deselect in picker, or delete in carousel).
+    /// Safe to discard the removed Storage path here — the active draft hasn't started
+    /// its background upload yet, so it never has one.
     func removePhotoFromActiveDraft(assetId: String, modelContext: ModelContext) {
         guard let id = activeDraftID,
               let draft = (try? modelContext.fetch(FetchDescriptor<Item>()))?.first(where: { $0.id == id }) else { return }
-        _ = draft.removePhoto(assetId: assetId)
+        draft.removePhoto(assetId: assetId)
         if draft.sourceAssetIdentifiers.isEmpty {
             deleteDraftLocallyAndCloud(draft: draft, modelContext: modelContext)
             activeDraftID = nil
@@ -125,24 +218,55 @@ class UploadManager: ObservableObject {
     /// Deletes a draft from the local database, Firestore, and deletes uploaded images from Storage.
     func deleteDraftLocallyAndCloud(draft: Item, modelContext: ModelContext) {
         let listingId = draft.firestoreListingId
-        guard let userId = Auth.auth().currentUser?.uid else {
+        let userId = Auth.auth().currentUser?.uid
+        cleanupError = nil
+        // Mark immediately (synchronously) so any in-flight background upload/recognition
+        // Task for this draft (which may be suspended mid-`await` right now) bails out on
+        // its next check instead of touching the model after it's deleted below, and so
+        // list views can exclude it from their next render.
+        deletedDraftIDs.insert(draft.id)
+        Item.deletedIDs.insert(draft.id)
+
+        // Wipe the photo data on the object itself WHILE it's still fully valid — i.e.
+        // before it's actually deleted from the context below. SwiftData's @Model macro
+        // backs property access with Swift's Observation framework, so this mutation is
+        // picked up synchronously by any view reading these properties. That matters
+        // because tracking "this draft is deleted" in an external set (Item.deletedIDs,
+        // above) turned out not to be sufficient on its own: a SwiftUI row can still hold
+        // a stale reference to this exact object (e.g. mid removal-animation) and re-read
+        // ITS properties directly, bypassing any lookup keyed by `id` — and once an object
+        // is truly detached from its context, EVERY property on it becomes unreadable, not
+        // just the externally-stored photosData that was actually crashing (confirmed by
+        // even `id` itself faulting once detached). Clearing sourceAssetIdentifiers here
+        // means every current photo-rendering call site — which all gate on
+        // sourceAssetIdentifiers being non-empty before ever calling image(for:) — simply
+        // has nothing to iterate, so photosData is never touched again for this object,
+        // regardless of whether some other reference to it is still floating around a view.
+        draft.sourceAssetIdentifiers = []
+        draft.photosData = []
+
+        // Defer the actual SwiftData delete + save by one run loop tick — belt-and-braces
+        // on top of the clearing above, so nothing else races the removal animation either.
+        DispatchQueue.main.async { [weak modelContext] in
+            guard let modelContext else { return }
             modelContext.delete(draft)
             try? modelContext.save()
-            return
         }
-        
-        // 1. Delete from SwiftData context
-        modelContext.delete(draft)
-        try? modelContext.save()
-        
-        // 2. Perform background cleanups if uploaded
+
+        guard userId != nil else { return }
+
+        // Perform background cleanups if uploaded. deleteListing itself deletes Storage
+        // photos first, then the Firestore document — so a failed Storage cleanup leaves
+        // the document in place as a retry marker instead of orphaning the photos for good.
         if let listingId = listingId {
-            Task {
+            Task { [weak self] in
                 print("[UploadManager] Cleaning up Cloud files for discarded draft \(listingId)")
-                // Delete photos from Storage
-                try? await StorageService.shared.deleteListingImages(userId: userId, listingId: listingId)
-                // Delete document from Firestore
-                try? await ListingRepository.shared.deleteListing(id: listingId)
+                do {
+                    try await ListingRepository.shared.deleteListing(id: listingId)
+                } catch {
+                    print("[UploadManager] Cleanup failed for \(listingId): \(error)")
+                    self?.cleanupError = "Couldn't fully delete this draft's photos. It may still be using storage — please try deleting it again."
+                }
             }
         }
     }
@@ -194,37 +318,49 @@ class UploadManager: ObservableObject {
         activeUploadCount += 1
         uploadStatuses[draft.id] = .pending
 
+        let draftID = draft.id
+        let assetIdentifiers = draft.sourceAssetIdentifiers
         Task {
-            uploadStatuses[draft.id] = .uploading(0)
+            uploadStatuses[draftID] = .uploading(0)
 
-            print("[UploadManager] Fetching \(draft.sourceAssetIdentifiers.count) images for \(draft.id)...")
-            var images: [UIImage] = []
-            for assetId in draft.sourceAssetIdentifiers {
+            print("[UploadManager] Fetching \(assetIdentifiers.count) images for \(draftID)...")
+            // Paired with assetId (not a bare [UIImage]) so a fetch failure partway through
+            // doesn't shift later images out of sync with the assetId they belong to.
+            var images: [(assetId: String, image: UIImage)] = []
+            for assetId in assetIdentifiers {
+                guard !deletedDraftIDs.contains(draftID) else {
+                    print("[UploadManager] Draft \(draftID) deleted mid-upload — aborting")
+                    return
+                }
                 if let img = draft.image(for: assetId) {
-                    images.append(img)
+                    images.append((assetId, img))
                 } else if let img = await PhotoAsset(identifier: assetId).fullResolutionImage() {
-                    images.append(img)
+                    images.append((assetId, img))
                 } else {
                     print("[UploadManager] WARNING: Could not fetch image for asset \(assetId)")
                 }
             }
-            print("[UploadManager] Fetched \(images.count)/\(draft.sourceAssetIdentifiers.count) images")
+            guard !deletedDraftIDs.contains(draftID) else {
+                print("[UploadManager] Draft \(draftID) deleted mid-upload — aborting before network upload")
+                return
+            }
+            print("[UploadManager] Fetched \(images.count)/\(assetIdentifiers.count) images")
 
-            var photoPaths: [String] = []
-            for (imgIdx, image) in images.enumerated() {
+            var photoPathsByAsset: [String: String] = [:]
+            for (imgIdx, entry) in images.enumerated() {
                 var success = false
                 var attempts = 0
                 let maxAttempts = 5
                 var delaySeconds = 2.0
-                
+
                 while !success && attempts < maxAttempts && !Task.isCancelled {
                     attempts += 1
                     do {
                         print("[UploadManager] Uploading image \(imgIdx+1)/\(images.count) for \(draft.id) (attempt \(attempts))...")
                         let path = try await StorageService.shared.uploadListingImage(
-                            image: image, index: imgIdx, userId: userId, listingId: listingId
+                            image: entry.image, index: imgIdx, userId: userId, listingId: listingId
                         )
-                        photoPaths.append(path)
+                        photoPathsByAsset[entry.assetId] = path
                         uploadStatuses[draft.id] = .uploading(Double(imgIdx + 1) / Double(images.count))
                         recalcUploadProgress()
                         success = true
@@ -239,12 +375,15 @@ class UploadManager: ObservableObject {
                 }
             }
 
-            draft.firebasePhotoPaths = photoPaths
-            try? modelContext.save()
-            print("[UploadManager] Upload complete for \(draft.id): \(photoPaths.count) paths saved")
-
-            let failed = photoPaths.count < images.count
-            uploadStatuses[draft.id] = failed ? .failed : .done
+            let failed = photoPathsByAsset.count < images.count
+            if !deletedDraftIDs.contains(draftID) {
+                draft.firebasePhotoPathsByAsset = photoPathsByAsset
+                try? modelContext.save()
+                print("[UploadManager] Upload complete for \(draftID): \(photoPathsByAsset.count) paths saved")
+            } else {
+                print("[UploadManager] Draft \(draftID) deleted mid-upload — discarding \(photoPathsByAsset.count) uploaded paths")
+            }
+            uploadStatuses[draftID] = failed ? .failed : .done
             activeUploadCount -= 1
             if activeUploadCount <= 0 {
                 isUploadingPhotos = false
@@ -349,7 +488,7 @@ class UploadManager: ObservableObject {
                     print("[UploadManager] Running Gemini for draft \(draft.id)...")
                     let gemini = try await GeminiService.shared.identifyItem(
                         images: Array(images.prefix(3)),
-                        userTitle: draft.userEditedTitle,
+                        userTitle: hasUserTitle ? draft.userEditedTitle : nil,
                         userPrice: draft.userEditedPrice,
                         userDescription: draft.userEditedDescription
                     )
@@ -415,6 +554,7 @@ class UploadManager: ObservableObject {
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             isProcessPillVisible = false
             AppTaskQueue.shared.complete(id: processingTaskId)
+            showProgressSheet = false
             showProcessResults = true
         }
     }
@@ -457,6 +597,7 @@ class UploadManager: ObservableObject {
 
     /// Uploads photos for a draft that missed the background upload (e.g. after app restart).
     /// Uses the pre-generated listing UUID — no Firestore round-trip needed.
+    @discardableResult
     private func uploadPhotosForDraft(_ draft: Item, userId: String, modelContext: ModelContext) async -> [String] {
         if draft.firestoreListingId == nil {
             draft.firestoreListingId = UUID().uuidString
@@ -465,8 +606,9 @@ class UploadManager: ObservableObject {
         let listingId = draft.firestoreListingId!
         print("[UploadManager] Inline upload starting for \(draft.id) → listing \(listingId)")
 
-        var paths: [String] = []
+        var pathsByAsset: [String: String] = draft.firebasePhotoPathsByAsset ?? [:]
         for (idx, assetId) in draft.sourceAssetIdentifiers.enumerated() {
+            if pathsByAsset[assetId] != nil { continue } // already uploaded
             let img: UIImage
             if let localImg = draft.image(for: assetId) {
                 img = localImg
@@ -480,30 +622,48 @@ class UploadManager: ObservableObject {
                 let path = try await StorageService.shared.uploadListingImage(
                     image: img, index: idx, userId: userId, listingId: listingId
                 )
-                paths.append(path)
+                pathsByAsset[assetId] = path
                 print("[UploadManager] Inline uploaded photo \(idx): \(path)")
             } catch {
                 print("[UploadManager] Inline upload failed for photo \(idx): \(error)")
             }
         }
 
-        draft.firebasePhotoPaths = paths
+        draft.firebasePhotoPathsByAsset = pathsByAsset
         try? modelContext.save()
-        return paths
+        return draft.orderedFirebasePhotoPaths
     }
 
     // MARK: – Phase 3: Publish to Firestore
 
     /// Posts finished drafts as active listings. Uploads photos first if they
     /// weren't already uploaded (e.g. app was restarted between phases).
-    func publishDrafts(drafts: [Item], modelContext: ModelContext) {
+    /// `onComplete` fires on the main actor after the publish task finishes (success or
+    /// failure). Callers must use it — not `.onChange(of: isPublishing)` — to sequence
+    /// post-publish work: when photos are already uploaded the task completes in
+    /// milliseconds, so `isPublishing` can flip true→false before SwiftUI renders and
+    /// an `.onChange` observer never sees the transition.
+    func publishDrafts(drafts: [Item], modelContext: ModelContext, onComplete: (() -> Void)? = nil) {
         guard !drafts.isEmpty else { return }
         print("[UploadManager] publishDrafts called for \(drafts.count) items")
         isPublishing = true
         publishError = nil
+        publishTaskId = UUID()
+        let taskId = publishTaskId
+        AppTaskQueue.shared.begin(
+            id: taskId,
+            label: "Publishing \(drafts.count == 1 ? "listing" : "\(drafts.count) listings")",
+            progress: -1,
+            accentColor: .blue,
+            onTap: { [weak self] in self?.showResultsOverview = true }
+        )
 
         Task {
-            defer { isPublishing = false }
+            defer {
+                isPublishing = false
+                AppTaskQueue.shared.complete(id: taskId)
+                onComplete?()
+            }
 
             guard let userId = Auth.auth().currentUser?.uid else {
                 print("[UploadManager] Publish aborted: No authenticated user")
@@ -518,7 +678,7 @@ class UploadManager: ObservableObject {
                 print("[UploadManager] Publishing draft \(draft.id)")
 
                 // Upload photos if background upload didn't complete fully
-                var photoPaths = draft.firebasePhotoPaths ?? []
+                var photoPaths = draft.orderedFirebasePhotoPaths
                 if photoPaths.count < draft.sourceAssetIdentifiers.count {
                     print("[UploadManager] Incomplete photo paths (\(photoPaths.count)/\(draft.sourceAssetIdentifiers.count)) for \(draft.id) — uploading now")
                     photoPaths = await uploadPhotosForDraft(draft, userId: userId, modelContext: modelContext)
@@ -579,6 +739,13 @@ class UploadManager: ObservableObject {
                         // ProcessResultsOverviewView.checkAndStartNextWebJob() deletes when the queue empties.
                         publishedPendingDeletionIDs.insert(draft.id)
                     } else {
+                        // See deleteDraftLocallyAndCloud — mark and clear before deleting so
+                        // no stale view reference can read photosData after this point. Only
+                        // safe here because this is the branch where nothing else (no
+                        // pending cross-post job) still needs the photos.
+                        Item.deletedIDs.insert(draft.id)
+                        draft.sourceAssetIdentifiers = []
+                        draft.photosData = []
                         modelContext.delete(draft)
                     }
                     // This draft is now a live listing — drop it from the session set so the
@@ -597,12 +764,9 @@ class UploadManager: ObservableObject {
 
             if publishedCount > 0 {
                 showProcessResults = false
-                // Don't bounce home if a cross-post status overview is owed (web jobs pending, or
-                // an API-only cross-post like eBay). The results view shows the overview, whose
-                // Done button returns to root.
-                if pendingAutofillJobsCount == 0 && !crossPostStatusPending {
-                    shouldReturnToRoot = true
-                }
+                // Transition to CrossPostStatusView is handled by ProcessResultsOverviewView
+                // via the onComplete callback (runPublishContinuationIfReady). shouldReturnToRoot
+                // is set when the user taps Done in CrossPostStatusView (onDone closure).
             } else {
                 publishError = "Could not publish listings. Check your connection and try again."
             }
@@ -632,7 +796,11 @@ class UploadManager: ObservableObject {
         isProcessing = false
         isPublishing = false
         showProcessResults = false
+        showResultsOverview = false
+        sessionCrossPostItems = []
+        showCrossPostStatus = false
         publishError = nil
+        crossPostError = nil
         uploadProgress = 0
         uploadStatuses.removeAll()
         uploadedAssetIDs.removeAll()
@@ -645,6 +813,8 @@ class UploadManager: ObservableObject {
         sessionDraftIDs.removeAll()
         activeDraftID = nil
         crossPostStatusPending = false
+        globalMercariJob = nil
+        onMercariJobComplete = nil
     }
 
     // MARK: – On-device Vision Recognition
@@ -652,6 +822,7 @@ class UploadManager: ObservableObject {
     func runLocalRecognition(draft: Item, modelContext: ModelContext) {
         guard let assetId = draft.sourceAssetIdentifiers.first else { return }
         let draftRef = draft
+        let draftID = draft.id
         Task {
             let image: UIImage
             if let localImg = draftRef.image(for: assetId) {
@@ -665,6 +836,10 @@ class UploadManager: ObservableObject {
             let title = await Task.detached(priority: .userInitiated) {
                 UploadManager.generateVisionTitle(cgImage: cgImage)
             }.value
+            guard !deletedDraftIDs.contains(draftID) else {
+                print("[UploadManager] Draft \(draftID) deleted mid-recognition — discarding vision title")
+                return
+            }
             draftRef.visionTitle = title
             try? modelContext.save()
         }

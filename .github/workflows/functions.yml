@@ -1,0 +1,55 @@
+name: Functions CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths: [wonni/functions/**]
+  pull_request:
+    branches: [main]
+    paths: [wonni/functions/**]
+
+jobs:
+  lint-and-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: wonni/functions
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: wonni/functions/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+
+  deploy:
+    name: Deploy to Firebase
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    defaults:
+      run:
+        working-directory: wonni
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - run: npm ci
+        working-directory: wonni/functions
+
+      - run: npm install -g firebase-tools
+
+      - run: firebase deploy --only functions --project wonni-app
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}

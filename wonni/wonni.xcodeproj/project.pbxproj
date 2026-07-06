@@ -12,6 +12,7 @@
 		4DE0F3AA27864C66A4EC49AB /* Sale.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7EBEECFD9B24F3D971DDEA2 /* Sale.swift */; };
 		58027310287C4A0F94DF7BCF /* UploadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76A8453ED0904B9D853B98E5 /* UploadManager.swift */; };
 		60A7C95275BB4BCCAA8FA838 /* RecordSaleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */; };
+		BBF4BEA4D58D4A4DB40131AF /* AddSaleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59AA822FA7114B56B0993C9A /* AddSaleView.swift */; };
 		6134E14E2FB64DBD007C3979 /* BulkEditSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6134E14D2FB64DBD007C3979 /* BulkEditSheet.swift */; };
 		6134E1502FB76C1A007C3979 /* ProcessProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6134E14F2FB76C1A007C3979 /* ProcessProgressView.swift */; };
 		6134E1532FB77702007C3979 /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = 6134E1522FB77702007C3979 /* FirebaseFunctions */; };
@@ -82,6 +83,7 @@
 		00EE85F19AD747589FB21EB0 /* UploadPillView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadPillView.swift; sourceTree = "<group>"; };
 		09C400D2D0AB7F825F735BF1 /* BulkImportManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BulkImportManager.swift; sourceTree = "<group>"; };
 		209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordSaleSheet.swift; sourceTree = "<group>"; };
+		59AA822FA7114B56B0993C9A /* AddSaleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddSaleView.swift; sourceTree = "<group>"; };
 		6134E14C2FB3AF08007C3979 /* wonni.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = wonni.entitlements; sourceTree = "<group>"; };
 		6134E14D2FB64DBD007C3979 /* BulkEditSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkEditSheet.swift; sourceTree = "<group>"; };
 		6134E14F2FB76C1A007C3979 /* ProcessProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessProgressView.swift; sourceTree = "<group>"; };
@@ -260,6 +262,7 @@
 				6192AA5F2D7F583E00EC2EFA /* ProfileView.swift */,
 				6134E1572FDCB206007C3979 /* PublishedPhotoModal.swift */,
 				209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */,
+				59AA822FA7114B56B0993C9A /* AddSaleView.swift */,
 				93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */,
 				61BCCD062D7B9A710037E4B9 /* SearchBarView.swift */,
 				6192AA5B2D7F582100EC2EFA /* SearchView.swift */,
@@ -429,6 +432,7 @@
 				4DE0F3AA27864C66A4EC49AB /* Sale.swift in Sources */,
 				1A589EC58F7C4BA78F4A2708 /* SaleRepository.swift in Sources */,
 				60A7C95275BB4BCCAA8FA838 /* RecordSaleSheet.swift in Sources */,
+				BBF4BEA4D58D4A4DB40131AF /* AddSaleView.swift in Sources */,
 				EC4CE9E74B3D4A44A464E4A6 /* SalesDashboardView.swift in Sources */,
 				9944CB339CA5802F7C51CEEB /* URLExtractor.swift in Sources */,
 				E638B2296070470221FCA204 /* ImportListingSheet.swift in Sources */,

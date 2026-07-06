@@ -499,21 +499,45 @@ struct DraftBulkEditSheet: View {
     private var allDraftsEmpty: Bool {
         !items.isEmpty && items.allSatisfy { !hasMeaningfulTitle($0) }
     }
+    /// True when the selection is mixed: at least one draft has a meaningful title and at least
+    /// one does not. In this case, both set-fields and prepend/append fields are shown.
+    private var hasMixedEmptiness: Bool {
+        let hasEmpty = items.contains { !hasMeaningfulTitle($0) }
+        let hasFilled = items.contains { hasMeaningfulTitle($0) }
+        return hasEmpty && hasFilled
+    }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    if allDraftsEmpty {
+                if allDraftsEmpty {
+                    // All drafts are empty: show direct-set fields only.
+                    Section {
                         setTextRow(label: "Title", placeholder: "Title for all", text: $titleSet, focus: .titlePrepend)
                         setTextRow(label: "Desc.", placeholder: "Description for all", text: $descriptionSet, focus: .descPrepend)
-                    } else {
+                    } header: { Text("Title & Description") }
+                } else if hasMixedEmptiness {
+                    // Mixed selection: show both sections — set-fields apply to empty drafts,
+                    // prepend/append fields apply to drafts that already have content.
+                    Section {
+                        setTextRow(label: "Title", placeholder: "Title (for untitled)", text: $titleSet, focus: .titlePrepend)
+                        setTextRow(label: "Desc.", placeholder: "Desc. (for empty)", text: $descriptionSet, focus: .descPrepend)
+                    } header: { Text("Set (applies to untitled drafts)") }
+                    Section {
                         dynamicTextRow(prepend: $titlePrepend, label: "Title", append: $titleAppend,
                                        focus1: .titlePrepend, focus2: .titleAppend)
                         dynamicTextRow(prepend: $descriptionPrepend, label: "Desc.", append: $descriptionAppend,
                                        focus1: .descPrepend, focus2: .descAppend)
-                    }
-                } header: { Text(allDraftsEmpty ? "Title & Description" : "Text Modifications") }
+                    } header: { Text("Modify (applies to titled drafts)") }
+                } else {
+                    // All drafts have titles: show prepend/append fields only.
+                    Section {
+                        dynamicTextRow(prepend: $titlePrepend, label: "Title", append: $titleAppend,
+                                       focus1: .titlePrepend, focus2: .titleAppend)
+                        dynamicTextRow(prepend: $descriptionPrepend, label: "Desc.", append: $descriptionAppend,
+                                       focus1: .descPrepend, focus2: .descAppend)
+                    } header: { Text("Text Modifications") }
+                }
 
                 Section {
                     VStack(spacing: 12) {
@@ -643,25 +667,28 @@ struct DraftBulkEditSheet: View {
     }
 
     private var hasChanges: Bool {
-        let textChanged = allDraftsEmpty
-            ? (!titleSet.isEmpty || !descriptionSet.isEmpty)
-            : (!titlePrepend.isEmpty || !titleAppend.isEmpty ||
-               !descriptionPrepend.isEmpty || !descriptionAppend.isEmpty)
+        // In mixed mode (some drafts have titles, some don't) either the set-fields or the
+        // prepend/append fields may be used depending on each item, so check all of them.
+        let textChanged = !titleSet.isEmpty || !descriptionSet.isEmpty ||
+            !titlePrepend.isEmpty || !titleAppend.isEmpty ||
+            !descriptionPrepend.isEmpty || !descriptionAppend.isEmpty
         return (priceAdjustmentMode != .none && priceAdjustmentValue != nil) ||
             textChanged ||
             selectedCondition != nil || selectedShipping != .unchanged
     }
 
     private func applyBulkEdit() {
-        let setMode = allDraftsEmpty
         for item in items {
-            if setMode {
-                // Empty drafts: set the title/description directly on every selected draft.
+            // Per-item mode decision: use set-directly for drafts that have no meaningful
+            // title/description, and prepend/append for drafts that already have content.
+            // This correctly handles mixed selections (some empty, some not).
+            let itemHasTitle = hasMeaningfulTitle(item)
+            if !itemHasTitle {
+                // Draft has no real title yet — apply the "set" values directly.
                 let t = titleSet.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !t.isEmpty { item.userEditedTitle = String(t.prefix(140)) }
-                if !descriptionSet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    item.userEditedDescription = descriptionSet
-                }
+                let d = descriptionSet.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !d.isEmpty { item.userEditedDescription = d }
             } else {
                 let currentTitle = item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? ""
                 var newTitle = currentTitle

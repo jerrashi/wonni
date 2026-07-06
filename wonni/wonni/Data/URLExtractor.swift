@@ -123,14 +123,34 @@ class URLExtractor: NSObject, ObservableObject {
                 for (let img of imgElements) {
                     if (img.src) urls.push(img.src);
                 }
-                
+
                 if (urls.length === 0) {
                     let fallbacks = document.querySelectorAll('.image-carousel img, [data-testid="Carousel"] img');
                     for (let img of fallbacks) {
                         if (img.src) urls.push(img.src);
                     }
                 }
-                
+
+                // Broader fallback for sold items — Mercari uses different containers on sold pages
+                if (urls.length === 0) {
+                    let altImgs = document.querySelectorAll('[data-testid*="Item"] img, [data-testid*="Photo"] img, [data-testid*="image"] img');
+                    for (let img of altImgs) {
+                        if (img.src && !img.src.includes('avatar') && !img.src.includes('profile')) {
+                            urls.push(img.src);
+                        }
+                    }
+                }
+
+                // Fallback: any Mercari CDN image on the page
+                if (urls.length === 0) {
+                    let allImgs = document.querySelectorAll('img');
+                    for (let img of allImgs) {
+                        if (img.src && (img.src.includes('mercdn.net') || img.src.includes('mercari-images'))) {
+                            urls.push(img.src);
+                        }
+                    }
+                }
+
                 // Fallback: og:image
                 if (urls.length === 0) {
                     let ogImg = document.querySelector('meta[property="og:image"]');

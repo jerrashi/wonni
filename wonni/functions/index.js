@@ -124,6 +124,10 @@ exports.etsyGetReceiptTakeHome = etsyGetReceiptTakeHome;
 const { syncSales } = require("./sale_poller");
 exports.syncSales = syncSales;
 
+// Saved-search alerts — notifies users in-app when a new listing matches their saved search
+const { notifySavedSearchMatches } = require("./saved_search_notify");
+exports.notifySavedSearchMatches = notifySavedSearchMatches;
+
 // eBay OAuth Redirect Intermediary (legacy — kept for fallback)
 exports.ebayRedirect = onRequest({ cors: true }, (req, res) => {
   const code = req.query.code;

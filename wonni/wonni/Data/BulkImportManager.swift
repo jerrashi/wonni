@@ -21,6 +21,16 @@ struct BulkImportJob: Identifiable {
     var status: BulkImportStatus = .pending
 }
 
+enum BulkImportError: Error, LocalizedError {
+    case noPhotosFetched
+
+    var errorDescription: String? {
+        switch self {
+        case .noPhotosFetched: return "Could not fetch any photos for this listing."
+        }
+    }
+}
+
 @MainActor
 class BulkImportManager: ObservableObject {
     @Published var jobs: [BulkImportJob] = []
@@ -100,6 +110,13 @@ class BulkImportManager: ObservableObject {
                       image: image, index: i, userId: userId, listingId: listingId
                   ) else { continue }
             photoPaths.append(path)
+        }
+
+        // Never write a listing with no photos — the feed/detail views render coverPhotoPath
+        // as a plain placeholder with no retry when it's nil, so a partial scrape failure here
+        // would otherwise silently produce a permanently photo-less listing.
+        guard !photoPaths.isEmpty else {
+            throw BulkImportError.noPhotosFetched
         }
 
         // Extract Mercari item ID from URL

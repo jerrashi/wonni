@@ -23,18 +23,26 @@ struct ActiveDraftCarouselView: View {
     @State private var showingDraftHistory = false
     @State private var draggedAssetId: String? = nil
     @State private var stackBouncing = false
+    @State private var isTrashTargeted = false
 
     // Active draft — the Item currently being built
     private var activeDraft: Item? {
-        guard let id = uploadManager.activeDraftID else { return nil }
+        guard let id = uploadManager.activeDraftID, !uploadManager.deletedDraftIDs.contains(id) else { return nil }
         return allItems.first { $0.id == id }
     }
 
     // Committed drafts — exclude the active draft, sorted newest first
     private var committedDrafts: [Item] {
         let activeID = uploadManager.activeDraftID
+        // Exclude drafts mid-deletion — see UploadManager.deleteDraftLocallyAndCloud /
+        // Item.deletedIDs. This carousel is always visible on the camera screen and is
+        // driven by its own independent @Query, so it needs the same exclusion the other
+        // draft-list views apply.
         return allItems
-            .filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && $0.id != activeID }
+            .filter {
+                $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && $0.id != activeID
+                    && !uploadManager.deletedDraftIDs.contains($0.id)
+            }
             .sorted { $0.createdAt > $1.createdAt }
     }
 
@@ -75,29 +83,42 @@ struct ActiveDraftCarouselView: View {
                     .padding(.vertical, 8)
                 }
 
-                // ── "+" commit button ───────────────────────────────────
+                // ── "+" commit button, replaced by a trash drop target while dragging ──
                 let hasActive = activeDraft?.sourceAssetIdentifiers.isEmpty == false
-                Button {
-                    guard hasActive else { return }
-                    withAnimation(.easeIn(duration: 0.18)) {
-                        uploadManager.commitActiveDraft(modelContext: modelContext)
-                        onCommit?()
-                        stackBouncing = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                            stackBouncing = false
-                        }
-                    }
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(.white)
+                if draggedAssetId != nil {
+                    Image(systemName: isTrashTargeted ? "trash.circle.fill" : "trash.circle")
+                        .font(.system(size: 30))
+                        .foregroundStyle(.red)
+                        .scaleEffect(isTrashTargeted ? 1.15 : 1.0)
+                        .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isTrashTargeted)
                         .frame(width: 44, height: 44)
-                        .background(hasActive ? Color.blue : Color.gray.opacity(0.35))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .padding(.trailing, 12)
+                        .onDrop(of: [.text], isTargeted: $isTrashTargeted) { _ in
+                            deleteDraggedPhoto()
+                        }
+                } else {
+                    Button {
+                        guard hasActive else { return }
+                        withAnimation(.easeIn(duration: 0.18)) {
+                            uploadManager.commitActiveDraft(modelContext: modelContext)
+                            onCommit?()
+                            stackBouncing = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                                stackBouncing = false
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(width: 44, height: 44)
+                            .background(hasActive ? Color.blue : Color.gray.opacity(0.35))
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .disabled(!hasActive)
+                    .padding(.trailing, 12)
+                    .animation(.easeInOut(duration: 0.15), value: hasActive)
                 }
-                .disabled(!hasActive)
-                .padding(.trailing, 12)
-                .animation(.easeInOut(duration: 0.15), value: hasActive)
             }
             .sheet(isPresented: $showingDraftHistory) {
                 DraftHistoryModal(photoCollection: PhotoCollection(smartAlbum: .smartAlbumUserLibrary))
@@ -143,6 +164,14 @@ struct ActiveDraftCarouselView: View {
             draggedAssetId: $draggedAssetId,
             modelContext: modelContext
         ))
+    }
+
+    @discardableResult
+    private func deleteDraggedPhoto() -> Bool {
+        guard let assetId = draggedAssetId else { return false }
+        uploadManager.removePhotoFromActiveDraft(assetId: assetId, modelContext: modelContext)
+        draggedAssetId = nil
+        return true
     }
 }
 

@@ -68,7 +68,29 @@ wonni/functions/node_modules/
 
 # Claude Code local settings
 .claude/settings.local.json
-.claude/settings.local.json
-.claude/settings.local.json
-.claude/settings.local.json
-.claude/settings.local.json
+.claude/worktrees/
+
+# macOS
+**/.DS_Store
+
+# Build logs and Firebase cache
+wonni/*.log
+wonni/firebase-debug*.log
+wonni/.firebase/
+
+# Design system — generated artifacts (re-created by /design-sync re-run)
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+design-system/node_modules/
+design-system/dist/
+
+# Local-only agent/dev-workflow docs — not for the public repo
+/AGENT_TASKS.md
+/CLAUDE.md
+/LEAD_AGENT_PROMPT.md
+/LEAD_AGENT_SETUP.md
+/MERCARI_PHOTO_SYNC_ANALYSIS.md
+config.bat

@@ -33,9 +33,11 @@ class SaleRepository: ObservableObject {
             .whereField("userId", isEqualTo: userId)
             .order(by: "soldAt", descending: true)
             .getDocuments()
-        return snap.documents
+        let sales = snap.documents
             .compactMap { try? $0.data(as: Sale.self) }
             .filter { !($0.isDeleted == true) }
+
+        return sales
     }
 
     func fetchHiddenSales() async throws -> [Sale] {
@@ -70,6 +72,13 @@ class SaleRepository: ObservableObject {
         ])
     }
 
+    // Hard-deletes a sale doc. Used for permanently purging malformed/incorrect imports —
+    // unlike hideSale, this removes the platformOrderId from knownMercariIds entirely,
+    // so the item can be re-scanned and re-imported on the next sync.
+    func permanentlyDeleteSale(id: String) async throws {
+        try await db.collection(col).document(id).delete()
+    }
+
     func addSale(_ sale: Sale) async throws {
         guard let userId = Auth.auth().currentUser?.uid else {
             throw NSError(domain: "SaleRepository", code: 401,
@@ -79,6 +88,8 @@ class SaleRepository: ObservableObject {
         s.userId = userId
         s.createdAt = Timestamp(date: Date())
         s.updatedAt = Timestamp(date: Date())
+
         try db.collection(col).document().setData(from: s)
+        print("[SaleRepository.addSale] Sale saved successfully")
     }
 }
