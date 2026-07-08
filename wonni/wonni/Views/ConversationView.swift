@@ -14,8 +14,6 @@ struct ConversationView: View {
     @EnvironmentObject private var authManager: AuthManager
     @State private var messages: [Message] = []
     @State private var messageText = ""
-    @State private var showOfferSheet = false
-    @State private var showRoleActionAlert = false
     @State private var listener: ListenerRegistration?
 
     private var currentUserId: String { authManager.currentUser?.uid ?? "" }
@@ -40,17 +38,29 @@ struct ConversationView: View {
         .toolbar(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                HStack {
+                HStack(spacing: 8) {
                     ZStack {
                         Circle().fill(Color.blue.opacity(0.12)).frame(width: 28, height: 28)
-                        Text(otherProfile?.displayName?.prefix(1).uppercased() ?? String(otherUserId.prefix(1)).uppercased())
-                            .font(.caption2.bold()).foregroundStyle(.blue)
+                        if let urlString = otherProfile?.photoURL, let url = URL(string: urlString) {
+                            AsyncImage(url: url) { image in
+                                image.resizable().scaledToFill()
+                            } placeholder: {
+                                ProgressView()
+                            }
+                            .frame(width: 28, height: 28)
+                            .clipShape(Circle())
+                        } else {
+                            Text(otherProfile?.displayName?.prefix(1).uppercased() ?? String(otherUserId.prefix(1)).uppercased())
+                                .font(.caption2.bold()).foregroundStyle(.blue)
+                        }
                     }
                     VStack(alignment: .leading, spacing: 0) {
                         Text(otherProfile?.displayName ?? "User")
                             .font(.subheadline.bold())
-                        Text(conversation.snapshotTitle ?? "Listing")
-                            .font(.caption2).foregroundStyle(.secondary)
+                        if let username = otherProfile?.username {
+                            Text("@\(username)")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
@@ -60,18 +70,6 @@ struct ConversationView: View {
             otherProfile = try? await UserRepository.shared.fetchProfile(uid: otherUserId)
         }
         .onDisappear { listener?.remove() }
-        .alert("Coming Soon", isPresented: $showRoleActionAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("This feature is coming soon.")
-        }
-        .sheet(isPresented: $showOfferSheet) {
-            MakeOfferSheet(currentPrice: conversation.snapshotPrice) { amount in
-                Task { try? await ConversationRepository.shared.sendOffer(
-                    conversationId: conversationId, amount: amount, senderId: currentUserId
-                )}
-            }
-        }
     }
 
     // MARK: Listing header
@@ -133,43 +131,6 @@ struct ConversationView: View {
 
     private var inputBar: some View {
         HStack(spacing: 10) {
-            if !isGeneralConversation {
-                if isBuyer {
-                    Button { showOfferSheet = true } label: {
-                        Text("Offer")
-                            .font(.subheadline.weight(.medium))
-                            .padding(.horizontal, 14).padding(.vertical, 8)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 20)
-                                    .strokeBorder(Color.primary.opacity(0.25), lineWidth: 1)
-                            )
-                    }
-                    .buttonStyle(.plain)
-
-                    Button { showRoleActionAlert = true } label: {
-                        Text("Received")
-                            .font(.subheadline.weight(.medium))
-                            .padding(.horizontal, 14).padding(.vertical, 8)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 20)
-                                    .strokeBorder(Color.primary.opacity(0.25), lineWidth: 1)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    Button { showRoleActionAlert = true } label: {
-                        Text("Shipped")
-                            .font(.subheadline.weight(.medium))
-                            .padding(.horizontal, 14).padding(.vertical, 8)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 20)
-                                    .strokeBorder(Color.primary.opacity(0.25), lineWidth: 1)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
             TextField("Message...", text: $messageText, axis: .vertical)
                 .lineLimit(1...4)
                 .padding(.horizontal, 12).padding(.vertical, 8)
