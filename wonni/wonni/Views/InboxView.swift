@@ -10,12 +10,19 @@ enum InboxFilter: String, CaseIterable {
     case all      = "All"
     case buying   = "Buyers"
     case selling  = "Sellers"
+    case general  = "General"
     case search   = "Search"
     case unread   = "Unread"
     case offers   = "Offers"
 }
 
-/// Unifies conversations and saved-search match notifications into one recency-sorted feed.
+enum InboxSort: String, CaseIterable {
+    case recent = "Recent"
+    case item   = "Item"
+    case user   = "User"
+}
+
+/// Unifies conversations and saved-search match notifications into one feed.
 private enum InboxItem: Identifiable {
     case conversation(Conversation)
     case searchMatch(SearchMatchNotification)
@@ -33,6 +40,25 @@ private enum InboxItem: Identifiable {
         case .searchMatch(let n):  return n.createdAt.dateValue()
         }
     }
+
+    /// "Item" sort key — the listing title either side of the feed is about.
+    var titleKey: String {
+        switch self {
+        case .conversation(let c): return c.snapshotTitle ?? ""
+        case .searchMatch(let n):  return n.listingTitle ?? ""
+        }
+    }
+
+    /// "User" sort key — the other participant's name. Notifications have no
+    /// counterpart user, so they sort to the front and keep insertion order among themselves.
+    func userKey(currentUserId: String) -> String {
+        switch self {
+        case .conversation(let c):
+            return c.participantDisplayNames?[c.buyerId == currentUserId ? c.sellerId : c.buyerId] ?? ""
+        case .searchMatch:
+            return ""
+        }
+    }
 }
 
 struct InboxView: View {
@@ -41,35 +67,62 @@ struct InboxView: View {
     @State private var conversations: [Conversation] = []
     @State private var searchNotifications: [SearchMatchNotification] = []
     @State private var selectedFilter: InboxFilter = .all
+    @State private var selectedSort: InboxSort = .recent
     @State private var convListener: ListenerRegistration?
     @State private var notifListener: ListenerRegistration?
 
     private var currentUserId: String { authManager.currentUser?.uid ?? "" }
 
     private var merged: [InboxItem] {
-        let items: [InboxItem] = conversations.map { .conversation($0) } + searchNotifications.map { .searchMatch($0) }
-        return items.sorted { $0.sortDate > $1.sortDate }
+        let uid = currentUserId
+        let visibleConversations = conversations.filter { !($0.deletedBy ?? []).contains(uid) }
+        return visibleConversations.map { .conversation($0) } + searchNotifications.map { .searchMatch($0) }
     }
 
     private var filtered: [InboxItem] {
+        let uid = currentUserId
+        let byFilter: [InboxItem]
         switch selectedFilter {
         case .all:
-            return merged
+            byFilter = merged
         case .buying:
-            return merged.filter { if case .conversation(let c) = $0 { return c.buyerId == currentUserId }; return false }
+            byFilter = merged.filter {
+                if case .conversation(let c) = $0 { return c.buyerId == uid && !c.isGeneralConversation }
+                return false
+            }
         case .selling:
-            return merged.filter { if case .conversation(let c) = $0 { return c.sellerId == currentUserId }; return false }
+            byFilter = merged.filter {
+                if case .conversation(let c) = $0 { return c.sellerId == uid && !c.isGeneralConversation }
+                return false
+            }
+        case .general:
+            byFilter = merged.filter {
+                if case .conversation(let c) = $0 { return c.isGeneralConversation }
+                return false
+            }
         case .search:
-            return merged.filter { if case .searchMatch = $0 { return true }; return false }
+            byFilter = merged.filter { if case .searchMatch = $0 { return true }; return false }
         case .unread:
-            return merged.filter {
+            byFilter = merged.filter {
                 switch $0 {
-                case .conversation(let c): return c.unreadCount(for: currentUserId) > 0
+                case .conversation(let c): return c.unreadCount(for: uid) > 0
                 case .searchMatch(let n):  return !n.isRead
                 }
             }
         case .offers:
-            return merged.filter { if case .conversation(let c) = $0 { return c.hasActiveOffer }; return false }
+            byFilter = merged.filter {
+                if case .conversation(let c) = $0 { return c.hasActiveOffer }
+                return false
+            }
+        }
+
+        switch selectedSort {
+        case .recent:
+            return byFilter.sorted { $0.sortDate > $1.sortDate }
+        case .item:
+            return byFilter.sorted { $0.titleKey < $1.titleKey }
+        case .user:
+            return byFilter.sorted { $0.userKey(currentUserId: uid) < $1.userKey(currentUserId: uid) }
         }
     }
 
@@ -94,21 +147,43 @@ struct InboxView: View {
     // MARK: Filter bar
 
     private var filterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(InboxFilter.allCases, id: \.self) { filter in
-                    Button(filter.rawValue) { selectedFilter = filter }
-                        .font(.subheadline.weight(selectedFilter == filter ? .semibold : .regular))
-                        .foregroundStyle(selectedFilter == filter ? .white : .primary)
-                        .padding(.horizontal, 14).padding(.vertical, 7)
-                        .background(
-                            selectedFilter == filter ? Color.primary : Color.secondary.opacity(0.1),
-                            in: Capsule()
-                        )
-                        .animation(.easeInOut(duration: 0.15), value: selectedFilter)
+        HStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(InboxFilter.allCases, id: \.self) { filter in
+                        Button(filter.rawValue) { selectedFilter = filter }
+                            .font(.subheadline.weight(selectedFilter == filter ? .semibold : .regular))
+                            .foregroundStyle(selectedFilter == filter ? .white : .primary)
+                            .padding(.horizontal, 14).padding(.vertical, 7)
+                            .background(
+                                selectedFilter == filter ? Color.primary : Color.secondary.opacity(0.1),
+                                in: Capsule()
+                            )
+                            .animation(.easeInOut(duration: 0.15), value: selectedFilter)
+                    }
                 }
+                .padding(.horizontal, 16).padding(.vertical, 10)
             }
-            .padding(.horizontal, 16).padding(.vertical, 10)
+
+            Menu {
+                ForEach(InboxSort.allCases, id: \.self) { sort in
+                    Button {
+                        selectedSort = sort
+                    } label: {
+                        if selectedSort == sort {
+                            Label(sort.rawValue, systemImage: "checkmark")
+                        } else {
+                            Text(sort.rawValue)
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+            }
+            .padding(.trailing, 4)
         }
     }
 
@@ -121,6 +196,39 @@ struct InboxView: View {
                 case .conversation(let conversation):
                     NavigationLink(destination: ConversationView(conversation: conversation)) {
                         ConversationRow(conversation: conversation, currentUserId: currentUserId)
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            Task {
+                                try? await ConversationRepository.shared.deleteConversation(
+                                    conversationId: conversation.id ?? "", userId: currentUserId)
+                            }
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                        if conversation.unreadCount(for: currentUserId) > 0 {
+                            Button {
+                                Task {
+                                    try? await ConversationRepository.shared.markAsRead(
+                                        conversationId: conversation.id ?? "", userId: currentUserId)
+                                }
+                            } label: {
+                                Label("Mark Read", systemImage: "envelope.open")
+                            }
+                            .tint(.blue)
+                        } else {
+                            Button {
+                                Task {
+                                    try? await ConversationRepository.shared.markAsUnread(
+                                        conversationId: conversation.id ?? "", userId: currentUserId)
+                                }
+                            } label: {
+                                Label("Mark Unread", systemImage: "envelope.badge")
+                            }
+                            .tint(.blue)
+                        }
                     }
                 case .searchMatch(let notification):
                     Button {
@@ -176,6 +284,12 @@ private struct ConversationRow: View {
     let currentUserId: String
 
     private var unread: Int { conversation.unreadCount(for: currentUserId) }
+    private var isBuyer: Bool { conversation.buyerId == currentUserId }
+
+    private var roleBadge: (label: String, color: Color) {
+        if conversation.isGeneralConversation { return ("General", .purple) }
+        return isBuyer ? ("Buying", .blue) : ("Selling", .green)
+    }
 
     private var timeText: String {
         guard let date = conversation.lastMessageAt?.dateValue() else { return "" }
@@ -203,9 +317,17 @@ private struct ConversationRow: View {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(conversation.snapshotTitle ?? "Listing")
-                    .font(.subheadline.weight(unread > 0 ? .semibold : .medium))
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Text(conversation.snapshotTitle ?? "Listing")
+                        .font(.subheadline.weight(unread > 0 ? .semibold : .medium))
+                        .lineLimit(1)
+                    Text(roleBadge.label)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(roleBadge.color)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(roleBadge.color.opacity(0.1), in: Capsule())
+                        .layoutPriority(1)
+                }
                 if let last = conversation.lastMessage {
                     Text(last)
                         .font(.caption)
