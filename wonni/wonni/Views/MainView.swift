@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import SwiftData
 import Photos
 import FirebaseFunctions
 import FirebaseFirestore
@@ -15,6 +16,7 @@ struct MainView: View {
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var bulkImportManager: BulkImportManager
     @EnvironmentObject var mercariSyncManager: MercariSyncManager
+    @Environment(\.modelContext) private var modelContext
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
 
     var body: some View {
@@ -100,6 +102,19 @@ struct MainView: View {
             }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: uploadManager.globalMercariJob?.id)
+        // Facebook cross-post — unlike Mercari, needs a visible sheet (no headless pill).
+        // Lives at MainView root (not Review & Publish) so the queue keeps advancing even
+        // if the user already dismissed Review & Publish (github issue #45).
+        .sheet(item: $uploadManager.activeAutofillJob, onDismiss: {
+            uploadManager.checkAndStartNextWebJob(modelContext: modelContext)
+        }) { job in
+            CrossPostContainerView(
+                platformName: "Facebook Marketplace",
+                listingTitle: job.title,
+                listingDescription: job.description,
+                listingPrice: job.price
+            )
+        }
         .sheet(isPresented: $uploadManager.showCrossPostStatus) {
             NavigationStack {
                 CrossPostStatusView(
@@ -540,6 +555,7 @@ struct SoldOnMercariHandlerSheet: View {
     @State private var step: Step = .qtyConfirm
     @State private var effectiveQty: Int
     @State private var isWorking = false
+    @State private var isCheckingExistingSale = true
     @State private var errorMessage: String? = nil
     @Environment(\.dismiss) private var dismiss
 
@@ -571,7 +587,11 @@ struct SoldOnMercariHandlerSheet: View {
 
             Divider()
 
-            if isWorking {
+            if isCheckingExistingSale {
+                Spacer()
+                ProgressView()
+                Spacer()
+            } else if isWorking {
                 Spacer()
                 ProgressView("Updating...")
                 Spacer()
@@ -592,6 +612,24 @@ struct SoldOnMercariHandlerSheet: View {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss(); onDone() }
             }
+        }
+        .task { await checkExistingSale() }
+    }
+
+    // If a Mercari Sale already exists for this listing, SaleRepository.addSale's shared
+    // decrement hook already ran decrementAndCascade for it — asking "was this already
+    // counted?" again risks the user answering "Subtract 1 now" and double-decrementing.
+    // Skip straight to the relist-vs-out-of-stock decision, mirroring the "Already counted"
+    // branch's own logic (github issue #50).
+    private func checkExistingSale() async {
+        defer { isCheckingExistingSale = false }
+        guard let id = listing.id else { return }
+        guard await SaleRepository.shared.hasSale(listingId: id, platform: "mercari") else { return }
+        effectiveQty = listing.quantity ?? 1
+        if effectiveQty > 0 {
+            step = .relistOrOut
+        } else {
+            dismiss(); onDone()
         }
     }
 

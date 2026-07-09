@@ -1836,8 +1836,6 @@ struct ProcessResultsOverviewView: View {
     @State private var lastFocusMoveDelta = 1
 
     @State private var showPublishConfirmation = false
-    @State private var webAutofillQueue: [CrossPostJob] = []
-    @State private var activeAutofillJob: CrossPostJob? = nil
     /// eBay/Etsy cross-posts deferred until publishing completes, ensuring the
     /// Firestore listing document exists before the Cloud Function tries to read it.
     /// Stores title for error messages since the SwiftData Item may be deleted by then.
@@ -1991,17 +1989,7 @@ struct ProcessResultsOverviewView: View {
         }) {
             publishConfirmationSheetContent
         }
-        .sheet(item: $activeAutofillJob, onDismiss: {
-            checkAndStartNextWebJob()
-        }) { job in
-            CrossPostContainerView(
-                platformName: "Facebook Marketplace",
-                listingTitle: job.title,
-                listingDescription: job.description,
-                listingPrice: job.price
-            )
-        }
-        .interactiveDismissDisabled(uploadManager.isPublishing || activeAutofillJob != nil)
+        .interactiveDismissDisabled(uploadManager.isPublishing || uploadManager.activeAutofillJob != nil)
     }
     
     @ViewBuilder private var publishConfirmationSheetContent: some View {
@@ -2017,12 +2005,13 @@ struct ProcessResultsOverviewView: View {
                             price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
                             listingId: item.firestoreListingId,
                             item: item,
-                            buyerPaysShipping: item.buyerPaysShipping
+                            buyerPaysShipping: item.buyerPaysShipping,
+                            condition: item.condition ?? ItemCondition.good.rawValue
                         ))
                     }
                 }
             }
-            self.webAutofillQueue = jobs
+            uploadManager.webAutofillQueue = jobs
             uploadManager.pendingAutofillJobsCount = jobs.count
             // Capture per-listing cross-post info now (before the drafts are deleted) so the
             // post-publish status overview can show per-platform status and offer retries.
@@ -2039,7 +2028,8 @@ struct ProcessResultsOverviewView: View {
                     coverPhotoPath: item.orderedFirebasePhotoPaths.first,
                     photoPaths: item.orderedFirebasePhotoPaths,
                     platforms: attemptedPlatforms,
-                    buyerPaysShipping: item.buyerPaysShipping
+                    buyerPaysShipping: item.buyerPaysShipping,
+                    condition: item.condition ?? ItemCondition.good.rawValue
                 )
             }
             if !attemptedPlatforms.isEmpty {
@@ -2078,7 +2068,7 @@ struct ProcessResultsOverviewView: View {
         // alert (attached to this view) can present and the user can retry.
         if uploadManager.publishError != nil {
             pendingAPITriggers = []
-            webAutofillQueue = []
+            uploadManager.webAutofillQueue = []
             uploadManager.pendingAutofillJobsCount = 0
             uploadManager.crossPostStatusPending = false
             return
@@ -2109,51 +2099,9 @@ struct ProcessResultsOverviewView: View {
         }
         // Start web autofill jobs (Mercari, Facebook) after publish completes. If there are
         // none (e.g. eBay-only), transition to the global CrossPostStatusView sheet.
-        if !webAutofillQueue.isEmpty {
-            checkAndStartNextWebJob()
+        if !uploadManager.webAutofillQueue.isEmpty {
+            uploadManager.checkAndStartNextWebJob(modelContext: modelContext)
         } else {
-            uploadManager.showResultsOverview = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                uploadManager.showCrossPostStatus = true
-            }
-        }
-    }
-
-    private func checkAndStartNextWebJob() {
-        guard activeAutofillJob == nil, uploadManager.globalMercariJob == nil else { return }
-        if !webAutofillQueue.isEmpty {
-            let nextJob = webAutofillQueue.removeFirst()
-            uploadManager.pendingAutofillJobsCount = webAutofillQueue.count + 1
-            if nextJob.platform == "mercari" {
-                // Mercari runs headlessly — show as a pill above the tab bar via MainView.
-                uploadManager.globalMercariJob = nextJob
-                uploadManager.onMercariJobComplete = { checkAndStartNextWebJob() }
-            } else {
-                // Facebook and other web platforms require a visible sheet.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                    activeAutofillJob = nextJob
-                }
-            }
-        } else {
-            uploadManager.pendingAutofillJobsCount = 0
-            // All web cross-posting jobs finished — now safe to delete SwiftData items
-            // that were held alive so startPosting() could read their photos.
-            let pendingIDs = uploadManager.publishedPendingDeletionIDs
-            if !pendingIDs.isEmpty {
-                // Mark and clear before deleting — see UploadManager.deleteDraftLocallyAndCloud.
-                // This delete didn't go through that function (these items were kept alive
-                // deliberately for the cross-post jobs, which have now all finished), so
-                // nothing else marks or clears them.
-                for item in allItems where pendingIDs.contains(item.id) {
-                    Item.deletedIDs.insert(item.id)
-                    item.sourceAssetIdentifiers = []
-                    item.photosData = []
-                    modelContext.delete(item)
-                }
-                try? modelContext.save()
-                uploadManager.publishedPendingDeletionIDs.removeAll()
-            }
-            // Close the results sheet and open CrossPostStatusView globally from MainView.
             uploadManager.showResultsOverview = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 uploadManager.showCrossPostStatus = true
@@ -2245,6 +2193,7 @@ struct CrossPostSessionItem: Identifiable, Equatable {
     let photoPaths: [String]
     let platforms: [String]     // attempted cross-post platforms, e.g. ["ebay","mercari"]
     let buyerPaysShipping: Bool
+    let condition: String       // ItemCondition rawValue, so retries don't post as "good"
 }
 
 /// Post-publish overview: per listing, shows Wonni plus each attempted platform's live status
@@ -2325,6 +2274,17 @@ struct CrossPostStatusView: View {
         } message: {
             Text(uploadManager.crossPostError ?? "")
         }
+        // See UploadManager.photoUploadWarning — a listing can publish (and cross-post) with
+        // fewer photos than selected if one silently failed every upload retry; this is the
+        // first point the user finds out, rather than noticing a thin listing later.
+        .alert("Some Photos Didn't Upload", isPresented: Binding(
+            get: { uploadManager.photoUploadWarning != nil },
+            set: { if !$0 { uploadManager.photoUploadWarning = nil } }
+        )) {
+            Button("OK", role: .cancel) { uploadManager.photoUploadWarning = nil }
+        } message: {
+            Text(uploadManager.photoUploadWarning ?? "")
+        }
     }
 
     @ViewBuilder
@@ -2401,7 +2361,8 @@ struct CrossPostStatusView: View {
                 price: item.price,
                 listingId: item.id,
                 photoFirebasePaths: item.photoPaths,
-                buyerPaysShipping: item.buyerPaysShipping
+                buyerPaysShipping: item.buyerPaysShipping,
+                condition: item.condition
             )
             uploadManager.globalMercariJob = job
             uploadManager.onMercariJobComplete = nil
@@ -2414,7 +2375,8 @@ struct CrossPostStatusView: View {
                 price: item.price,
                 listingId: item.id,
                 photoFirebasePaths: item.photoPaths,
-                buyerPaysShipping: item.buyerPaysShipping
+                buyerPaysShipping: item.buyerPaysShipping,
+                condition: item.condition
             )
         default:
             break
@@ -2943,7 +2905,12 @@ struct PublishConfirmationSheet: View {
     @State private var touchedPlatforms: Set<String> = []
     @State private var showAddressSetupSheet = false
     @State private var platformToEnableAfterAddressSetup = ""
-    
+    /// Gates the Publish button until integrations/settings finish loading, so a fast tap
+    /// can't confirm with `selectedPlatforms` still empty from the async default-selection
+    /// not having run yet (github issue #46).
+    @State private var isLoadingIntegrations = true
+    @State private var showEmptyPlatformsConfirm = false
+
     var body: some View {
         NavigationStack {
             Form {
@@ -3020,11 +2987,19 @@ struct PublishConfirmationSheet: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Publish") {
-                        onConfirm(selectedPlatforms)
-                        dismiss()
+                    if isLoadingIntegrations {
+                        ProgressView()
+                    } else {
+                        Button("Publish") {
+                            if selectedPlatforms.isEmpty {
+                                showEmptyPlatformsConfirm = true
+                            } else {
+                                onConfirm(selectedPlatforms)
+                                dismiss()
+                            }
+                        }
+                        .fontWeight(.bold)
                     }
-                    .fontWeight(.bold)
                 }
             }
             .task {
@@ -3037,6 +3012,7 @@ struct PublishConfirmationSheet: View {
                 where !touchedPlatforms.contains(platform) {
                     selectedPlatforms.insert(platform)
                 }
+                isLoadingIntegrations = false
             }
             .sheet(isPresented: $showAddressSetupSheet) {
                 AddressSetupSheet {
@@ -3045,6 +3021,17 @@ struct PublishConfirmationSheet: View {
                         platformToEnableAfterAddressSetup = ""
                     }
                 }
+            }
+            .confirmationDialog(
+                "Publish to Wonni only? No cross-post platforms are selected.",
+                isPresented: $showEmptyPlatformsConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Publish to Wonni Only") {
+                    onConfirm(selectedPlatforms)
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) {}
             }
         }
     }

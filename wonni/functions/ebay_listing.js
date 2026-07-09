@@ -45,6 +45,27 @@ function makeHttpRequest(options, bodyData = null) {
 }
 
 /**
+ * Retries a request up to 3 attempts on a 5xx response — eBay's Inventory API surfaces
+ * genuinely transient errors this way (e.g. "Core Inventory Service internal error",
+ * "Product not found. Please try again") that a same-payload retry typically clears.
+ * Does not retry 4xx — those are data problems a retry can't fix.
+ */
+async function makeHttpRequestWithRetry(options, bodyData, label) {
+  let res;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    res = await makeHttpRequest(options, bodyData);
+    if (res.statusCode < 300) return res;
+    if (attempt < 3 && res.statusCode >= 500) {
+      console.log(`[${label}] attempt ${attempt} returned ${res.statusCode}, retrying...`);
+      await new Promise(resolve => setTimeout(resolve, attempt * 1500));
+    } else {
+      return res;
+    }
+  }
+  return res;
+}
+
+/**
  * Refreshes the eBay OAuth token using the user's refresh token.
  */
 async function refreshEbayToken(clientId, certId, refreshToken, isSandbox) {
@@ -342,6 +363,42 @@ function isConditionError(responseBody) {
       e.errorId === 25021 ||
       (e.parameters || []).some(p => p.value === "CONDITION_ID")
     );
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Errors thrown internally here look like `Failed to X (400): {"errors":[{"message":"..."}]}`
+ * — the JSON is eBay's raw Inventory API error body. The client only ever sees this string
+ * (github issues #55/#56 — "generic INTERNAL" with no actionable message), so extract eBay's
+ * own human-readable message(s) when present instead of surfacing the whole blob.
+ */
+function friendlyEbayErrorMessage(rawMessage) {
+  const jsonStart = rawMessage.indexOf("{");
+  if (jsonStart === -1) return rawMessage;
+  try {
+    const obj = JSON.parse(rawMessage.slice(jsonStart));
+    const messages = (obj.errors || []).map(e => e.message).filter(Boolean);
+    if (messages.length > 0) return messages.join(" ");
+  } catch (e) {
+    // Not JSON, or not eBay's error shape — fall through to the raw message.
+  }
+  return rawMessage;
+}
+
+/**
+ * True if a publish error body is the "package weight is not valid or is missing" failure
+ * (25020, eBay error code err:216121). Weight/dimensions on the inventory item are always
+ * populated (with safe defaults) before this request, so this isn't actually a missing-value
+ * bug on our side — it fires because CALCULATED shipping (the default when buyerPaysShipping
+ * is true) additionally wants an explicit packageType, which is otherwise only ever set for
+ * the firstClassEnvelope case. See isPackageWeightError's caller for the recovery attempt.
+ */
+function isPackageWeightError(responseBody) {
+  try {
+    const obj = JSON.parse(responseBody);
+    return (obj.errors || []).some(e => e.errorId === 25020);
   } catch (e) {
     return false;
   }
@@ -979,7 +1036,7 @@ exports.ebayCreateListing = onCall(
               "Content-Language": "en-US"
             }
           };
-          const updateRes = await makeHttpRequest(updateOfferOptions, offerBody);
+          const updateRes = await makeHttpRequestWithRetry(updateOfferOptions, offerBody, "ebayCreateListing:updateOffer");
           if (updateRes.statusCode !== 200 && updateRes.statusCode !== 204) {
              throw new Error(`Failed to update existing eBay offer (${updateRes.statusCode}): ${updateRes.body}`);
           }
@@ -1027,9 +1084,11 @@ exports.ebayCreateListing = onCall(
       let publishRes = await publishOnce();
 
       // Recover from publish failures eBay reports against the inventory item: missing required
-      // aspects (25002) and an invalid condition for the category (25021). Each round mutates the
-      // inventory item, re-PUTs it, and republishes. Bounded to avoid loops.
+      // aspects (25002), an invalid condition for the category (25021), and a missing/invalid
+      // package weight (25020). Each round mutates the inventory item, re-PUTs it, and
+      // republishes. Bounded to avoid loops.
       let conditionFallbackTried = false;
+      let packageTypeFallbackTried = false;
       for (let round = 0; round < 4 && publishRes.statusCode !== 200; round++) {
         let changed = false;
 
@@ -1052,6 +1111,19 @@ exports.ebayCreateListing = onCall(
           if (itemBody.condition !== "USED_EXCELLENT") {
             console.log(`[ebayCreateListing] Condition ${itemBody.condition} rejected by ${categoryId}; retrying as USED_EXCELLENT`);
             itemBody.condition = "USED_EXCELLENT";
+            changed = true;
+          }
+        }
+
+        // (c) eBay reports weight/package details invalid even though a valid positive weight
+        //     and dimensions are always sent — in practice this fires for CALCULATED shipping
+        //     (buyerPaysShipping=true) when packageType is unset, which we otherwise only set
+        //     for the firstClassEnvelope case. Fall back to a generic boxed-parcel type once.
+        if (isPackageWeightError(publishRes.body) && !packageTypeFallbackTried) {
+          packageTypeFallbackTried = true;
+          if (!itemBody.packageWeightAndSize.packageType) {
+            console.log(`[ebayCreateListing] Weight/package rejected with packageType unset; retrying as MAILING_BOX`);
+            itemBody.packageWeightAndSize.packageType = "MAILING_BOX";
             changed = true;
           }
         }
@@ -1128,7 +1200,7 @@ exports.ebayCreateListing = onCall(
           code = err.code;
         }
       }
-      throw new HttpsError(code, err.message);
+      throw new HttpsError(code, friendlyEbayErrorMessage(err.message));
     }
   }
 );
@@ -1216,7 +1288,7 @@ exports.ebayUpdateListing = onCall(
       }
 
       console.log(`[ebayUpdateListing] Updating inventory item SKU=${sku}`);
-      const itemRes = await makeHttpRequest({
+      const itemRes = await makeHttpRequestWithRetry({
         hostname: host,
         path: `/sell/inventory/v1/inventory_item/${sku}`,
         method: "PUT",
@@ -1225,7 +1297,7 @@ exports.ebayUpdateListing = onCall(
           "Content-Type": "application/json",
           "Content-Language": "en-US"
         }
-      }, itemBody);
+      }, itemBody, "ebayUpdateListing:inventoryItem");
       if (![200, 201, 204].includes(itemRes.statusCode)) {
         throw new Error(`Failed to update eBay inventory item (${itemRes.statusCode}): ${itemRes.body}`);
       }
@@ -1318,7 +1390,7 @@ exports.ebayUpdateListing = onCall(
       console.error(`[ebayUpdateListing] Error:`, err);
       let code = "internal";
       if (err instanceof HttpsError) { code = err.code; }
-      throw new HttpsError(code, err.message);
+      throw new HttpsError(code, friendlyEbayErrorMessage(err.message));
     }
   }
 );
@@ -1469,7 +1541,7 @@ exports.ebayDeleteListing = onCall(
           code = err.code;
         }
       }
-      throw new HttpsError(code, err.message);
+      throw new HttpsError(code, friendlyEbayErrorMessage(err.message));
     }
   }
 );
