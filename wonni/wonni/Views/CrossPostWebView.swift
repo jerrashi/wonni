@@ -29,6 +29,10 @@ struct CrossPostJob: Identifiable {
     /// When true, the seller wants the buyer to pay shipping (Mercari "Offer free shipping? → No").
     /// Defaults to false = free shipping (Mercari's own default).
     let buyerPaysShipping: Bool
+    /// ItemCondition rawValue. Carried on the job itself because `item` is nil on every
+    /// flow except fresh-draft publish (profile cross-post, retry, re-list), which used to
+    /// silently post everything as "good" (github issue #47).
+    let condition: String
 
     init(
         platform: String,
@@ -38,7 +42,8 @@ struct CrossPostJob: Identifiable {
         listingId: String? = nil,
         item: Item? = nil,
         photoFirebasePaths: [String] = [],
-        buyerPaysShipping: Bool = false
+        buyerPaysShipping: Bool = false,
+        condition: String = ItemCondition.good.rawValue
     ) {
         self.platform = platform
         self.title = title
@@ -48,6 +53,7 @@ struct CrossPostJob: Identifiable {
         self.item = item
         self.photoFirebasePaths = photoFirebasePaths
         self.buyerPaysShipping = buyerPaysShipping
+        self.condition = condition
     }
 }
 
@@ -2568,7 +2574,7 @@ struct MercariAutoPosterView: View {
             description: job.description,
             price: job.price,
             photoBase64Strings: photoBase64Strings,
-            condition: job.item?.condition ?? "good",
+            condition: job.condition,
             suggestedCategory: job.item?.aiSuggestedCategory,
             suggestedBrand: job.item?.aiSuggestedBrand,
             weightLbs: job.item?.weightLbs,
@@ -2628,7 +2634,7 @@ struct MercariAutoPosterView: View {
             description: job.description,
             price: job.price,
             photoBase64Strings: photoBase64Strings,
-            condition: job.item?.condition ?? "good",
+            condition: job.condition,
             suggestedCategory: job.item?.aiSuggestedCategory,
             suggestedBrand: job.item?.aiSuggestedBrand,
             weightLbs: job.item?.weightLbs,
@@ -3007,7 +3013,21 @@ struct MercariSyncSheet: View {
                 Task { _ = try? await callCloudFunction("ebayUpdateListing", ["listingId": listingId]) }
             }
             if soldDiffers {
-                // Record the sale — take-home will be backfilled async by the transaction loader
+                // Enrich before recording so the sale is written complete on the common path
+                // (github issue #24) — this is a direct user action (tapping Apply), not a
+                // silent background sync, so on scrape failure we still record with nil
+                // take-home and fall back to the existing async backfill rather than dropping
+                // the user's action entirely.
+                let takeHomeData = await withCheckedContinuation { (continuation: CheckedContinuation<MercariTransactionData?, Never>) in
+                    DispatchQueue.main.async {
+                        let scraper = MercariTakeHomeScraper(mercariId: mercariId) { data in
+                            continuation.resume(returning: data)
+                        } onFail: {
+                            continuation.resume(returning: nil)
+                        }
+                        scraper.start()
+                    }
+                }
                 let sale = Sale(
                     userId: "",
                     listingId: listingId,
@@ -3015,10 +3035,12 @@ struct MercariSyncSheet: View {
                     coverPhotoPath: listing.coverPhotoPath,
                     platform: "mercari",
                     platformOrderId: mercariId,
-                    priceSoldFor: loader.priceDollars ?? listing.price ?? 0,
-                    takeHome: nil,
-                    status: .pending,
-                    soldAt: Timestamp(date: Date())
+                    priceSoldFor: takeHomeData?.soldPrice ?? loader.priceDollars ?? listing.price ?? 0,
+                    takeHome: takeHomeData?.takeHome,
+                    trackingNumber: takeHomeData?.trackingNumber,
+                    carrier: takeHomeData?.carrier,
+                    status: takeHomeData?.trackingNumber?.isEmpty == false ? .shipped : .pending,
+                    soldAt: takeHomeData?.soldDate.map { Timestamp(date: $0) } ?? Timestamp(date: Date())
                 )
                 let saleId = try? await SaleRepository.shared.recordSale(sale)
 
@@ -3028,8 +3050,9 @@ struct MercariSyncSheet: View {
                     "platform": "mercari"
                 ])
 
-                // Async: scrape take-home from the Mercari transaction page and backfill
-                if let sid = saleId {
+                // Scrape failed synchronously above — fall back to the existing async retry
+                // so the sale still eventually gets a complete take-home instead of staying nil.
+                if takeHomeData?.takeHome == nil, let sid = saleId {
                     Task {
                         await fetchAndBackfillMercariTakeHome(saleId: sid, mercariId: mercariId)
                     }
@@ -3314,7 +3337,8 @@ struct MercariProfileSyncSheet: View {
                             price: listing.price ?? 0,
                             listingId: listing.id,
                             photoFirebasePaths: listing.photoPaths,
-                            buyerPaysShipping: listing.shippingInfo?.buyerPaysShipping ?? false
+                            buyerPaysShipping: listing.shippingInfo?.buyerPaysShipping ?? false,
+                            condition: listing.condition.rawValue
                         )
                     } label: {
                         Label("Re-list on Mercari", systemImage: "arrow.up.circle")
@@ -4514,17 +4538,35 @@ class MercariSyncManager: ObservableObject {
                     _ = try? await callCloudFunction("decrementAndCascade", ["listingId": listingId, "platform": "mercari"])
                 }
                 if soldDiff {
+                    // Enrich before recording (github issue #24) — unlike the single-listing
+                    // apply() flow above, this bulk path previously had no backfill at all, so
+                    // a scrape failure here left the sale permanently missing take-home rather
+                    // than just temporarily. MercariTakeHomeScraper is self-contained (owns its
+                    // own WKWebView), so it's safe to use per-item in this loop.
+                    let mercariItemId = listing.crossPostListingIds?["mercari"] ?? ""
+                    let takeHomeData: MercariTransactionData? = mercariItemId.isEmpty ? nil : await withCheckedContinuation { continuation in
+                        DispatchQueue.main.async {
+                            let scraper = MercariTakeHomeScraper(mercariId: mercariItemId) { data in
+                                continuation.resume(returning: data)
+                            } onFail: {
+                                continuation.resume(returning: nil)
+                            }
+                            scraper.start()
+                        }
+                    }
                     let sale = Sale(
                         userId: listing.userId,
                         listingId: listingId,
                         listingTitle: listing.customTitle,
                         coverPhotoPath: listing.coverPhotoPath,
                         platform: "mercari",
-                        platformOrderId: listing.crossPostListingIds?["mercari"] ?? "",
-                        priceSoldFor: result.price ?? listing.price ?? 0,
-                        takeHome: nil,
-                        status: .pending,
-                        soldAt: Timestamp(date: Date())
+                        platformOrderId: mercariItemId,
+                        priceSoldFor: takeHomeData?.soldPrice ?? result.price ?? listing.price ?? 0,
+                        takeHome: takeHomeData?.takeHome,
+                        trackingNumber: takeHomeData?.trackingNumber,
+                        carrier: takeHomeData?.carrier,
+                        status: takeHomeData?.trackingNumber?.isEmpty == false ? .shipped : .pending,
+                        soldAt: takeHomeData?.soldDate.map { Timestamp(date: $0) } ?? Timestamp(date: Date())
                     )
                     _ = try? await SaleRepository.shared.recordSale(sale)
                 }
@@ -4540,6 +4582,12 @@ struct MercariSaleResult {
     var thumbnailUrl: String?
     var status: SaleStatus?
     var soldAt: Date?
+    /// Read from the item detail page's __NEXT_DATA__ (item.price / 100), which — unlike the
+    /// sold-items list page's price field — is confirmed to always be in cents; the hardened
+    /// single-item loader (MercariItemLoader.load, ~line 4271) uses the same unconditional
+    /// divide with no magnitude heuristic. Only populated when fetchPhoto is true, since that's
+    /// the only time this method visits the item page. See github issue #38.
+    var price: Double?
 }
 
 @MainActor
@@ -4808,7 +4856,7 @@ final class MercariSaleSyncManager: ObservableObject {
                     function isOGP(url) {
                         return !url || url.indexOf('ogp_image') !== -1 || url.indexOf('assets/common') !== -1;
                     }
-                    var out = { photo: null, soldOn: null };
+                    var out = { photo: null, soldOn: null, price: null };
                     var nd = document.getElementById('__NEXT_DATA__');
                     if (nd) {
                         try {
@@ -4823,6 +4871,9 @@ final class MercariSaleSyncManager: ObservableObject {
                                 }
                                 if (!out.photo && item.thumbnailUrl && !isOGP(item.thumbnailUrl)) out.photo = item.thumbnailUrl;
                                 if (!out.photo && item.photo_url && !isOGP(item.photo_url)) out.photo = item.photo_url;
+                                // item.price is always in cents on the item detail page (unlike
+                                // the sold-items list page, which is ambiguous — see issue #38).
+                                if (item.price != null) out.price = item.price / 100;
                             }
                         } catch(e) {}
                     }
@@ -4874,6 +4925,10 @@ final class MercariSaleSyncManager: ObservableObject {
                         if let d = result.soldAt {
                             print("[MercariSaleSync] soldAt from item page for \(itemId): \(d)")
                         }
+                    }
+                    if let price = obj["price"] as? Double {
+                        result.price = price
+                        print("[MercariSaleSync] price from item page for \(itemId): \(price)")
                     }
                 }
             }
@@ -4956,6 +5011,10 @@ final class MercariSaleSyncManager: ObservableObject {
                         if (!extractedId || seen.has(extractedId)) continue;
                         seen.add(extractedId);
                         var upd = it.updated || it.updatedAt || it.updated_at || null;
+                        // Rough cents-vs-dollars guess only — every caller (syncWebPlatforms'
+                        // auto-import, and the manual-review sheet via enrichItems) re-fetches
+                        // the confirmed-reliable item-page price before writing to Firestore.
+                        // See github issue #38.
                         var price = it.price ? (it.price > 1000 ? it.price / 100 : it.price) : null;
                         results.push({ id: extractedId, name: it.name || null,
                                        price: price, thumbnailUrl: (it.thumbnails && it.thumbnails[0]) || it.thumbnailUrl || null,

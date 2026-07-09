@@ -118,6 +118,12 @@ class UploadManager: ObservableObject {
     /// A local @State there would silently discard the error into a torn-down view. Surfaced
     /// from CrossPostStatusView, which is reliably the next screen shown after any publish.
     @Published var crossPostError: String? = nil
+    /// Set in publishDrafts when a listing published (and any cross-post proceeded) with fewer
+    /// photos than the user selected — a photo silently failed every upload retry. Previously
+    /// this was invisible: the publish guard only checked photoPaths wasn't *empty*, so a
+    /// partial photo set went out with no error, matching github issue #56's "photos are not
+    /// properly posting with the listing" report. Surfaced the same way as crossPostError.
+    @Published var photoUploadWarning: String? = nil
     /// Set when Storage/Firestore cleanup fails during `deleteDraftLocallyAndCloud` —
     /// surfaced as a toast from MainView instead of being silently swallowed, mirroring
     /// `crossPostError` above.
@@ -137,6 +143,14 @@ class UploadManager: ObservableObject {
     @Published var globalMercariJob: CrossPostJob? = nil
     /// Called by MainView's MercariAutoPosterView onDismiss to advance the queue in the originating view.
     var onMercariJobComplete: (() -> Void)? = nil
+
+    // ── Web autofill queue (Mercari headless + Facebook visible sheet) ─────────
+    /// Owned here (not view @State) so dismissing Review & Publish mid-queue doesn't
+    /// strand remaining jobs or leave held drafts undeleted (github issue #45).
+    @Published var webAutofillQueue: [CrossPostJob] = []
+    /// Facebook requires a visible sheet (unlike Mercari's headless pill). Presented from
+    /// MainView, mirroring globalMercariJob, so it isn't torn down with Review & Publish.
+    @Published var activeAutofillJob: CrossPostJob? = nil
 
     // ── Internal tracking ───────────────────────────────────────────────────
     private var activeUploadCount = 0
@@ -690,6 +704,15 @@ class UploadManager: ObservableObject {
                     continue
                 }
 
+                // Publishing proceeds with whatever subset uploaded (never zero, per the guard
+                // above), but the user should know some photos silently failed rather than
+                // finding out only by noticing a thin listing later (github issue #56).
+                if photoPaths.count < draft.sourceAssetIdentifiers.count {
+                    let title = draft.userEditedTitle ?? draft.aiSuggestedTitle ?? "Untitled"
+                    let msg = "\"\(title.prefix(40))\" published with \(photoPaths.count) of \(draft.sourceAssetIdentifiers.count) photos — one or more failed to upload."
+                    photoUploadWarning = photoUploadWarning.map { "\($0)\n\n\(msg)" } ?? msg
+                }
+
                 // Build the active listing using the pre-generated listing ID
                 var listing = UserListing.newDraft(
                     userId: userId,
@@ -714,6 +737,7 @@ class UploadManager: ObservableObject {
                 // required "Artist"/"Release Title" item specifics then failed the eBay publish.
                 listing.ebayCategory = nil
                 listing.brand = draft.aiSuggestedBrand
+                listing.condition = ItemCondition(rawValue: draft.condition ?? "") ?? .good
                 listing.sourceAssetIdentifiers = []
 
                 var packageDimensions: PackageDimensions? = nil
@@ -769,6 +793,57 @@ class UploadManager: ObservableObject {
                 // is set when the user taps Done in CrossPostStatusView (onDone closure).
             } else {
                 publishError = "Could not publish listings. Check your connection and try again."
+            }
+        }
+    }
+
+    // MARK: – Web autofill queue
+
+    /// Starts the next queued web-autofill cross-post job (Mercari's headless pill, or
+    /// Facebook's visible sheet), or — once the queue is empty — deletes drafts that were
+    /// kept alive so the jobs could read their photos, and hands off to CrossPostStatusView.
+    /// Called from MainView (both on Mercari pill completion and Facebook sheet dismissal),
+    /// so the queue keeps advancing even if Review & Publish has already been dismissed.
+    func checkAndStartNextWebJob(modelContext: ModelContext) {
+        guard activeAutofillJob == nil, globalMercariJob == nil else { return }
+        if !webAutofillQueue.isEmpty {
+            let nextJob = webAutofillQueue.removeFirst()
+            pendingAutofillJobsCount = webAutofillQueue.count + 1
+            if nextJob.platform == "mercari" {
+                // Mercari runs headlessly — shown as a pill above the tab bar via MainView.
+                globalMercariJob = nextJob
+                onMercariJobComplete = { [weak self] in self?.checkAndStartNextWebJob(modelContext: modelContext) }
+            } else {
+                // Facebook and other web platforms require a visible sheet.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+                    self?.activeAutofillJob = nextJob
+                }
+            }
+        } else {
+            pendingAutofillJobsCount = 0
+            // All web cross-posting jobs finished — now safe to delete SwiftData items
+            // that were held alive so startPosting() could read their photos.
+            let pendingIDs = publishedPendingDeletionIDs
+            if !pendingIDs.isEmpty {
+                let items = (try? modelContext.fetch(FetchDescriptor<Item>()))?
+                    .filter { pendingIDs.contains($0.id) } ?? []
+                for item in items {
+                    // Mark and clear before deleting — see deleteDraftLocallyAndCloud. This
+                    // delete didn't go through that function (these items were kept alive
+                    // deliberately for the cross-post jobs, which have now all finished), so
+                    // nothing else marks or clears them.
+                    Item.deletedIDs.insert(item.id)
+                    item.sourceAssetIdentifiers = []
+                    item.photosData = []
+                    modelContext.delete(item)
+                }
+                try? modelContext.save()
+                publishedPendingDeletionIDs.removeAll()
+            }
+            // Close the results sheet (if still open) and open CrossPostStatusView globally.
+            showResultsOverview = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                self?.showCrossPostStatus = true
             }
         }
     }

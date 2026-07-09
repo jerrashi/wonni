@@ -824,7 +824,8 @@ struct ProfileView: View {
                         price: listing.price ?? 0.0,
                         listingId: id,
                         photoFirebasePaths: listing.photoPaths,
-                        buyerPaysShipping: listing.shippingInfo?.buyerPaysShipping ?? false
+                        buyerPaysShipping: listing.shippingInfo?.buyerPaysShipping ?? false,
+                        condition: listing.condition.rawValue
                     ))
                 } else if platform == "ebay" {
                     // Set pending state locally first so UI updates immediately
@@ -1992,7 +1993,8 @@ struct EditListingSheet: View {
                         price: price ?? 0.0,
                         listingId: id,
                         photoFirebasePaths: listing.photoPaths,
-                        buyerPaysShipping: !isFreeShipping
+                        buyerPaysShipping: !isFreeShipping,
+                        condition: (condition ?? listing.condition).rawValue
                     ))
                 }
             }
@@ -2874,7 +2876,14 @@ struct BulkCrossPostSheet: View {
     @State private var selectedPlatforms: Set<String> = []
     @State private var showAddressSetupSheet = false
     @State private var platformToEnableAfterAddressSetup = ""
-    
+    /// Platforms whose toggle the user has explicitly touched. The async `.task`
+    /// default-selection must never overwrite an explicit user choice made while
+    /// integrations were still loading (github issue #46 — same race as
+    /// PublishConfirmationSheet, this sheet never got the fix from #8).
+    @State private var touchedPlatforms: Set<String> = []
+    @State private var isLoadingIntegrations = true
+    @State private var showEmptyPlatformsConfirm = false
+
     var body: some View {
         NavigationStack {
             Form {
@@ -2904,6 +2913,7 @@ struct BulkCrossPostSheet: View {
                             Toggle(isOn: Binding(
                                 get: { selectedPlatforms.contains(integration.platform) },
                                 set: { isSelected in
+                                    touchedPlatforms.insert(integration.platform)
                                     if isSelected {
                                         if isAPI && SellingSettingsRepository.shared.settings?.defaultLocation.postalCode.isEmpty != false {
                                             platformToEnableAfterAddressSetup = integration.platform
@@ -2952,18 +2962,32 @@ struct BulkCrossPostSheet: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Post") {
-                        onConfirm(selectedPlatforms)
-                        dismiss()
+                    if isLoadingIntegrations {
+                        ProgressView()
+                    } else {
+                        Button("Post") {
+                            if selectedPlatforms.isEmpty {
+                                showEmptyPlatformsConfirm = true
+                            } else {
+                                onConfirm(selectedPlatforms)
+                                dismiss()
+                            }
+                        }
+                        .fontWeight(.bold)
                     }
-                    .fontWeight(.bold)
                 }
             }
             .task {
                 await integrationRepo.loadIntegrations()
                 await SellingSettingsRepository.shared.loadSettings()
-                // Default toggle connected API platforms
-                selectedPlatforms = Set(integrationRepo.integrations.filter { $0.isConnected }.map { $0.platform })
+                // Default-select connected API platforms, but only those the user hasn't
+                // explicitly toggled while the async load was in flight — a blanket
+                // reassignment here used to wipe the user's in-flight choices.
+                for platform in integrationRepo.integrations.filter({ $0.isConnected }).map({ $0.platform })
+                where !touchedPlatforms.contains(platform) {
+                    selectedPlatforms.insert(platform)
+                }
+                isLoadingIntegrations = false
             }
             .sheet(isPresented: $showAddressSetupSheet) {
                 AddressSetupSheet {
@@ -2972,6 +2996,12 @@ struct BulkCrossPostSheet: View {
                         platformToEnableAfterAddressSetup = ""
                     }
                 }
+            }
+            // These listings are already live on Wonni, so an empty selection here isn't a
+            // meaningful "Wonni only" action like in PublishConfirmationSheet — it's just a
+            // no-op. Tell the user instead of silently dismissing.
+            .alert("Select at least one platform to cross-post to.", isPresented: $showEmptyPlatformsConfirm) {
+                Button("OK", role: .cancel) {}
             }
         }
     }

@@ -138,6 +138,12 @@ service cloud.firestore {
       match /settings/{settingId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
+
+      // Discovered-but-undecided Mercari sales — durable pending list for the "+" import
+      // modal (github issue #50). Doc ID == Mercari item id.
+      match /pendingMercariSales/{saleId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
     }
   }
 
