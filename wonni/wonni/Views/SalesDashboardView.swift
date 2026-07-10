@@ -432,16 +432,22 @@ struct SalesDashboardView: View {
         salesSyncTaskId = taskId
         AppTaskQueue.shared.begin(id: taskId, label: "Syncing sales")
         if !force { lastSyncTimestamp = Date().timeIntervalSince1970 }
-        defer {
-            AppTaskQueue.shared.complete(id: taskId)
-            isSyncing = false
-        }
 
-        let toast = await syncAPIPlatforms(force: force)
-        if let toast { showToast(toast) }
-        // Runs after so a "new Mercari sales found" review banner (if any) shows last and
-        // isn't immediately overwritten by the eBay/Etsy toast above.
-        await syncWebPlatforms()
+        // Collect result messages and show exactly ONE, only after the "Syncing sales"
+        // pill is gone — toasting mid-sync stacked two competing status bars.
+        let apiToast = await syncAPIPlatforms(force: force)
+        let webToast = await syncWebPlatforms()
+
+        AppTaskQueue.shared.complete(id: taskId)
+        isSyncing = false
+
+        if let webToast {
+            showToast(webToast.message, actionLabel: webToast.actionLabel ?? "Undo",
+                      duration: webToast.action != nil ? 8_000_000_000 : nil,
+                      action: webToast.action)
+        } else if let apiToast {
+            showToast(apiToast)
+        }
     }
 
     // Calls the Cloud Function which runs eBay → Etsy in sequence.
@@ -471,20 +477,22 @@ struct SalesDashboardView: View {
 
     // Iterates web-autofill platform managers in order.
     // Add new platforms here as: await nextPlatformSyncManager.sync(sales: sales)
-    private func syncWebPlatforms() async {
+    // Returns the result message to toast AFTER the sync pill clears (never toasts itself).
+    private func syncWebPlatforms() async -> (message: String, actionLabel: String?, action: (() -> Void)?)? {
         // Include deleted (hidden) sales so restored+deleted items never resurface on sync.
         let knownMercariIds = Set((sales + hiddenSales).compactMap { $0.platform == "mercari" ? $0.platformOrderId : nil })
-        // Stop at any item dated before the calendar day of the last sync.
-        // e.g. last sync at 6/26 8:42am → stop at items dated 6/25 or earlier.
-        let stopDate = lastSyncTimestamp > 0
-            ? Calendar.current.startOfDay(for: Date(timeIntervalSince1970: lastSyncTimestamp))
-            : nil
+        // No date cutoff: scan the full (bounded) in_progress list and dedupe by known IDs.
+        // The old "stop at items older than the last sync day" optimization permanently hid
+        // any older sale that a previous sync failed to import.
         let found = await mercariSaleSyncManager.scanForNewSales(
             knownOrderIds: knownMercariIds,
-            stopBeforeDate: stopDate
+            stopBeforeDate: nil
         )
+        var result: (message: String, actionLabel: String?, action: (() -> Void)?)? = nil
         if !found.isEmpty {
             if mercariAutoImport {
+                var imported = 0
+                var needsReview: [MercariFoundSaleItem] = []
                 for item in found {
                     // Enrich before saving so we never write a sale missing take-home or a
                     // real sold date — scanForNewSales only reads title/price off the list page.
@@ -495,8 +503,16 @@ struct SalesDashboardView: View {
                     guard let name = item.name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                           let price = enrichment?.price ?? item.price, price > 0,
                           let takeHome = enrichment?.takeHome,
-                          let saleDate = enrichment?.soldAt else {
-                        print("[SyncWebPlatforms] Skipping \(item.id): incomplete sale data (name/price/takeHome/soldAt)")
+                          let saleDate = enrichment?.soldAt ?? item.soldAt else {
+                        // Incomplete — never silently dropped: persist to the pending list,
+                        // pre-flagged, so the user can fix it in the "+" modal.
+                        var pending = item
+                        pending.price = enrichment?.price ?? pending.price
+                        pending.takeHome = enrichment?.takeHome ?? pending.takeHome
+                        pending.soldAt = enrichment?.soldAt ?? pending.soldAt
+                        pending.thumbnailUrl = enrichment?.thumbnailUrl ?? pending.thumbnailUrl
+                        pending.enrichFailed = true
+                        needsReview.append(pending)
                         continue
                     }
                     let match = await ListingRepository.shared.findListingByMercariId(item.id)
@@ -514,28 +530,41 @@ struct SalesDashboardView: View {
                         status: enrichment?.status ?? .pending,
                         soldAt: Timestamp(date: saleDate)
                     )
-                    try? await SaleRepository.shared.addSale(sale)
+                    do {
+                        try await SaleRepository.shared.addSale(sale)
+                        imported += 1
+                        await PendingMercariSaleRepository.shared.delete(item.id)
+                    } catch {
+                        print("[SyncWebPlatforms] Failed to save \(item.id): \(error)")
+                    }
+                }
+                if !needsReview.isEmpty {
+                    await PendingMercariSaleRepository.shared.upsert(needsReview)
                 }
                 await reload()
+                var parts: [String] = []
+                if imported > 0 { parts.append("\(imported) Mercari sale\(imported == 1 ? "" : "s") imported") }
+                if !needsReview.isEmpty { parts.append("\(needsReview.count) need\(needsReview.count == 1 ? "s" : "") review") }
+                if !parts.isEmpty {
+                    result = (parts.joined(separator: " · "),
+                              needsReview.isEmpty ? nil : "Review",
+                              needsReview.isEmpty ? nil : { showAddSale = true })
+                }
             } else {
                 // Auto-import is off — persist to the durable pending-sales collection (not
                 // just an in-memory toast) so the "+" modal's list survives app restarts
-                // (github issue #50), and surface a banner instead of forcing the sheet open
-                // mid-sync.
+                // (github issue #50).
                 await PendingMercariSaleRepository.shared.upsert(found)
                 let count = found.count
-                showToast(
-                    "\(count) new Mercari sale\(count == 1 ? "" : "s") found — review in Import",
-                    actionLabel: "Review",
-                    duration: 8_000_000_000
-                ) {
-                    showAddSale = true
-                }
+                result = ("\(count) new Mercari sale\(count == 1 ? "" : "s") found — review in Import",
+                          "Review",
+                          { showAddSale = true })
             }
         }
         await mercariSaleSyncManager.sync(sales: sales)
         // Future: await facebookSaleSyncManager.scanForNewSales(...) / .sync(...)
         await reload()
+        return result
     }
 
     private func purgeSale(_ sale: Sale) async {
@@ -933,11 +962,11 @@ final class MercariSalesPageImporter: ObservableObject {
             // confirmed-reliable item-page value instead of trusting the list page's ambiguous
             // cents-vs-dollars guess (github issue #38).
             if let result = await saleSync.loadSaleData(itemId: id, fetchPhoto: true) {
-                foundItems[i].takeHome = result.takeHome
-                foundItems[i].soldAt = result.soldAt
+                foundItems[i].takeHome = result.takeHome ?? foundItems[i].takeHome
+                foundItems[i].soldAt = result.soldAt ?? foundItems[i].soldAt
                 if let photo = result.thumbnailUrl { foundItems[i].thumbnailUrl = photo }
                 if let price = result.price { foundItems[i].price = price }
-                if result.takeHome == nil || result.soldAt == nil {
+                if foundItems[i].takeHome == nil || foundItems[i].soldAt == nil {
                     foundItems[i].enrichFailed = true
                     print("[Importer] Could not enrich \(id) — order page data missing")
                 }
