@@ -34,6 +34,7 @@ struct AddSaleSheet: View {
     @State private var itemToEdit: MercariFoundSaleItem? = nil
     @State private var retryingIds: Set<String> = []
     @State private var importError: String? = nil
+    @State private var showMercariLogin = false
 
     // Headless — reused for both the pending list's Sync button (discovery) and enrichment.
     @StateObject private var mercariSync = MercariSaleSyncManager()
@@ -147,8 +148,25 @@ struct AddSaleSheet: View {
                     Task { await PendingMercariSaleRepository.shared.delete(savedId) }
                 }
             }
+            .sheet(isPresented: $showMercariLogin, onDismiss: { Task { await syncNow() } }) {
+                MercariSyncLoginSheet(webView: mercariSync.webView) {
+                    showMercariLogin = false
+                }
+            }
+            .onChange(of: mercariSync.needsLogin) { _, needs in
+                if needs { showMercariLogin = true }
+            }
             .task { await reloadPending() }
         }
+        // The scan/enrichment webview must live in the view hierarchy — a detached WKWebView
+        // throttles callAsyncJavaScript and every scan silently returns nothing (same reason
+        // SalesDashboardView embeds its manager's webview at 0.01 opacity).
+        .background(
+            MercariSheetWebView(webView: mercariSync.webView)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(0.01)
+                .allowsHitTesting(false)
+        )
     }
 
     private var urlEntryRow: some View {
@@ -287,11 +305,20 @@ struct AddSaleSheet: View {
         isSyncing = true
         importError = nil
         defer { isSyncing = false }
-        let knownIds = Set(pendingItems.map { $0.id })
+        // Known = already-pending + already-imported (incl. soft-deleted, so restored+deleted
+        // sales never resurface) — otherwise every Sync re-discovers sales the user already
+        // imported, since they stay on Mercari's in_progress page until the order completes.
+        async let fetchSales = SaleRepository.shared.fetchSales()
+        async let fetchHidden = SaleRepository.shared.fetchHiddenSales()
+        let importedIds = (((try? await fetchSales) ?? []) + ((try? await fetchHidden) ?? []))
+            .compactMap { $0.platform == "mercari" ? $0.platformOrderId : nil }
+        let knownIds = Set(pendingItems.map { $0.id }).union(importedIds)
         let found = await PendingMercariSaleRepository.shared.discoverAndPersist(
             using: mercariSync, knownOrderIds: knownIds, stopBeforeDate: nil
         )
-        if found.isEmpty && pendingItems.isEmpty {
+        if mercariSync.needsLogin {
+            importError = "Log in to Mercari to sync."
+        } else if found.isEmpty && pendingItems.isEmpty {
             importError = "No new sales found."
         }
         await reloadPending()

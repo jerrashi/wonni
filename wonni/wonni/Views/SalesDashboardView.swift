@@ -979,7 +979,8 @@ private struct AsyncExternalImage: View {
 
 // MARK: - Mercari login sheet (shown when sync detects a login redirect)
 
-private struct MercariSyncLoginSheet: View {
+// Not private: also presented by AddSaleSheet when its sync scan hits a login redirect.
+struct MercariSyncLoginSheet: View {
     let webView: WKWebView
     let onDone: () -> Void
 
