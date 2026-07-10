@@ -4597,6 +4597,10 @@ final class MercariSaleSyncManager: ObservableObject {
     @Published var totalCount = 0
     @Published var currentStatus = ""
     @Published var needsLogin = false
+    /// One-line summary of what the last scanForNewSales pass saw (page URL, anchor/row
+    /// counts, sample hrefs). Surfaced in the UI so a TestFlight user can screenshot why a
+    /// scan found nothing — console logs aren't visible outside Xcode.
+    @Published var lastScanDiagnostics: String? = nil
 
     let webView: WKWebView
     private let navDelegate = SaleNavDelegate()
@@ -4951,10 +4955,12 @@ final class MercariSaleSyncManager: ObservableObject {
         // sortBy=7 = Last Updated, so we get newest sales first without needing dropdown interaction.
         // /in_progress/ shows transactions currently being traded — complete ones are already tracked.
         guard let url = URL(string: "https://www.mercari.com/mypage/listings/in_progress/?sortBy=7") else { return [] }
+        lastScanDiagnostics = nil
         navDelegate.reset()
         webView.load(URLRequest(url: url))
         guard await navDelegate.waitForLoad(timeout: 10) else {
             print("[MercariSaleSync] scanForNewSales: page timed out")
+            lastScanDiagnostics = "Page load timed out after 10s"
             return []
         }
 
@@ -4967,183 +4973,93 @@ final class MercariSaleSyncManager: ObservableObject {
         }
         needsLogin = false
 
-        try? await Task.sleep(nanoseconds: 1_500_000_000)
-
-        // Mercari item IDs always match /m\d+/. We look for that pattern in any link href
-        // since the in-progress page may link to /transaction/order_status/m[id]/ rather
-        // than /us/item/m[id]/, and the URL scheme can vary by page/experiment.
-        let extractJS = """
-        return (function() {
-            var results = [];
-            var seen = new Set();
-            var dateRe = /^\\d{2}\\/\\d{2}\\/\\d{2,4}$/;
-            var idRe = /(m\\d+)/;
-
-            function extractId(href) {
-                var m = href.match(idRe);
-                return m ? m[1] : null;
-            }
-
-            // Phase 1: try __NEXT_DATA__ — broadest search across all known key paths
-            var nd = document.getElementById('__NEXT_DATA__');
-            if (nd) {
-                try {
-                    var root = JSON.parse(nd.textContent || '');
-                    // Flatten everything under pageProps into candidate arrays
-                    var pp = root.props && root.props.pageProps;
-                    var candidates = [];
-                    if (pp) {
-                        // Walk all top-level and one-level-deep keys looking for arrays of objects with id+name
-                        for (var k in pp) {
-                            var v = pp[k];
-                            if (Array.isArray(v) && v.length && v[0] && v[0].id) candidates = candidates.concat(v);
-                            else if (v && typeof v === 'object') {
-                                for (var k2 in v) {
-                                    var v2 = v[k2];
-                                    if (Array.isArray(v2) && v2.length && v2[0] && v2[0].id) candidates = candidates.concat(v2);
-                                }
-                            }
-                        }
-                    }
-                    for (var it of candidates) {
-                        var sid = String(it.id || '');
-                        var extractedId = extractId(sid) || extractId(it.itemId || '');
-                        if (!extractedId || seen.has(extractedId)) continue;
-                        seen.add(extractedId);
-                        var upd = it.updated || it.updatedAt || it.updated_at || null;
-                        // Rough cents-vs-dollars guess only — every caller (syncWebPlatforms'
-                        // auto-import, and the manual-review sheet via enrichItems) re-fetches
-                        // the confirmed-reliable item-page price before writing to Firestore.
-                        // See github issue #38.
-                        var price = it.price ? (it.price > 1000 ? it.price / 100 : it.price) : null;
-                        results.push({ id: extractedId, name: it.name || null,
-                                       price: price, thumbnailUrl: (it.thumbnails && it.thumbnails[0]) || it.thumbnailUrl || null,
-                                       updatedStr: null });
-                    }
-                } catch(e) {}
-            }
-
-            // Shared helper: given any element, find name + price using data-testid
-            // first (item detail pages), then fall back to $ regex on <p> tags
-            // (in-progress list page which has no data-testid attributes).
-            function extractNamePrice(el) {
-                var priceRe = /^\\$[\\d,\\.]+/;
-                var nameEl = el.querySelector('[data-testid="ItemName"],[data-testid="item-name"]');
-                var priceEl = el.querySelector('[data-testid="ItemPrice"],[data-testid="item-price"]');
-                if (!nameEl || !priceEl) {
-                    var paras = Array.from(el.querySelectorAll('p'));
-                    if (!priceEl) priceEl = paras.find(function(p) { return priceRe.test(p.innerText.trim()); });
-                    if (!nameEl)  nameEl  = paras.find(function(p) {
-                        var t = p.innerText.trim();
-                        return t.length > 3 && !priceRe.test(t);
-                    });
+        // Mercari is a React SPA: didFinish fires before items render (WebContent cold start
+        // alone is ~2.5s). Poll for real content instead of a fixed sleep — a one-shot
+        // extraction here is why scans used to come back empty on device.
+        for _ in 0..<12 {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            if let probe = (try? await webView.callJS(
+                #"return JSON.stringify({n: document.querySelectorAll('a[href]').length, u: window.location.href});"#
+            )) as? String,
+               let data = probe.data(using: .utf8),
+               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if let u = dict["u"] as? String, u.contains("/login") || u.contains("/signup") {
+                    print("[MercariSaleSync] Client-side redirect to login")
+                    needsLogin = true
+                    return []
                 }
-                var priceText = priceEl ? priceEl.innerText.replace(/[^0-9\\.]/g,'') : null;
-                return {
-                    name: nameEl ? nameEl.innerText.trim() : null,
-                    price: priceText ? parseFloat(priceText) || null : null
-                };
+                if (dict["n"] as? Int ?? 0) > 0 { break }
             }
+        }
 
-            // Phase 2: DOM scan — walk <tr> rows first to pair links with date cells
-            if (results.length === 0) {
-                for (var row of document.querySelectorAll('tr')) {
-                    var link = Array.from(row.querySelectorAll('a[href]'))
-                        .find(function(a) { return idRe.test(a.href); });
-                    if (!link) continue;
-                    var eid = extractId(link.href);
-                    if (!eid || seen.has(eid)) continue;
-                    seen.add(eid);
-                    var dateTd = Array.from(row.querySelectorAll('td'))
-                        .find(function(td) { return dateRe.test(td.innerText.trim()); });
-                    var np = extractNamePrice(link);
-                    var imgEl = link.querySelector('img');
-                    results.push({ id: eid, name: np.name, price: np.price,
-                                   thumbnailUrl: imgEl ? imgEl.src : null,
-                                   updatedStr: dateTd ? dateTd.innerText.trim() : null });
-                }
-            }
-
-            // Phase 3: bare link scan — filter on JS .href (always absolute)
-            if (results.length === 0) {
-                for (var a of document.querySelectorAll('a[href]')) {
-                    if (!idRe.test(a.href)) continue;
-                    var eid = extractId(a.href);
-                    if (!eid || seen.has(eid)) continue;
-                    seen.add(eid);
-                    var np = extractNamePrice(a);
-                    var imgEl = a.querySelector('img');
-                    results.push({ id: eid, name: np.name, price: np.price,
-                                   thumbnailUrl: imgEl ? imgEl.src : null,
-                                   updatedStr: null });
-                }
-            }
-
-            return JSON.stringify({ items: results, url: window.location.href, count: results.length });
-        })();
-        """
-
-        let dateFormatter: DateFormatter = {
-            let f = DateFormatter()
-            f.locale = Locale(identifier: "en_US_POSIX")
-            f.dateFormat = "MM/dd/yy"  // Mercari shows e.g. 06/25/26
-            return f
-        }()
-
+        // Scroll-and-extract until the item count stops growing. The extraction script
+        // itself lives in MercariScanJS (covered by wonniTests fixture tests).
+        //
+        // Two deliberate behavior changes from the original implementation, both of which
+        // made real scans report "0 new sales" (github issue #50):
+        //  - Already-known IDs are FILTERED, not treated as a stop signal. Stopping at the
+        //    first known sale silently hid every older not-yet-imported sale below it.
+        //  - Items missing name/price are KEPT (with nils) and routed to enrichment /
+        //    fix-and-import, matching the old visible-scan flow, instead of being dropped.
         var newItems: [MercariFoundSaleItem] = []
+        var addedIds: Set<String> = []
         var lastCount = 0
         var noChangeStreak = 0
-        var done = false
+        var stopped = false
+        var lastDiag: String? = nil
 
         for _ in 0..<30 {
-            guard !done else { break }
+            guard !stopped else { break }
             _ = try? await webView.callJS("window.scrollTo(0, document.body.scrollHeight); return null;")
             try? await Task.sleep(nanoseconds: 1_500_000_000)
 
-            guard let json = (try? await webView.callJS(extractJS)) as? String,
+            guard let json = (try? await webView.callJS(MercariScanJS.extractInProgressItems)) as? String,
                   let data = json.data(using: .utf8),
                   let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let arr = root["items"] as? [[String: Any]] else { continue }
 
-            print("[MercariSaleSync] scan: \(arr.count) items on page, url=\(root["url"] as? String ?? "?")")
+            if let diag = root["diag"] as? [String: Any] {
+                let hrefs = (diag["sampleHrefs"] as? [String])?.joined(separator: " ") ?? ""
+                lastDiag = "url=\(root["url"] as? String ?? "?") ready=\(diag["readyState"] as? String ?? "?") "
+                    + "nextData=\(diag["hasNextData"] as? Bool == true ? "Y" : "N") "
+                    + "anchors=\(diag["anchorCount"] as? Int ?? 0) itemLinks=\(diag["idAnchorCount"] as? Int ?? 0) "
+                    + "rows=\(diag["rowCount"] as? Int ?? 0) extracted=\(arr.count) hrefs=[\(hrefs)]"
+            }
+            print("[MercariSaleSync] scan: \(arr.count) items on page — \(lastDiag ?? "")")
 
             if arr.count <= lastCount {
                 noChangeStreak += 1
-                if noChangeStreak >= 3 { break }  // 3 × 1.5s = 4.5s grace for hydration
+                if noChangeStreak >= 3 { break }
                 continue
             }
             noChangeStreak = 0
 
             for dict in arr.dropFirst(lastCount) {
                 guard let id = dict["id"] as? String, !id.isEmpty else { continue }
+                if knownOrderIds.contains(id) || addedIds.contains(id) { continue }
 
-                // Stop at the first sale we already know about — list is newest-first
-                if knownOrderIds.contains(id) { done = true; break }
-
-                // Stop once we reach an item updated before the start of the last-sync day
+                // Optional cutoff: stop once items are older than the caller's date.
+                // Callers that want the full pending list (the spec'd behavior) pass nil.
                 if let cutoff = stopBeforeDate,
                    let dateStr = dict["updatedStr"] as? String,
-                   let itemDate = dateFormatter.date(from: dateStr),
+                   let itemDate = MercariDateParsing.parseSoldDate(dateStr),
                    itemDate < cutoff {
-                    done = true; break
+                    stopped = true; break
                 }
 
-                let name = dict["name"] as? String
-                let price = (dict["price"] as? NSNumber)?.doubleValue
-                guard let n = name, !n.isEmpty, let p = price, p > 0 else {
-                    print("[MercariSaleSync] skipping item \(id): missing name or price")
-                    continue
-                }
+                addedIds.insert(id)
                 newItems.append(MercariFoundSaleItem(
                     id: id,
-                    name: n,
-                    price: p,
-                    thumbnailUrl: dict["thumbnailUrl"] as? String
+                    name: (dict["name"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                    price: (dict["price"] as? NSNumber)?.doubleValue,
+                    thumbnailUrl: dict["thumbnailUrl"] as? String,
+                    soldAt: (dict["updatedStr"] as? String).flatMap { MercariDateParsing.parseSoldDate($0) }
                 ))
             }
             lastCount = arr.count
         }
 
+        lastScanDiagnostics = lastDiag
         print("[MercariSaleSync] scanForNewSales: \(newItems.count) new item(s)")
         return newItems
     }

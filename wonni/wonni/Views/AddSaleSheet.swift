@@ -84,6 +84,18 @@ struct AddSaleSheet: View {
                         } else {
                             ForEach(pendingItems) { item in pendingRow(item) }
                         }
+                        // What the last scan actually saw — screenshot this if Sync keeps
+                        // finding nothing, it pinpoints whether the page loaded, whether
+                        // items rendered, and what the links looked like.
+                        if importError != nil, let diag = mercariSync.lastScanDiagnostics {
+                            DisclosureGroup("Scan details") {
+                                Text(diag)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                            .font(.caption)
+                        }
                     } header: {
                         Text("Found on Mercari (\(pendingItems.count))")
                     }

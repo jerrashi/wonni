@@ -70,6 +70,7 @@
 		61FAA58A2FB022A0001C28CE /* ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA58B2FB022A0001C28CE /* ConversationView.swift */; };
 		61FAA58C2FB022A0001C28CE /* SearchRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA58D2FB022A0001C28CE /* SearchRepository.swift */; };
 		6A9BC89536054268BC3F7DDB /* PublicProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53C7176BC7F54AF2908CF8FE /* PublicProfileView.swift */; };
+		73B4F7E5CEADC2C6BFC2CDE3 /* MercariScanJSTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D1D2B4BED80AB257DFE4C7 /* MercariScanJSTests.swift */; };
 		9944CB339CA5802F7C51CEEB /* URLExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D58F95FAA23371A58634E74E /* URLExtractor.swift */; };
 		A1B2C3D4E5F6A7B82E9D0001 /* ActiveDraftCarouselView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B82E9D0002 /* ActiveDraftCarouselView.swift */; };
 		AA0011223344556677AABBFF /* MercariObservedDataRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0011223344556677AABBEE /* MercariObservedDataRepository.swift */; };
@@ -79,6 +80,7 @@
 		CCDD00112233445566778801 /* ListingTemplate.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00112233445566778800 /* ListingTemplate.swift */; };
 		CCDD00112233445566778803 /* ListingTemplatesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00112233445566778802 /* ListingTemplatesView.swift */; };
 		D09C14F1968D71BC4CF4F0E6 /* PendingMercariSaleRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 520B53ED7B01C7E414B50230 /* PendingMercariSaleRepository.swift */; };
+		D2FF825E4990E0C83AE448A4 /* MercariScanJS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56EC85A21B130DB43A7EB01C /* MercariScanJS.swift */; };
 		D66414564520B94BD62B1EEE /* BulkImportManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09C400D2D0AB7F825F735BF1 /* BulkImportManager.swift */; };
 		E638B2296070470221FCA204 /* ImportListingSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67BC65BADBDD92E27F2C170A /* ImportListingSheet.swift */; };
 		EC4CE9E74B3D4A44A464E4A6 /* SalesDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */; };
@@ -106,6 +108,7 @@
 		4E4F2D9655DDF97CF4C7136F /* MercariURLDetectorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MercariURLDetectorTests.swift; sourceTree = "<group>"; };
 		520B53ED7B01C7E414B50230 /* PendingMercariSaleRepository.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PendingMercariSaleRepository.swift; sourceTree = "<group>"; };
 		53C7176BC7F54AF2908CF8FE /* PublicProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublicProfileView.swift; sourceTree = "<group>"; };
+		56EC85A21B130DB43A7EB01C /* MercariScanJS.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MercariScanJS.swift; sourceTree = "<group>"; };
 		6134E14C2FB3AF08007C3979 /* wonni.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = wonni.entitlements; sourceTree = "<group>"; };
 		6134E14D2FB64DBD007C3979 /* BulkEditSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkEditSheet.swift; sourceTree = "<group>"; };
 		6134E14F2FB76C1A007C3979 /* ProcessProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessProgressView.swift; sourceTree = "<group>"; };
@@ -166,6 +169,7 @@
 		954511D35EA0839747028ADA /* BulkImportPillView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BulkImportPillView.swift; sourceTree = "<group>"; };
 		9564BAC1690BD050B5596F07 /* MercariSaleParsing.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MercariSaleParsing.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B82E9D0002 /* ActiveDraftCarouselView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveDraftCarouselView.swift; sourceTree = "<group>"; };
+		A9D1D2B4BED80AB257DFE4C7 /* MercariScanJSTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MercariScanJSTests.swift; sourceTree = "<group>"; };
 		AA0011223344556677AABBEE /* MercariObservedDataRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MercariObservedDataRepository.swift; sourceTree = "<group>"; };
 		AABB00112233445566778801 /* AppTaskQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTaskQueue.swift; sourceTree = "<group>"; };
 		CCDD00112233445566778800 /* ListingTemplate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListingTemplate.swift; sourceTree = "<group>"; };
@@ -349,6 +353,7 @@
 				AABB00112233445566778801 /* AppTaskQueue.swift */,
 				9564BAC1690BD050B5596F07 /* MercariSaleParsing.swift */,
 				520B53ED7B01C7E414B50230 /* PendingMercariSaleRepository.swift */,
+				56EC85A21B130DB43A7EB01C /* MercariScanJS.swift */,
 			);
 			path = Data;
 			sourceTree = "<group>";
@@ -359,6 +364,7 @@
 				4E4F2D9655DDF97CF4C7136F /* MercariURLDetectorTests.swift */,
 				63AE5A91B4E5B0F695600110 /* MercariDateParsingTests.swift */,
 				03D0C11455159C543D7730AA /* MercariFlagCriteriaTests.swift */,
+				A9D1D2B4BED80AB257DFE4C7 /* MercariScanJSTests.swift */,
 			);
 			name = wonniTests;
 			path = wonniTests;
@@ -529,6 +535,7 @@
 				FAAFEB48A7D6F72586D01FD4 /* MercariSaleParsing.swift in Sources */,
 				D09C14F1968D71BC4CF4F0E6 /* PendingMercariSaleRepository.swift in Sources */,
 				147096BF7F09296C73526449 /* PendingMercariSale.swift in Sources */,
+				D2FF825E4990E0C83AE448A4 /* MercariScanJS.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -539,6 +546,7 @@
 				2B46C4E38868C6C673B04554 /* MercariURLDetectorTests.swift in Sources */,
 				19BE5E984ECA727D0E9A513A /* MercariDateParsingTests.swift in Sources */,
 				0685922FCBC971E8E5A74D30 /* MercariFlagCriteriaTests.swift in Sources */,
+				73B4F7E5CEADC2C6BFC2CDE3 /* MercariScanJSTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
