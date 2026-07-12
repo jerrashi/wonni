@@ -152,6 +152,53 @@ final class MercariScanJSTests: XCTestCase {
         XCTAssertEqual(first["updatedStr"] as? String, "07/10/26")
     }
 
+    /// Uses the EXACT markup captured from mercari.com's desktop page source (2026-07-12):
+    /// title is a <p> whose styled-components class contains "ItemsList__T2WithBreakWord",
+    /// status is an element whose class contains "ItemStatusLabel". Row is div-based (no
+    /// <tr>), anchor holds only the thumbnail. The sc- hash suffixes change per deploy —
+    /// only the display-name fragments are stable.
+    func test_divRow_realMercariClasses_titleAndStatusExtracted() async throws {
+        let html = """
+        <html><body><div id="root"><div class="ItemsList__Row-sc-249e96a8-3 abcDef">
+            <a href="/transaction/order_status/m46397154598/">
+                <img src="https://cdn/k.jpg">
+            </a>
+            <div>
+                <p color="gray-dark" class="T2-sc-1um8956 ItemsList__T2WithBreakWord-sc-249e96a8-0 kQKWGo ccYYZm">JEONGYEON Twice \u{201C}This Is For\u{201D} World Tour Exclusive JEONGVELY Keychain</p>
+                <div class="ItemStatusLabel__Container-sc-8f7274bc-0 hGmVcS"><span>Awaiting rating from buyer</span></div>
+                <span>$16.20</span>
+            </div>
+        </div></div></body></html>
+        """
+        try await loadFixture(html)
+        let (items, _) = try await runExtract()
+        let first = try XCTUnwrap(items.first)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(first["id"] as? String, "m46397154598")
+        XCTAssertEqual(first["name"] as? String, "JEONGYEON Twice \u{201C}This Is For\u{201D} World Tour Exclusive JEONGVELY Keychain")
+        XCTAssertEqual(first["price"] as? Double, 16.2)
+        XCTAssertEqual(first["statusText"] as? String, "Awaiting rating from buyer")
+    }
+
+    /// Even a status string that ISN'T in the known-phrase regex must be excluded from
+    /// name candidates when it's inside an ItemStatusLabel-classed element.
+    func test_divRow_unknownStatusPhraseInStatusLabel_notUsedAsName() async throws {
+        let html = """
+        <html><body><div><div class="ItemsList__Row-sc-1 x">
+            <a href="/transaction/order_status/m1010/"><img src="x.jpg"></a>
+            <div>
+                <div class="ItemStatusLabel__Container-sc-2 y"><span>Some future status wording</span></div>
+                <span>$5.00</span>
+            </div>
+        </div></div></body></html>
+        """
+        try await loadFixture(html)
+        let (items, _) = try await runExtract()
+        let first = try XCTUnwrap(items.first)
+        XCTAssertTrue(first["name"] is NSNull)
+        XCTAssertEqual(first["statusText"] as? String, "Some future status wording")
+    }
+
     /// No usable title anywhere (no alt, only a status phrase) — name must come back null,
     /// NOT the status string.
     func test_tableRow_onlyStatusText_nameStaysNull() async throws {
