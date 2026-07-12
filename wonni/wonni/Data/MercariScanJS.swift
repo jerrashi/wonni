@@ -78,13 +78,18 @@ enum MercariScanJS {
         // status, e.g. "Awaiting rating from buyer", while the title is in the img alt).
         var statusRe = /^(awaiting|ship by|shipped|in transit|on the way|delivered|rate (the )?buyer|label (created|printed)|arriv|waiting|pending|order (placed|complete)|preparing|out for delivery|return)/i;
 
-        // Name + price finder: data-testid first (item detail pages), then the thumbnail's
-        // alt text (in_progress rows put the title there), then leaf text — excluding
-        // prices, dates, and status phrases. Also captures the row's status text.
+        // Name + price finder. Title preference (confirmed against mercari.com desktop
+        // source, 2026-07-12): data-testid → the styled-components display-name class
+        // "ItemsList__T2WithBreakWord" (the sc- hash suffixes change per deploy; the
+        // display-name fragment is stable) → thumbnail alt → leaf text. The status label
+        // ("Awaiting rating from buyer") is identified structurally by its
+        // "ItemStatusLabel" class — anything inside one is excluded from name candidates
+        // even if its wording isn't in the known-phrase regex.
         function extractNamePrice(el) {
             if (!el) return { name: null, price: null, statusText: null };
             var priceRe = /^\$[\d,\.]+/;
-            var nameEl = el.querySelector('[data-testid="ItemName"],[data-testid="item-name"]');
+            var nameEl = el.querySelector('[data-testid="ItemName"],[data-testid="item-name"]')
+                      || el.querySelector('[class*="ItemsList__T2WithBreakWord"]');
             var priceEl = el.querySelector('[data-testid="ItemPrice"],[data-testid="item-price"]');
             var name = nameEl ? nameEl.innerText.trim() : null;
             if (!name) {
@@ -95,14 +100,19 @@ enum MercariScanJS {
                     }
                 }
             }
+            function inStatusLabel(t) {
+                return t.closest && t.closest('[class*="ItemStatusLabel"]') !== null;
+            }
             var texts = Array.from(el.querySelectorAll('p, span, td, div'))
                 .filter(function(t) { return t.children.length === 0; });
-            var statusEl = texts.find(function(t) { return statusRe.test(t.innerText.trim()); });
+            var statusEl = el.querySelector('[class*="ItemStatusLabel"]')
+                        || texts.find(function(t) { return statusRe.test(t.innerText.trim()); });
             if (!priceEl) priceEl = texts.find(function(t) { return priceRe.test(t.innerText.trim()); });
             if (!name) {
                 var textEl = texts.find(function(t) {
                     var s = t.innerText.trim();
-                    return s.length > 3 && !priceRe.test(s) && !dateRe.test(s) && !statusRe.test(s);
+                    return s.length > 3 && !priceRe.test(s) && !dateRe.test(s)
+                        && !statusRe.test(s) && !inStatusLabel(t);
                 });
                 if (textEl) name = textEl.innerText.trim();
             }

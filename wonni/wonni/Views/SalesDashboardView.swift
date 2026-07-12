@@ -490,7 +490,12 @@ struct SalesDashboardView: View {
         )
         var result: (message: String, actionLabel: String?, action: (() -> Void)?)? = nil
         if !found.isEmpty {
-            if mercariAutoImport {
+            // Read the setting NOW, not from the cached @State: that state defaults to true
+            // and only updates when reload()'s async fetch lands, so a sync tapped right
+            // after opening the dashboard could auto-import with the setting off.
+            let autoImport = await IntegrationRepository.shared.loadSalesDashboardSettings()
+            mercariAutoImport = autoImport
+            if autoImport {
                 var imported = 0
                 var needsReview: [MercariFoundSaleItem] = []
                 for item in found {
@@ -553,12 +558,17 @@ struct SalesDashboardView: View {
             } else {
                 // Auto-import is off — persist to the durable pending-sales collection (not
                 // just an in-memory toast) so the "+" modal's list survives app restarts
-                // (github issue #50).
+                // (github issue #50). Re-found already-pending items get refreshed by the
+                // merge (that's how scraper fixes reach stale records) but only genuinely
+                // new ones count toward the toast.
+                let existingPendingIds = Set(await PendingMercariSaleRepository.shared.fetchAll().map { $0.id })
                 await PendingMercariSaleRepository.shared.upsert(found)
-                let count = found.count
-                result = ("\(count) new Mercari sale\(count == 1 ? "" : "s") found — review in Import",
-                          "Review",
-                          { showAddSale = true })
+                let count = found.filter { !existingPendingIds.contains($0.id) }.count
+                if count > 0 {
+                    result = ("\(count) new Mercari sale\(count == 1 ? "" : "s") found — review in Import",
+                              "Review",
+                              { showAddSale = true })
+                }
             }
         }
         await mercariSaleSyncManager.sync(sales: sales)

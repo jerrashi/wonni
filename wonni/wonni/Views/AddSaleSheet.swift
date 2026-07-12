@@ -332,20 +332,23 @@ struct AddSaleSheet: View {
         isSyncing = true
         importError = nil
         defer { isSyncing = false }
-        // Known = already-pending + already-imported (incl. soft-deleted, so restored+deleted
-        // sales never resurface) — otherwise every Sync re-discovers sales the user already
-        // imported, since they stay on Mercari's in_progress page until the order completes.
+        // Known = already-imported only (incl. soft-deleted, so restored+deleted sales
+        // never resurface). Already-PENDING items are deliberately NOT excluded: the scan
+        // re-extracts them and the merge-upsert refreshes their name/price/status, so a
+        // scraper fix actually reaches records captured by an older, buggier scan —
+        // otherwise stale fields (like status-as-title) are frozen forever.
         async let fetchSales = SaleRepository.shared.fetchSales()
         async let fetchHidden = SaleRepository.shared.fetchHiddenSales()
         let importedIds = (((try? await fetchSales) ?? []) + ((try? await fetchHidden) ?? []))
             .compactMap { $0.platform == "mercari" ? $0.platformOrderId : nil }
-        let knownIds = Set(pendingItems.map { $0.id }).union(importedIds)
+        let previouslyPendingIds = Set(pendingItems.map { $0.id })
         let found = await PendingMercariSaleRepository.shared.discoverAndPersist(
-            using: mercariSync, knownOrderIds: knownIds, stopBeforeDate: nil
+            using: mercariSync, knownOrderIds: Set(importedIds), stopBeforeDate: nil
         )
+        let genuinelyNew = found.filter { !previouslyPendingIds.contains($0.id) }
         if mercariSync.needsLogin {
             importError = "Log in to Mercari to sync."
-        } else if found.isEmpty && pendingItems.isEmpty {
+        } else if genuinelyNew.isEmpty && found.isEmpty && pendingItems.isEmpty {
             importError = "No new sales found."
         }
         await reloadPending()

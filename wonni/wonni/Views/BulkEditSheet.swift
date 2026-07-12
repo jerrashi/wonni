@@ -22,6 +22,7 @@ struct BulkEditSheet: View {
     @State private var selectedCondition: ItemCondition? = nil
     @State private var selectedShipping: ShippingPolicyMode = .unchanged
     @State private var markOutOfStock = false
+    @State private var outOfStockSummary: String?
     @State private var weightWholeLbs: Int = 0
     @State private var weightOz: Double = 0
     @State private var lengthIn: Double? = nil
@@ -276,6 +277,20 @@ struct BulkEditSheet: View {
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
                 }
             }
+            .alert(
+                "Out of Stock",
+                isPresented: Binding(
+                    get: { outOfStockSummary != nil },
+                    set: { if !$0 { outOfStockSummary = nil } }
+                )
+            ) {
+                Button("OK") {
+                    onComplete()
+                    dismiss()
+                }
+            } message: {
+                Text(outOfStockSummary ?? "")
+            }
         }
     }
     
@@ -464,7 +479,16 @@ struct BulkEditSheet: View {
                 }
 
                 if markOutOfStock {
-                    try await markSelectedOutOfStock(Array(selectedListingIds))
+                    let result = await markSelectedOutOfStock(Array(selectedListingIds))
+                    if result.failed > 0 {
+                        // Stay open and show the summary; onComplete/dismiss run
+                        // when the user acknowledges the alert.
+                        await MainActor.run {
+                            isApplying = false
+                            outOfStockSummary = "\(result.succeeded)/\(result.succeeded + result.failed) listings marked out of stock. \(result.failed) failed after 3 attempts — see Xcode console and Firebase function logs for details."
+                        }
+                        return
+                    }
                 }
 
                 await MainActor.run {
@@ -482,23 +506,33 @@ struct BulkEditSheet: View {
     }
 
     /// Marks every listing in `ids` out of stock via the `markSoldOutAndCascade`
-    /// cloud function (qty=0, status=sold, hides on eBay/Etsy, deactivates on Mercari).
-    ///
-    /// Partial-failure behavior is the key decision here: if listing 3 of 10 fails,
-    /// should the remaining 7 still be processed (best-effort), or should we stop
-    /// and surface the error immediately (fail-fast)?
-    private func markSelectedOutOfStock(_ ids: [String]) async throws {
-        // TODO(user): implement the loop.
-        // Each call: _ = try await callCloudFunction("markSoldOutAndCascade", ["listingId": id])
-        //
-        // Option A — fail-fast: `try await` each call in order; the first error
-        //   propagates and applyBulkEdit's catch keeps the sheet open. Simple, but
-        //   listings before the failure are already out of stock while later ones aren't.
-        // Option B — best-effort: `try?` each call, count failures, and throw one
-        //   summary error at the end if any failed. Every healthy listing gets
-        //   processed, at the cost of a vaguer error.
-        // Keep calls sequential either way — each invocation fans out to eBay/Etsy
-        // APIs, and firing dozens concurrently invites rate limiting.
+    /// cloud function (qty=0, status=sold, hides on eBay/Etsy, flags Mercari for
+    /// webview deactivation). Best-effort with auto-retry: each listing gets up to
+    /// 3 attempts with backoff, and failures don't stop the remaining listings.
+    /// Calls stay sequential — each invocation fans out to eBay/Etsy APIs, and
+    /// firing dozens concurrently invites rate limiting.
+    private func markSelectedOutOfStock(_ ids: [String]) async -> (succeeded: Int, failed: Int) {
+        var failedCount = 0
+        for id in ids {
+            var lastError: Error?
+            for attempt in 1...3 {
+                do {
+                    _ = try await callCloudFunction("markSoldOutAndCascade", ["listingId": id])
+                    lastError = nil
+                    break
+                } catch {
+                    lastError = error
+                    if attempt < 3 {
+                        try? await Task.sleep(nanoseconds: UInt64(attempt) * 1_000_000_000)
+                    }
+                }
+            }
+            if let error = lastError {
+                failedCount += 1
+                print("[BulkEdit] markSoldOutAndCascade failed for \(id) after 3 attempts: \(error)")
+            }
+        }
+        return (ids.count - failedCount, failedCount)
     }
 }
 
