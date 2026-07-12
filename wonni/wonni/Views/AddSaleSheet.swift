@@ -34,17 +34,14 @@ struct AddSaleSheet: View {
     @State private var itemToEdit: MercariFoundSaleItem? = nil
     @State private var retryingIds: Set<String> = []
     @State private var importError: String? = nil
+    @State private var importStatus = ""
     @State private var showMercariLogin = false
 
-    // Headless — reused for both the pending list's Sync button (discovery) and enrichment.
+    // Headless — reused for both the pending list's Sync button (discovery) and the
+    // per-item enrichment that runs when the user actually imports. Nothing is enriched
+    // on open: the pending list shows whatever the list-page scan captured (name, price,
+    // date, status), and full order-page details are fetched only for selected items.
     @StateObject private var mercariSync = MercariSaleSyncManager()
-    @StateObject private var importer: MercariSalesPageImporter
-
-    init() {
-        let sync = MercariSaleSyncManager()
-        _mercariSync = StateObject(wrappedValue: sync)
-        _importer = StateObject(wrappedValue: MercariSalesPageImporter(saleSync: sync))
-    }
 
     private var detection: MercariInputDetection {
         MercariURLDetector.detect(urlString)
@@ -117,7 +114,7 @@ struct AddSaleSheet: View {
                             ProgressView()
                         } else {
                             Button("Import (\(selectedIds.count))") { Task { await importSelected() } }
-                                .disabled(selectedIds.isEmpty || importer.isEnriching)
+                                .disabled(selectedIds.isEmpty)
                         }
                     }
                 }
@@ -216,7 +213,13 @@ struct AddSaleSheet: View {
             if isSyncing {
                 HStack(spacing: 6) {
                     ProgressView().scaleEffect(0.75)
-                    Text(importer.isEnriching ? importer.scanStatus : "Checking Mercari…")
+                    Text("Checking Mercari…")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } else if isImporting {
+                HStack(spacing: 6) {
+                    ProgressView().scaleEffect(0.75)
+                    Text(importStatus)
                         .font(.caption).foregroundStyle(.secondary)
                 }
             } else if let err = importError {
@@ -228,7 +231,7 @@ struct AddSaleSheet: View {
             Button("Sync") { Task { await syncNow() } }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .disabled(isSyncing)
+                .disabled(isSyncing || isImporting)
         }
     }
 
@@ -265,10 +268,11 @@ struct AddSaleSheet: View {
                                 Text("·").font(.caption2).foregroundStyle(.secondary)
                                 Text(date.formatted(.dateTime.month(.abbreviated).day().year()))
                                     .font(.caption2).foregroundStyle(.secondary)
-                            } else if importer.isEnriching {
-                                ProgressView().scaleEffect(0.6)
                             }
                         }
+                    }
+                    if let status = item.statusText {
+                        Text(status).font(.caption2).foregroundStyle(.tertiary)
                     }
                 }
                 Spacer()
@@ -292,25 +296,36 @@ struct AddSaleSheet: View {
         .disabled(retryingIds.contains(item.id))
     }
 
+    // Only items whose enrichment actually FAILED are flagged. Un-enriched items (no
+    // take-home yet) stay selectable — full details are fetched when the user imports,
+    // not up front, so opening this sheet is instant.
     private func isFlagged(_ item: MercariFoundSaleItem) -> Bool {
-        guard !importer.isEnriching, !retryingIds.contains(item.id) else { return false }
-        if item.enrichFailed { return true }
-        return MercariSaleValidation.needsFix(
-            name: item.name, price: item.price, takeHome: item.takeHome, soldAt: item.soldAt
-        )
+        guard !retryingIds.contains(item.id) else { return false }
+        return item.enrichFailed
     }
 
     private func reloadPending() async {
         isLoadingPending = true
-        let items = await PendingMercariSaleRepository.shared.fetchAll()
-        pendingItems = items
-        importer.foundItems = items
+        pendingItems = await PendingMercariSaleRepository.shared.fetchAll()
         isLoadingPending = false
-        // Freshly-loaded pending items may not have take-home/sold-date yet (scanForNewSales
-        // only reads the list page) — enrich before showing them as selectable.
-        await importer.enrichItems()
-        pendingItems = importer.foundItems
-        await PendingMercariSaleRepository.shared.upsert(pendingItems)
+    }
+
+    /// Fetches order-page details for one item and merges them in. Returns the enriched
+    /// item; marks enrichFailed if required fields are still missing afterward.
+    private func enrich(_ item: MercariFoundSaleItem) async -> MercariFoundSaleItem {
+        var updated = item
+        if let result = await mercariSync.loadSaleData(itemId: item.id, fetchPhoto: true) {
+            updated.takeHome = result.takeHome ?? updated.takeHome
+            updated.soldAt = result.soldAt ?? updated.soldAt
+            updated.thumbnailUrl = result.thumbnailUrl ?? updated.thumbnailUrl
+            // The item-page price is confirmed reliable; the list-page price is only a
+            // cents-vs-dollars magnitude guess (github issue #38).
+            updated.price = result.price ?? updated.price
+        }
+        updated.enrichFailed = MercariSaleValidation.needsFix(
+            name: updated.name, price: updated.price, takeHome: updated.takeHome, soldAt: updated.soldAt
+        )
+        return updated
     }
 
     private func syncNow() async {
@@ -338,23 +353,45 @@ struct AddSaleSheet: View {
 
     private func retry(_ item: MercariFoundSaleItem) async {
         retryingIds.insert(item.id)
-        await importer.enrichItem(item.id)
-        pendingItems = importer.foundItems
-        await PendingMercariSaleRepository.shared.upsert(pendingItems)
+        let updated = await enrich(item)
+        if let i = pendingItems.firstIndex(where: { $0.id == item.id }) {
+            pendingItems[i] = updated
+        }
+        await PendingMercariSaleRepository.shared.upsert([updated])
         retryingIds.remove(item.id)
     }
 
+    // Enrich-then-import, per item, only for what the user selected. Complete items save
+    // immediately; items whose order-page scrape comes back incomplete get flagged in the
+    // list (never silently dropped, never written incomplete — github issue #24).
     private func importSelected() async {
         isImporting = true
+        importError = nil
         var succeededIds: Set<String> = []
-        for item in pendingItems where selectedIds.contains(item.id) {
-            // Flagged items can't be selected (tapping one opens the fix dialog instead), but
-            // guard anyway — never write an incomplete Sale doc (github issue #24's failure mode).
-            guard !isFlagged(item),
-                  let name = item.name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        var failedCount = 0
+        let selected = pendingItems.filter { selectedIds.contains($0.id) && !isFlagged($0) }
+        var done = 0
+        for var item in selected {
+            done += 1
+            importStatus = "Importing \(done)/\(selected.count)…"
+            retryingIds.insert(item.id)
+            defer { retryingIds.remove(item.id) }
+
+            if MercariSaleValidation.needsFix(name: item.name, price: item.price,
+                                              takeHome: item.takeHome, soldAt: item.soldAt) {
+                item = await enrich(item)
+                if let i = pendingItems.firstIndex(where: { $0.id == item.id }) {
+                    pendingItems[i] = item
+                }
+                await PendingMercariSaleRepository.shared.upsert([item])
+            }
+            guard let name = item.name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   let price = item.price, price > 0,
                   let takeHome = item.takeHome,
-                  let saleDate = item.soldAt else { continue }
+                  let saleDate = item.soldAt else {
+                failedCount += 1
+                continue
+            }
             let match = await ListingRepository.shared.findListingByMercariId(item.id)
             let sale = Sale(
                 listingId: match?.listingId,
@@ -374,12 +411,16 @@ struct AddSaleSheet: View {
                 await PendingMercariSaleRepository.shared.delete(item.id)
             } catch {
                 print("[AddSaleSheet] Failed to save sale for \(item.id): \(error)")
+                failedCount += 1
             }
         }
         isImporting = false
+        importStatus = ""
         pendingItems.removeAll { succeededIds.contains($0.id) }
-        importer.foundItems.removeAll { succeededIds.contains($0.id) }
         selectedIds.subtract(succeededIds)
+        if failedCount > 0 {
+            importError = "\(failedCount) item\(failedCount == 1 ? "" : "s") couldn't be fully synced — tap the flagged row\(failedCount == 1 ? "" : "s") to fix."
+        }
     }
 }
 

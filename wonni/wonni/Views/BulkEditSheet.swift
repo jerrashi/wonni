@@ -21,6 +21,7 @@ struct BulkEditSheet: View {
     
     @State private var selectedCondition: ItemCondition? = nil
     @State private var selectedShipping: ShippingPolicyMode = .unchanged
+    @State private var markOutOfStock = false
     @State private var weightWholeLbs: Int = 0
     @State private var weightOz: Double = 0
     @State private var lengthIn: Double? = nil
@@ -240,6 +241,16 @@ struct BulkEditSheet: View {
                     Text("Leave at 0 / blank to keep existing values.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+
+                Section {
+                    Toggle("Mark as Out of Stock", isOn: $markOutOfStock)
+                        .tint(.red)
+                } header: {
+                    Text("Availability")
+                } footer: {
+                    Text("Sets quantity to 0 and marks each listing sold. Hides the listing on eBay and Etsy and deactivates it on Mercari.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             .navigationTitle("Bulk Edit (\(selectedListingIds.count))")
             .navigationBarTitleDisplayMode(.inline)
@@ -381,12 +392,16 @@ struct BulkEditSheet: View {
         }
     }
     
-    private var hasChanges: Bool {
+    private var hasFieldChanges: Bool {
         (priceAdjustmentMode != .none && priceAdjustmentValue != nil) ||
         !titlePrepend.isEmpty || !titleAppend.isEmpty ||
         !descriptionPrepend.isEmpty || !descriptionAppend.isEmpty ||
         selectedCondition != nil || selectedShipping != .unchanged ||
         combinedWeightLbs != nil || hasDimensions
+    }
+
+    private var hasChanges: Bool {
+        hasFieldChanges || markOutOfStock
     }
     
     private func applyBulkEdit() {
@@ -418,28 +433,38 @@ struct BulkEditSheet: View {
             }
 
             do {
-                let dims: (Double, Double, Double)? = hasDimensions ? (lengthIn!, widthIn!, heightIn!) : nil
-                let ebayIds = try await ListingRepository.shared.bulkUpdate(
-                    listingIds: Array(selectedListingIds),
-                    priceAdjustment: adjustment,
-                    isPercentage: isPercentage,
-                    isPriceSet: isPriceSet,
-                    minimumPrice: minP,
-                    maximumPrice: maxP,
-                    titlePrepend: titlePrepend.isEmpty ? nil : titlePrepend,
-                    titleAppend: titleAppend.isEmpty ? nil : titleAppend,
-                    descriptionPrepend: descriptionPrepend.isEmpty ? nil : descriptionPrepend,
-                    descriptionAppend: descriptionAppend.isEmpty ? nil : descriptionAppend,
-                    condition: selectedCondition,
-                    buyerPaysShipping: buyerPaysShipping,
-                    setWeightLbs: combinedWeightLbs,
-                    setPackageDimensions: dims
-                )
+                if hasFieldChanges {
+                    let dims: (Double, Double, Double)? = hasDimensions ? (lengthIn!, widthIn!, heightIn!) : nil
+                    let ebayIds = try await ListingRepository.shared.bulkUpdate(
+                        listingIds: Array(selectedListingIds),
+                        priceAdjustment: adjustment,
+                        isPercentage: isPercentage,
+                        isPriceSet: isPriceSet,
+                        minimumPrice: minP,
+                        maximumPrice: maxP,
+                        titlePrepend: titlePrepend.isEmpty ? nil : titlePrepend,
+                        titleAppend: titleAppend.isEmpty ? nil : titleAppend,
+                        descriptionPrepend: descriptionPrepend.isEmpty ? nil : descriptionPrepend,
+                        descriptionAppend: descriptionAppend.isEmpty ? nil : descriptionAppend,
+                        condition: selectedCondition,
+                        buyerPaysShipping: buyerPaysShipping,
+                        setWeightLbs: combinedWeightLbs,
+                        setPackageDimensions: dims
+                    )
 
-                for id in ebayIds {
-                    Task {
-                        _ = try? await callCloudFunction("ebayUpdateListing", ["listingId": id])
+                    // markSoldOutAndCascade hides the eBay listing with qty=0 anyway,
+                    // so pushing field edits to eBay is skipped when going out of stock.
+                    if !markOutOfStock {
+                        for id in ebayIds {
+                            Task {
+                                _ = try? await callCloudFunction("ebayUpdateListing", ["listingId": id])
+                            }
+                        }
                     }
+                }
+
+                if markOutOfStock {
+                    try await markSelectedOutOfStock(Array(selectedListingIds))
                 }
 
                 await MainActor.run {
@@ -454,6 +479,26 @@ struct BulkEditSheet: View {
                 }
             }
         }
+    }
+
+    /// Marks every listing in `ids` out of stock via the `markSoldOutAndCascade`
+    /// cloud function (qty=0, status=sold, hides on eBay/Etsy, deactivates on Mercari).
+    ///
+    /// Partial-failure behavior is the key decision here: if listing 3 of 10 fails,
+    /// should the remaining 7 still be processed (best-effort), or should we stop
+    /// and surface the error immediately (fail-fast)?
+    private func markSelectedOutOfStock(_ ids: [String]) async throws {
+        // TODO(user): implement the loop.
+        // Each call: _ = try await callCloudFunction("markSoldOutAndCascade", ["listingId": id])
+        //
+        // Option A — fail-fast: `try await` each call in order; the first error
+        //   propagates and applyBulkEdit's catch keeps the sheet open. Simple, but
+        //   listings before the failure are already out of stock while later ones aren't.
+        // Option B — best-effort: `try?` each call, count failures, and throw one
+        //   summary error at the end if any failed. Every healthy listing gets
+        //   processed, at the cost of a vaguer error.
+        // Keep calls sequential either way — each invocation fans out to eBay/Etsy
+        // APIs, and firing dozens concurrently invites rate limiting.
     }
 }
 

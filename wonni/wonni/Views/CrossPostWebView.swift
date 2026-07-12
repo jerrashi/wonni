@@ -5053,7 +5053,8 @@ final class MercariSaleSyncManager: ObservableObject {
                     name: (dict["name"] as? String).flatMap { $0.isEmpty ? nil : $0 },
                     price: (dict["price"] as? NSNumber)?.doubleValue,
                     thumbnailUrl: dict["thumbnailUrl"] as? String,
-                    soldAt: (dict["updatedStr"] as? String).flatMap { MercariDateParsing.parseSoldDate($0) }
+                    soldAt: (dict["updatedStr"] as? String).flatMap { MercariDateParsing.parseSoldDate($0) },
+                    statusText: (dict["statusText"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                 ))
             }
             lastCount = arr.count
