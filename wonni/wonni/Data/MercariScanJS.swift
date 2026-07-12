@@ -67,31 +67,50 @@ enum MercariScanJS {
                     results.push({ id: extractedId, name: it.name || null,
                                    price: price,
                                    thumbnailUrl: (it.thumbnails && it.thumbnails[0]) || it.thumbnailUrl || null,
-                                   updatedStr: (typeof upd === 'string' && dateRe.test(upd)) ? upd : null });
+                                   updatedStr: (typeof upd === 'string' && dateRe.test(upd)) ? upd : null,
+                                   statusText: (typeof it.status === 'string') ? it.status : null });
                 }
             } catch(e) {}
         }
 
-        // Name + price finder: data-testid first (item detail pages), then $-regex over
-        // <p>/<span>/<td> text (the list page has no data-testid attributes).
+        // Transaction-status phrases shown on in_progress rows. These must never be
+        // mistaken for the item title (observed live: every row's first plain text is the
+        // status, e.g. "Awaiting rating from buyer", while the title is in the img alt).
+        var statusRe = /^(awaiting|ship by|shipped|in transit|on the way|delivered|rate (the )?buyer|label (created|printed)|arriv|waiting|pending|order (placed|complete)|preparing|out for delivery|return)/i;
+
+        // Name + price finder: data-testid first (item detail pages), then the thumbnail's
+        // alt text (in_progress rows put the title there), then leaf text — excluding
+        // prices, dates, and status phrases. Also captures the row's status text.
         function extractNamePrice(el) {
-            if (!el) return { name: null, price: null };
+            if (!el) return { name: null, price: null, statusText: null };
             var priceRe = /^\$[\d,\.]+/;
             var nameEl = el.querySelector('[data-testid="ItemName"],[data-testid="item-name"]');
             var priceEl = el.querySelector('[data-testid="ItemPrice"],[data-testid="item-price"]');
-            if (!nameEl || !priceEl) {
-                var texts = Array.from(el.querySelectorAll('p, span, td, div'))
-                    .filter(function(t) { return t.children.length === 0; });
-                if (!priceEl) priceEl = texts.find(function(t) { return priceRe.test(t.innerText.trim()); });
-                if (!nameEl)  nameEl  = texts.find(function(t) {
+            var name = nameEl ? nameEl.innerText.trim() : null;
+            if (!name) {
+                for (var img of el.querySelectorAll('img')) {
+                    var alt = (img.getAttribute('alt') || '').trim();
+                    if (alt.length > 3 && !alt.toLowerCase().includes('avatar') && !statusRe.test(alt)) {
+                        name = alt; break;
+                    }
+                }
+            }
+            var texts = Array.from(el.querySelectorAll('p, span, td, div'))
+                .filter(function(t) { return t.children.length === 0; });
+            var statusEl = texts.find(function(t) { return statusRe.test(t.innerText.trim()); });
+            if (!priceEl) priceEl = texts.find(function(t) { return priceRe.test(t.innerText.trim()); });
+            if (!name) {
+                var textEl = texts.find(function(t) {
                     var s = t.innerText.trim();
-                    return s.length > 3 && !priceRe.test(s) && !dateRe.test(s);
+                    return s.length > 3 && !priceRe.test(s) && !dateRe.test(s) && !statusRe.test(s);
                 });
+                if (textEl) name = textEl.innerText.trim();
             }
             var priceText = priceEl ? priceEl.innerText.replace(/[^0-9\.]/g,'') : null;
             return {
-                name: nameEl ? nameEl.innerText.trim() : null,
-                price: priceText ? parseFloat(priceText) || null : null
+                name: name,
+                price: priceText ? parseFloat(priceText) || null : null,
+                statusText: statusEl ? statusEl.innerText.trim() : null
             };
         }
 
@@ -109,15 +128,17 @@ enum MercariScanJS {
                 // Search inside the link first, then widen to the whole row — Mercari's
                 // list rows keep the title/price in cells NEXT TO the thumbnail link.
                 var np = extractNamePrice(link);
-                if (np.name === null || np.price === null) {
+                if (np.name === null || np.price === null || np.statusText === null) {
                     var rowNp = extractNamePrice(row);
                     np = { name: np.name !== null ? np.name : rowNp.name,
-                           price: np.price !== null ? np.price : rowNp.price };
+                           price: np.price !== null ? np.price : rowNp.price,
+                           statusText: np.statusText !== null ? np.statusText : rowNp.statusText };
                 }
                 var imgEl = row.querySelector('img');
                 results.push({ id: eid, name: np.name, price: np.price,
                                thumbnailUrl: imgEl ? imgEl.src : null,
-                               updatedStr: dateTd ? dateTd.innerText.trim() : null });
+                               updatedStr: dateTd ? dateTd.innerText.trim() : null,
+                               statusText: np.statusText });
             }
         }
 
@@ -129,16 +150,18 @@ enum MercariScanJS {
                 if (!eid || seen.has(eid)) continue;
                 seen.add(eid);
                 var np = extractNamePrice(a);
-                if (np.name === null || np.price === null) {
+                if (np.name === null || np.price === null || np.statusText === null) {
                     var container = a.closest('li, article, tr') || a.parentElement;
                     var cNp = extractNamePrice(container);
                     np = { name: np.name !== null ? np.name : cNp.name,
-                           price: np.price !== null ? np.price : cNp.price };
+                           price: np.price !== null ? np.price : cNp.price,
+                           statusText: np.statusText !== null ? np.statusText : cNp.statusText };
                 }
                 var imgEl = a.querySelector('img');
                 results.push({ id: eid, name: np.name, price: np.price,
                                thumbnailUrl: imgEl ? imgEl.src : null,
-                               updatedStr: null });
+                               updatedStr: null,
+                               statusText: np.statusText });
             }
         }
 

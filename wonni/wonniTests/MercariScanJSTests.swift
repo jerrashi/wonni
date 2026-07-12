@@ -124,6 +124,54 @@ final class MercariScanJSTests: XCTestCase {
         XCTAssertEqual(items[0]["updatedStr"] as? String, "07/07/26")
     }
 
+    /// Replicates the real in_progress row shape observed on device (2026-07-12 screenshot):
+    /// the first plain text in the row is the transaction STATUS ("Awaiting rating from
+    /// buyer"), and the item title lives in the thumbnail's alt attribute. The name finder
+    /// must prefer img[alt] and never fall back to a status phrase.
+    func test_tableRow_realShape_titleInImgAlt_statusNotUsedAsName() async throws {
+        let html = """
+        <html><body><table><tbody>
+        <tr>
+            <td><a href="/transaction/order_status/m11862301506/">
+                <img src="https://cdn/t.jpg" alt="Taesan - BOYNEXTDOOR Home Album Sweet Home">
+            </a></td>
+            <td><p>Awaiting rating from buyer</p></td>
+            <td><span>$60.00</span></td>
+            <td>07/10/26</td>
+        </tr>
+        </tbody></table></body></html>
+        """
+        try await loadFixture(html)
+        let (items, _) = try await runExtract()
+        let first = try XCTUnwrap(items.first)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(first["id"] as? String, "m11862301506")
+        XCTAssertEqual(first["name"] as? String, "Taesan - BOYNEXTDOOR Home Album Sweet Home")
+        XCTAssertEqual(first["price"] as? Double, 60.0)
+        XCTAssertEqual(first["statusText"] as? String, "Awaiting rating from buyer")
+        XCTAssertEqual(first["updatedStr"] as? String, "07/10/26")
+    }
+
+    /// No usable title anywhere (no alt, only a status phrase) — name must come back null,
+    /// NOT the status string.
+    func test_tableRow_onlyStatusText_nameStaysNull() async throws {
+        let html = """
+        <html><body><table><tbody>
+        <tr>
+            <td><a href="/transaction/order_status/m999/"><img src="x.jpg"></a></td>
+            <td><p>Ship by Jul 15</p></td>
+            <td><span>$10.00</span></td>
+        </tr>
+        </tbody></table></body></html>
+        """
+        try await loadFixture(html)
+        let (items, _) = try await runExtract()
+        let first = try XCTUnwrap(items.first)
+        XCTAssertTrue(first["name"] is NSNull)
+        XCTAssertEqual(first["statusText"] as? String, "Ship by Jul 15")
+        XCTAssertEqual(first["price"] as? Double, 10.0)
+    }
+
     func test_tableRow_priceWithThousandsSeparator() async throws {
         let html = """
         <html><body><table><tbody>

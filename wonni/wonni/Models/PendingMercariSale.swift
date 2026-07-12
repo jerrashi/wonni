@@ -17,6 +17,7 @@ struct PendingMercariSale: Identifiable, Codable {
     var thumbnailUrl: String?
     var takeHome: Double?
     var soldAt: Timestamp?
+    var statusText: String?
     var enrichFailed: Bool?
     var discoveredAt: Timestamp?
 }
@@ -30,6 +31,7 @@ extension MercariFoundSaleItem {
             thumbnailUrl: pending.thumbnailUrl,
             takeHome: pending.takeHome,
             soldAt: pending.soldAt?.dateValue(),
+            statusText: pending.statusText,
             enrichFailed: pending.enrichFailed ?? false
         )
     }
@@ -44,6 +46,7 @@ extension PendingMercariSale {
             thumbnailUrl: item.thumbnailUrl,
             takeHome: item.takeHome,
             soldAt: item.soldAt.map { Timestamp(date: $0) },
+            statusText: item.statusText,
             enrichFailed: item.enrichFailed,
             discoveredAt: Timestamp(date: Date())
         )
