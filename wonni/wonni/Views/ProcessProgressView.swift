@@ -141,7 +141,7 @@ struct ProcessProgressView: View {
             // Thumbnail
             Group {
                 if let assetId = item.sourceAssetIdentifiers.first {
-                    if let img = item.image(for: assetId) {
+                    if let img = item.thumbnail(for: assetId) {
                         Image(uiImage: img)
                             .resizable()
                             .scaledToFill()

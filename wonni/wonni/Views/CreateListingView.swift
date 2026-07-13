@@ -640,7 +640,7 @@ struct CustomPhotoPickerView: View {
 
                                                     ZStack(alignment: .topTrailing) {
                                                         Group {
-                                                            if let uiImage = draft.image(for: assetId) {
+                                                            if let uiImage = draft.thumbnail(for: assetId) {
                                                                 Image(uiImage: uiImage)
                                                                     .resizable()
                                                                     .scaledToFill()
@@ -961,6 +961,9 @@ struct DraftHistoryTitleField: View {
     }
 
     private func commitLocalTitle() {
+        // onDisappear-driven commit can race a delete of this draft; writing to a
+        // detached SwiftData object traps.
+        guard !Item.deletedIDs.contains(draft.id) else { return }
         let v = localTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let placeholder = draft.visionTitle ?? draft.aiSuggestedTitle ?? ""
         if v.isEmpty {
@@ -1073,7 +1076,7 @@ struct DraftRow: View, Equatable {
                 Group {
                     if let assetId = item.sourceAssetIdentifiers.first {
                         Group {
-                            if let uiImage = item.image(for: assetId) {
+                            if let uiImage = item.thumbnail(for: assetId) {
                                 Image(uiImage: uiImage).resizable().scaledToFill()
                             } else {
                                 PhotoItemView(asset: PhotoAsset(identifier: assetId), cache: cache, imageSize: CGSize(width: 160, height: 160))
@@ -1229,11 +1232,14 @@ struct DraftRow: View, Equatable {
     }
 
     private func saveLocalStateToModel() {
+        // onDisappear also fires when the row vanishes because the draft was deleted —
+        // touching attributes on a detached SwiftData object traps.
+        guard !Item.deletedIDs.contains(item.id) else { return }
         let v = String(titleText.prefix(140))
         if item.userEditedTitle != (v.isEmpty ? nil : v) {
             item.userEditedTitle = v.isEmpty ? nil : v
         }
-        
+
         let cleaned = priceText.filter { $0.isNumber || $0 == "." }
         let newPrice = cleaned.isEmpty ? nil : Double(cleaned)
         if item.userEditedPrice != newPrice {
@@ -1294,7 +1300,7 @@ struct DraftEditSheet: View {
                                 ForEach(item.sourceAssetIdentifiers, id: \.self) { assetId in
                                     ZStack(alignment: .topTrailing) {
                                         Group {
-                                            if let uiImage = item.image(for: assetId) {
+                                            if let uiImage = item.thumbnail(for: assetId) {
                                                 Image(uiImage: uiImage)
                                                     .resizable()
                                                     .scaledToFill()
@@ -2569,7 +2575,7 @@ struct ResultDraftRow: View, Equatable {
 
                 Group {
                     if let assetId = item.sourceAssetIdentifiers.first {
-                        if let img = item.image(for: assetId) {
+                        if let img = item.thumbnail(for: assetId) {
                             Image(uiImage: img).resizable().scaledToFill()
                         } else {
                             PhotoItemView(asset: PhotoAsset(identifier: assetId), cache: cache, imageSize: CGSize(width: 160, height: 160))
@@ -2718,6 +2724,9 @@ struct ResultDraftRow: View, Equatable {
     }
 
     private func saveLocalStateToModel() {
+        // Same detached-object guard as DraftRow — the sheet can be dismissed as part
+        // of a flow that already deleted the draft.
+        guard !Item.deletedIDs.contains(item.id) else { return }
         let v = String(titleText.prefix(140))
         if item.userEditedTitle != (v.isEmpty ? nil : v) {
             item.userEditedTitle = v.isEmpty ? nil : v

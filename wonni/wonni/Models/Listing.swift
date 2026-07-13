@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import ImageIO
 import SwiftData
 import UIKit
 
@@ -81,6 +82,43 @@ class Item {
     /// the compiler across this static/instance-method boundary.
     nonisolated(unsafe) static var deletedIDs: Set<UUID> = []
 
+    /// Decoded-thumbnail cache for `thumbnail(for:)`. Keyed by "\(item.id)-\(assetId)":
+    /// the bytes behind an assetId never change after insertion (reorder/remove remap
+    /// `sourceAssetIdentifiers` and `photosData` together, keeping the assetId→data
+    /// mapping stable), so entries only need explicit eviction in `removePhoto`.
+    /// `nonisolated(unsafe)` for the same reason as `deletedIDs`: all access is
+    /// main-thread by construction (view bodies), and NSCache is thread-safe anyway.
+    nonisolated(unsafe) private static let thumbnailCache = NSCache<NSString, UIImage>()
+
+    /// Max pixel dimension for cached thumbnails: 160pt (largest on-screen use,
+    /// DraftPhotoEditModal) at 3x. One tier keeps every view sharing one cache entry.
+    private static let thumbnailMaxPixel = 480
+
+    /// Cached, downsampled thumbnail for list/grid display. Views must use this instead
+    /// of `image(for:)`: that faults the entire externally-stored `photosData` array and
+    /// decodes the photo at full camera resolution on every call, which — invoked from a
+    /// row `body` that re-evaluates per keystroke — was the source of major typing lag
+    /// in the listing flow. Upload/publish paths still use `image(for:)` for full res.
+    func thumbnail(for assetId: String) -> UIImage? {
+        guard !Item.deletedIDs.contains(id) else { return nil }
+        let key = "\(id)-\(assetId)" as NSString
+        if let cached = Item.thumbnailCache.object(forKey: key) { return cached }
+        guard let idx = sourceAssetIdentifiers.firstIndex(of: assetId),
+              idx < photosData.count else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: Item.thumbnailMaxPixel
+        ]
+        guard let source = CGImageSourceCreateWithData(photosData[idx] as CFData, nil),
+              let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        let thumb = UIImage(cgImage: cgImage)
+        Item.thumbnailCache.setObject(thumb, forKey: key)
+        return thumb
+    }
+
     func image(for assetId: String) -> UIImage? {
         // A SwiftUI row can still be mid-render against a just-deleted Item — e.g. List's
         // own swipe-to-delete removal animation, or a sibling carousel/stack view driven
@@ -126,6 +164,7 @@ class Item {
     func removePhoto(assetId: String) -> (data: Data?, firebasePhotoPath: String?) {
         guard let idx = sourceAssetIdentifiers.firstIndex(of: assetId) else { return (nil, nil) }
         sourceAssetIdentifiers.remove(at: idx)
+        Item.thumbnailCache.removeObject(forKey: "\(id)-\(assetId)" as NSString)
         let path = firebasePhotoPathsByAsset?.removeValue(forKey: assetId)
 
         if isLocalPhotoOnly && idx < photosData.count {

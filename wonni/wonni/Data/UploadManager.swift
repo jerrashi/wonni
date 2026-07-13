@@ -576,34 +576,37 @@ class UploadManager: ObservableObject {
     /// Syncs metadata to Firestore if the listing document already exists.
     /// Fire-and-forget — failures are logged but not surfaced.
     func syncDraftData(_ draft: Item) {
-        guard let listingId = draft.firestoreListingId else { return }
+        guard let listingId = draft.firestoreListingId,
+              !Item.deletedIDs.contains(draft.id) else { return }
+
+        // Snapshot every attribute NOW, before the Task body runs. The Task executes a
+        // beat later on the main actor, and the draft can be deleted in that gap
+        // (publish cleanup, swipe delete, undo-toast delete) — reading any attribute on
+        // a detached SwiftData object then traps with "backing data was detached from a
+        // context without resolving attribute faults" (seen in the wild on \Item.tags).
+        var data: [String: Any] = [:]
+        data["customTitle"] = draft.userEditedTitle ?? draft.aiSuggestedTitle
+        data["customDescription"] = draft.userEditedDescription ?? draft.aiSuggestedDescription
+        data["price"] = draft.userEditedPrice ?? draft.aiSuggestedPrice
+        data["tags"] = draft.tags
+        data["personalNote"] = draft.personalNote
+        data["updatedAt"] = Timestamp(date: Date())
+
+        if let l = draft.lengthIn, let w = draft.widthIn, let h = draft.heightIn {
+            let dimensions = PackageDimensions(lengthIn: l, widthIn: w, heightIn: h)
+            let shippingInfo = ShippingInfo(
+                buyerPaysShipping: draft.buyerPaysShipping,
+                handlingFee: draft.handlingFee,
+                estimatedShippingDays: draft.estimatedShippingDays,
+                weightLbs: draft.weightLbs,
+                packageDimensions: dimensions
+            )
+            data["shippingInfo"] = (try? Firestore.Encoder().encode(shippingInfo)) ?? [:]
+        }
 
         Task {
-            do {
-                var data: [String: Any] = [:]
-                data["customTitle"] = draft.userEditedTitle ?? draft.aiSuggestedTitle
-                data["customDescription"] = draft.userEditedDescription ?? draft.aiSuggestedDescription
-                data["price"] = draft.userEditedPrice ?? draft.aiSuggestedPrice
-                data["tags"] = draft.tags
-                data["personalNote"] = draft.personalNote
-                data["updatedAt"] = Timestamp(date: Date())
-
-                if let l = draft.lengthIn, let w = draft.widthIn, let h = draft.heightIn {
-                    let dimensions = PackageDimensions(lengthIn: l, widthIn: w, heightIn: h)
-                    let shippingInfo = ShippingInfo(
-                        buyerPaysShipping: draft.buyerPaysShipping,
-                        handlingFee: draft.handlingFee,
-                        estimatedShippingDays: draft.estimatedShippingDays,
-                        weightLbs: draft.weightLbs,
-                        packageDimensions: dimensions
-                    )
-                    data["shippingInfo"] = try Firestore.Encoder().encode(shippingInfo)
-                }
-
-                try await ListingRepository.shared.updateListingData(listingId: listingId, data: data)
-            } catch {
-                // Expected to fail when no Firestore draft exists yet — suppress noise
-            }
+            // Expected to fail when no Firestore draft exists yet — suppress noise
+            try? await ListingRepository.shared.updateListingData(listingId: listingId, data: data)
         }
     }
 

@@ -25,7 +25,7 @@ struct DraftPhotoEditModal: View {
                     ForEach(localAssetIds, id: \.self) { assetId in
                         ZStack(alignment: .topTrailing) {
                             Group {
-                                if let uiImage = item.image(for: assetId) {
+                                if let uiImage = item.thumbnail(for: assetId) {
                                     Image(uiImage: uiImage)
                                         .resizable()
                                         .scaledToFill()
@@ -46,7 +46,7 @@ struct DraftPhotoEditModal: View {
                                 return NSItemProvider(object: assetId as NSString)
                             }, preview: {
                                 Group {
-                                    if let uiImage = item.image(for: assetId) {
+                                    if let uiImage = item.thumbnail(for: assetId) {
                                         Image(uiImage: uiImage)
                                             .resizable()
                                             .scaledToFill()
