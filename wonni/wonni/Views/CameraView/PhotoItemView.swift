@@ -60,7 +60,7 @@ struct DraftStackThumbnailView: View {
                     let offsetVal = CGFloat(index) * 6
                     
                     Group {
-                        if let uiImage = draft.image(for: assetId) {
+                        if let uiImage = draft.thumbnail(for: assetId) {
                             Image(uiImage: uiImage)
                                 .resizable()
                                 .scaledToFill()

@@ -133,7 +133,7 @@ struct ActiveDraftCarouselView: View {
         let isDragged = draggedAssetId == assetId
 
         Group {
-            if let uiImage = draft.image(for: assetId) {
+            if let uiImage = draft.thumbnail(for: assetId) {
                 Image(uiImage: uiImage)
                     .resizable()
                     .scaledToFill()
@@ -225,7 +225,7 @@ struct DraftsStackIconView: View {
 
                 Group {
                     if let draft, let assetId = draft.sourceAssetIdentifiers.first {
-                        if let uiImage = draft.image(for: assetId) {
+                        if let uiImage = draft.thumbnail(for: assetId) {
                             Image(uiImage: uiImage)
                                 .resizable()
                                 .scaledToFill()
