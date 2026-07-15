@@ -22,6 +22,7 @@
 		60A7C95275BB4BCCAA8FA838 /* RecordSaleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */; };
 		6134E14E2FB64DBD007C3979 /* BulkEditSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6134E14D2FB64DBD007C3979 /* BulkEditSheet.swift */; };
 		6134E1502FB76C1A007C3979 /* ProcessProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6134E14F2FB76C1A007C3979 /* ProcessProgressView.swift */; };
+		AB12CD342FB76C1A007C3979 /* PublishProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB12CD332FB76C1A007C3979 /* PublishProgressView.swift */; };
 		6134E1532FB77702007C3979 /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = 6134E1522FB77702007C3979 /* FirebaseFunctions */; };
 		6134E1582FDCB206007C3979 /* PublishedPhotoModal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6134E1572FDCB206007C3979 /* PublishedPhotoModal.swift */; };
 		6134E1592FDCB206007C3979 /* DraftPhotoEditModal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6134E1562FDCB206007C3979 /* DraftPhotoEditModal.swift */; };
@@ -118,6 +119,7 @@
 		6134E14C2FB3AF08007C3979 /* wonni.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = wonni.entitlements; sourceTree = "<group>"; };
 		6134E14D2FB64DBD007C3979 /* BulkEditSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkEditSheet.swift; sourceTree = "<group>"; };
 		6134E14F2FB76C1A007C3979 /* ProcessProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessProgressView.swift; sourceTree = "<group>"; };
+		AB12CD332FB76C1A007C3979 /* PublishProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublishProgressView.swift; sourceTree = "<group>"; };
 		6134E1562FDCB206007C3979 /* DraftPhotoEditModal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftPhotoEditModal.swift; sourceTree = "<group>"; };
 		6134E1572FDCB206007C3979 /* PublishedPhotoModal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublishedPhotoModal.swift; sourceTree = "<group>"; };
 		6192AA592D7F575F00EC2EFA /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
@@ -313,6 +315,7 @@
 				61EE00672D765D37006063C3 /* MainView.swift */,
 				61FAA5842FAF22A0001C28CE /* OnboardingView.swift */,
 				6134E14F2FB76C1A007C3979 /* ProcessProgressView.swift */,
+				AB12CD332FB76C1A007C3979 /* PublishProgressView.swift */,
 				6192AA5F2D7F583E00EC2EFA /* ProfileView.swift */,
 				6134E1572FDCB206007C3979 /* PublishedPhotoModal.swift */,
 				209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */,
@@ -502,6 +505,7 @@
 				6192AA782D7F65DE00EC2EFA /* CachedImageManager.swift in Sources */,
 				6192AA602D7F583E00EC2EFA /* ProfileView.swift in Sources */,
 				6134E1502FB76C1A007C3979 /* ProcessProgressView.swift in Sources */,
+				AB12CD342FB76C1A007C3979 /* PublishProgressView.swift in Sources */,
 				6192AA742D7F65DE00EC2EFA /* DataModel.swift in Sources */,
 				61EE007D2D778EFA006063C3 /* Listing.swift in Sources */,
 				6192AA7B2D7F65DF00EC2EFA /* PhotoLibrary.swift in Sources */,

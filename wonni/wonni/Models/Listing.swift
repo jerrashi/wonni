@@ -56,6 +56,13 @@ class Item {
     /// cross-posted platforms. See github issue: bulk-deleting already-published drafts
     /// deleted the live listing while leaving it posted on eBay/Mercari.
     var publishedAt: Date?
+    /// Set the moment the user confirms publish (before any network work starts).
+    /// Cleared when `publishedAt` is set on Firestore success. On failure or app kill,
+    /// stays `true` — items with `pendingPublish == true` but `publishedAt == nil` are
+    /// "failed-to-publish" drafts, recovered by `sweepFailedPublishDrafts()` on next launch.
+    /// Views that show the active draft queue (carousel, picker grid, AI processing list)
+    /// exclude these items; `ProcessResultsOverviewView` retains them so the user can retry.
+    var pendingPublish: Bool = false
     var visionTitle: String?
     /// True once the user tapped the vision-title suggestion chip to fill the title
     /// field. Vision output is never prefilled as editable text (it polluted the

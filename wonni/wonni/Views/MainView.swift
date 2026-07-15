@@ -20,6 +20,19 @@ struct MainView: View {
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
 
     var body: some View {
+        tabContent
+        .background(
+            Group {
+                MercariSheetWebView(webView: bulkImportManager.urlExtractor.webView)
+                    .frame(width: 1, height: 1).opacity(0).allowsHitTesting(false)
+                MercariSheetWebView(webView: mercariSyncManager.loader.webView)
+                    .frame(width: 1, height: 1).opacity(0).allowsHitTesting(false)
+            }
+        )
+    }
+
+    // Extracted from body to keep the modifier chain short enough for Swift's type checker.
+    @ViewBuilder private var tabContent: some View {
         TabView(selection: $uploadManager.selectedTab) {
             NavigationStack { HomeView() }
                 .appTaskQueuePill()
@@ -46,19 +59,12 @@ struct MainView: View {
                 .tabItem { Label("Profile", systemImage: "person.crop.circle.fill") }
                 .tag(4)
         }
-        .background(
-            Group {
-                MercariSheetWebView(webView: bulkImportManager.urlExtractor.webView)
-                    .frame(width: 1, height: 1).opacity(0).allowsHitTesting(false)
-                MercariSheetWebView(webView: mercariSyncManager.loader.webView)
-                    .frame(width: 1, height: 1).opacity(0).allowsHitTesting(false)
-            }
-        )
         // One-time sweep for drafts orphaned by a since-fixed bug (publishedAt set but
         // isDraft never cleared) — see cleanupOrphanedPublishedDrafts. Idempotent no-op
         // once the device's local data is clean.
         .task {
             uploadManager.cleanupOrphanedPublishedDrafts(modelContext: modelContext)
+            uploadManager.sweepFailedPublishDrafts(modelContext: modelContext)
         }
         .sheet(isPresented: $uploadManager.showProgressSheet) {
             NavigationStack { ProcessProgressView() }
@@ -71,6 +77,12 @@ struct MainView: View {
         .sheet(isPresented: $mercariSyncManager.showProgressSheet) {
             NavigationStack { MercariSyncProgressSheet() }
                 .environmentObject(mercariSyncManager)
+        }
+        .fullScreenCover(isPresented: $uploadManager.showPublishProgress) {
+            NavigationStack {
+                PublishProgressView(onMinimize: { uploadManager.showPublishProgress = false })
+            }
+            .environmentObject(uploadManager)
         }
         // When AI processing finishes, show the publish overview globally.
         // The 0.5 s delay lets any open cover/sheet (ProcessProgressView fullScreenCover
@@ -88,6 +100,33 @@ struct MainView: View {
             if should {
                 uploadManager.showResultsOverview = false
             }
+        }
+        // Failed-publish modal alert: shown once per launch when the sell tab is first
+        // entered and sweepFailedPublishDrafts found pendingPublish=true items.
+        // Retry navigates to ProcessResultsOverviewView (all isDraft=true items show there).
+        // Dismiss clears the in-memory array; pendingPublish stays true on the items so the
+        // alert reappears on the next launch until the user retries successfully or
+        // manually deletes the drafts.
+        .alert(
+            "\(uploadManager.failedPublishDrafts.count) listing\(uploadManager.failedPublishDrafts.count == 1 ? "" : "s") failed to publish",
+            isPresented: Binding(
+                get: { uploadManager.selectedTab == 2 && !uploadManager.failedPublishDrafts.isEmpty },
+                set: { if !$0 { uploadManager.failedPublishDrafts = [] } }
+            )
+        ) {
+            Button("Retry") {
+                let draftsToRetry = uploadManager.failedPublishDrafts
+                uploadManager.failedPublishDrafts = []
+                // Navigate to ProcessResultsOverviewView — all isDraft=true items appear
+                // there, with pendingPublish=true items highlighted in orange
+                uploadManager.showResultsOverview = true
+                _ = draftsToRetry // keep reference alive through the closure
+            }
+            Button("Dismiss", role: .cancel) {
+                uploadManager.failedPublishDrafts = []
+            }
+        } message: {
+            Text("Your drafts were saved and are ready to retry. They won't appear in your draft list until you retry or delete them.")
         }
         // Full screen (spec N4), not a sheet: Review & Publish is a primary flow step.
         // Its Back button pops the camera tab to the camera itself (drafts saved) via
@@ -205,14 +244,29 @@ private extension View {
 
 struct AppTaskQueuePillContent: View {
     @ObservedObject private var queue = AppTaskQueue.shared
+    @EnvironmentObject private var uploadManager: UploadManager
     @State private var showActivity = false
 
     var body: some View {
         if queue.hasActiveTasks, !queue.suppressGlobalPill, let task = queue.current {
-            AppTaskQueuePillView(task: task, queueCount: queue.count, onExpand: { showActivity = true })
+            let pillView = AppTaskQueuePillView(
+                task: task,
+                queueCount: queue.count,
+                onExpand: {
+                    if queue.count == 1 {
+                        // Single task: tap goes directly into its detail view
+                        task.onTap?()
+                    } else {
+                        // Multiple tasks: show the queue list first
+                        showActivity = true
+                    }
+                }
+            )
+            pillView
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .sheet(isPresented: $showActivity) {
                     NavigationStack { AppTaskActivityView() }
+                        .environmentObject(uploadManager)
                 }
         }
     }
@@ -223,7 +277,9 @@ struct AppTaskQueuePillContent: View {
 // what's running/queued/done before diving into one of them.
 struct AppTaskActivityView: View {
     @ObservedObject private var queue = AppTaskQueue.shared
+    @EnvironmentObject private var uploadManager: UploadManager
     @Environment(\.dismiss) private var dismiss
+    @State private var cancelTarget: AppTaskQueue.AppTask? = nil
 
     var body: some View {
         List {
@@ -249,6 +305,20 @@ struct AppTaskActivityView: View {
                 Button("Close") { dismiss() }
             }
         }
+        // Cancel confirmation for queued (not-yet-running) tasks
+        .confirmationDialog(
+            cancelTarget.map { "Remove \($0.label) from queue?" } ?? "Remove from queue?",
+            isPresented: Binding(get: { cancelTarget != nil }, set: { if !$0 { cancelTarget = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Remove from Queue", role: .destructive) {
+                if let t = cancelTarget { t.onCancel?() }
+                cancelTarget = nil
+            }
+            Button("Keep", role: .cancel) { cancelTarget = nil }
+        } message: {
+            Text("Your drafts will stay saved.")
+        }
     }
 
     @ViewBuilder
@@ -257,6 +327,9 @@ struct AppTaskActivityView: View {
             if isDone {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
+            } else if task.isError {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .foregroundStyle(.red)
             } else if task.progress < 0 {
                 ProgressView().progressViewStyle(.circular).scaleEffect(0.8)
             } else {
@@ -264,15 +337,35 @@ struct AppTaskActivityView: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(task.label).font(.subheadline.weight(.medium))
+                    .foregroundStyle(task.isError ? .red : .primary)
                 if let detail = task.detail {
                     Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
             Spacer()
-            if !isDone, let onTap = task.onTap {
-                Button("View") { onTap(); dismiss() }
+            if !isDone {
+                if task.isError {
+                    // Error task: Retry button calls onTap which re-opens the progress view
+                    Button("Retry") {
+                        AppTaskQueue.shared.dismiss(id: task.id)
+                        task.onTap?()
+                        dismiss()
+                    }
                     .font(.caption.weight(.semibold))
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                } else if task.onCancel != nil {
+                    // Queued task: tap opens cancel confirmation
+                    Button("Cancel") { cancelTarget = task }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.bordered)
+                        .tint(.secondary)
+                } else if let onTap = task.onTap {
+                    // Active task: View button drills into its progress view
+                    Button("View") { onTap(); dismiss() }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.bordered)
+                }
             }
         }
         .padding(.vertical, 2)
@@ -284,9 +377,17 @@ struct AppTaskQueuePillView: View {
     let queueCount: Int
     var onExpand: () -> Void = {}
 
+    private var pillColor: Color {
+        task.isError ? .red : task.accentColor
+    }
+
     var body: some View {
         HStack(spacing: 12) {
-            if task.progress < 0 {
+            if task.isError {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .foregroundStyle(.white)
+                    .frame(width: 20, height: 20)
+            } else if task.progress < 0 {
                 ProgressView()
                     .progressViewStyle(.circular)
                     .tint(.white)
@@ -341,12 +442,13 @@ struct AppTaskQueuePillView: View {
         .background(
             Capsule()
                 .fill(.ultraThinMaterial)
-                .overlay(Capsule().fill(task.accentColor.opacity(0.85)))
+                .overlay(Capsule().fill(pillColor.opacity(0.85)))
                 .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
         )
         .padding(.horizontal, 20)
         .padding(.bottom, 4)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: task.label)
+        .animation(.easeInOut(duration: 0.3), value: task.isError)
     }
 }
 
