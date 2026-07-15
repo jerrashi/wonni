@@ -35,8 +35,13 @@ service cloud.firestore {
       allow update: if request.auth != null
                     && request.auth.uid == resource.data.userId
                     && request.resource.data.userId == resource.data.userId;
+      // resource == null: deleting a non-existent doc must be a no-op, not a deny.
+      // Drafts live only in SwiftData until publish, so every draft-discard cleanup
+      // ends with a delete against a doc that was never created — with the plain
+      // owner check, rules evaluate resource.data on null, error out, and surface
+      // as PERMISSION_DENIED, tripping the "Delete Failed" alert for nothing (W8).
       allow delete: if request.auth != null
-                    && request.auth.uid == resource.data.userId;
+                    && (resource == null || request.auth.uid == resource.data.userId);
       allow create: if request.auth != null
                     && request.auth.uid == request.resource.data.userId;
     }

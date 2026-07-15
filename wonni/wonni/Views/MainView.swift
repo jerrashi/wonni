@@ -66,10 +66,10 @@ struct MainView: View {
             NavigationStack { MercariSyncProgressSheet() }
                 .environmentObject(mercariSyncManager)
         }
-        // When AI processing finishes, show the publish overview as a global sheet.
+        // When AI processing finishes, show the publish overview globally.
         // The 0.5 s delay lets any open cover/sheet (ProcessProgressView fullScreenCover
-        // or pill sheet) finish its dismiss animation before the results sheet appears —
-        // presenting two sheets simultaneously in the same frame corrupts the nav stack.
+        // or pill sheet) finish its dismiss animation before the results view appears —
+        // presenting two covers simultaneously in the same frame corrupts the nav stack.
         .onChange(of: uploadManager.showProcessResults) { _, show in
             if show {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -77,13 +77,17 @@ struct MainView: View {
                 }
             }
         }
-        // Close the results sheet when publishing completes and the app returns to root.
+        // Close the results view when publishing completes and the app returns to root.
         .onChange(of: uploadManager.shouldReturnToRoot) { _, should in
             if should {
                 uploadManager.showResultsOverview = false
             }
         }
-        .sheet(isPresented: $uploadManager.showResultsOverview) {
+        // Full screen (spec N4), not a sheet: Review & Publish is a primary flow step.
+        // Its Back button pops the camera tab to the camera itself (drafts saved) via
+        // uploadManager.returnToCameraRoot; leaving mid-publish is safe because the
+        // continuation lives on UploadManager (Phase 3), reachable again from the pill.
+        .fullScreenCover(isPresented: $uploadManager.showResultsOverview) {
             NavigationStack { ProcessResultsOverviewView() }
                 .environmentObject(uploadManager)
         }

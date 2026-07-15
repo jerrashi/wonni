@@ -5,7 +5,8 @@
 //  Shared bottom carousel used identically in CameraView and CustomPhotoPickerView.
 //  Shows the active draft's photos as a flat, drag-to-reorder row, followed by
 //  committed draft fanned-card thumbnails. Tapping a committed draft opens
-//  DraftHistoryModal. Tapping "+" commits the active draft and starts upload.
+//  draft history (via the host's onOpenDraftHistory push). Tapping "+" commits the
+//  active draft and starts upload.
 //
 
 import SwiftUI
@@ -19,8 +20,11 @@ struct ActiveDraftCarouselView: View {
     var cache: CachedImageManager
     /// Extra action to run alongside commitActiveDraft (e.g. camera does nothing extra)
     var onCommit: (() -> Void)? = nil
+    /// Navigates to draft history. Provided by the host (camera / picker) so history is
+    /// PUSHED on their shared NavigationStack — the old local sheet here stacked a modal
+    /// on top of the live camera, the root cause of the reported flow lag (spec N1).
+    let onOpenDraftHistory: () -> Void
 
-    @State private var showingDraftHistory = false
     @State private var draggedAssetId: String? = nil
     @State private var stackBouncing = false
     @State private var isTrashTargeted = false
@@ -61,7 +65,7 @@ struct ActiveDraftCarouselView: View {
                             DraftsStackIconView(drafts: committedDrafts, cache: cache)
                                 .scaleEffect(stackBouncing ? 1.08 : 1.0)
                                 .animation(.spring(response: 0.35, dampingFraction: 0.45), value: stackBouncing)
-                                .onTapGesture { showingDraftHistory = true }
+                                .onTapGesture { onOpenDraftHistory() }
                         }
 
                         // Divider between active and committed (if both exist)
@@ -119,9 +123,6 @@ struct ActiveDraftCarouselView: View {
                     .padding(.trailing, 12)
                     .animation(.easeInOut(duration: 0.15), value: hasActive)
                 }
-            }
-            .sheet(isPresented: $showingDraftHistory) {
-                DraftHistoryModal(photoCollection: PhotoCollection(smartAlbum: .smartAlbumUserLibrary))
             }
         }
     }
