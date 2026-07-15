@@ -616,7 +616,9 @@ struct CustomPhotoPickerView: View {
                                                 // In selection mode the title is read-only — tapping it toggles
                                                 // the draft's selection instead of focusing the field, so picking
                                                 // drafts to edit/delete isn't fighting the keyboard.
-                                                let title = draft.userEditedTitle ?? draft.visionTitle ?? draft.aiSuggestedTitle
+                                                // visionTitle last: display-only fallback so unpicked suggestions
+                                                // still label the row, but never outrank a real (AI) title.
+                                                let title = draft.userEditedTitle ?? draft.aiSuggestedTitle ?? draft.visionTitle
                                                 Text(title?.isEmpty == false ? title! : "Untitled draft")
                                                     .font(.subheadline.weight(.semibold))
                                                     .foregroundStyle(hasUserTitle ? .primary : .secondary)
@@ -941,27 +943,40 @@ struct DraftHistoryTitleField: View {
     @State private var localTitle: String = ""
 
     var body: some View {
-        TextField("Add title…", text: $localTitle)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(draft.userEditedTitle != nil ? .primary : .secondary)
-            .focused(focusedDraftID, equals: draft.id)
-            .onReceive(NotificationCenter.default.publisher(for: UITextField.textDidBeginEditingNotification)) { notification in
-                guard let tf = notification.object as? UITextField else { return }
-                if focusedDraftID.wrappedValue == draft.id {
-                    DispatchQueue.main.async { tf.selectAll(nil) }
+        VStack(alignment: .leading, spacing: 4) {
+            TextField("Add title…", text: $localTitle)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(draft.userEditedTitle != nil ? .primary : .secondary)
+                .focused(focusedDraftID, equals: draft.id)
+                .onReceive(NotificationCenter.default.publisher(for: UITextField.textDidBeginEditingNotification)) { notification in
+                    guard let tf = notification.object as? UITextField else { return }
+                    if focusedDraftID.wrappedValue == draft.id {
+                        DispatchQueue.main.async { tf.selectAll(nil) }
+                    }
+                }
+
+            if let vision = draft.visionTitle, !vision.isEmpty,
+               draft.processedAt == nil, localTitle.isEmpty {
+                VisionTitleSuggestionChip(suggestion: vision) {
+                    localTitle = vision
+                    draft.userEditedTitle = vision
+                    draft.visionTitleAccepted = true
                 }
             }
-            .onAppear {
-                localTitle = draft.userEditedTitle ?? draft.visionTitle ?? draft.aiSuggestedTitle ?? ""
-            }
-            .onChange(of: focusedDraftID.wrappedValue) { oldFocus, newFocus in
-                if oldFocus == draft.id && newFocus != draft.id {
-                    commitLocalTitle()
-                }
-            }
-            .onDisappear {
+        }
+        .onAppear {
+            // Vision output deliberately NOT seeded — offered via the chip instead
+            // (prefilled vision text used to ride along into "user" titles).
+            localTitle = draft.userEditedTitle ?? draft.aiSuggestedTitle ?? ""
+        }
+        .onChange(of: focusedDraftID.wrappedValue) { oldFocus, newFocus in
+            if oldFocus == draft.id && newFocus != draft.id {
                 commitLocalTitle()
             }
+        }
+        .onDisappear {
+            commitLocalTitle()
+        }
     }
 
     private func commitLocalTitle() {
@@ -969,14 +984,14 @@ struct DraftHistoryTitleField: View {
         // detached SwiftData object traps.
         guard !Item.deletedIDs.contains(draft.id) else { return }
         let v = localTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let placeholder = draft.visionTitle ?? draft.aiSuggestedTitle ?? ""
+        let placeholder = draft.aiSuggestedTitle ?? ""
         if v.isEmpty {
             // User cleared the field — remove user title.
             if draft.userEditedTitle != nil { draft.userEditedTitle = nil }
         } else if v != placeholder || draft.userEditedTitle != nil {
             // Commit if it differs from the placeholder, or if there was already a user title.
             // If v == placeholder and userEditedTitle == nil, the user just tapped and left —
-            // don't turn an untouched AI/vision suggestion into a "user edited" title.
+            // don't turn an untouched AI suggestion into a "user edited" title.
             if draft.userEditedTitle != v {
                 draft.userEditedTitle = v
             }
@@ -1016,6 +1031,37 @@ struct TitleCharCountView: View {
             .foregroundStyle(color)
             .animation(.easeInOut(duration: 0.2), value: count)
         }
+    }
+}
+
+// MARK: - VisionTitleSuggestionChip
+/// On-device Vision's title guess, offered as an explicit suggestion instead of
+/// prefilled editable text. Prefilling polluted the "user title" hint sent to Gemini
+/// (any edit dragged the vision text along as if the user wrote it) and even leaked
+/// into `userEditedTitle` on scroll-away. Tapping the chip is a deliberate acceptance:
+/// it fills the field and marks `visionTitleAccepted` for model-quality tracking.
+/// Shown only pre-AI (`processedAt == nil`) while the title field is empty; an
+/// unaccepted suggestion is simply dropped at process time.
+struct VisionTitleSuggestionChip: View {
+    let suggestion: String
+    let onAccept: () -> Void
+
+    var body: some View {
+        Button(action: onAccept) {
+            HStack(spacing: 4) {
+                Image(systemName: "wand.and.stars")
+                    .font(.caption2)
+                Text("Use: \u{201C}\(suggestion)\u{201D}")
+                    .font(.caption2.weight(.medium))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.blue.opacity(0.1))
+            .foregroundStyle(.blue)
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -1059,7 +1105,8 @@ struct DraftRow: View, Equatable {
         lhs.item.aiSuggestedDescription == rhs.item.aiSuggestedDescription &&
         lhs.item.originalUserTitleBeforeAI == rhs.item.originalUserTitleBeforeAI &&
         lhs.item.originalUserDescriptionBeforeAI == rhs.item.originalUserDescriptionBeforeAI &&
-        lhs.item.processedAt == rhs.item.processedAt
+        lhs.item.processedAt == rhs.item.processedAt &&
+        lhs.item.visionTitle == rhs.item.visionTitle
     }
 
     var body: some View {
@@ -1118,6 +1165,16 @@ struct DraftRow: View, Equatable {
 
                     TitleCharCountView(count: titleText.count)
 
+                    if let vision = item.visionTitle, !vision.isEmpty,
+                       item.processedAt == nil, titleText.isEmpty {
+                        VisionTitleSuggestionChip(suggestion: vision) {
+                            titleText = vision
+                            item.userEditedTitle = vision
+                            item.visionTitleAccepted = true
+                            try? modelContext.save()
+                        }
+                    }
+
                     HStack(spacing: 3) {
                         Text("$").font(.subheadline).foregroundStyle(.secondary)
                         TextField("Price", text: $priceText)
@@ -1173,6 +1230,10 @@ struct DraftRow: View, Equatable {
                         Button {
                             withAnimation {
                                 if let origTitle = item.originalUserTitleBeforeAI {
+                                    // Drive the visible field on the tap frame (same optimistic
+                                    // treatment as ResultDraftRow.undoAITitle) — the .onChange
+                                    // round-trip alone is what made undo feel unresponsive.
+                                    titleText = origTitle
                                     item.userEditedTitle = origTitle
                                     item.originalUserTitleBeforeAI = nil
                                 }
@@ -1180,6 +1241,9 @@ struct DraftRow: View, Equatable {
                                     item.userEditedDescription = origDesc
                                     item.originalUserDescriptionBeforeAI = nil
                                 }
+                            }
+                            Task { @MainActor in
+                                guard !Item.deletedIDs.contains(item.id) else { return }
                                 try? modelContext.save()
                             }
                         } label: {
@@ -1192,7 +1256,10 @@ struct DraftRow: View, Equatable {
         }
         .padding(.vertical, 8)
         .onAppear {
-            titleText = item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? ""
+            // Vision output deliberately NOT seeded here — prefilled vision text used to be
+            // committed as `userEditedTitle` by saveLocalStateToModel the moment the row
+            // scrolled away, and dragged into any user edit. It's offered via the chip instead.
+            titleText = item.userEditedTitle ?? item.aiSuggestedTitle ?? ""
             if let p = item.userEditedPrice {
                 priceText = String(format: "%.2f", p)
             }
@@ -1212,7 +1279,7 @@ struct DraftRow: View, Equatable {
         }
         .onChange(of: item.userEditedTitle) { _, newVal in
             // Sync local title state when the model is updated externally (e.g. bulk edit)
-            titleText = newVal ?? item.aiSuggestedTitle ?? item.visionTitle ?? ""
+            titleText = newVal ?? item.aiSuggestedTitle ?? ""
         }
         .onChange(of: item.userEditedPrice) { _, newVal in
             // Sync local price state when the model is updated externally (e.g. bulk edit)
@@ -2807,32 +2874,46 @@ struct ResultDraftRow: View, Equatable {
     private func undoAITitle() {
         guard let orig = item.originalUserTitleBeforeAI else { return }
         let aiTitle = item.userEditedTitle
+        // Drive the visible field on the tap frame. Without this the field only updates
+        // after the model write round-trips back through .onChange(of: item.userEditedTitle),
+        // which (behind a synchronous save + Firestore sync) is the lag users reported.
+        titleText = orig.isEmpty ? (item.aiSuggestedTitle ?? "") : orig
         item.userEditedTitle = orig.isEmpty ? nil : orig
         item.originalUserTitleBeforeAI = nil
-        try? modelContext.save()
-        uploadManager.syncDraftData(item)
         undoneAITitle = aiTitle
         showToast(message: "AI title edits discarded") { [self] in
+            titleText = self.undoneAITitle ?? item.aiSuggestedTitle ?? ""
             item.originalUserTitleBeforeAI = item.userEditedTitle
             item.userEditedTitle = self.undoneAITitle
             self.undoneAITitle = nil
-            try? modelContext.save()
-            uploadManager.syncDraftData(item)
+            deferredPersist()
         }
+        deferredPersist()
     }
 
     private func undoAIDescription() {
         guard let orig = item.originalUserDescriptionBeforeAI else { return }
         let aiDesc = item.userEditedDescription
+        descriptionText = orig.isEmpty ? (item.aiSuggestedDescription ?? "") : orig
         item.userEditedDescription = orig.isEmpty ? nil : orig
         item.originalUserDescriptionBeforeAI = nil
-        try? modelContext.save()
-        uploadManager.syncDraftData(item)
         undoneAIDescription = aiDesc
         showToast(message: "AI description edits discarded") { [self] in
+            descriptionText = self.undoneAIDescription ?? item.aiSuggestedDescription ?? ""
             item.originalUserDescriptionBeforeAI = item.userEditedDescription
             item.userEditedDescription = self.undoneAIDescription
             self.undoneAIDescription = nil
+            deferredPersist()
+        }
+        deferredPersist()
+    }
+
+    /// Save + Firestore sync a beat after the current frame — keeps undo/redo taps
+    /// responsive (the synchronous save was part of the visible lag). Fires on the
+    /// main actor; the deleted-item guard lives in syncDraftData.
+    private func deferredPersist() {
+        Task { @MainActor in
+            guard !Item.deletedIDs.contains(item.id) else { return }
             try? modelContext.save()
             uploadManager.syncDraftData(item)
         }
@@ -3002,7 +3083,7 @@ struct PublishConfirmationSheet: View {
                     } else {
                         ForEach(integrationRepo.integrations) { integration in
                             let isAPI = integration.platform == "ebay" || integration.platform == "etsy"
-                            Toggle(isOn: Binding(
+                            let isOn = Binding<Bool>(
                                 get: { selectedPlatforms.contains(integration.platform) },
                                 set: { isSelected in
                                     touchedPlatforms.insert(integration.platform)
@@ -3017,7 +3098,8 @@ struct PublishConfirmationSheet: View {
                                         selectedPlatforms.remove(integration.platform)
                                     }
                                 }
-                            )) {
+                            )
+                            Toggle(isOn: isOn) {
                                 VStack(alignment: .leading, spacing: 4) {
                                     HStack {
                                         Text(platformDisplayName(integration.platform))
@@ -3041,6 +3123,12 @@ struct PublishConfirmationSheet: View {
                                             .foregroundStyle(.secondary)
                                     }
                                 }
+                                // A Form Toggle only responds on the switch itself; the label —
+                                // most of the row — was dead space, which read as "tapping does
+                                // nothing." Make the label area toggle too.
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                                .onTapGesture { isOn.wrappedValue.toggle() }
                             }
                             .disabled(isAPI && !integration.isConnected)
                         }

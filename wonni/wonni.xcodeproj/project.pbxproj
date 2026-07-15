@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		0685922FCBC971E8E5A74D30 /* MercariFlagCriteriaTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03D0C11455159C543D7730AA /* MercariFlagCriteriaTests.swift */; };
+		8E4A3B02D5F9C6171B2E0A34 /* DraftAIProcessingPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D3F2A91C4E8B5060A1D9F23 /* DraftAIProcessingPolicyTests.swift */; };
+		0A6C5D24F71BE8393D402C56 /* VisionTitlePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F5B4C13E60AD7282C3F1B45 /* VisionTitlePolicyTests.swift */; };
 		147096BF7F09296C73526449 /* PendingMercariSale.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76BC65B5E09E487A41EA3CCE /* PendingMercariSale.swift */; };
 		19BE5E984ECA727D0E9A513A /* MercariDateParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63AE5A91B4E5B0F695600110 /* MercariDateParsingTests.swift */; };
 		1A589EC58F7C4BA78F4A2708 /* SaleRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9C92C11853A41889AB9C925 /* SaleRepository.swift */; };
@@ -101,6 +103,8 @@
 /* Begin PBXFileReference section */
 		00EE85F19AD747589FB21EB0 /* UploadPillView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadPillView.swift; sourceTree = "<group>"; };
 		03D0C11455159C543D7730AA /* MercariFlagCriteriaTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MercariFlagCriteriaTests.swift; sourceTree = "<group>"; };
+		7D3F2A91C4E8B5060A1D9F23 /* DraftAIProcessingPolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DraftAIProcessingPolicyTests.swift; sourceTree = "<group>"; };
+		9F5B4C13E60AD7282C3F1B45 /* VisionTitlePolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VisionTitlePolicyTests.swift; sourceTree = "<group>"; };
 		09C400D2D0AB7F825F735BF1 /* BulkImportManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BulkImportManager.swift; sourceTree = "<group>"; };
 		0D7C98D7BE92AB470D733EB9 /* wonniTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = wonniTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		170EF2F9EA31030386E584A7 /* AddSaleSheet.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AddSaleSheet.swift; sourceTree = "<group>"; };
@@ -365,6 +369,8 @@
 				63AE5A91B4E5B0F695600110 /* MercariDateParsingTests.swift */,
 				03D0C11455159C543D7730AA /* MercariFlagCriteriaTests.swift */,
 				A9D1D2B4BED80AB257DFE4C7 /* MercariScanJSTests.swift */,
+				7D3F2A91C4E8B5060A1D9F23 /* DraftAIProcessingPolicyTests.swift */,
+				9F5B4C13E60AD7282C3F1B45 /* VisionTitlePolicyTests.swift */,
 			);
 			name = wonniTests;
 			path = wonniTests;
@@ -547,6 +553,8 @@
 				19BE5E984ECA727D0E9A513A /* MercariDateParsingTests.swift in Sources */,
 				0685922FCBC971E8E5A74D30 /* MercariFlagCriteriaTests.swift in Sources */,
 				73B4F7E5CEADC2C6BFC2CDE3 /* MercariScanJSTests.swift in Sources */,
+				8E4A3B02D5F9C6171B2E0A34 /* DraftAIProcessingPolicyTests.swift in Sources */,
+				0A6C5D24F71BE8393D402C56 /* VisionTitlePolicyTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
