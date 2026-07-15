@@ -134,6 +134,37 @@ class UploadManager: ObservableObject {
     /// Drives the global CrossPostStatusView sheet in MainView.
     @Published var showCrossPostStatus = false
 
+    // ── Publish continuation (post-publish cross-post handoff) ──────────────
+    // Owned here — NOT as @State on ProcessResultsOverviewView — because the publish
+    // can outlive that view: if Review & Publish was dismissed while Firestore writes
+    // were still in flight, the continuation died with the view's state, so deferred
+    // eBay/Etsy triggers never fired, web autofill jobs were never built, and drafts
+    // kept alive for those jobs were never deleted (github issue #44).
+
+    /// One deferred eBay/Etsy cross-post trigger, captured at publish confirmation.
+    /// Stores the title for error messages since the SwiftData Item may be deleted
+    /// by the time the trigger runs.
+    struct PendingAPITrigger {
+        let listingId: String
+        let title: String
+        let platforms: [String]
+    }
+    private var pendingAPITriggers: [PendingAPITrigger] = []
+    /// Web platforms selected at publish confirmation; jobs are built from these in
+    /// runPublishContinuationIfReady once firestoreListingId + Storage paths are final.
+    private var pendingWebPlatforms: [String] = []
+    private var pendingWebJobItems: [Item] = []
+    /// Post-publish continuation gating. The continuation (API cross-post triggers, web
+    /// autofill jobs, sheet transitions) may only run once BOTH the publish task has
+    /// finished AND the confirmation sheet is fully dismissed — mutating sheet state while
+    /// another sheet is mid-dismissal makes UIKit drop the transition and strands the
+    /// modal on screen with its binding out of sync.
+    private var pendingPublishContinuation = false
+    /// Set true by ProcessResultsOverviewView when it presents the publish confirmation
+    /// sheet, false in that sheet's onDismiss (which then calls
+    /// runPublishContinuationIfReady). Plain var — only read inside guards, never drives UI.
+    var publishConfirmationSheetVisible = false
+
     // ── Legacy / Pill visibility ─────────────────────────────────────────────
     @Published var isPillVisible = false
     @Published var isProcessPillVisible = false
@@ -704,6 +735,23 @@ class UploadManager: ObservableObject {
 
     // MARK: – Phase 3: Publish to Firestore
 
+    /// Publish entry point for Review & Publish. Records the post-publish continuation
+    /// (deferred API cross-post triggers, which web autofill jobs to build) and starts
+    /// the publish. The continuation is armed from publishDrafts' completion — manager
+    /// state, not view state — so it survives Review & Publish being dismissed mid-flight.
+    func beginPublish(drafts: [Item], webPlatforms: [String], apiTriggers: [PendingAPITrigger], modelContext: ModelContext) {
+        pendingWebPlatforms = webPlatforms
+        pendingWebJobItems = webPlatforms.isEmpty ? [] : drafts
+        // publishDrafts reads this count to keep the drafts' SwiftData items alive
+        // until the web queue has snapshotted their photos (see its keep-alive branch).
+        pendingAutofillJobsCount = webPlatforms.count * drafts.count
+        pendingAPITriggers = apiTriggers
+        publishDrafts(drafts: drafts, modelContext: modelContext) { [weak self] in
+            self?.pendingPublishContinuation = true
+            self?.runPublishContinuationIfReady(modelContext: modelContext)
+        }
+    }
+
     /// Posts finished drafts as active listings. Uploads photos first if they
     /// weren't already uploaded (e.g. app was restarted between phases).
     /// `onComplete` fires on the main actor after the publish task finishes (success or
@@ -874,6 +922,118 @@ class UploadManager: ObservableObject {
                 publishError = "Could not publish listings. Check your connection and try again."
             }
         }
+    }
+
+    // MARK: – Publish continuation
+
+    /// Runs post-publish work (deferred API cross-posts, web autofill jobs, sheet
+    /// transitions) once publishing has finished AND the confirmation sheet is fully
+    /// dismissed, whichever happens last. Called from publishDrafts' completion (via
+    /// beginPublish) and from the confirmation sheet's onDismiss.
+    func runPublishContinuationIfReady(modelContext: ModelContext) {
+        guard pendingPublishContinuation, !publishConfirmationSheetVisible else { return }
+        pendingPublishContinuation = false
+        // Total publish failure: none of the listings were written to Firestore, so
+        // cross-posting them (API or web autofill) would only produce confusing secondary
+        // errors. Drop the queued jobs and leave the results screen up so its
+        // "Publish Failed" alert can present and the user can retry.
+        if publishError != nil {
+            pendingAPITriggers = []
+            pendingWebPlatforms = []
+            pendingWebJobItems = []
+            webAutofillQueue = []
+            pendingAutofillJobsCount = 0
+            crossPostStatusPending = false
+            return
+        }
+        // Fire deferred API cross-posts now that the Firestore write has completed.
+        if !pendingAPITriggers.isEmpty {
+            let triggers = pendingAPITriggers
+            pendingAPITriggers = []
+            Task {
+                var errorMessages: [String] = []
+                for trigger in triggers {
+                    do {
+                        try await IntegrationRepository.shared.triggerCrossPost(
+                            listingId: trigger.listingId,
+                            platforms: trigger.platforms
+                        )
+                    } catch {
+                        errorMessages.append(Self.formatCrossPostError(error, title: trigger.title))
+                    }
+                }
+                if !errorMessages.isEmpty {
+                    // Review & Publish is very likely already dismissed by the time this
+                    // Task resolves — crossPostError outlives it and is surfaced from
+                    // CrossPostStatusView, reliably the next screen the user lands on.
+                    crossPostError = errorMessages.joined(separator: "\n\n")
+                }
+            }
+        }
+        // Build web autofill jobs NOW — publish has completed, so every item has its
+        // firestoreListingId and uploaded Storage photo paths. Jobs carry those plain
+        // values (item: nil), so they survive draft deletion and never touch SwiftData:
+        // the same shape as ProfileView's reliable one-by-one cross-post jobs.
+        var jobs: [CrossPostJob] = []
+        for item in pendingWebJobItems where !Item.deletedIDs.contains(item.id) {
+            for platform in pendingWebPlatforms {
+                jobs.append(CrossPostJob(
+                    platform: platform,
+                    title: item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled",
+                    description: item.userEditedDescription ?? item.aiSuggestedDescription ?? "",
+                    price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
+                    listingId: item.firestoreListingId,
+                    photoFirebasePaths: item.orderedFirebasePhotoPaths,
+                    buyerPaysShipping: item.buyerPaysShipping,
+                    condition: item.condition ?? ItemCondition.good.rawValue,
+                    suggestedCategory: item.aiSuggestedCategory,
+                    suggestedBrand: item.aiSuggestedBrand,
+                    weightLbs: item.weightLbs,
+                    lengthIn: item.lengthIn,
+                    widthIn: item.widthIn,
+                    heightIn: item.heightIn
+                ))
+            }
+        }
+        pendingWebPlatforms = []
+        pendingWebJobItems = []
+        webAutofillQueue = jobs
+        pendingAutofillJobsCount = jobs.count
+        // Start web autofill jobs (Mercari, Facebook) after publish completes. If there are
+        // none (e.g. eBay-only), transition to the global CrossPostStatusView sheet.
+        if !webAutofillQueue.isEmpty {
+            checkAndStartNextWebJob(modelContext: modelContext)
+        } else {
+            showResultsOverview = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                self?.showCrossPostStatus = true
+            }
+        }
+    }
+
+    /// Maps raw cross-post trigger errors to actionable user-facing messages.
+    private nonisolated static func formatCrossPostError(_ error: Error, title: String) -> String {
+        let nsError = error as NSError
+        let serverMsg = nsError.userInfo["NSLocalizedDescription"] as? String ?? ""
+
+        // Title-too-long: eBay max is 80 chars
+        if serverMsg.lowercased().contains("title") && (serverMsg.lowercased().contains("long") || serverMsg.lowercased().contains("80") || serverMsg.lowercased().contains("character")) {
+            let count = title.count
+            return "eBay cross-post failed for \"\(title.prefix(40))…\"\n\nYour title is \(count) characters. eBay requires 80 or fewer. Edit the title and try again."
+        }
+        // Business policy / setup issue
+        if serverMsg.contains("bizpolicy") || serverMsg.contains("Business Policies") || serverMsg.contains("bp/manage") {
+            return "eBay cross-post failed: Your eBay Business Policies aren't configured yet. Visit your eBay Seller Hub → Business Policies to set up Payment, Return, and Shipping policies."
+        }
+        // Missing permissions / reconnect
+        if serverMsg.contains("missing required permissions") || serverMsg.contains("invalid_scope") {
+            return "eBay cross-post failed: Missing eBay permissions. Please disconnect and reconnect your eBay account in Settings."
+        }
+        // Generic fallback with raw message
+        if !serverMsg.isEmpty && serverMsg != "INTERNAL" {
+            return "Cross-post failed for \"\(title.prefix(40))\": \(serverMsg)"
+        }
+        return "Cross-post failed for \"\(title.prefix(40))\". Check your connection and integration settings, then try again."
     }
 
     // MARK: – Web autofill queue

@@ -1930,21 +1930,9 @@ struct ProcessResultsOverviewView: View {
     @State private var lastFocusMoveDelta = 1
 
     @State private var showPublishConfirmation = false
-    /// eBay/Etsy cross-posts deferred until publishing completes, ensuring the
-    /// Firestore listing document exists before the Cloud Function tries to read it.
-    /// Stores title for error messages since the SwiftData Item may be deleted by then.
-    @State private var pendingAPITriggers: [(listingId: String, title: String, platforms: [String])] = []
-    /// Web platforms selected at publish confirmation; jobs are built from these in
-    /// runPublishContinuationIfReady once firestoreListingId + Storage paths are final.
-    @State private var pendingWebPlatforms: [String] = []
-    @State private var pendingWebJobItems: [Item] = []
-    /// Post-publish continuation gating. The continuation (API cross-post triggers, web
-    /// autofill jobs, sheet transitions) may only run once BOTH the publish task has
-    /// finished AND the confirmation sheet is fully dismissed — mutating sheet state while
-    /// another sheet is mid-dismissal makes UIKit drop the transition and strands the
-    /// modal on screen with its binding out of sync.
-    @State private var pendingPublishContinuation = false
-    @State private var confirmationSheetVisible = false
+    // The post-publish continuation (deferred API triggers, web autofill job building,
+    // its gating flags) lives on UploadManager — see its "Publish continuation" section.
+    // It was @State here once, and dismissing this sheet mid-publish discarded it.
 
     // Only show the items that went through AI processing
     private var results: [Item] {
@@ -2022,7 +2010,7 @@ struct ProcessResultsOverviewView: View {
                 Button {
                     focusedField = nil
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        confirmationSheetVisible = true
+                        uploadManager.publishConfirmationSheetVisible = true
                         showPublishConfirmation = true
                     }
                 } label: {
@@ -2086,8 +2074,8 @@ struct ProcessResultsOverviewView: View {
         .sheet(isPresented: $showPublishConfirmation, onDismiss: {
             // Fires once the sheet is FULLY gone — only now is it safe to run the
             // post-publish continuation that mutates other sheet state.
-            confirmationSheetVisible = false
-            runPublishContinuationIfReady()
+            uploadManager.publishConfirmationSheetVisible = false
+            uploadManager.runPublishContinuationIfReady(modelContext: modelContext)
         }) {
             publishConfirmationSheetContent
         }
@@ -2096,17 +2084,13 @@ struct ProcessResultsOverviewView: View {
     
     @ViewBuilder private var publishConfirmationSheetContent: some View {
         PublishConfirmationSheet(itemsToPublish: toPublish) { selectedPlatforms in
-            // Web autofill jobs are BUILT in runPublishContinuationIfReady, after publish
-            // completes — at this point firestoreListingId can be nil and the Storage photo
-            // uploads unfinished, so a job snapshotted now would carry empty paths / no
-            // listing ID (the old fragility: jobs held the live draft instead and broke
-            // whenever the draft was deleted or its photos still uploading). Here we only
-            // record what to build and set pendingAutofillJobsCount, which publishDrafts
-            // reads to keep the drafts alive until the web queue drains.
+            // Web autofill jobs are BUILT in UploadManager.runPublishContinuationIfReady,
+            // after publish completes — at this point firestoreListingId can be nil and the
+            // Storage photo uploads unfinished, so a job snapshotted now would carry empty
+            // paths / no listing ID (the old fragility: jobs held the live draft instead and
+            // broke whenever the draft was deleted or its photos still uploading). Here we
+            // only record what to build; beginPublish stores it all on the manager.
             let webPlatforms = selectedPlatforms.filter { $0 == "mercari" || $0 == "facebook" }.sorted()
-            pendingWebPlatforms = webPlatforms
-            pendingWebJobItems = webPlatforms.isEmpty ? [] : toPublish
-            uploadManager.pendingAutofillJobsCount = webPlatforms.count * toPublish.count
             // Capture per-listing cross-post info now (before the drafts are deleted) so the
             // post-publish status overview can show per-platform status and offer retries.
             let attemptedPlatforms = Array(selectedPlatforms).sorted()
@@ -2129,109 +2113,22 @@ struct ProcessResultsOverviewView: View {
             if !attemptedPlatforms.isEmpty {
                 uploadManager.crossPostStatusPending = true
             }
-            // Defer API cross-posts to the publish completion (runPublishContinuationIfReady)
+            // API cross-posts are deferred to the publish completion (the continuation)
             // so the Firestore write completes before the Cloud Function reads the listing.
             let apiPlatforms = selectedPlatforms.filter { $0 == "ebay" || $0 == "etsy" }
-            if !apiPlatforms.isEmpty {
-                pendingAPITriggers = toPublish.compactMap { item in
-                    guard let listingId = item.firestoreListingId else { return nil }
-                    let title = item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled"
-                    return (listingId: listingId, title: title, platforms: Array(apiPlatforms))
-                }
+            let apiTriggers: [UploadManager.PendingAPITrigger] = apiPlatforms.isEmpty ? [] : toPublish.compactMap { item in
+                guard let listingId = item.firestoreListingId else { return nil }
+                let title = item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled"
+                return UploadManager.PendingAPITrigger(listingId: listingId, title: title, platforms: Array(apiPlatforms))
             }
-            uploadManager.publishDrafts(drafts: toPublish, modelContext: modelContext) {
-                // Explicit completion — do NOT observe isPublishing for this: the publish
-                // task can finish before SwiftUI renders the true state, so an .onChange
-                // observer may never fire (true→false coalesces to no change).
-                pendingPublishContinuation = true
-                runPublishContinuationIfReady()
-            }
+            uploadManager.beginPublish(
+                drafts: toPublish,
+                webPlatforms: webPlatforms,
+                apiTriggers: apiTriggers,
+                modelContext: modelContext
+            )
         }
         .presentationDetents([.large])
-    }
-
-    /// Runs post-publish work (deferred API cross-posts, web autofill jobs, sheet
-    /// transitions) once publishing has finished AND the confirmation sheet is fully
-    /// dismissed, whichever happens last.
-    private func runPublishContinuationIfReady() {
-        guard pendingPublishContinuation, !confirmationSheetVisible else { return }
-        pendingPublishContinuation = false
-        // Total publish failure: none of the listings were written to Firestore, so
-        // cross-posting them (API or web autofill) would only produce confusing secondary
-        // errors. Drop the queued jobs and stay on this screen so the "Publish Failed"
-        // alert (attached to this view) can present and the user can retry.
-        if uploadManager.publishError != nil {
-            pendingAPITriggers = []
-            pendingWebPlatforms = []
-            pendingWebJobItems = []
-            uploadManager.webAutofillQueue = []
-            uploadManager.pendingAutofillJobsCount = 0
-            uploadManager.crossPostStatusPending = false
-            return
-        }
-        // Fire deferred API cross-posts now that the Firestore write has completed.
-        if !pendingAPITriggers.isEmpty {
-            let triggers = pendingAPITriggers
-            pendingAPITriggers = []
-            Task {
-                var errorMessages: [String] = []
-                for trigger in triggers {
-                    do {
-                        try await IntegrationRepository.shared.triggerCrossPost(
-                            listingId: trigger.listingId,
-                            platforms: trigger.platforms
-                        )
-                    } catch {
-                        errorMessages.append(formatCrossPostError(error, title: trigger.title, platforms: trigger.platforms))
-                    }
-                }
-                if !errorMessages.isEmpty {
-                    // See UploadManager.crossPostError — this view is very likely already
-                    // dismissed by the time this Task resolves, so the error must live
-                    // somewhere that outlives it.
-                    uploadManager.crossPostError = errorMessages.joined(separator: "\n\n")
-                }
-            }
-        }
-        // Build web autofill jobs NOW — publish has completed, so every item has its
-        // firestoreListingId and uploaded Storage photo paths. Jobs carry those plain
-        // values (item: nil), so they survive draft deletion and never touch SwiftData:
-        // the same shape as ProfileView's reliable one-by-one cross-post jobs.
-        var jobs: [CrossPostJob] = []
-        for item in pendingWebJobItems where !Item.deletedIDs.contains(item.id) {
-            for platform in pendingWebPlatforms {
-                jobs.append(CrossPostJob(
-                    platform: platform,
-                    title: item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled",
-                    description: item.userEditedDescription ?? item.aiSuggestedDescription ?? "",
-                    price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
-                    listingId: item.firestoreListingId,
-                    photoFirebasePaths: item.orderedFirebasePhotoPaths,
-                    buyerPaysShipping: item.buyerPaysShipping,
-                    condition: item.condition ?? ItemCondition.good.rawValue,
-                    suggestedCategory: item.aiSuggestedCategory,
-                    suggestedBrand: item.aiSuggestedBrand,
-                    weightLbs: item.weightLbs,
-                    lengthIn: item.lengthIn,
-                    widthIn: item.widthIn,
-                    heightIn: item.heightIn
-                ))
-            }
-        }
-        pendingWebPlatforms = []
-        pendingWebJobItems = []
-        uploadManager.webAutofillQueue = jobs
-        uploadManager.pendingAutofillJobsCount = jobs.count
-        // Start web autofill jobs (Mercari, Facebook) after publish completes. If there are
-        // none (e.g. eBay-only), transition to the global CrossPostStatusView sheet.
-        if !uploadManager.webAutofillQueue.isEmpty {
-            uploadManager.checkAndStartNextWebJob(modelContext: modelContext)
-        } else {
-            uploadManager.showResultsOverview = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                uploadManager.showCrossPostStatus = true
-            }
-        }
     }
 
     private func toggleSelection(_ item: Item) {
@@ -2278,30 +2175,6 @@ struct ProcessResultsOverviewView: View {
         default: field = .description
         }
         focusedField = DraftFocusField(itemID: results[row].id, field: field)
-    }
-
-    private func formatCrossPostError(_ error: Error, title: String, platforms: [String]) -> String {
-        let nsError = error as NSError
-        let serverMsg = nsError.userInfo["NSLocalizedDescription"] as? String ?? ""
-
-        // Title-too-long: eBay max is 80 chars
-        if serverMsg.lowercased().contains("title") && (serverMsg.lowercased().contains("long") || serverMsg.lowercased().contains("80") || serverMsg.lowercased().contains("character")) {
-            let count = title.count
-            return "eBay cross-post failed for \"\(title.prefix(40))…\"\n\nYour title is \(count) characters. eBay requires 80 or fewer. Edit the title and try again."
-        }
-        // Business policy / setup issue
-        if serverMsg.contains("bizpolicy") || serverMsg.contains("Business Policies") || serverMsg.contains("bp/manage") {
-            return "eBay cross-post failed: Your eBay Business Policies aren't configured yet. Visit your eBay Seller Hub → Business Policies to set up Payment, Return, and Shipping policies."
-        }
-        // Missing permissions / reconnect
-        if serverMsg.contains("missing required permissions") || serverMsg.contains("invalid_scope") {
-            return "eBay cross-post failed: Missing eBay permissions. Please disconnect and reconnect your eBay account in Settings."
-        }
-        // Generic fallback with raw message
-        if !serverMsg.isEmpty && serverMsg != "INTERNAL" {
-            return "Cross-post failed for \"\(title.prefix(40))\": \(serverMsg)"
-        }
-        return "Cross-post failed for \"\(title.prefix(40))\". Check your connection and integration settings, then try again."
     }
 }
 
