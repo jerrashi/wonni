@@ -271,6 +271,28 @@ class UploadManager: ObservableObject {
         try? modelContext.save()
     }
     
+    /// One-time startup sweep for `Item`s left behind by a bug where `publishDrafts` set
+    /// `publishedAt` but never flipped `isDraft` to false — so every "show me the drafts"
+    /// view (camera carousel, picker grid) kept rendering an already-published listing as
+    /// an in-progress draft forever. Safe to call unconditionally on every launch: it only
+    /// touches items that are already confirmed published (`publishedAt != nil`) and no
+    /// longer tracked by any in-memory cross-post queue (that queue is `@Published` state
+    /// on this object, so a fresh launch always starts empty — nothing here races it).
+    /// New publishes are unaffected; publishDrafts now sets `isDraft = false` itself.
+    func cleanupOrphanedPublishedDrafts(modelContext: ModelContext) {
+        let orphaned = (try? modelContext.fetch(FetchDescriptor<Item>()))?
+            .filter { $0.isDraft && $0.publishedAt != nil } ?? []
+        guard !orphaned.isEmpty else { return }
+        print("[UploadManager] Cleaning up \(orphaned.count) orphaned published draft(s) from a previous launch")
+        for item in orphaned {
+            Item.deletedIDs.insert(item.id)
+            item.sourceAssetIdentifiers = []
+            item.photosData = []
+            modelContext.delete(item)
+        }
+        try? modelContext.save()
+    }
+
     /// Deletes a draft from the local database, Firestore, and deletes uploaded images from Storage.
     /// Only ever safe to call on an item that hasn't been published — see the guard below.
     func deleteDraftLocallyAndCloud(draft: Item, modelContext: ModelContext) {
@@ -889,9 +911,15 @@ class UploadManager: ObservableObject {
                     // Marks this Item as a live listing everywhere delete flows check it — see
                     // deleteDraftLocallyAndCloud's guard. Set before branching so it's true even
                     // in the kept-alive-for-cross-post case below, which can leave the Item
-                    // sitting in SwiftData (still isDraft, still full of photos) for as long as
-                    // the web-autofill queue takes to drain.
+                    // sitting in SwiftData (still full of photos) for as long as the
+                    // web-autofill queue takes to drain.
                     draft.publishedAt = Date()
+                    // isDraft is the single field every "show me the drafts" @Query/filter in
+                    // the app keys off — camera carousel, picker grid, draft history. Flipping
+                    // it here (rather than relying on every call site to also check
+                    // publishedAt) is what keeps a just-published item from still rendering as
+                    // an in-progress draft while it's kept alive for cross-posting below.
+                    draft.isDraft = false
                     if pendingAutofillJobsCount > 0 {
                         // Web cross-post jobs were selected — keep the SwiftData item alive
                         // until runPublishContinuationIfReady has snapshotted its metadata +
