@@ -769,7 +769,9 @@ struct DraftBulkEditSheet: View {
                 let d = descriptionSet.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !d.isEmpty { item.userEditedDescription = d }
             } else {
-                let currentTitle = item.userEditedTitle ?? item.aiSuggestedTitle ?? item.visionTitle ?? ""
+                // No visionTitle here: it's a suggestion, never a base to prepend/append onto
+                // (and itemHasTitle already guarantees one of these two is non-empty).
+                let currentTitle = item.userEditedTitle ?? item.aiSuggestedTitle ?? ""
                 var newTitle = currentTitle
                 if !titlePrepend.isEmpty { newTitle = titlePrepend + newTitle }
                 if !titleAppend.isEmpty { newTitle = newTitle + titleAppend }

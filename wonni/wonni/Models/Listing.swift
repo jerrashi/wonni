@@ -57,6 +57,12 @@ class Item {
     /// deleted the live listing while leaving it posted on eBay/Mercari.
     var publishedAt: Date?
     var visionTitle: String?
+    /// True once the user tapped the vision-title suggestion chip to fill the title
+    /// field. Vision output is never prefilled as editable text (it polluted the
+    /// "user title" hint sent to Gemini); accepting the chip is a deliberate choice,
+    /// so accepted text counts as a real user title. Rides to the published listing
+    /// doc for model-quality analysis ("% of vision suggestions accepted").
+    var visionTitleAccepted: Bool = false
     var isLocalPhotoOnly: Bool
     var aiSuggestedCategory: String?
     var aiSuggestedBrand: String?
@@ -271,11 +277,28 @@ class Mileage {
     var date: Date
     var title: String
     var miles: Double
-    
+
     init(id: UUID = UUID(), date: Date = Date(), title: String, miles: Double) {
         self.id = id
         self.date = date
         self.title = title
         self.miles = miles
+    }
+}
+
+/// Pure policy for whether a draft's AI processing can be skipped. Factored out of
+/// `UploadManager.processDrafts` so the set-comparison semantics are unit-testable
+/// (see DraftAIProcessingPolicyTests).
+enum DraftAIProcessingPolicy {
+    /// Skip when the draft was processed before AND its photo set is unchanged.
+    /// Compared as a Set: reordering photos (e.g. changing the cover) never re-bills
+    /// the AI, but adding, removing, or swapping a photo changes the AI's actual
+    /// input, so those drafts are re-processed. A nil snapshot means the draft was
+    /// processed before `processedPhotoIDs` existed — treated as unchanged so
+    /// pre-migration drafts aren't re-billed.
+    static func shouldSkip(processedAt: Date?, processedPhotoIDs: [String]?, currentPhotoIDs: [String]) -> Bool {
+        guard processedAt != nil else { return false }
+        guard let snapshot = processedPhotoIDs else { return true }
+        return Set(snapshot) == Set(currentPhotoIDs)
     }
 }

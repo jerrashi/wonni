@@ -484,16 +484,17 @@ class UploadManager: ObservableObject {
                 )
 
                 // Skip Gemini if this draft was already processed in a prior run AND its
-                // photo set is unchanged (compared as a Set — reordering the cover photo
-                // must not re-bill the AI). Adding/removing photos changes the AI's actual
-                // input, so those drafts are deliberately re-processed. nil snapshot =
-                // draft processed before processedPhotoIDs existed; treat as unchanged.
-                let photosUnchanged = draft.processedPhotoIDs
-                    .map { Set($0) == Set(draft.sourceAssetIdentifiers) } ?? true
-                if draft.processedAt != nil && !photosUnchanged {
+                // photo set is unchanged — see DraftAIProcessingPolicy.shouldSkip for the
+                // exact semantics (set comparison, nil-snapshot handling).
+                let skipAI = DraftAIProcessingPolicy.shouldSkip(
+                    processedAt: draft.processedAt,
+                    processedPhotoIDs: draft.processedPhotoIDs,
+                    currentPhotoIDs: draft.sourceAssetIdentifiers
+                )
+                if draft.processedAt != nil && !skipAI {
                     print("[UploadManager] Re-processing \(draft.id) — photos changed since last AI run")
                 }
-                if draft.processedAt != nil && photosUnchanged {
+                if skipAI {
                     print("[UploadManager] Skipping Gemini for \(draft.id) — already processed")
                     processedItemIDs.append(draft.id)
                     processStatuses[draft.id] = .done
@@ -517,7 +518,12 @@ class UploadManager: ObservableObject {
                 processStatuses[draft.id] = .uploading(0.35)  // Analyzing with AI...
 
                 do {
-                    let hasUserTitle = draft.userEditedTitle != nil && !draft.userEditedTitle!.isEmpty && draft.userEditedTitle != draft.visionTitle
+                    // Any non-empty userEditedTitle is a deliberate user signal now: vision
+                    // output is never prefilled into the field (it's an explicit-accept chip),
+                    // so the old `!= visionTitle` exclusion — which guarded against the prefill
+                    // leaking through as a fake user title — no longer applies. An unaccepted
+                    // vision suggestion simply leaves the title empty here (no hint sent).
+                    let hasUserTitle = draft.userEditedTitle != nil && !draft.userEditedTitle!.isEmpty
                     let hasUserDesc = draft.userEditedDescription != nil && !draft.userEditedDescription!.isEmpty
 
                     if hasUserTitle {
@@ -979,32 +985,82 @@ class UploadManager: ObservableObject {
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         try? handler.perform([textReq, classifyReq])
 
-        // Prefer OCR text (brand names, model numbers)
-        if let topText = textReq.results?
-            .compactMap({ $0.topCandidates(1).first })
-            .filter({ $0.confidence > 0.7 && $0.string.count > 2 })
-            .first?.string, !topText.isEmpty {
-            return topText.capitalized
+        let candidates = (classifyReq.results ?? []).map {
+            VisionTitlePolicy.Candidate(
+                identifier: $0.identifier,
+                confidence: $0.confidence,
+                passesPrecisionFilter: $0.hasMinimumRecall(0.01, forPrecision: 0.9)
+            )
         }
+        let ocrText = textReq.results?
+            .compactMap { $0.topCandidates(1).first }
+            .filter { $0.confidence > 0.7 && $0.string.count > 2 }
+            .first?.string
+        return VisionTitlePolicy.suggestion(classifications: candidates, ocrText: ocrText)
+    }
+}
 
-        // Fall back to a SINGLE human-readable classification label (e.g. "Butterfly"),
-        // not a concatenation of abstract taxonomy terms ("structure wood person").
-        // Apple recommends filtering VNClassifyImageRequest results by precision/recall rather
-        // than a raw confidence threshold, since the taxonomy is hierarchical; among those that
-        // clear the bar we take the most confident, falling back to the top result overall.
-        let observations = classifyReq.results ?? []
-        guard let best = observations.filter({ $0.hasMinimumRecall(0.01, forPrecision: 0.9) })
-                .max(by: { $0.confidence < $1.confidence })
-                ?? observations.max(by: { $0.confidence < $1.confidence }),
-              best.confidence > 0.4 else {
-            return nil
+/// Pure selection policy for the on-device vision title suggestion. Factored out of
+/// `UploadManager.generateVisionTitle` so it's unit-testable (VisionTitlePolicyTests)
+/// without constructing Vision framework observation objects.
+///
+/// Order: specific classification → OCR text → nil. A confident, specific label
+/// ("Compact Disc") is the best suggestion; OCR text (brand names, model numbers) is a
+/// solid second; and no suggestion beats a vague one — "Structure" helps nobody.
+enum VisionTitlePolicy {
+    /// Classification labels below this confidence produce no classification suggestion.
+    /// Tunable: raise for fewer/safer suggestions, lower for more coverage.
+    static let minClassificationConfidence: Float = 0.6
+
+    /// Broad taxonomy ancestors that are never useful as a listing title. Vision's
+    /// taxonomy is hierarchical, so confidence is systematically highest at generic
+    /// nodes ("Structure" always outscores "Compact Disc" on confidence) — these are
+    /// excluded outright rather than threshold-tuned away. Extend freely; identifiers
+    /// are compared lowercased.
+    static let genericLabelDenylist: Set<String> = [
+        "structure", "material", "object", "objects", "indoor", "outdoor",
+        "furniture", "container", "art", "design", "pattern", "texture",
+        "still_life", "machine", "device", "instrument", "equipment", "tool",
+        "product", "decoration", "adult", "person", "people", "room", "wall",
+        "floor", "table", "text", "document", "rectangle", "circle", "line",
+    ]
+
+    /// A Vision classification observation reduced to what the policy needs.
+    struct Candidate {
+        /// Raw Vision taxonomy identifier, e.g. "compact_disc".
+        let identifier: String
+        let confidence: Float
+        /// Result of `hasMinimumRecall(0.01, forPrecision: 0.9)` — Apple's recommended
+        /// filter for this hierarchical taxonomy.
+        let passesPrecisionFilter: Bool
+    }
+
+    static func suggestion(classifications: [Candidate], ocrText: String?) -> String? {
+        let eligible = classifications.filter {
+            $0.passesPrecisionFilter
+                && $0.confidence >= minClassificationConfidence
+                && !genericLabelDenylist.contains($0.identifier.lowercased())
         }
-        return humanReadableLabel(best.identifier)
+        // Compound identifiers ("hot_air_balloon") outrank single words: in a
+        // hierarchical taxonomy, multi-word identifiers are almost always leaves —
+        // i.e. the descriptive answer. Confidence breaks ties within each group.
+        if let best = eligible.max(by: { lhs, rhs in
+            let lCompound = lhs.identifier.contains("_")
+            let rCompound = rhs.identifier.contains("_")
+            if lCompound != rCompound { return rCompound }
+            return lhs.confidence < rhs.confidence
+        }) {
+            return humanReadableLabel(best.identifier)
+        }
+        if let ocr = ocrText?.trimmingCharacters(in: .whitespacesAndNewlines), !ocr.isEmpty {
+            return ocr.capitalized
+        }
+        return nil
     }
 
     /// Turns a Vision taxonomy identifier (lowercase, often underscore-delimited, e.g.
     /// "hot_air_balloon") into a clean title-cased phrase ("Hot Air Balloon").
-    private nonisolated static func humanReadableLabel(_ identifier: String) -> String {
+    static func humanReadableLabel(_ identifier: String) -> String {
         identifier
             .replacingOccurrences(of: "_", with: " ")
             .split(separator: " ")
