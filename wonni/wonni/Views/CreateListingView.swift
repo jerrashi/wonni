@@ -1241,6 +1241,7 @@ struct DraftRow: View, Equatable {
                                     item.userEditedDescription = origDesc
                                     item.originalUserDescriptionBeforeAI = nil
                                 }
+                                item.aiUndoCount += 1
                             }
                             Task { @MainActor in
                                 guard !Item.deletedIDs.contains(item.id) else { return }
@@ -2960,11 +2961,13 @@ struct ResultDraftRow: View, Equatable {
         titleText = orig.isEmpty ? (item.aiSuggestedTitle ?? "") : orig
         item.userEditedTitle = orig.isEmpty ? nil : orig
         item.originalUserTitleBeforeAI = nil
+        item.aiUndoCount += 1
         undoneAITitle = aiTitle
         showToast(message: "AI title edits discarded") { [self] in
             titleText = self.undoneAITitle ?? item.aiSuggestedTitle ?? ""
             item.originalUserTitleBeforeAI = item.userEditedTitle
             item.userEditedTitle = self.undoneAITitle
+            item.aiUndoCount = max(0, item.aiUndoCount - 1)
             self.undoneAITitle = nil
             deferredPersist()
         }
@@ -2977,11 +2980,13 @@ struct ResultDraftRow: View, Equatable {
         descriptionText = orig.isEmpty ? (item.aiSuggestedDescription ?? "") : orig
         item.userEditedDescription = orig.isEmpty ? nil : orig
         item.originalUserDescriptionBeforeAI = nil
+        item.aiUndoCount += 1
         undoneAIDescription = aiDesc
         showToast(message: "AI description edits discarded") { [self] in
             descriptionText = self.undoneAIDescription ?? item.aiSuggestedDescription ?? ""
             item.originalUserDescriptionBeforeAI = item.userEditedDescription
             item.userEditedDescription = self.undoneAIDescription
+            item.aiUndoCount = max(0, item.aiUndoCount - 1)
             self.undoneAIDescription = nil
             deferredPersist()
         }

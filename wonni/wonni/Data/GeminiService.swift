@@ -23,6 +23,11 @@ struct GeminiIdentificationResponse: Codable {
     var widthIn: Double?
     var heightIn: Double?
     var confidence: Double?
+    /// Stamped by the Cloud Function (the only honest source): which model and
+    /// prompt revision produced this output. Optional so an older deployed
+    /// function that doesn't send them yet still decodes.
+    var aiModel: String?
+    var promptVersion: String?
 }
 
 class GeminiService: ObservableObject {

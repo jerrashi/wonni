@@ -79,6 +79,62 @@ struct ListingVariation: Codable, Identifiable {
     var sku: String?       // optional seller-defined SKU for this variant
 }
 
+// MARK: - AI quality tracking
+
+/// Model-quality telemetry captured when a draft is published: what the AI (and the
+/// on-device vision model) produced vs. what the user actually shipped. Enables the
+/// offline analyses agreed in the 2026-07-14 spec — "% similar to final output by
+/// model", "% of vision suggestions shown/accepted" (accidental-tap cleaning happens
+/// offline via token overlap; the client logs raw signals only).
+struct AIQualityTracking: Codable {
+    var aiSuggestedTitle: String?
+    var aiSuggestedDescription: String?
+    var aiSuggestedPrice: Double?
+    var visionTitle: String?
+    var visionTitleAccepted: Bool
+    var aiModel: String?
+    var promptVersion: String?
+    /// Final differs from the AI's output. Only meaningful (and only true) when the
+    /// AI actually produced a value for the field.
+    var titleEdited: Bool
+    var descriptionEdited: Bool
+    var priceEdited: Bool
+    /// Undo actions taken (title or description; toast-Restore retracts one).
+    var undoCount: Int
+
+    /// Pure publish-time snapshot builder — unit-tested in AIQualityTrackingTests.
+    static func from(
+        aiSuggestedTitle: String?,
+        aiSuggestedDescription: String?,
+        aiSuggestedPrice: Double?,
+        userEditedTitle: String?,
+        userEditedDescription: String?,
+        userEditedPrice: Double?,
+        visionTitle: String?,
+        visionTitleAccepted: Bool,
+        aiModel: String?,
+        promptVersion: String?,
+        undoCount: Int
+    ) -> AIQualityTracking {
+        AIQualityTracking(
+            aiSuggestedTitle: aiSuggestedTitle,
+            aiSuggestedDescription: aiSuggestedDescription,
+            aiSuggestedPrice: aiSuggestedPrice,
+            visionTitle: visionTitle,
+            visionTitleAccepted: visionTitleAccepted,
+            aiModel: aiModel,
+            promptVersion: promptVersion,
+            titleEdited: aiSuggestedTitle != nil
+                && userEditedTitle != nil && userEditedTitle != aiSuggestedTitle,
+            descriptionEdited: aiSuggestedDescription != nil
+                && userEditedDescription != nil && userEditedDescription != aiSuggestedDescription,
+            priceEdited: aiSuggestedPrice != nil
+                && userEditedPrice != nil && userEditedPrice != aiSuggestedPrice,
+            undoCount: undoCount
+        )
+    }
+}
+
 // MARK: - UserListing
 
 /// One seller's offer. References InventoryUnits for quantity tracking.
@@ -141,6 +197,12 @@ struct UserListing: Identifiable, Codable {
     // ── Gemini identification ─────────────────────────────────────────────────
     var geminiIdentificationConfirmed: Bool
     var geminiRawResponse: String?   // Raw JSON from Gemini for debugging
+
+    // ── AI quality tracking (spec T1) ─────────────────────────────────────────
+    // Snapshot taken at publish: what the AI produced vs. what actually shipped.
+    // Nested map (`aiTracking.aiModel`, …) so analysis queries stay tidy and the
+    // fields can't be confused with the listing's real content fields.
+    var aiTracking: AIQualityTracking? = nil
 
     // ── Cross-Posting ─────────────────────────────────────────────────────────
     var sellingProfileId: String?
