@@ -25,6 +25,11 @@ final class AppTaskQueue: ObservableObject {
     // overlap it — pushed navigationDestination content doesn't compose safe-area-wise
     // with the tab's outer .safeAreaInset, so without this the two pills stack as a ZStack.
     @Published var suppressGlobalPill = false
+    // Short history the activity view (Q3) shows below the live queue, so a job that just
+    // finished doesn't just vanish with no confirmation. Capped small — this is a glance
+    // list, not a log.
+    @Published private(set) var recentlyCompleted: [AppTask] = []
+    private let recentlyCompletedLimit = 5
 
     var current: AppTask? { tasks.first }
     var hasActiveTasks: Bool { !tasks.isEmpty }
@@ -51,6 +56,14 @@ final class AppTaskQueue: ObservableObject {
     }
 
     func complete(id: UUID) {
-        tasks.removeAll { $0.id == id }
+        guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
+        var finished = tasks[idx]
+        finished.progress = 1
+        finished.onTap = nil
+        recentlyCompleted.insert(finished, at: 0)
+        if recentlyCompleted.count > recentlyCompletedLimit {
+            recentlyCompleted.removeLast(recentlyCompleted.count - recentlyCompletedLimit)
+        }
+        tasks.remove(at: idx)
     }
 }

@@ -174,10 +174,14 @@ class UploadManager: ObservableObject {
     @Published var isProcessPillVisible = false
     @Published var showProgressSheet = false
 
-    // ── Global Mercari cross-post job (shown as pill above tab bar from MainView) ──
+    // ── Global Mercari cross-post job (runs headlessly; surfaced via AppTaskQueue's
+    // one shared pill — Q1/Q2 — rather than its own pill) ──
     @Published var globalMercariJob: CrossPostJob? = nil
     /// Called by MainView's MercariAutoPosterView onDismiss to advance the queue in the originating view.
     var onMercariJobComplete: (() -> Void)? = nil
+    /// One-shot: set true when the AppTaskQueue pill for the active Mercari job is tapped.
+    /// Observed by MercariAutoPosterView to expand its full-screen WebView.
+    @Published var mercariPillExpandRequested = false
     /// One-shot callback fired when the web autofill queue drains. Set by the flow that
     /// enqueued the jobs (e.g. ProfileView reloads its listings); cleared after firing.
     var onWebQueueDrained: (() -> Void)? = nil
@@ -1057,9 +1061,18 @@ class UploadManager: ObservableObject {
             let nextJob = webAutofillQueue.removeFirst()
             pendingAutofillJobsCount = webAutofillQueue.count + 1
             if nextJob.platform == "mercari" {
-                // Mercari runs headlessly — shown as a pill above the tab bar via MainView.
+                // Mercari runs headlessly — folded into the one global AppTaskQueue pill
+                // (Q1/Q2) instead of its own separate pill. Tapping it requests the
+                // full-screen WebView via mercariPillExpandRequested.
                 globalMercariJob = nextJob
                 onMercariJobComplete = { [weak self] in self?.checkAndStartNextWebJob(modelContext: modelContext) }
+                AppTaskQueue.shared.begin(
+                    id: nextJob.id,
+                    label: "Posting to Mercari…",
+                    detail: nextJob.title,
+                    accentColor: Color(red: 0.1, green: 0.0, blue: 0.35),
+                    onTap: { [weak self] in self?.mercariPillExpandRequested = true }
+                )
             } else {
                 // Facebook and other web platforms require a visible sheet.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
@@ -1142,8 +1155,10 @@ class UploadManager: ObservableObject {
         sessionDraftIDs.removeAll()
         activeDraftID = nil
         crossPostStatusPending = false
+        if let job = globalMercariJob { AppTaskQueue.shared.complete(id: job.id) }
         globalMercariJob = nil
         onMercariJobComplete = nil
+        mercariPillExpandRequested = false
     }
 
     // MARK: – On-device Vision Recognition

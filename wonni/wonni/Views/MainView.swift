@@ -91,21 +91,23 @@ struct MainView: View {
             NavigationStack { ProcessResultsOverviewView() }
                 .environmentObject(uploadManager)
         }
-        // Global Mercari cross-post pill — shown above the tab bar for all flows that
-        // call UploadManager.globalMercariJob. Runs the WebView headlessly; expands to
-        // full screen only when user interaction is required (login, category review).
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if let job = uploadManager.globalMercariJob {
-                MercariAutoPosterView(job: job) {
-                    let completion = uploadManager.onMercariJobComplete
-                    uploadManager.globalMercariJob = nil
-                    uploadManager.onMercariJobComplete = nil
-                    completion?()
+        // Mercari cross-post job (Q1/Q2): mounted invisibly so its WebView keeps running
+        // headlessly and its fullScreenCover is available — the visible pill is now the
+        // single shared AppTaskQueue pill (.appTaskQueuePill() per tab), registered by
+        // UploadManager.checkAndStartNextWebJob.
+        .background(
+            Group {
+                if let job = uploadManager.globalMercariJob {
+                    MercariAutoPosterView(job: job) {
+                        let completion = uploadManager.onMercariJobComplete
+                        AppTaskQueue.shared.complete(id: job.id)
+                        uploadManager.globalMercariJob = nil
+                        uploadManager.onMercariJobComplete = nil
+                        completion?()
+                    }
                 }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-        }
-        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: uploadManager.globalMercariJob?.id)
+        )
         // Facebook cross-post — unlike Mercari, needs a visible sheet (no headless pill).
         // Lives at MainView root (not Review & Publish) so the queue keeps advancing even
         // if the user already dismissed Review & Publish (github issue #45).
@@ -119,7 +121,10 @@ struct MainView: View {
                 listingPrice: job.price
             )
         }
-        .sheet(isPresented: $uploadManager.showCrossPostStatus) {
+        // N6: full screen (not a sheet) — this is the publish-progress view for the
+        // cross-post phase, per listing × platform, mirroring ProcessProgressView's
+        // full-screen + minimize pattern rather than a dismissable sheet.
+        .fullScreenCover(isPresented: $uploadManager.showCrossPostStatus) {
             NavigationStack {
                 CrossPostStatusView(
                     items: uploadManager.sessionCrossPostItems,
@@ -194,18 +199,84 @@ private extension View {
 
 struct AppTaskQueuePillContent: View {
     @ObservedObject private var queue = AppTaskQueue.shared
+    @State private var showActivity = false
 
     var body: some View {
         if queue.hasActiveTasks, !queue.suppressGlobalPill, let task = queue.current {
-            AppTaskQueuePillView(task: task, queueCount: queue.count)
+            AppTaskQueuePillView(task: task, queueCount: queue.count, onExpand: { showActivity = true })
                 .transition(.move(edge: .bottom).combined(with: .opacity))
+                .sheet(isPresented: $showActivity) {
+                    NavigationStack { AppTaskActivityView() }
+                }
         }
+    }
+}
+
+// Q3: tapping the pill's chevron opens this instead of jumping straight into whatever
+// the top task's own action is — with more than one job queued, the user should see
+// what's running/queued/done before diving into one of them.
+struct AppTaskActivityView: View {
+    @ObservedObject private var queue = AppTaskQueue.shared
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        List {
+            if !queue.tasks.isEmpty {
+                Section("In progress") {
+                    ForEach(queue.tasks) { task in
+                        activityRow(task, isDone: false)
+                    }
+                }
+            }
+            if !queue.recentlyCompleted.isEmpty {
+                Section("Recently completed") {
+                    ForEach(queue.recentlyCompleted) { task in
+                        activityRow(task, isDone: true)
+                    }
+                }
+            }
+        }
+        .navigationTitle("Activity")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Close") { dismiss() }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func activityRow(_ task: AppTaskQueue.AppTask, isDone: Bool) -> some View {
+        HStack(spacing: 12) {
+            if isDone {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            } else if task.progress < 0 {
+                ProgressView().progressViewStyle(.circular).scaleEffect(0.8)
+            } else {
+                ProgressView(value: task.progress).progressViewStyle(.circular).scaleEffect(0.8)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(task.label).font(.subheadline.weight(.medium))
+                if let detail = task.detail {
+                    Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            Spacer()
+            if !isDone, let onTap = task.onTap {
+                Button("View") { onTap(); dismiss() }
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(.vertical, 2)
     }
 }
 
 struct AppTaskQueuePillView: View {
     let task: AppTaskQueue.AppTask
     let queueCount: Int
+    var onExpand: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 12) {
@@ -251,14 +322,12 @@ struct AppTaskQueuePillView: View {
 
             Spacer()
 
-            if task.onTap != nil {
-                Button {
-                    task.onTap?()
-                } label: {
-                    Image(systemName: "chevron.up")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.white.opacity(0.8))
-                }
+            Button {
+                onExpand()
+            } label: {
+                Image(systemName: "chevron.up")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.8))
             }
         }
         .padding(.horizontal, 16)
