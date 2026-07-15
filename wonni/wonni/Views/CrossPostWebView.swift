@@ -33,6 +33,16 @@ struct CrossPostJob: Identifiable {
     /// flow except fresh-draft publish (profile cross-post, retry, re-list), which used to
     /// silently post everything as "good" (github issue #47).
     let condition: String
+    /// Injection metadata snapshotted as plain values at job creation, so the job never
+    /// depends on a live SwiftData object — drafts are deleted after publish, and a job
+    /// holding a deleted `item` traps on any attribute read. Falls back to `item` for the
+    /// remaining item-based flows (single retry from Review & Publish).
+    let suggestedCategory: String?
+    let suggestedBrand: String?
+    let weightLbs: Double?
+    let lengthIn: Double?
+    let widthIn: Double?
+    let heightIn: Double?
 
     init(
         platform: String,
@@ -43,7 +53,13 @@ struct CrossPostJob: Identifiable {
         item: Item? = nil,
         photoFirebasePaths: [String] = [],
         buyerPaysShipping: Bool = false,
-        condition: String = ItemCondition.good.rawValue
+        condition: String = ItemCondition.good.rawValue,
+        suggestedCategory: String? = nil,
+        suggestedBrand: String? = nil,
+        weightLbs: Double? = nil,
+        lengthIn: Double? = nil,
+        widthIn: Double? = nil,
+        heightIn: Double? = nil
     ) {
         self.platform = platform
         self.title = title
@@ -54,6 +70,12 @@ struct CrossPostJob: Identifiable {
         self.photoFirebasePaths = photoFirebasePaths
         self.buyerPaysShipping = buyerPaysShipping
         self.condition = condition
+        self.suggestedCategory = suggestedCategory
+        self.suggestedBrand = suggestedBrand
+        self.weightLbs = weightLbs
+        self.lengthIn = lengthIn
+        self.widthIn = widthIn
+        self.heightIn = heightIn
     }
 }
 
@@ -2169,12 +2191,20 @@ struct MercariAutoPosterView: View {
     // Pill is always visible; isExpanded drives a fullScreenCover for the live WebView.
     @State private var isExpanded = false
 
+    /// One silent retry is attempted before a failure is surfaced to the user (set back
+    /// to allow the pill to stay compact through the first, usually-transient, hiccup).
+    @State private var autoRetryAttempted = false
+
     // True when the user must see and interact with the live Mercari page.
     // loginRequired is included so anti-bot checks and the login form are always visible
     // rather than hidden behind a headless overlay.
     private var requiresUserInteraction: Bool {
         switch state.status {
-        case .waitingForCategory, .failed, .loginRequired: return true
+        case .waitingForCategory, .loginRequired: return true
+        // First pre-submit failure auto-retries silently (see onChange below); only
+        // surface the page once that retry has been spent — or immediately for
+        // post-submit failures, which must never be retried (duplicate-listing risk).
+        case .failed: return autoRetryAttempted || state.latestSubmitResult != nil
         default: return false
         }
     }
@@ -2347,6 +2377,17 @@ struct MercariAutoPosterView: View {
                             isExpanded = false
                             onDismiss()
                         }
+                    }
+                case .failed:
+                    // First pre-submit failure: retry once, silently, before surfacing the
+                    // webview for manual completion. Post-submit failures (latestSubmitResult
+                    // set) are excluded — the submission may have gone through without a
+                    // captured listing ID, and re-submitting would post a duplicate.
+                    if !autoRetryAttempted && state.latestSubmitResult == nil {
+                        autoRetryAttempted = true
+                        hasInjected = false
+                        state.prepareForResume()
+                        Task { await fetchPhotosAndResume() }
                     }
                 default: break
                 }
@@ -2575,12 +2616,12 @@ struct MercariAutoPosterView: View {
             price: job.price,
             photoBase64Strings: photoBase64Strings,
             condition: job.condition,
-            suggestedCategory: job.item?.aiSuggestedCategory,
-            suggestedBrand: job.item?.aiSuggestedBrand,
-            weightLbs: job.item?.weightLbs,
-            lengthIn: job.item?.lengthIn,
-            widthIn: job.item?.widthIn,
-            heightIn: job.item?.heightIn,
+            suggestedCategory: job.suggestedCategory ?? job.item?.aiSuggestedCategory,
+            suggestedBrand: job.suggestedBrand ?? job.item?.aiSuggestedBrand,
+            weightLbs: job.weightLbs ?? job.item?.weightLbs,
+            lengthIn: job.lengthIn ?? job.item?.lengthIn,
+            widthIn: job.widthIn ?? job.item?.widthIn,
+            heightIn: job.heightIn ?? job.item?.heightIn,
             buyerPaysShipping: job.buyerPaysShipping,
             preferences: preferences
         )
@@ -2635,12 +2676,12 @@ struct MercariAutoPosterView: View {
             price: job.price,
             photoBase64Strings: photoBase64Strings,
             condition: job.condition,
-            suggestedCategory: job.item?.aiSuggestedCategory,
-            suggestedBrand: job.item?.aiSuggestedBrand,
-            weightLbs: job.item?.weightLbs,
-            lengthIn: job.item?.lengthIn,
-            widthIn: job.item?.widthIn,
-            heightIn: job.item?.heightIn,
+            suggestedCategory: job.suggestedCategory ?? job.item?.aiSuggestedCategory,
+            suggestedBrand: job.suggestedBrand ?? job.item?.aiSuggestedBrand,
+            weightLbs: job.weightLbs ?? job.item?.weightLbs,
+            lengthIn: job.lengthIn ?? job.item?.lengthIn,
+            widthIn: job.widthIn ?? job.item?.widthIn,
+            heightIn: job.heightIn ?? job.item?.heightIn,
             buyerPaysShipping: job.buyerPaysShipping,
             preferences: preferences
         )

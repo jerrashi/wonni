@@ -44,10 +44,12 @@ struct ProfileView: View {
     @State private var showImportSheet = false
     @State private var showBulkImportSheet = false
     
-    // Web Autofill Queue for non-API cross-posting (Mercari, Facebook)
-    @State private var webAutofillQueue: [CrossPostJob] = []
-    @State private var activeAutofillJob: CrossPostJob? = nil
-    @State private var activeMercariJob: CrossPostJob? = nil
+    // Web cross-posting (Mercari, Facebook) goes through UploadManager's shared queue —
+    // MainView owns the pill/sheet presentation, so jobs keep advancing even if the user
+    // navigates away from this tab. (Replaced the duplicate local queue found while
+    // fixing #45.)
+    @EnvironmentObject private var uploadManager: UploadManager
+    @Environment(\.modelContext) private var modelContext
 
     @State private var profile: UserPublicProfile?
     @State private var showMercariProfileSync = false
@@ -110,17 +112,9 @@ struct ProfileView: View {
     }
 
     var body: some View {
+        // Mercari pill and Facebook sheet are presented globally by MainView, driven by
+        // UploadManager.globalMercariJob / activeAutofillJob.
         profileNavStack
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if let job = activeMercariJob {
-                    MercariAutoPosterView(job: job) {
-                        activeMercariJob = nil
-                        checkAndStartNextWebJob()
-                    }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
-            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: activeMercariJob?.id)
     }
 
     // Extracted to break the compiler's type-check budget: body stays trivial,
@@ -132,12 +126,7 @@ struct ProfileView: View {
                 EditListingSheet(listing: listing) { jobs in
                     Task { await loadListings() }
                     if !jobs.isEmpty {
-                        self.webAutofillQueue.append(contentsOf: jobs)
-                        if self.activeAutofillJob == nil {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                self.checkAndStartNextWebJob()
-                            }
-                        }
+                        enqueueWebJobs(jobs)
                     }
                 }
             }
@@ -153,16 +142,6 @@ struct ProfileView: View {
                     bulkPostListings(platforms: platforms)
                 }
                 .presentationDetents([.fraction(0.75), .large])
-            }
-            .sheet(item: $activeAutofillJob, onDismiss: {
-                checkAndStartNextWebJob()
-            }) { job in
-                CrossPostContainerView(
-                    platformName: "Facebook Marketplace",
-                    listingTitle: job.title,
-                    listingDescription: job.description,
-                    listingPrice: job.price
-                )
             }
             .task {
                 await loadListings()
@@ -300,7 +279,7 @@ struct ProfileView: View {
             // beneath an active sheet, so without this gate it would be swallowed the moment the
             // Mercari sheet opened. Same fix as the bulk publish flow.
             .alert("Cross-Post Failed", isPresented: Binding(
-                get: { showCrossPostError && activeAutofillJob == nil },
+                get: { showCrossPostError && uploadManager.activeAutofillJob == nil },
                 set: { showCrossPostError = $0 }
             ), presenting: crossPostErrorMessage) { _ in
                 if crossPostErrorMessage?.contains("ebay.com/bp/manage") == true || crossPostErrorMessage?.contains("bizpolicy.ebay.com") == true || crossPostErrorMessage?.contains("Business Policies") == true {
@@ -855,29 +834,23 @@ struct ProfileView: View {
         }
         
         if !webJobs.isEmpty {
-            self.webAutofillQueue = webJobs
-            // Delay to allow BulkCrossPostSheet to fully dismiss before presenting the autofill sheet
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                self.checkAndStartNextWebJob()
-            }
+            enqueueWebJobs(webJobs)
         }
-        
+
         // Clear selection
         selectedListings.removeAll()
         editMode = .inactive
     }
-    
-    private func checkAndStartNextWebJob() {
-        guard activeAutofillJob == nil, activeMercariJob == nil else { return }
-        if !webAutofillQueue.isEmpty {
-            let nextJob = webAutofillQueue.removeFirst()
-            if nextJob.platform == "mercari" {
-                activeMercariJob = nextJob
-            } else {
-                activeAutofillJob = nextJob
-            }
-        } else {
-            Task { await loadListings() }
+
+    /// Hands jobs to UploadManager's shared web-autofill queue (pill/sheet presented
+    /// globally by MainView) and refreshes this tab's listings once the queue drains.
+    private func enqueueWebJobs(_ jobs: [CrossPostJob]) {
+        uploadManager.webAutofillQueue.append(contentsOf: jobs)
+        uploadManager.pendingAutofillJobsCount = uploadManager.webAutofillQueue.count
+        uploadManager.onWebQueueDrained = { Task { await loadListings() } }
+        // Delay so the initiating sheet fully dismisses before the pill/sheet presents.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            uploadManager.checkAndStartNextWebJob(modelContext: modelContext)
         }
     }
 

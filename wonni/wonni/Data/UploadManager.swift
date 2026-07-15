@@ -143,6 +143,9 @@ class UploadManager: ObservableObject {
     @Published var globalMercariJob: CrossPostJob? = nil
     /// Called by MainView's MercariAutoPosterView onDismiss to advance the queue in the originating view.
     var onMercariJobComplete: (() -> Void)? = nil
+    /// One-shot callback fired when the web autofill queue drains. Set by the flow that
+    /// enqueued the jobs (e.g. ProfileView reloads its listings); cleared after firing.
+    var onWebQueueDrained: (() -> Void)? = nil
 
     // ── Web autofill queue (Mercari headless + Facebook visible sheet) ─────────
     /// Owned here (not view @State) so dismissing Review & Publish mid-queue doesn't
@@ -230,7 +233,22 @@ class UploadManager: ObservableObject {
     }
     
     /// Deletes a draft from the local database, Firestore, and deletes uploaded images from Storage.
+    /// Only ever safe to call on an item that hasn't been published — see the guard below.
     func deleteDraftLocallyAndCloud(draft: Item, modelContext: ModelContext) {
+        // CRITICAL: never let a draft-discard action touch a listing that's already live.
+        // draft.firestoreListingId is the SAME id as the published Firestore document, and
+        // Firestore rules only check ownership on delete (not status) — nothing server-side
+        // stops this from hard-deleting a real, active listing (+ its Storage photos) while
+        // leaving it posted on eBay/Mercari untouched. This function is meant for discarding
+        // an unpublished draft; once publishDrafts sets publishedAt, this item is a live
+        // listing masquerading as a leftover local draft (kept alive so a queued cross-post
+        // job can read its photos) and must be left alone — checkAndStartNextWebJob() owns
+        // cleaning it up once the cross-post queue drains. Deleting a real listing has to go
+        // through ProfileView.deleteListing, which also tears down cross-posted platforms.
+        guard draft.publishedAt == nil else {
+            print("[UploadManager] Refusing to delete \(draft.id) — already published at \(draft.publishedAt!). It's cleaned up automatically once cross-posting finishes.")
+            return
+        }
         let listingId = draft.firestoreListingId
         let userId = Auth.auth().currentUser?.uid
         cleanupError = nil
@@ -427,7 +445,8 @@ class UploadManager: ObservableObject {
     // MARK: – Phase 2: AI Processing
 
     /// Runs Gemini on each draft. Skips drafts that have already been processed
-    /// (processedAt is set), so re-tapping "Process" never re-bills the AI.
+    /// (processedAt is set) with an unchanged photo set (processedPhotoIDs), so
+    /// re-tapping "Process" never re-bills the AI unless photos were added/removed.
     func processDrafts(drafts: [Item], modelContext: ModelContext) {
         guard !drafts.isEmpty else { return }
 
@@ -464,8 +483,17 @@ class UploadManager: ObservableObject {
                     detail: "\(index + 1) of \(processTotalCount)"
                 )
 
-                // Skip Gemini if this draft was already processed in a prior run
-                if draft.processedAt != nil {
+                // Skip Gemini if this draft was already processed in a prior run AND its
+                // photo set is unchanged (compared as a Set — reordering the cover photo
+                // must not re-bill the AI). Adding/removing photos changes the AI's actual
+                // input, so those drafts are deliberately re-processed. nil snapshot =
+                // draft processed before processedPhotoIDs existed; treat as unchanged.
+                let photosUnchanged = draft.processedPhotoIDs
+                    .map { Set($0) == Set(draft.sourceAssetIdentifiers) } ?? true
+                if draft.processedAt != nil && !photosUnchanged {
+                    print("[UploadManager] Re-processing \(draft.id) — photos changed since last AI run")
+                }
+                if draft.processedAt != nil && photosUnchanged {
                     print("[UploadManager] Skipping Gemini for \(draft.id) — already processed")
                     processedItemIDs.append(draft.id)
                     processStatuses[draft.id] = .done
@@ -551,6 +579,7 @@ class UploadManager: ObservableObject {
                     draft.aiSuggestedCategory = draft.aiSuggestedCategory ?? gemini.category
                     draft.aiSuggestedBrand = draft.aiSuggestedBrand ?? gemini.brand
                     draft.processedAt = Date()
+                    draft.processedPhotoIDs = draft.sourceAssetIdentifiers
                     processedItemIDs.append(draft.id)
                     processStatuses[draft.id] = .done
                 } catch {
@@ -760,10 +789,18 @@ class UploadManager: ObservableObject {
                 do {
                     let docID = try await ListingRepository.shared.saveDraft(listing)
                     print("[UploadManager] Published listing \(docID)")
+                    // Marks this Item as a live listing everywhere delete flows check it — see
+                    // deleteDraftLocallyAndCloud's guard. Set before branching so it's true even
+                    // in the kept-alive-for-cross-post case below, which can leave the Item
+                    // sitting in SwiftData (still isDraft, still full of photos) for as long as
+                    // the web-autofill queue takes to drain.
+                    draft.publishedAt = Date()
                     if pendingAutofillJobsCount > 0 {
-                        // Cross-posting jobs are queued — keep the SwiftData item alive so
-                        // startPosting() can read photos directly without copying or re-downloading.
-                        // ProcessResultsOverviewView.checkAndStartNextWebJob() deletes when the queue empties.
+                        // Web cross-post jobs were selected — keep the SwiftData item alive
+                        // until runPublishContinuationIfReady has snapshotted its metadata +
+                        // Storage photo paths into plain-value CrossPostJobs (the jobs
+                        // themselves no longer reference the item).
+                        // checkAndStartNextWebJob() deletes these when the queue empties.
                         publishedPendingDeletionIDs.insert(draft.id)
                     } else {
                         // See deleteDraftLocallyAndCloud — mark and clear before deleting so
@@ -776,8 +813,10 @@ class UploadManager: ObservableObject {
                         modelContext.delete(draft)
                     }
                     // This draft is now a live listing — drop it from the session set so the
-                    // discard-on-exit path can't call deleteDraftLocallyAndCloud on it and try to
-                    // delete the published Firestore document (which the rules correctly reject).
+                    // discard-on-exit path doesn't even attempt deleteDraftLocallyAndCloud on it
+                    // (that function's own publishedAt guard is the actual backstop; Firestore
+                    // rules do NOT check status on delete, only ownership, so nothing server-side
+                    // protects a published listing from this path).
                     sessionDraftIDs.removeAll { $0 == draft.id }
                     publishedCount += 1
                 } catch {
@@ -844,10 +883,17 @@ class UploadManager: ObservableObject {
                 publishedPendingDeletionIDs.removeAll()
             }
             // Close the results sheet (if still open) and open CrossPostStatusView globally.
-            showResultsOverview = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                self?.showCrossPostStatus = true
+            // Publish-flow only: profile-initiated cross-posts don't set
+            // crossPostStatusPending and get their own drain callback instead.
+            if crossPostStatusPending {
+                showResultsOverview = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                    self?.showCrossPostStatus = true
+                }
             }
+            let drained = onWebQueueDrained
+            onWebQueueDrained = nil
+            drained?()
         }
     }
 

@@ -40,6 +40,22 @@ class Item {
     var firebasePhotoPathsByAsset: [String: String]?
     var firestoreListingId: String?
     var processedAt: Date?
+    /// Snapshot of `sourceAssetIdentifiers` taken when AI processing completed. The
+    /// process skip compares this as a SET against the current photos: reorders never
+    /// re-bill the AI, but adding/removing a photo makes the draft eligible for
+    /// re-processing (the photos are the AI's actual input). nil (pre-migration drafts)
+    /// is treated as unchanged so existing processed drafts aren't re-billed.
+    var processedPhotoIDs: [String]?
+    /// Set the moment `UploadManager.publishDrafts` successfully writes this item's
+    /// Firestore listing doc. Distinguishes "still an unpublished draft" from "kept alive
+    /// locally only so a queued cross-post job can read its photos" (the item survives in
+    /// SwiftData until the web-autofill queue drains). Delete flows meant for discarding an
+    /// unpublished draft (`deleteDraftLocallyAndCloud`) must refuse to touch Firestore/Storage
+    /// once this is set — the app's copy is already live, and further deletion has to go
+    /// through the real delist flow (`ProfileView.deleteListing`), which also tears down
+    /// cross-posted platforms. See github issue: bulk-deleting already-published drafts
+    /// deleted the live listing while leaving it posted on eBay/Mercari.
+    var publishedAt: Date?
     var visionTitle: String?
     var isLocalPhotoOnly: Bool
     var aiSuggestedCategory: String?
