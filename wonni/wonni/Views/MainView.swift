@@ -54,6 +54,12 @@ struct MainView: View {
                     .frame(width: 1, height: 1).opacity(0).allowsHitTesting(false)
             }
         )
+        // One-time sweep for drafts orphaned by a since-fixed bug (publishedAt set but
+        // isDraft never cleared) — see cleanupOrphanedPublishedDrafts. Idempotent no-op
+        // once the device's local data is clean.
+        .task {
+            uploadManager.cleanupOrphanedPublishedDrafts(modelContext: modelContext)
+        }
         .sheet(isPresented: $uploadManager.showProgressSheet) {
             NavigationStack { ProcessProgressView() }
                 .environmentObject(uploadManager)
