@@ -573,7 +573,7 @@ struct CustomPhotoPickerView: View {
             // that previously let a bulk "delete selected drafts" hard-delete an already-live
             // listing (see UploadManager.deleteDraftLocallyAndCloud's guard).
             allItems.filter {
-                $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && !uploadManager.deletedDraftIDs.contains($0.id) && $0.publishedAt == nil
+                $0.isDraft && !$0.pendingPublish && !$0.sourceAssetIdentifiers.isEmpty && !uploadManager.deletedDraftIDs.contains($0.id) && $0.publishedAt == nil
             }
         }
 
@@ -1704,7 +1704,7 @@ struct BulkListingOverviewView: View {
         // queue drains, so without this it lingers here looking like an ordinary editable,
         // swipeable draft — which is exactly how a bulk "delete selected drafts" ended up
         // hard-deleting an already-published listing (see UploadManager.deleteDraftLocallyAndCloud).
-        allItems.filter { !$0.sourceAssetIdentifiers.isEmpty && !uploadManager.deletedDraftIDs.contains($0.id) && $0.publishedAt == nil }
+        allItems.filter { !$0.sourceAssetIdentifiers.isEmpty && !uploadManager.deletedDraftIDs.contains($0.id) && $0.publishedAt == nil && !$0.pendingPublish }
     }
 
     var body: some View {
@@ -1942,6 +1942,8 @@ struct ProcessResultsOverviewView: View {
         // still in SwiftData because a queued web cross-post job needs its photos — drop it
         // from the reviewable/swipeable list the moment that happens, instead of leaving a
         // live listing looking like an ordinary draft (see deleteDraftLocallyAndCloud).
+        // pendingPublish=true items ARE kept here intentionally — they are failed-to-publish
+        // drafts that the user is retrying. They appear with an orange highlight below.
         return allItems.filter { processedSet.contains($0.id) && !uploadManager.deletedDraftIDs.contains($0.id) && $0.publishedAt == nil }
     }
 
@@ -1964,6 +1966,9 @@ struct ProcessResultsOverviewView: View {
                         onDescriptionAutoAdvance: { moveFocus(by: lastFocusMoveDelta) }
                     )
                     .equatable()
+                    // Orange tint for items that previously failed to publish
+                    // (pendingPublish=true but not yet successfully written to Firestore).
+                    .listRowBackground(item.pendingPublish ? Color.orange.opacity(0.10) : nil)
                 }
                 .onDelete { offsets in
                     for i in offsets {
@@ -2089,6 +2094,14 @@ struct ProcessResultsOverviewView: View {
             // post-publish continuation that mutates other sheet state.
             uploadManager.publishConfirmationSheetVisible = false
             uploadManager.runPublishContinuationIfReady(modelContext: modelContext)
+            // If beginPublish was called (i.e. user didn't cancel), swap to PublishProgressView.
+            // Delay matches the existing AI→results transition to avoid overlapping covers.
+            if uploadManager.isPublishing || !uploadManager.publishStatuses.isEmpty {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    uploadManager.showResultsOverview = false
+                    uploadManager.showPublishProgress = true
+                }
+            }
         }) {
             publishConfirmationSheetContent
         }

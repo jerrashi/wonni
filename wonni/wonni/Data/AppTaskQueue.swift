@@ -16,7 +16,14 @@ final class AppTaskQueue: ObservableObject {
         var detail: String?
         var progress: Double    // -1 = indeterminate spinner, 0–1 = ring
         var accentColor: Color
+        /// When true, the pill renders in an error/red state and the activity row
+        /// shows a "Retry" button instead of "View". The task stays in `tasks`
+        /// (not moved to `recentlyCompleted`) until dismissed via `dismiss(id:)`.
+        var isError: Bool = false
         var onTap: (() -> Void)?
+        /// For queued-but-not-yet-running tasks: tapping opens a cancel confirmation.
+        /// Nil for active tasks.
+        var onCancel: (() -> Void)?
     }
 
     @Published private(set) var tasks: [AppTask] = []
@@ -41,22 +48,28 @@ final class AppTaskQueue: ObservableObject {
         detail: String? = nil,
         progress: Double = -1,
         accentColor: Color = Color.accentColor,
-        onTap: (() -> Void)? = nil
+        onTap: (() -> Void)? = nil,
+        onCancel: (() -> Void)? = nil
     ) {
         guard !tasks.contains(where: { $0.id == id }) else { return }
         tasks.append(AppTask(id: id, label: label, detail: detail,
-                             progress: progress, accentColor: accentColor, onTap: onTap))
+                             progress: progress, accentColor: accentColor,
+                             onTap: onTap, onCancel: onCancel))
     }
 
-    func update(id: UUID, label: String? = nil, detail: String? = nil, progress: Double? = nil) {
+    func update(id: UUID, label: String? = nil, detail: String? = nil, progress: Double? = nil, isError: Bool? = nil) {
         guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
         if let l = label { tasks[idx].label = l }
         if let d = detail { tasks[idx].detail = d }
         if let p = progress { tasks[idx].progress = p }
+        if let e = isError { tasks[idx].isError = e }
     }
 
     func complete(id: UUID) {
         guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
+        // Error tasks stay in the active queue so the pill keeps showing the retry
+        // affordance. They are only removed via dismiss(id:) after the user acts.
+        guard !tasks[idx].isError else { return }
         var finished = tasks[idx]
         finished.progress = 1
         finished.onTap = nil
@@ -65,5 +78,11 @@ final class AppTaskQueue: ObservableObject {
             recentlyCompleted.removeLast(recentlyCompleted.count - recentlyCompletedLimit)
         }
         tasks.remove(at: idx)
+    }
+
+    /// Removes an error task from the active queue without adding it to recentlyCompleted.
+    /// Call this after the user taps "Retry" or explicitly dismisses a failed task.
+    func dismiss(id: UUID) {
+        tasks.removeAll { $0.id == id }
     }
 }

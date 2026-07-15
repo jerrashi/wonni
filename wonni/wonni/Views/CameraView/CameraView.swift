@@ -21,7 +21,6 @@ struct CameraView: View {
         case draftHistory
     }
     @State private var route: CameraRoute?
-    @State private var showingExitAlert = false
     @AppStorage("showCameraGrid") private var showGrid: Bool = false
 
     private var hasActiveDraft: Bool {
@@ -31,7 +30,12 @@ struct CameraView: View {
 
     private var hasAnyContent: Bool {
         let activeID = uploadManager.activeDraftID
-        let anyCommitted = allItems.contains { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && $0.id != activeID }
+        // Exclude pendingPublish items — they are already committed to publish and should
+        // not appear in the camera carousel or drive the Proceed button. They are still
+        // saved drafts, just hidden until the user visits the publish overview.
+        let anyCommitted = allItems.contains {
+            $0.isDraft && !$0.pendingPublish && !$0.sourceAssetIdentifiers.isEmpty && $0.id != activeID
+        }
         return hasActiveDraft || anyCommitted
     }
 
@@ -89,24 +93,6 @@ struct CameraView: View {
         }
         .toolbar(.hidden, for: .tabBar)
         .toolbar(.hidden, for: .navigationBar)
-        .alert("Save Drafts?", isPresented: $showingExitAlert) {
-            Button("Discard", role: .destructive) {
-                if let activeID = uploadManager.activeDraftID,
-                   let draft = allItems.first(where: { $0.id == activeID }) {
-                    uploadManager.deleteDraftLocallyAndCloud(draft: draft, modelContext: modelContext)
-                    uploadManager.activeDraftID = nil
-                }
-                for draft in allItems where uploadManager.sessionDraftIDs.contains(draft.id) {
-                    uploadManager.deleteDraftLocallyAndCloud(draft: draft, modelContext: modelContext)
-                }
-                uploadManager.sessionDraftIDs.removeAll()
-                uploadManager.selectedTab = 0
-            }
-            Button("Save") { uploadManager.selectedTab = 0 }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("You have created drafts in this session. Would you like to save or discard them?")
-        }
         .task {
             // Wire camera photo callback BEFORE starting the camera
             model.onPhotoAdded = { [weak uploadManager] assetId, imageData in
@@ -175,13 +161,13 @@ struct CameraView: View {
     private func topBarView(safeTop: CGFloat) -> some View {
         HStack(alignment: .center) {
             Button {
-                let hasActiveDraftNow = uploadManager.activeDraftID != nil
-                let hasSessionDrafts = !uploadManager.sessionDraftIDs.isEmpty
-                if hasActiveDraftNow || hasSessionDrafts {
-                    showingExitAlert = true
-                } else {
-                    uploadManager.selectedTab = 0
+                // Commit active draft if it has photos (no dialog — drafts save silently).
+                // An empty active draft (no photos taken yet) is left as-is; it will be
+                // cleaned up automatically at session end if never committed.
+                if hasActiveDraft {
+                    uploadManager.commitActiveDraft(modelContext: modelContext)
                 }
+                uploadManager.selectedTab = 0
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.left")

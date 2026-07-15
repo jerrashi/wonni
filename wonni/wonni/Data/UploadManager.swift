@@ -122,6 +122,27 @@ class UploadManager: ObservableObject {
     /// A local @State there would silently discard the error into a torn-down view. Surfaced
     /// from CrossPostStatusView, which is reliably the next screen shown after any publish.
     @Published var crossPostError: String? = nil
+
+    // ── Publish Progress Phase (mirrors AI processing progress tracking) ────
+    /// Per-item publish status — drives PublishProgressView rows. Throttled like
+    /// processStatuses so BulkListingOverviewView doesn't reconstruct on every tick.
+    var publishStatuses: [UUID: DraftUploadStatus] {
+        get { _publishStatuses }
+        set { _publishStatuses = newValue; scheduleThrottledChangeNotify() }
+    }
+    private var _publishStatuses: [UUID: DraftUploadStatus] = [:]
+    @Published var publishTotalCount = 0
+    var publishCurrentIndex: Int {
+        get { _publishCurrentIndex }
+        set { _publishCurrentIndex = newValue; scheduleThrottledChangeNotify() }
+    }
+    private var _publishCurrentIndex = 0
+    /// Items found by `sweepFailedPublishDrafts` on launch (pendingPublish=true,
+    /// publishedAt=nil). Cleared when the user taps Retry or Dismiss in the alert.
+    /// In-memory only — persisted state lives on the Item's pendingPublish flag.
+    @Published var failedPublishDrafts: [Item] = []
+    /// Controls the PublishProgressView fullScreenCover in MainView.
+    @Published var showPublishProgress = false
     /// Set in publishDrafts when a listing published (and any cross-post proceeded) with fewer
     /// photos than the user selected — a photo silently failed every upload retry. Previously
     /// this was invisible: the publish guard only checked photoPaths wasn't *empty*, so a
@@ -291,6 +312,34 @@ class UploadManager: ObservableObject {
             modelContext.delete(item)
         }
         try? modelContext.save()
+    }
+
+    /// Finds items where `pendingPublish == true` but `publishedAt == nil` — these were
+    /// mid-publish when the app died, or whose Firestore write failed last session.
+    /// Populates `failedPublishDrafts` for the modal alert shown on sell-tab entry.
+    func sweepFailedPublishDrafts(modelContext: ModelContext) {
+        let all = (try? modelContext.fetch(FetchDescriptor<Item>())) ?? []
+        failedPublishDrafts = all.filter { $0.isDraft && $0.pendingPublish && $0.publishedAt == nil }
+        if !failedPublishDrafts.isEmpty {
+            print("[UploadManager] Found \(failedPublishDrafts.count) failed-to-publish draft(s) from a previous session")
+        }
+    }
+
+    /// Re-runs publish for items whose `publishStatuses[id] == .failed` (in-session retry)
+    /// or for items passed explicitly (cross-session retry from the sell-tab alert).
+    func retryFailedPublish(drafts: [Item], modelContext: ModelContext) {
+        guard !drafts.isEmpty else { return }
+        print("[UploadManager] Retrying publish for \(drafts.count) failed item(s)")
+        for draft in drafts {
+            publishStatuses[draft.id] = .pending
+            // Ensure pendingPublish is set in case this is a cross-session retry
+            draft.pendingPublish = true
+        }
+        try? modelContext.save()
+        publishDrafts(drafts: drafts, modelContext: modelContext) { [weak self] in
+            self?.pendingPublishContinuation = true
+            self?.runPublishContinuationIfReady(modelContext: modelContext)
+        }
     }
 
     /// Deletes a draft from the local database, Firestore, and deletes uploaded images from Storage.
@@ -774,6 +823,22 @@ class UploadManager: ObservableObject {
     /// the publish. The continuation is armed from publishDrafts' completion — manager
     /// state, not view state — so it survives Review & Publish being dismissed mid-flight.
     func beginPublish(drafts: [Item], webPlatforms: [String], apiTriggers: [PendingAPITrigger], modelContext: ModelContext) {
+        // Mark intent immediately — before any network work. This removes items from
+        // the draft list / carousel / AI processing flow the instant the user confirms.
+        // Items stay pendingPublish=true if publish fails or the app is killed; cleared
+        // only on Firestore success (inside publishDrafts).
+        for draft in drafts {
+            draft.pendingPublish = true
+        }
+        try? modelContext.save()
+
+        // Init publish progress state for PublishProgressView
+        publishTotalCount = drafts.count
+        publishCurrentIndex = 0
+        for draft in drafts {
+            publishStatuses[draft.id] = .pending
+        }
+
         pendingWebPlatforms = webPlatforms
         pendingWebJobItems = webPlatforms.isEmpty ? [] : drafts
         // publishDrafts reads this count to keep the drafts' SwiftData items alive
@@ -802,10 +867,10 @@ class UploadManager: ObservableObject {
         let taskId = publishTaskId
         AppTaskQueue.shared.begin(
             id: taskId,
-            label: "Publishing \(drafts.count == 1 ? "listing" : "\(drafts.count) listings")",
-            progress: -1,
+            label: "Publishing 0/\(drafts.count) listings",
+            progress: 0,
             accentColor: .blue,
-            onTap: { [weak self] in self?.showResultsOverview = true }
+            onTap: { [weak self] in self?.showPublishProgress = true }
         )
 
         Task {
@@ -826,16 +891,25 @@ class UploadManager: ObservableObject {
 
             for draft in drafts {
                 print("[UploadManager] Publishing draft \(draft.id)")
+                publishCurrentIndex += 1
+                publishStatuses[draft.id] = .uploading(0.1)
+                AppTaskQueue.shared.update(
+                    id: taskId,
+                    label: "Publishing \(publishCurrentIndex)/\(publishTotalCount) listings",
+                    progress: Double(publishCurrentIndex - 1) / Double(max(1, publishTotalCount))
+                )
 
                 // Upload photos if background upload didn't complete fully
                 var photoPaths = draft.orderedFirebasePhotoPaths
                 if photoPaths.count < draft.sourceAssetIdentifiers.count {
                     print("[UploadManager] Incomplete photo paths (\(photoPaths.count)/\(draft.sourceAssetIdentifiers.count)) for \(draft.id) — uploading now")
+                    publishStatuses[draft.id] = .uploading(0.25)
                     photoPaths = await uploadPhotosForDraft(draft, userId: userId, modelContext: modelContext)
                 }
 
                 guard !photoPaths.isEmpty else {
                     print("[UploadManager] Skipping \(draft.id) — photo upload failed")
+                    publishStatuses[draft.id] = .failed
                     failedCount += 1
                     continue
                 }
@@ -904,23 +978,51 @@ class UploadManager: ObservableObject {
                 )
 
                 print("[UploadManager] Writing listing to Firestore: \(listing.id ?? "nil"), \(photoPaths.count) photos")
+                publishStatuses[draft.id] = .uploading(0.75)
 
-                do {
-                    let docID = try await ListingRepository.shared.saveDraft(listing)
-                    print("[UploadManager] Published listing \(docID)")
-                    // Marks this Item as a live listing everywhere delete flows check it — see
-                    // deleteDraftLocallyAndCloud's guard. Set before branching so it's true even
-                    // in the kept-alive-for-cross-post case below, which can leave the Item
-                    // sitting in SwiftData (still full of photos) for as long as the
-                    // web-autofill queue takes to drain.
-                    draft.publishedAt = Date()
-                    // isDraft is the single field every "show me the drafts" @Query/filter in
-                    // the app keys off — camera carousel, picker grid, draft history. Flipping
-                    // it here (rather than relying on every call site to also check
-                    // publishedAt) is what keeps a just-published item from still rendering as
-                    // an in-progress draft while it's kept alive for cross-posting below.
-                    draft.isDraft = false
-                    if pendingAutofillJobsCount > 0 {
+                // Auto-retry once on Firestore write failure before surfacing an error.
+                var firestoreError: Error? = nil
+                var docID: String? = nil
+                for attempt in 1...2 {
+                    do {
+                        docID = try await ListingRepository.shared.saveDraft(listing)
+                        firestoreError = nil
+                        break
+                    } catch {
+                        firestoreError = error
+                        print("[UploadManager] Firestore write failed for \(draft.id) (attempt \(attempt)): \(error)")
+                        if attempt == 1 {
+                            // Brief pause before the auto-retry
+                            try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        }
+                    }
+                }
+
+                if let firestoreError {
+                    print("[UploadManager] Firestore write failed after retry for \(draft.id): \(firestoreError)")
+                    publishStatuses[draft.id] = .failed
+                    failedCount += 1
+                    // pendingPublish stays true — item is recoverable on next launch
+                    continue
+                }
+
+                print("[UploadManager] Published listing \(docID ?? "nil")")
+                // Marks this Item as a live listing everywhere delete flows check it — see
+                // deleteDraftLocallyAndCloud's guard. Set before branching so it's true even
+                // in the kept-alive-for-cross-post case below, which can leave the Item
+                // sitting in SwiftData (still full of photos) for as long as the
+                // web-autofill queue takes to drain.
+                draft.publishedAt = Date()
+                // isDraft is the single field every "show me the drafts" @Query/filter in
+                // the app keys off — camera carousel, picker grid, draft history. Flipping
+                // it here (rather than relying on every call site to also check
+                // publishedAt) is what keeps a just-published item from still rendering as
+                // an in-progress draft while it's kept alive for cross-posting below.
+                draft.isDraft = false
+                // Clear the publish intent flag — this item is now a confirmed live listing.
+                draft.pendingPublish = false
+                publishStatuses[draft.id] = .done
+                if pendingAutofillJobsCount > 0 {
                         // Web cross-post jobs were selected — keep the SwiftData item alive
                         // until runPublishContinuationIfReady has snapshotted its metadata +
                         // Storage photo paths into plain-value CrossPostJobs (the jobs
@@ -944,22 +1046,35 @@ class UploadManager: ObservableObject {
                     // protects a published listing from this path).
                     sessionDraftIDs.removeAll { $0 == draft.id }
                     publishedCount += 1
-                } catch {
-                    print("[UploadManager] Firestore write failed for \(draft.id): \(error)")
-                    failedCount += 1
-                }
             }
 
             try? modelContext.save()
             print("[UploadManager] Publish complete: \(publishedCount) published, \(failedCount) failed")
 
-            if publishedCount > 0 {
+            // Update the pill to reflect outcome
+            if failedCount > 0 && publishedCount == 0 {
+                // Total failure — leave pill in error state so the user can tap Retry
+                AppTaskQueue.shared.update(
+                    id: taskId,
+                    label: "\(failedCount) listing\(failedCount == 1 ? "" : "s") failed to publish",
+                    progress: 1,
+                    isError: true
+                )
+                publishError = "Could not publish listings. Check your connection and try again."
+            } else if failedCount > 0 {
+                // Partial failure — mark pill error, cross-post can still proceed for successes
+                AppTaskQueue.shared.update(
+                    id: taskId,
+                    label: "\(failedCount) listing\(failedCount == 1 ? "" : "s") failed",
+                    progress: 1,
+                    isError: true
+                )
+            } else {
+                // All succeeded — pill completes normally (moved to recentlyCompleted)
                 showProcessResults = false
                 // Transition to CrossPostStatusView is handled by ProcessResultsOverviewView
                 // via the onComplete callback (runPublishContinuationIfReady). shouldReturnToRoot
                 // is set when the user taps Done in CrossPostStatusView (onDone closure).
-            } else {
-                publishError = "Could not publish listings. Check your connection and try again."
             }
         }
     }

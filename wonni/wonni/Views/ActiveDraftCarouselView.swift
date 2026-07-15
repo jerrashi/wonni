@@ -44,7 +44,7 @@ struct ActiveDraftCarouselView: View {
         // draft-list views apply.
         return allItems
             .filter {
-                $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && $0.id != activeID
+                $0.isDraft && !$0.pendingPublish && !$0.sourceAssetIdentifiers.isEmpty && $0.id != activeID
                     && !uploadManager.deletedDraftIDs.contains($0.id)
             }
             .sorted { $0.createdAt > $1.createdAt }
