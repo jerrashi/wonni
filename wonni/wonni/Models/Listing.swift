@@ -63,6 +63,15 @@ class Item {
     /// so accepted text counts as a real user title. Rides to the published listing
     /// doc for model-quality analysis ("% of vision suggestions accepted").
     var visionTitleAccepted: Bool = false
+    /// Which Gemini model / prompt revision produced this draft's AI output, as
+    /// stamped by the identifyItem Cloud Function at process time. Captured on the
+    /// draft (not looked up at publish) so a draft published days later still
+    /// records the model that actually wrote its text.
+    var aiModel: String?
+    var aiPromptVersion: String?
+    /// Number of "Undo AI edits" actions taken on this draft (title or description;
+    /// a toast-Restore retracts one). Strong negative-quality signal per model.
+    var aiUndoCount: Int = 0
     var isLocalPhotoOnly: Bool
     var aiSuggestedCategory: String?
     var aiSuggestedBrand: String?

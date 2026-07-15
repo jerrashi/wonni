@@ -4,7 +4,13 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const geminiApiKey = defineSecret("GEMINI_API_KEY");
 
-exports.identifyItem = onCall({ 
+// Model-quality tracking (spec T1): both ride back to the client and onto the
+// published listing doc, so "% similar to final output by model/prompt" can be
+// compared across changes. Bump PROMPT_VERSION on ANY edit to the prompt below.
+const GEMINI_MODEL = "gemini-3.1-flash-lite";
+const PROMPT_VERSION = "2026-07-14.1";
+
+exports.identifyItem = onCall({
   secrets: [geminiApiKey],
   cors: true,
   memory: "512MiB",
@@ -21,9 +27,8 @@ exports.identifyItem = onCall({
 
   try {
     const genAI = new GoogleGenerativeAI(geminiApiKey.value());
-    
-    // Updated to the latest stable model
-    const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
+
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
     let hintStr = "";
     if (userTitle) hintStr += `- User suggested title: "${userTitle}"\n`;
@@ -59,20 +64,22 @@ exports.identifyItem = onCall({
       },
     }));
 
-    console.log(`Calling gemini-3.1-flash-lite with ${images.length} images...`);
-    
+    console.log(`Calling ${GEMINI_MODEL} with ${images.length} images...`);
+
     const result = await model.generateContent([prompt, ...imageParts]);
     const response = await result.response;
     const text = response.text();
 
-    console.log("Gemini 3.1 responded successfully.");
+    console.log("Gemini responded successfully.");
 
     const cleanedJson = text
       .replace(/```json/g, "")
       .replace(/```/g, "")
       .trim();
 
-    return JSON.parse(cleanedJson);
+    // The server is the only honest source for which model/prompt produced this
+    // output — stamp it on the response for the client's quality tracking.
+    return { ...JSON.parse(cleanedJson), aiModel: GEMINI_MODEL, promptVersion: PROMPT_VERSION };
   } catch (error) {
     console.error("FULL ERROR DETAIL:", error);
     throw new HttpsError("internal", `Gemini Error: ${error.message}`);

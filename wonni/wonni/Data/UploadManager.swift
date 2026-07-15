@@ -547,10 +547,14 @@ class UploadManager: ObservableObject {
                     // it already incorporates the user's title hints from the prompt.
                     // Fall back to name if shortTitle wasn't returned.
                     let primaryTitle = (gemini.shortTitle?.isEmpty == false) ? gemini.shortTitle : gemini.name
+                    // ALWAYS keep the raw AI output in aiSuggestedTitle, even when it also
+                    // replaces the user's title below — before this, the user-title path
+                    // overwrote userEditedTitle in place and the AI's output became
+                    // unrecoverable, making "AI vs. final" tracking impossible (spec T2).
+                    draft.aiSuggestedTitle = primaryTitle
                     if hasUserTitle {
                         draft.userEditedTitle = primaryTitle
                     } else {
-                        draft.aiSuggestedTitle = primaryTitle
                         draft.userEditedTitle = nil
                     }
 
@@ -560,6 +564,10 @@ class UploadManager: ObservableObject {
                     }
 
                     if draft.aiSuggestedPrice == nil { draft.aiSuggestedPrice = gemini.suggestedPrice }
+
+                    // Raw AI description always recorded (same T2 rationale as the title);
+                    // the merge below only decides what the user-facing field shows.
+                    draft.aiSuggestedDescription = gemini.description
 
                     // Description merging
                     if hasUserDesc, let userDesc = draft.userEditedDescription, !userDesc.isEmpty, let geminiDesc = gemini.description, !geminiDesc.isEmpty {
@@ -573,10 +581,18 @@ class UploadManager: ObservableObject {
                         } else {
                             draft.userEditedDescription = "\(userDesc)\n\n\(geminiDesc)"
                         }
-                    } else {
-                        draft.aiSuggestedDescription = gemini.description
+                    } else if !hasUserDesc {
+                        // No user description: clear so the AI suggestion shows via fallback.
+                        // (hasUserDesc + empty Gemini description keeps the user's text —
+                        // the old unconditional nil here silently wiped it.)
                         draft.userEditedDescription = nil
                     }
+
+                    // Which model/prompt produced this output — stamped by the Cloud
+                    // Function; captured on the draft so publishing days later still
+                    // records the model that actually wrote the text.
+                    draft.aiModel = gemini.aiModel
+                    draft.aiPromptVersion = gemini.promptVersion
 
                     draft.weightLbs = draft.weightLbs ?? gemini.weightLbs
                     draft.lengthIn  = draft.lengthIn  ?? gemini.lengthIn
@@ -768,6 +784,21 @@ class UploadManager: ObservableObject {
                 listing.customDescription = draft.userEditedDescription ?? draft.aiSuggestedDescription
                 listing.price = draft.userEditedPrice ?? draft.aiSuggestedPrice
                 listing.geminiIdentificationConfirmed = draft.processedAt != nil
+                // Publish-time snapshot of AI output vs. what actually shipped (spec T1) —
+                // the substrate for "% similar to final by model" and vision-chip metrics.
+                listing.aiTracking = AIQualityTracking.from(
+                    aiSuggestedTitle: draft.aiSuggestedTitle,
+                    aiSuggestedDescription: draft.aiSuggestedDescription,
+                    aiSuggestedPrice: draft.aiSuggestedPrice,
+                    userEditedTitle: draft.userEditedTitle,
+                    userEditedDescription: draft.userEditedDescription,
+                    userEditedPrice: draft.userEditedPrice,
+                    visionTitle: draft.visionTitle,
+                    visionTitleAccepted: draft.visionTitleAccepted,
+                    aiModel: draft.aiModel,
+                    promptVersion: draft.aiPromptVersion,
+                    undoCount: draft.aiUndoCount
+                )
                 listing.category = draft.aiSuggestedCategory
                 // eBay category is resolved server-side from eBay's own taxonomy suggestions
                 // (using the title + this Gemini category string). The old static client-side map
