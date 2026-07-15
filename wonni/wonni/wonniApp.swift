@@ -11,7 +11,10 @@ import FirebaseCore
 
 @main
 struct WonniApp: App {
-    @StateObject private var uploadManager = UploadManager()
+    // Inject the singleton — NOT a fresh instance. A few non-view contexts write to
+    // UploadManager.shared directly (e.g. cleanupError from photo-delete failures);
+    // with a separate instance here those writes landed on an object no view observes.
+    @StateObject private var uploadManager = UploadManager.shared
     @StateObject private var authManager = AuthManager()
     @StateObject private var bulkImportManager = BulkImportManager()
     @StateObject private var mercariSyncManager = MercariSyncManager()

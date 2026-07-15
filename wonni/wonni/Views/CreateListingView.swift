@@ -566,8 +566,12 @@ struct CustomPhotoPickerView: View {
         var drafts: [Item] {
             // See UploadManager.deletedDraftIDs — deletion is deferred a tick, so this
             // filter is what actually drops the row from the grid immediately.
+            // publishedAt == nil excludes items kept alive only for a queued cross-post job —
+            // this modal's multi-select delete (deleteSelectedItems, below) is exactly the path
+            // that previously let a bulk "delete selected drafts" hard-delete an already-live
+            // listing (see UploadManager.deleteDraftLocallyAndCloud's guard).
             allItems.filter {
-                $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && !uploadManager.deletedDraftIDs.contains($0.id)
+                $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && !uploadManager.deletedDraftIDs.contains($0.id) && $0.publishedAt == nil
             }
         }
 
@@ -1617,7 +1621,12 @@ struct BulkListingOverviewView: View {
         // Excluding `deletedDraftIDs` here matters: deletion is deferred by a run loop tick
         // (see UploadManager.deleteDraftLocallyAndCloud) to avoid a SwiftData crash, so this
         // filter is what actually removes the row from the List immediately.
-        allItems.filter { !$0.sourceAssetIdentifiers.isEmpty && !uploadManager.deletedDraftIDs.contains($0.id) }
+        // Excluding `publishedAt != nil` matters even more: an item selected for a web
+        // cross-post is kept alive in SwiftData (still isDraft, still has photos) until the
+        // queue drains, so without this it lingers here looking like an ordinary editable,
+        // swipeable draft — which is exactly how a bulk "delete selected drafts" ended up
+        // hard-deleting an already-published listing (see UploadManager.deleteDraftLocallyAndCloud).
+        allItems.filter { !$0.sourceAssetIdentifiers.isEmpty && !uploadManager.deletedDraftIDs.contains($0.id) && $0.publishedAt == nil }
     }
 
     var body: some View {
@@ -1846,6 +1855,10 @@ struct ProcessResultsOverviewView: View {
     /// Firestore listing document exists before the Cloud Function tries to read it.
     /// Stores title for error messages since the SwiftData Item may be deleted by then.
     @State private var pendingAPITriggers: [(listingId: String, title: String, platforms: [String])] = []
+    /// Web platforms selected at publish confirmation; jobs are built from these in
+    /// runPublishContinuationIfReady once firestoreListingId + Storage paths are final.
+    @State private var pendingWebPlatforms: [String] = []
+    @State private var pendingWebJobItems: [Item] = []
     /// Post-publish continuation gating. The continuation (API cross-post triggers, web
     /// autofill jobs, sheet transitions) may only run once BOTH the publish task has
     /// finished AND the confirmation sheet is fully dismissed — mutating sheet state while
@@ -1859,7 +1872,11 @@ struct ProcessResultsOverviewView: View {
         let processedSet = Set(uploadManager.processedItemIDs)
         // See UploadManager.deletedDraftIDs — deletion is deferred a tick, so this filter is
         // what actually drops the row from the List immediately.
-        return allItems.filter { processedSet.contains($0.id) && !uploadManager.deletedDraftIDs.contains($0.id) }
+        // publishedAt != nil means this item already published successfully and is only
+        // still in SwiftData because a queued web cross-post job needs its photos — drop it
+        // from the reviewable/swipeable list the moment that happens, instead of leaving a
+        // live listing looking like an ordinary draft (see deleteDraftLocallyAndCloud).
+        return allItems.filter { processedSet.contains($0.id) && !uploadManager.deletedDraftIDs.contains($0.id) && $0.publishedAt == nil }
     }
 
     private var toPublish: [Item] {
@@ -2000,25 +2017,17 @@ struct ProcessResultsOverviewView: View {
     
     @ViewBuilder private var publishConfirmationSheetContent: some View {
         PublishConfirmationSheet(itemsToPublish: toPublish) { selectedPlatforms in
-            var jobs: [CrossPostJob] = []
-            for item in toPublish {
-                for platform in selectedPlatforms {
-                    if platform == "mercari" || platform == "facebook" {
-                        jobs.append(CrossPostJob(
-                            platform: platform,
-                            title: item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled",
-                            description: item.userEditedDescription ?? item.aiSuggestedDescription ?? "",
-                            price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
-                            listingId: item.firestoreListingId,
-                            item: item,
-                            buyerPaysShipping: item.buyerPaysShipping,
-                            condition: item.condition ?? ItemCondition.good.rawValue
-                        ))
-                    }
-                }
-            }
-            uploadManager.webAutofillQueue = jobs
-            uploadManager.pendingAutofillJobsCount = jobs.count
+            // Web autofill jobs are BUILT in runPublishContinuationIfReady, after publish
+            // completes — at this point firestoreListingId can be nil and the Storage photo
+            // uploads unfinished, so a job snapshotted now would carry empty paths / no
+            // listing ID (the old fragility: jobs held the live draft instead and broke
+            // whenever the draft was deleted or its photos still uploading). Here we only
+            // record what to build and set pendingAutofillJobsCount, which publishDrafts
+            // reads to keep the drafts alive until the web queue drains.
+            let webPlatforms = selectedPlatforms.filter { $0 == "mercari" || $0 == "facebook" }.sorted()
+            pendingWebPlatforms = webPlatforms
+            pendingWebJobItems = webPlatforms.isEmpty ? [] : toPublish
+            uploadManager.pendingAutofillJobsCount = webPlatforms.count * toPublish.count
             // Capture per-listing cross-post info now (before the drafts are deleted) so the
             // post-publish status overview can show per-platform status and offer retries.
             let attemptedPlatforms = Array(selectedPlatforms).sorted()
@@ -2074,6 +2083,8 @@ struct ProcessResultsOverviewView: View {
         // alert (attached to this view) can present and the user can retry.
         if uploadManager.publishError != nil {
             pendingAPITriggers = []
+            pendingWebPlatforms = []
+            pendingWebJobItems = []
             uploadManager.webAutofillQueue = []
             uploadManager.pendingAutofillJobsCount = 0
             uploadManager.crossPostStatusPending = false
@@ -2103,6 +2114,35 @@ struct ProcessResultsOverviewView: View {
                 }
             }
         }
+        // Build web autofill jobs NOW — publish has completed, so every item has its
+        // firestoreListingId and uploaded Storage photo paths. Jobs carry those plain
+        // values (item: nil), so they survive draft deletion and never touch SwiftData:
+        // the same shape as ProfileView's reliable one-by-one cross-post jobs.
+        var jobs: [CrossPostJob] = []
+        for item in pendingWebJobItems where !Item.deletedIDs.contains(item.id) {
+            for platform in pendingWebPlatforms {
+                jobs.append(CrossPostJob(
+                    platform: platform,
+                    title: item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled",
+                    description: item.userEditedDescription ?? item.aiSuggestedDescription ?? "",
+                    price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
+                    listingId: item.firestoreListingId,
+                    photoFirebasePaths: item.orderedFirebasePhotoPaths,
+                    buyerPaysShipping: item.buyerPaysShipping,
+                    condition: item.condition ?? ItemCondition.good.rawValue,
+                    suggestedCategory: item.aiSuggestedCategory,
+                    suggestedBrand: item.aiSuggestedBrand,
+                    weightLbs: item.weightLbs,
+                    lengthIn: item.lengthIn,
+                    widthIn: item.widthIn,
+                    heightIn: item.heightIn
+                ))
+            }
+        }
+        pendingWebPlatforms = []
+        pendingWebJobItems = []
+        uploadManager.webAutofillQueue = jobs
+        uploadManager.pendingAutofillJobsCount = jobs.count
         // Start web autofill jobs (Mercari, Facebook) after publish completes. If there are
         // none (e.g. eBay-only), transition to the global CrossPostStatusView sheet.
         if !uploadManager.webAutofillQueue.isEmpty {
@@ -2705,6 +2745,24 @@ struct ResultDraftRow: View, Equatable {
             if newFocus == DraftFocusField(itemID: item.id, field: .description) {
                 descriptionEditorOpenedViaFocus = true
                 showDescriptionEditor = true
+            }
+        }
+        // Sync local state when the model is updated externally (undo AI edits, undo-toast
+        // restore, bulk edit, edit sheet). Without this, the next saveLocalStateToModel()
+        // (focus change / onDisappear) writes the stale local text back over the external
+        // change — which made "Undo AI edits" silently revert. Same fix DraftRow got in
+        // 1ad19e7 for its title/price.
+        .onChange(of: item.userEditedTitle) { _, newVal in
+            titleText = newVal ?? item.aiSuggestedTitle ?? ""
+        }
+        .onChange(of: item.userEditedDescription) { _, newVal in
+            descriptionText = newVal ?? item.aiSuggestedDescription ?? ""
+        }
+        .onChange(of: item.userEditedPrice) { _, newVal in
+            if let p = newVal ?? item.aiSuggestedPrice {
+                priceText = String(format: "%.2f", p)
+            } else {
+                priceText = ""
             }
         }
         .onChange(of: showDescriptionEditor) { _, isShowing in
