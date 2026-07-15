@@ -112,14 +112,18 @@ struct SelectablePhotoGridItem: View {
 }
 
 struct CustomPhotoPickerView: View {
-        var addingToExistingDraft: Bool = false
-        /// Called when the user taps the green checkmark (non-addingToExistingDraft mode).
-        /// The parent navigation controller should handle pushing the drafts overview.
+        /// Called when the user taps the green checkmark. The parent navigation
+        /// controller should handle pushing the drafts overview.
         var onProceed: (() -> Void)? = nil
 
         @StateObject var photoCollection = PhotoCollection(smartAlbum: .smartAlbumUserLibrary)
-        @State private var navigateToOverview = false
-        @State private var showingDraftHistory = false
+        /// Single pushed destination off this view (two navigationDestination(isPresented:)
+        /// modifiers at one level collide — same pattern as CameraView.CameraRoute).
+        private enum PickerRoute: Hashable {
+            case overview
+            case draftHistory
+        }
+        @State private var pickerRoute: PickerRoute?
         @State private var hidePreviouslySelected = false
         @State private var photoAccessLimited = false
         @Environment(\.dismiss) private var dismiss
@@ -236,8 +240,11 @@ struct CustomPhotoPickerView: View {
                 if hasContent {
                     VStack(spacing: 0) {
                         Divider()
-                        ActiveDraftCarouselView(cache: photoCollection.cache)
-                            .padding(.bottom, 4)
+                        ActiveDraftCarouselView(
+                            cache: photoCollection.cache,
+                            onOpenDraftHistory: { pickerRoute = .draftHistory }
+                        )
+                        .padding(.bottom, 4)
                     }
                     .background(Color(.systemBackground))
                     .transition(.move(edge: .bottom))
@@ -250,11 +257,6 @@ struct CustomPhotoPickerView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button {
-                        if addingToExistingDraft {
-                            if uploadManager.activeDraftID != nil {
-                                uploadManager.commitActiveDraft(modelContext: modelContext)
-                            }
-                        }
                         dismiss()
                     } label: {
                         HStack(spacing: 4) {
@@ -267,32 +269,21 @@ struct CustomPhotoPickerView: View {
                     let hasActiveDraft = uploadManager.activeDraftID != nil
                         && !(activeDraft?.sourceAssetIdentifiers.isEmpty ?? true)
                     let canProceed = hasActiveDraft || !committedDrafts.isEmpty
-                    if addingToExistingDraft {
-                        Button("Done") {
-                            if hasActiveDraft {
-                                uploadManager.commitActiveDraft(modelContext: modelContext)
-                            }
-                            dismiss()
+                    Button {
+                        if hasActiveDraft {
+                            uploadManager.commitActiveDraft(modelContext: modelContext)
                         }
-                        .fontWeight(.semibold)
-                        .disabled(!canProceed)
-                    } else {
-                        Button {
-                            if hasActiveDraft {
-                                uploadManager.commitActiveDraft(modelContext: modelContext)
-                            }
-                            if let proceed = onProceed {
-                                proceed()
-                            } else {
-                                navigateToOverview = true
-                            }
-                        } label: {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 24))
-                                .foregroundColor(canProceed ? .green : .secondary)
+                        if let proceed = onProceed {
+                            proceed()
+                        } else {
+                            pickerRoute = .overview
                         }
-                        .disabled(!canProceed)
+                    } label: {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 24))
+                            .foregroundColor(canProceed ? .green : .secondary)
                     }
+                    .disabled(!canProceed)
                 }
             }
             .task {
@@ -307,11 +298,15 @@ struct CustomPhotoPickerView: View {
                     print("Failed to load photos: \(error)")
                 }
             }
-            .sheet(isPresented: $showingDraftHistory) {
-                DraftHistoryModal(photoCollection: photoCollection)
-            }
-            .navigationDestination(isPresented: $navigateToOverview) {
-                BulkListingOverviewView()
+            .navigationDestination(item: $pickerRoute) { destination in
+                switch destination {
+                case .overview:
+                    BulkListingOverviewView()
+                case .draftHistory:
+                    // N2: "+" on a draft pops back to THIS picker with that draft
+                    // active in the carousel — no nested sheet.
+                    DraftHistoryView(photoCollection: photoCollection, onAddPhotos: { pickerRoute = nil })
+                }
             }
         }
         
@@ -532,12 +527,20 @@ struct CustomPhotoPickerView: View {
         }
     }
 
-    // MARK: - DraftHistoryModal
-    struct DraftHistoryModal: View {
+    // MARK: - DraftHistoryView
+    /// Draft history: every committed draft with photos, titles, selection mode, and a
+    /// per-draft "+" that reopens the draft in the photo picker. Pushed full-screen on
+    /// the host's NavigationStack (spec N1) — until Phase 4 this was a sheet stacked
+    /// over the live camera, with a further nested picker sheet behind "+".
+    struct DraftHistoryView: View {
         @Environment(\.dismiss) private var dismiss
         @Query(filter: #Predicate<Item> { $0.isDraft == true })
         private var allItems: [Item]
         @ObservedObject var photoCollection: PhotoCollection
+        /// Host navigation for the per-draft "+": return to the picker AFTER this view
+        /// has made that draft the active one (camera swaps its route to .picker;
+        /// the picker pops back to itself).
+        let onAddPhotos: () -> Void
         @Environment(\.modelContext) private var modelContext
         @EnvironmentObject private var uploadManager: UploadManager
 
@@ -546,7 +549,6 @@ struct CustomPhotoPickerView: View {
         @State private var showingDeleteConfirm = false
         @State private var draggedCompositeId: String?
         @State private var isTrashTargeted = false
-        @State private var showingPickerForDraft = false
         @State private var showingDraftBulkEdit = false
         @FocusState private var focusedDraftID: UUID?
 
@@ -576,7 +578,6 @@ struct CustomPhotoPickerView: View {
         }
 
         var body: some View {
-            NavigationStack {
                 Group {
                     if drafts.isEmpty {
                         VStack {
@@ -702,8 +703,15 @@ struct CustomPhotoPickerView: View {
                                                 // "+" tile — always the last item in the scroll
                                                 if !isSelectionMode {
                                                     Button {
+                                                        // Keep any in-progress active draft safe by
+                                                        // committing it, then reopen THIS draft as the
+                                                        // active one — the host navigates back to the
+                                                        // picker with it in the carousel (spec N2).
+                                                        if uploadManager.activeDraftID != nil {
+                                                            uploadManager.commitActiveDraft(modelContext: modelContext)
+                                                        }
                                                         uploadManager.activeDraftID = draft.id
-                                                        showingPickerForDraft = true
+                                                        onAddPhotos()
                                                     } label: {
                                                         RoundedRectangle(cornerRadius: 8)
                                                             .fill(Color(.systemGray5))
@@ -824,14 +832,6 @@ struct CustomPhotoPickerView: View {
                 } message: {
                     Text("Are you sure you want to delete the selected items?")
                 }
-                .sheet(isPresented: $showingPickerForDraft, onDismiss: {
-                    // Collapse the draft-history modal too once the add-photos picker closes, so the
-                    // user returns straight to the listing flow instead of unwinding nested modals.
-                    dismiss()
-                }) {
-                    CustomPhotoPickerView(addingToExistingDraft: true)
-                        .environmentObject(uploadManager)
-                }
                 .sheet(isPresented: $showingDraftBulkEdit) {
                     DraftBulkEditSheet(items: fullySelectedDrafts) {
                         isSelectionMode = false
@@ -839,7 +839,6 @@ struct CustomPhotoPickerView: View {
                     }
                     .environmentObject(uploadManager)
                 }
-            }
         }
 
 
@@ -930,7 +929,7 @@ struct CustomPhotoPickerView: View {
                 do {
                     try await StorageService.shared.deletePhoto(path: path, userId: userId)
                 } catch {
-                    print("[DraftHistoryModal] Failed to delete photo at \(path): \(error)")
+                    print("[DraftHistoryView] Failed to delete photo at \(path): \(error)")
                     uploadManager.cleanupError = "Couldn't fully delete a removed photo. It may still be using storage."
                 }
             }
@@ -2043,6 +2042,20 @@ struct ProcessResultsOverviewView: View {
         .navigationTitle("Review & Publish")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            // Spec N4: full-screen view with an explicit way back — returns to the
+            // camera with drafts saved. Safe even mid-publish: the continuation lives
+            // on UploadManager (Phase 3) and the queue pill re-opens this view.
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    uploadManager.showResultsOverview = false
+                    uploadManager.returnToCameraRoot = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text("Back")
+                    }
+                }
+            }
             ToolbarItemGroup(placement: .keyboard) {
                 let atFirst: Bool = focusedIndex == nil || focusedIndex == 0
                 let atLast: Bool = focusedIndex == nil || focusedIndex == results.count * 3 - 1
@@ -2079,7 +2092,6 @@ struct ProcessResultsOverviewView: View {
         }) {
             publishConfirmationSheetContent
         }
-        .interactiveDismissDisabled(uploadManager.isPublishing || uploadManager.activeAutofillJob != nil)
     }
     
     @ViewBuilder private var publishConfirmationSheetContent: some View {

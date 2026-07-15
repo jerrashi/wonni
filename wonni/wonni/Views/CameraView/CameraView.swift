@@ -18,6 +18,7 @@ struct CameraView: View {
     private enum CameraRoute: Hashable {
         case picker
         case drafts
+        case draftHistory
     }
     @State private var route: CameraRoute?
     @State private var showingExitAlert = false
@@ -72,8 +73,11 @@ struct CameraView: View {
                 VStack(spacing: 8) {
                     // Shared carousel (identical to picker bottom bar)
                     if hasAnyContent {
-                        ActiveDraftCarouselView(cache: model.photoCollection.cache)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                        ActiveDraftCarouselView(
+                            cache: model.photoCollection.cache,
+                            onOpenDraftHistory: { route = .draftHistory }
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                     cameraButtonsView()
                 }
@@ -109,20 +113,44 @@ struct CameraView: View {
                 guard let um = uploadManager else { return }
                 um.addPhotoToActiveDraft(assetId: assetId, imageData: imageData, modelContext: modelContext)
             }
-            await model.camera.start()
+            // .task re-runs on every appear (incl. returning from another tab) — only
+            // start the session when the camera itself is what's on screen.
+            if route == nil {
+                await model.camera.start()
+            }
             await model.loadPhotos()
             await model.loadThumbnail()
+        }
+        // The capture session runs ONLY while the camera itself is on screen. Driving
+        // this off the route (instead of onAppear/onDisappear pairs on each destination)
+        // also covers pushes the destinations make themselves — e.g. picker → drafts
+        // overview used to fire the picker's onDisappear and resume the preview UNDER
+        // the drafts screen. isPreviewPaused stops viewfinder frames instantly; stop()
+        // tears the AVCaptureSession down (spec N1: no rendering or capture while hidden).
+        .onChange(of: route) { _, newRoute in
+            if newRoute == nil {
+                model.camera.isPreviewPaused = false
+                Task { await model.camera.start() }
+            } else {
+                model.camera.isPreviewPaused = true
+                model.camera.stop()
+            }
+        }
+        // Tab switched away (camera can't be visible): stop capturing. The .task above
+        // restarts it on return.
+        .onDisappear {
+            model.camera.stop()
         }
         .navigationDestination(item: $route) { destination in
             switch destination {
             case .picker:
                 CustomPhotoPickerView(onProceed: { route = .drafts })
-                    .onAppear  { model.camera.isPreviewPaused = true }
-                    .onDisappear { model.camera.isPreviewPaused = false }
             case .drafts:
                 BulkListingOverviewView()
-                    .onAppear  { model.camera.isPreviewPaused = true }
-                    .onDisappear { model.camera.isPreviewPaused = false }
+            case .draftHistory:
+                // N2: "+" on a draft reopens the EXISTING picker screen (route swap on
+                // this same stack) with that draft active in the carousel — no nested sheet.
+                DraftHistoryView(photoCollection: model.photoCollection, onAddPhotos: { route = .picker })
             }
         }
         .onChange(of: uploadManager.shouldReturnToRoot) { _, should in
@@ -130,6 +158,14 @@ struct CameraView: View {
                 route = nil
                 uploadManager.shouldReturnToRoot = false
                 uploadManager.selectedTab = 4
+            }
+        }
+        // Review & Publish's Back button (spec N4): dismisses the full-screen results
+        // view and pops this stack back to the camera, drafts intact.
+        .onChange(of: uploadManager.returnToCameraRoot) { _, should in
+            if should {
+                route = nil
+                uploadManager.returnToCameraRoot = false
             }
         }
     }
@@ -200,13 +236,6 @@ struct CameraView: View {
                 ThumbnailView(image: model.thumbnailImage)
                     .frame(width: 46, height: 46)
                     .cornerRadius(8)
-            }
-            .onChange(of: uploadManager.shouldReturnToRoot) { _, should in
-                if should {
-                    route = nil
-                    uploadManager.shouldReturnToRoot = false
-                    uploadManager.selectedTab = 4
-                }
             }
 
             Spacer()

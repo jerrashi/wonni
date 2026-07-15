@@ -29,6 +29,10 @@ class UploadManager: ObservableObject {
     // ── Tab / Navigation ────────────────────────────────────────────────────
     @Published var selectedTab = 0
     @Published var shouldReturnToRoot = false
+    /// One-shot: pops the camera tab's NavigationStack back to the camera itself
+    /// (drafts stay saved). Set by Review & Publish's Back button; observed and
+    /// reset by CameraView.
+    @Published var returnToCameraRoot = false
     @Published var pendingAutofillJobsCount = 0
     @Published var sessionDraftIDs: [UUID] = []
     /// IDs of drafts marked for deletion. Populated synchronously by
@@ -343,7 +347,11 @@ class UploadManager: ObservableObject {
             activeDraftID = nil
             return
         }
-        sessionDraftIDs.append(draft.id)
+        // A draft reopened from history ("+" add-photos flow) is already in the session
+        // set — appending again would make the discard path delete it twice.
+        if !sessionDraftIDs.contains(draft.id) {
+            sessionDraftIDs.append(draft.id)
+        }
         startBackgroundUpload(draft: draft, modelContext: modelContext)
         runLocalRecognition(draft: draft, modelContext: modelContext)
         activeDraftID = nil
