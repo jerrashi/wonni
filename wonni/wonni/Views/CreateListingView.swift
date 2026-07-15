@@ -2219,6 +2219,16 @@ struct CrossPostStatusView: View {
     @State private var retryingEbay: Set<String> = []
     @EnvironmentObject private var uploadManager: UploadManager
 
+    private var allResolved: Bool {
+        for item in items {
+            for platform in item.platforms where platform != "wonni" {
+                let status = statuses[item.id]?[platform] ?? "pending"
+                if status == "pending" || status == "removing" { return false }
+            }
+        }
+        return true
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             List {
@@ -2246,8 +2256,11 @@ struct CrossPostStatusView: View {
             .listStyle(.insetGrouped)
 
             Divider()
+            // N6: still-in-flight jobs can be minimized (mirrors ProcessProgressView) —
+            // the queue keeps running via UploadManager, this view just steps aside.
+            // Once everything has resolved (posted or failed), it reads "Done".
             Button(action: { stopListeners(); onDone() }) {
-                Text("Done")
+                Text(allResolved ? "Done" : "Minimize")
                     .fontWeight(.semibold)
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)

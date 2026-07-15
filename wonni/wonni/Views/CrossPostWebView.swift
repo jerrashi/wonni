@@ -2174,6 +2174,7 @@ struct MercariShippingPreferencesView: View {
 struct MercariAutoPosterView: View {
     let job: CrossPostJob
     var onDismiss: () -> Void = {}
+    @EnvironmentObject private var uploadManager: UploadManager
     @StateObject private var state = MercariPostingState()
     @State private var hasInjected = false
 
@@ -2279,10 +2280,13 @@ struct MercariAutoPosterView: View {
     }
 
     var body: some View {
-        // Pill is always shown inline (via safeAreaInset in ProfileView) — sits above the tab bar.
-        // The WebView runs headlessly behind it. isExpanded drives a fullScreenCover for the
-        // live editing experience when user interaction is required.
-        pillView
+        // Q1/Q2: the compact pill is no longer rendered here — the job is represented by a
+        // single AppTaskQueue task (registered in UploadManager.checkAndStartNextWebJob),
+        // which is the one pill shown above the tab bar. This view stays mounted (invisible)
+        // so the WebView keeps running headlessly, and expands to a full-screen cover either
+        // when user interaction is required or when the queue pill is tapped.
+        Color.clear
+            .frame(width: 0, height: 0)
             .background(
                 Group {
                     if !isExpanded {
@@ -2364,6 +2368,16 @@ struct MercariAutoPosterView: View {
                 .interactiveDismissDisabled(true)
             }
             .task { await loadPreferencesThenStart() }
+            .onChange(of: pillStepText) { _, newText in
+                AppTaskQueue.shared.update(id: job.id, label: newText)
+            }
+            .onChange(of: uploadManager.mercariPillExpandRequested) { _, requested in
+                guard requested else { return }
+                uploadManager.mercariPillExpandRequested = false
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    isExpanded = true
+                }
+            }
             .onChange(of: state.status) { _, newStatus in
                 switch newStatus {
                 case .success:
@@ -2373,10 +2387,10 @@ struct MercariAutoPosterView: View {
                             await MainActor.run { state.status = .failed("Listing ID not confirmed — verify on Mercari") }
                             return
                         }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                            isExpanded = false
-                            onDismiss()
-                        }
+                        // Q4: no lingering per-item success state — advance the queue
+                        // immediately instead of holding the "Listed on Mercari!" screen.
+                        isExpanded = false
+                        onDismiss()
                     }
                 case .failed:
                     // First pre-submit failure: retry once, silently, before surfacing the
