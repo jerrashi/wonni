@@ -1025,6 +1025,22 @@ enum VisionTitlePolicy {
         "floor", "table", "text", "document", "rectangle", "circle", "line",
     ]
 
+    /// Words that describe materials, surfaces, or photo composition rather than a
+    /// sellable subject. An identifier whose tokens are ALL from this set is rejected
+    /// even when compound — "wood_processed" (a photo's wooden background, reported
+    /// 2026-07-14) is exactly as useless as "structure", and the compound-identifier
+    /// preference below would otherwise actively favor it. Token-level so future
+    /// taxonomy variants ("metal_brushed", "fabric_woven") are covered without
+    /// enumerating every combination; "compact_disc" survives because "compact" and
+    /// "disc" aren't material words.
+    static let genericTokens: Set<String> = [
+        "wood", "processed", "material", "metal", "plastic", "fabric", "paper",
+        "cardboard", "glass", "stone", "concrete", "brick", "leather", "textile",
+        "surface", "background", "texture", "pattern", "grain", "brushed",
+        "woven", "polished", "painted", "abstract", "closeup", "macro", "blur",
+        "light", "dark", "shadow",
+    ]
+
     /// A Vision classification observation reduced to what the policy needs.
     struct Candidate {
         /// Raw Vision taxonomy identifier, e.g. "compact_disc".
@@ -1035,11 +1051,21 @@ enum VisionTitlePolicy {
         let passesPrecisionFilter: Bool
     }
 
+    /// True when the identifier names a sellable subject rather than a generic
+    /// concept, material, or photo-composition term.
+    static func isDescriptiveIdentifier(_ identifier: String) -> Bool {
+        let id = identifier.lowercased()
+        guard !genericLabelDenylist.contains(id) else { return false }
+        let tokens = id.split(separator: "_").map(String.init)
+        guard !tokens.isEmpty else { return false }
+        return !tokens.allSatisfy { genericTokens.contains($0) }
+    }
+
     static func suggestion(classifications: [Candidate], ocrText: String?) -> String? {
         let eligible = classifications.filter {
             $0.passesPrecisionFilter
                 && $0.confidence >= minClassificationConfidence
-                && !genericLabelDenylist.contains($0.identifier.lowercased())
+                && isDescriptiveIdentifier($0.identifier)
         }
         // Compound identifiers ("hot_air_balloon") outrank single words: in a
         // hierarchical taxonomy, multi-word identifiers are almost always leaves —

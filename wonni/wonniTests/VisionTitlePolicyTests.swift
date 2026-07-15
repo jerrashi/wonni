@@ -71,6 +71,36 @@ final class VisionTitlePolicyTests: XCTestCase {
         ))
     }
 
+    func test_allGenericTokenCompound_rejectedDespiteCompoundPreference() {
+        // Device regression 2026-07-14: "wood_processed" (the photo's wooden
+        // BACKGROUND) won because compound identifiers are preferred. Material-only
+        // compounds must lose to OCR / blank.
+        XCTAssertNil(VisionTitlePolicy.suggestion(
+            classifications: [candidate("wood_processed", confidence: 0.95)],
+            ocrText: nil
+        ))
+        // With OCR present, the material label must not shadow it.
+        XCTAssertEqual(
+            VisionTitlePolicy.suggestion(
+                classifications: [candidate("wood_processed", confidence: 0.95)],
+                ocrText: "aespa lemonade"
+            ),
+            "Aespa Lemonade"
+        )
+    }
+
+    func test_partiallyGenericCompound_stillAccepted() {
+        // "compact_disc" has no material tokens; a mixed id like "glass_bottle"
+        // (generic material + real subject noun) must also survive.
+        XCTAssertEqual(
+            VisionTitlePolicy.suggestion(
+                classifications: [candidate("glass_bottle", confidence: 0.8)],
+                ocrText: nil
+            ),
+            "Glass Bottle"
+        )
+    }
+
     func test_belowConfidenceFloor_noClassificationSuggestion() {
         let result = VisionTitlePolicy.suggestion(
             classifications: [candidate(

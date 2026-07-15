@@ -1603,6 +1603,17 @@ struct DraftEditSheet: View {
     }
 
     private func saveToDraft() {
+        // Editing an AI-changed title/description here counts as taking ownership,
+        // same as inline edits in ResultDraftRow: a real change retires the AI diff
+        // (Review & Publish then shows a normal field, not the word-diff).
+        if item.originalUserTitleBeforeAI != nil,
+           title != (item.userEditedTitle ?? item.aiSuggestedTitle ?? "") {
+            item.originalUserTitleBeforeAI = nil
+        }
+        if item.originalUserDescriptionBeforeAI != nil,
+           description != (item.userEditedDescription ?? item.aiSuggestedDescription ?? "") {
+            item.originalUserDescriptionBeforeAI = nil
+        }
         item.userEditedTitle = title.isEmpty ? nil : title
         item.userEditedPrice = Double(priceText.filter { $0.isNumber || $0 == "." })
         item.userEditedDescription = description.isEmpty ? nil : description
@@ -2667,6 +2678,12 @@ struct ResultDraftRow: View, Equatable {
     @State private var undoneAIDescription: String? = nil
     @State private var toastMessage: String? = nil
     @State private var toastRestoreAction: (() -> Void)? = nil
+    /// While an AI-edited title shows as a word-diff, tapping it (or arrow-keying into
+    /// it) swaps in the editable field. Leaving the field decides the diff's fate:
+    /// text changed → the user has taken ownership, drop `originalUserTitleBeforeAI`
+    /// (row becomes a normal title permanently); unchanged → the diff comes back.
+    @State private var isEditingAITitle = false
+    @State private var aiTitleAtEditStart: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2695,19 +2712,31 @@ struct ResultDraftRow: View, Equatable {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
 
                 VStack(alignment: .leading, spacing: 6) {
-                    if let origTitle = item.originalUserTitleBeforeAI {
-                        WordDiffView(before: origTitle, after: titleText)
+                    // AI-edited titles show ONLY the diff (accept = leave it, reject =
+                    // undo link, edit = tap the diff). The old layout stacked the diff
+                    // AND a duplicate editable title, which read as two titles.
+                    if let origTitle = item.originalUserTitleBeforeAI, !isEditingAITitle {
+                        HStack(alignment: .top, spacing: 6) {
+                            WordDiffView(before: origTitle, after: titleText)
+                            Spacer(minLength: 0)
+                            Image(systemName: "pencil")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .padding(.top, 2)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture { beginEditingAITitle() }
                         Button("Undo AI title edits") { undoAITitle() }
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.blue)
                             .buttonStyle(.plain)
+                    } else {
+                        TextField("Title", text: $titleText)
+                            .font(.body.weight(.semibold))
+                            .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .title))
+
+                        TitleCharCountView(count: titleText.count)
                     }
-
-                    TextField("Title", text: $titleText)
-                        .font(.body.weight(.semibold))
-                        .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .title))
-
-                    TitleCharCountView(count: titleText.count)
 
                     HStack(spacing: 3) {
                         Text("$").font(.subheadline).foregroundStyle(.secondary)
@@ -2731,43 +2760,40 @@ struct ResultDraftRow: View, Equatable {
             }
 
             // ── Description (full width) ────────────────────────────────────
+            // Same treatment as the title: an AI-edited description shows ONLY the
+            // diff (tap opens the editor; saving a real change drops the diff), not
+            // the diff plus a duplicate description box.
             if let origDesc = item.originalUserDescriptionBeforeAI {
-                WordDiffView(before: origDesc, after: descriptionText)
-                    .padding(.horizontal, 4)
+                HStack(alignment: .top, spacing: 6) {
+                    WordDiffView(before: origDesc, after: descriptionText)
+                    Spacer(minLength: 0)
+                    Image(systemName: "pencil")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 2)
+                }
+                .padding(.horizontal, 4)
+                .contentShape(Rectangle())
+                .onTapGesture { showDescriptionEditor = true }
                 Button("Undo AI description edits") { undoAIDescription() }
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.blue)
                     .buttonStyle(.plain)
                     .padding(.leading, 4)
-            }
-
-            Button { showDescriptionEditor = true } label: {
-                Text(descriptionText.isEmpty ? "Add description…" : descriptionText)
-                    .lineLimit(3)
-                    .font(.caption)
-                    .foregroundStyle(descriptionText.isEmpty
-                        ? Color(.placeholderText)
-                        : (item.userEditedDescription != nil ? .primary : .secondary))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(item.originalUserDescriptionBeforeAI != nil
-                        ? Color.purple.opacity(0.08) : Color(.systemGray6))
-                    .cornerRadius(8)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(item.originalUserDescriptionBeforeAI != nil
-                                ? Color.purple.opacity(0.2) : Color.clear, lineWidth: 1)
-                    )
-            }
-            .buttonStyle(.plain)
-            .sheet(isPresented: $showDescriptionEditor) {
-                DescriptionEditorSheet(
-                    initialText: descriptionText,
-                    onSave: { newText in
-                        item.userEditedDescription = newText.isEmpty ? nil : newText
-                    },
-                    hasAIPurple: item.originalUserDescriptionBeforeAI != nil
-                )
+            } else {
+                Button { showDescriptionEditor = true } label: {
+                    Text(descriptionText.isEmpty ? "Add description…" : descriptionText)
+                        .lineLimit(3)
+                        .font(.caption)
+                        .foregroundStyle(descriptionText.isEmpty
+                            ? Color(.placeholderText)
+                            : (item.userEditedDescription != nil ? .primary : .secondary))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(8)
+                }
+                .buttonStyle(.plain)
             }
 
             // ── AI badge row ────────────────────────────────────────────────
@@ -2786,15 +2812,33 @@ struct ResultDraftRow: View, Equatable {
                 }
                 Spacer()
             }
-        }
-        .padding(.vertical, 8)
-        .overlay(alignment: .bottom) {
+
+            // ── Undo toast (in flow) ────────────────────────────────────────
+            // A real list element, not an overlay: the old floating version sat on
+            // top of neighboring rows and hid them. In flow, it occupies (part of)
+            // the space the undone AI text just vacated.
             if let msg = toastMessage {
                 AIUndoToastView(message: msg, onRestore: toastRestoreAction)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .padding(.vertical, 8)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: toastMessage != nil)
+        .sheet(isPresented: $showDescriptionEditor) {
+            DescriptionEditorSheet(
+                initialText: descriptionText,
+                onSave: { newText in
+                    let changed = newText != descriptionText
+                    item.userEditedDescription = newText.isEmpty ? nil : newText
+                    if changed && item.originalUserDescriptionBeforeAI != nil {
+                        // The user reshaped the AI's description to their liking —
+                        // the diff has served its purpose; show a normal field now.
+                        item.originalUserDescriptionBeforeAI = nil
+                    }
+                },
+                hasAIPurple: item.originalUserDescriptionBeforeAI != nil
+            )
+        }
         .onAppear {
             titleText = item.userEditedTitle ?? item.aiSuggestedTitle ?? ""
             descriptionText = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
@@ -2803,8 +2847,19 @@ struct ResultDraftRow: View, Equatable {
             }
         }
         .onChange(of: focusedField.wrappedValue) { oldFocus, newFocus in
+            let myTitle = DraftFocusField(itemID: item.id, field: .title)
+            // Leaving the title field while editing an AI-diffed title decides the
+            // diff's fate (see endEditingAITitleIfNeeded) BEFORE the general save.
+            if oldFocus == myTitle && newFocus != myTitle {
+                endEditingAITitleIfNeeded()
+            }
             if oldFocus?.itemID == item.id && newFocus?.itemID != item.id {
                 saveLocalStateToModel()
+            }
+            // Arrow-keying into a title that's showing as a diff: swap in the editable
+            // field, same as tapping the diff.
+            if newFocus == myTitle && item.originalUserTitleBeforeAI != nil && !isEditingAITitle {
+                beginEditingAITitle()
             }
             // Description isn't a real focusable field (it's a button that opens a sheet),
             // so the keyboard arrows can't land real focus there. Landing "on" it via arrow
@@ -2841,11 +2896,36 @@ struct ResultDraftRow: View, Equatable {
             }
         }
         .onDisappear {
+            endEditingAITitleIfNeeded()
             saveLocalStateToModel()
         }
         .sheet(isPresented: $showEditSheet) {
             DraftEditSheet(item: item)
         }
+    }
+
+    /// Swap the AI-title diff for the editable field and focus it. The focus assignment
+    /// is deferred a tick so the TextField exists in the hierarchy before it's targeted.
+    private func beginEditingAITitle() {
+        aiTitleAtEditStart = titleText
+        isEditingAITitle = true
+        DispatchQueue.main.async {
+            focusedField.wrappedValue = DraftFocusField(itemID: item.id, field: .title)
+        }
+    }
+
+    /// Ends an AI-title editing session. Changed text means the user reshaped the AI's
+    /// title to their liking — drop `originalUserTitleBeforeAI` so the row becomes a
+    /// normal title field (their requested accept/reject/edit semantics). Unchanged
+    /// text (tapped in, tapped out) brings the diff back.
+    private func endEditingAITitleIfNeeded() {
+        guard isEditingAITitle else { return }
+        isEditingAITitle = false
+        if let start = aiTitleAtEditStart, titleText != start,
+           !Item.deletedIDs.contains(item.id) {
+            item.originalUserTitleBeforeAI = nil
+        }
+        aiTitleAtEditStart = nil
     }
 
     private func saveLocalStateToModel() {

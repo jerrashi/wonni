@@ -151,6 +151,28 @@ Q5 results summary with actionable errors.
 
 Each phase is independently shippable; 1–2 have no dependency on 3–5.
 
+## 4b. Phase 1.1 — device-feedback round (2026-07-14 evening)
+
+User tested Phase 1 on device; agreed follow-ups:
+- **Vision labels:** "Wood Processed" (photo's wooden background) slipped through — a compound
+  *material* leaf that the compound-preference actively favored. Added token-level filter:
+  identifiers whose tokens are ALL material/composition words (`VisionTitlePolicy.genericTokens`)
+  are rejected, letting OCR/blank take over. Regression-tested.
+- **Vision metrics:** "% drafts with a suggestion" = `visionTitle != nil`; "% accepted" =
+  `visionTitleAccepted`, cleaned **offline** by token-overlap between suggestion and the title
+  submitted to AI (excludes accidental taps / fully-replaced text). No client-side cleaning —
+  raw signals only; all fields ship to Firestore in Phase 2.
+- **Review & Publish, AI-edit rows:** when AI edited a field, show ONLY the word-diff + undo link
+  (was: diff AND a duplicate editable field/box). Accept = leave it · Reject = undo link ·
+  Edit = tap the diff (or arrow-key into it) → editable field; committing a *changed* text
+  retires the diff permanently (`originalUser*BeforeAI = nil` — the user owns the text now);
+  unchanged text brings the diff back. Same ownership rule applies to edits via DraftEditSheet
+  and the description editor sheet.
+- **Undo toast:** in-flow element at the bottom of the row (occupies vacated space) instead of a
+  floating overlay that covered neighboring rows.
+- Platform-toggle dead tap: confirmed fixed on device; consistent with render-pressure, not logic.
+- "+" in drafts overview not full-screen: correct — that's Phase 4 scope, untouched in Phase 1.
+
 ## 5. Open items
 - W8 investigation: "Delete Failed" alert after draft deletion (suspected photo-stack / cloud-cleanup
   race). Reproduce with a draft that has uploaded photos, then delete.
