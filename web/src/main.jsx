@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useAuthState } from "./hooks/useAuthState";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
+import ProductDetail from "./pages/ProductDetail";
 import Orders from "./pages/Orders";
 import Settings from "./pages/Settings";
 import "./index.css";
@@ -20,6 +21,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+        <Route path="/products/:productId" element={<ProtectedRoute><ProductDetail /></ProtectedRoute>} />
         <Route path="/orders" element={<ProtectedRoute><Orders /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
       </Routes>

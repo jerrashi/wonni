@@ -3,6 +3,7 @@ const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const https = require("https");
 const { refreshTiktokToken, tiktokHeaders, makeHttpsRequest, TT_APP_KEY, TT_APP_SECRET } = require("./tiktok_auth");
+const { listingImagesFor, toTiktokProductPayload } = require("./platform_adapters");
 
 const TT_API_HOST = "open-api.tiktokglobalshop.com";
 
@@ -84,7 +85,7 @@ exports.tiktokCreateListing = onCall(
 
     // Upload images
     const imgIds = [];
-    for (const imgUrl of (product.images ?? []).slice(0, 9)) {
+    for (const imgUrl of listingImagesFor(product, 9)) {
       const id = await uploadImageToTiktok(imgUrl, uid);
       if (id) imgIds.push({ img_id: id });
     }
@@ -94,10 +95,13 @@ exports.tiktokCreateListing = onCall(
       ?? product.suggestedSellPrice
       ?? product.aliexpressPrice * 2.5;
 
+    const { images: _ignoredImages, ...basePayload } = toTiktokProductPayload(product, {
+      titleOverride,
+      categoryId,
+    });
+
     const payload = {
-      title: (titleOverride ?? product.title).slice(0, 255),
-      description: product.description ?? product.title,
-      category_id: categoryId,
+      ...basePayload,
       main_images: imgIds,
       skus: [
         {

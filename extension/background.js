@@ -1,13 +1,34 @@
 // Manifest V3 service worker
 // Relays IMPORT_PRODUCT messages from content.js to the Cloud Function using a stored Firebase ID token.
 
-const DASHBOARD_URL = "https://wonni-dropship.web.app";
-const IMPORT_FUNCTION_URL = "https://us-central1-wonni-dropship.cloudfunctions.net/aliexpressImportProduct";
+const DEFAULT_DASHBOARD_URL = "https://wonni-dropship.web.app";
+const FUNCTIONS_BASE = "https://us-central1-wonni-dropship.cloudfunctions.net";
+const IMPORT_FUNCTIONS = {
+  aliexpress: `${FUNCTIONS_BASE}/aliexpressImportProduct`,
+  weverse: `${FUNCTIONS_BASE}/weverseImportProduct`,
+};
+
+function normalizeDashboardUrl(rawUrl) {
+  try {
+    return new URL(rawUrl).origin;
+  } catch {
+    return DEFAULT_DASHBOARD_URL;
+  }
+}
+
+async function getDashboardUrl() {
+  const { dashboardBaseUrl } = await chrome.storage.local.get(["dashboardBaseUrl"]);
+  return normalizeDashboardUrl(dashboardBaseUrl);
+}
 
 // Receive token + fee rate updates from the web app
 chrome.runtime.onMessageExternal.addListener((message, _sender, sendResponse) => {
   if (message.type === "SET_TOKEN") {
     chrome.storage.local.set({ idToken: message.idToken, userEmail: message.email });
+    sendResponse({ ok: true });
+  }
+  if (message.type === "SET_DASHBOARD_URL") {
+    chrome.storage.local.set({ dashboardBaseUrl: normalizeDashboardUrl(message.dashboardBaseUrl) });
     sendResponse({ ok: true });
   }
   if (message.type === "SET_FEE_RATE") {
@@ -19,26 +40,34 @@ chrome.runtime.onMessageExternal.addListener((message, _sender, sendResponse) =>
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "IMPORT_PRODUCT") {
-    handleImport(message.data).then(sendResponse).catch((e) => sendResponse({ error: e.message }));
+    handleImport(message.data, message.source ?? "aliexpress")
+      .then(sendResponse)
+      .catch((e) => sendResponse({ error: e.message }));
     return true; // keep channel open for async response
   }
 });
 
-async function handleImport(productData) {
+async function handleImport(productData, source) {
   const { idToken } = await chrome.storage.local.get(["idToken"]);
+  const dashboardUrl = await getDashboardUrl();
   if (!idToken) {
     // Open dashboard so user can sign in; token is saved by popup.js after login
-    chrome.tabs.create({ url: DASHBOARD_URL + "/login" });
+    chrome.tabs.create({ url: `${dashboardUrl}/login` });
     throw new Error("Sign in to Wonni Drop first.");
   }
 
-  const response = await fetch(IMPORT_FUNCTION_URL, {
+  // Weverse: server re-scrapes from the URL. AliExpress: send scraped page data.
+  const payload = source === "weverse"
+    ? { productUrl: productData.productUrl }
+    : { scrapedData: productData };
+
+  const response = await fetch(IMPORT_FUNCTIONS[source] ?? IMPORT_FUNCTIONS.aliexpress, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${idToken}`,
     },
-    body: JSON.stringify({ data: { scrapedData: productData } }),
+    body: JSON.stringify({ data: payload }),
   });
 
   if (!response.ok) {
@@ -48,6 +77,6 @@ async function handleImport(productData) {
 
   const json = await response.json();
   const productId = json?.result?.productId;
-  chrome.tabs.create({ url: `${DASHBOARD_URL}/?imported=${productId}` });
+  chrome.tabs.create({ url: `${dashboardUrl}/?imported=${productId}` });
   return { productId };
 }

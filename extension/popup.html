@@ -35,6 +35,19 @@
     .recent { margin-top: 12px; border-top: 1px solid #2a2a2a; padding-top: 12px; }
     .recent-title { font-size: 11px; color: #555; text-transform: uppercase; margin-bottom: 8px; }
     .recent-item { font-size: 12px; color: #888; padding: 4px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .field { margin: 12px 0; }
+    .field label { display: block; font-size: 11px; color: #555; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .field input {
+      width: 100%;
+      padding: 8px 10px;
+      background: #0f0f0f;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      color: #f0f0f0;
+      font-size: 12px;
+      box-sizing: border-box;
+    }
+    .field button { margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -42,6 +55,11 @@
   <div class="status" id="status">Loading…</div>
   <button class="btn-primary" onclick="openDashboard()">Open Dashboard</button>
   <button id="auth-btn"></button>
+  <div class="field">
+    <label for="dashboard-url">Dashboard URL</label>
+    <input id="dashboard-url" type="text" placeholder="http://localhost:5173" />
+    <button id="save-dashboard-btn">Save Dashboard URL</button>
+  </div>
   <div class="recent" id="recent-section" style="display:none">
     <div class="recent-title">Recently Imported</div>
     <div id="recent-list"></div>

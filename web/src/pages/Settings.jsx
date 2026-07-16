@@ -12,6 +12,15 @@ function sendToExtension(msg) {
 
 const ALIEXPRESS_APP_KEY = import.meta.env.VITE_ALIEXPRESS_APP_KEY ?? "REPLACE_ME";
 const TIKTOK_APP_KEY = import.meta.env.VITE_TIKTOK_APP_KEY ?? "REPLACE_ME";
+const EBAY_CLIENT_ID = import.meta.env.VITE_EBAY_CLIENT_ID ?? "REPLACE_ME";
+const EBAY_RU_NAME = import.meta.env.VITE_EBAY_RU_NAME ?? "REPLACE_ME";
+const EBAY_AUTH_HOST = import.meta.env.VITE_EBAY_ENV === "production"
+  ? "auth.ebay.com"
+  : "auth.sandbox.ebay.com";
+const EBAY_SCOPES = [
+  "https://api.ebay.com/oauth/api_scope/sell.inventory",
+  "https://api.ebay.com/oauth/api_scope/sell.account",
+].join(" ");
 
 function ConnectRow({ label, description, connected, username, onConnect, onDisconnect }) {
   return (
@@ -46,7 +55,7 @@ export default function Settings() {
   useEffect(() => {
     const uid = auth.currentUser?.uid;
     if (!uid) return;
-    const platforms = ["aliexpress", "tiktok"];
+    const platforms = ["aliexpress", "tiktok", "ebay"];
     const unsubs = platforms.map((p) =>
       onSnapshot(doc(db, "users", uid, "integrations", p), (snap) => {
         setIntegrations((prev) => ({ ...prev, [p]: snap.data() }));
@@ -59,18 +68,28 @@ export default function Settings() {
     const { data } = await callFunction("generateOAuthState")({ platform });
     const state = data.state;
 
-    const url = platform === "aliexpress"
-      ? "https://oauth.aliexpress.com/authorize?" + new URLSearchParams({
-          response_type: "code",
-          client_id: ALIEXPRESS_APP_KEY,
-          redirect_uri: "https://wonni-dropship.web.app/oauth/aliexpress",
-          state,
-        })
-      : "https://auth.tiktok-shops.com/oauth/authorize?" + new URLSearchParams({
-          app_key: TIKTOK_APP_KEY,
-          redirect_uri: "https://wonni-dropship.web.app/oauth/tiktok",
-          state,
-        });
+    const urls = {
+      aliexpress: "https://oauth.aliexpress.com/authorize?" + new URLSearchParams({
+        response_type: "code",
+        client_id: ALIEXPRESS_APP_KEY,
+        redirect_uri: "https://wonni-dropship.web.app/oauth/aliexpress",
+        state,
+      }),
+      tiktok: "https://auth.tiktok-shops.com/oauth/authorize?" + new URLSearchParams({
+        app_key: TIKTOK_APP_KEY,
+        redirect_uri: "https://wonni-dropship.web.app/oauth/tiktok",
+        state,
+      }),
+      // eBay's redirect_uri is the RuName; the RuName config points at /oauth/ebay
+      ebay: `https://${EBAY_AUTH_HOST}/oauth2/authorize?` + new URLSearchParams({
+        client_id: EBAY_CLIENT_ID,
+        redirect_uri: EBAY_RU_NAME,
+        response_type: "code",
+        scope: EBAY_SCOPES,
+        state,
+      }),
+    };
+    const url = urls[platform];
 
     window.open(url, "_blank", "width=600,height=700");
   }
@@ -103,6 +122,14 @@ export default function Settings() {
             username={integrations.tiktok?.connectedUsername}
             onConnect={() => openOAuth("tiktok")}
             onDisconnect={() => disconnect("tiktok")}
+          />
+          <ConnectRow
+            label="eBay"
+            description="Connect to list products with one click"
+            connected={integrations.ebay?.isConnected}
+            username={integrations.ebay?.connectedUsername}
+            onConnect={() => openOAuth("ebay")}
+            onDisconnect={() => disconnect("ebay")}
           />
         </div>
       </div>

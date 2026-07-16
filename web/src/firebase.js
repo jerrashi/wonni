@@ -1,7 +1,7 @@
 import { initializeApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import { getAuth, GoogleAuthProvider, connectAuthEmulator } from "firebase/auth";
+import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
+import { getFunctions, httpsCallable, connectFunctionsEmulator } from "firebase/functions";
 
 const firebaseConfig = {
   apiKey: "AIzaSyB7QQahI-DxHsDE7OKaxtXfdQucr1sSxfU",
@@ -19,5 +19,12 @@ export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const functions = getFunctions(app);
 export const googleProvider = new GoogleAuthProvider();
+
+// Local testing: VITE_USE_EMULATORS=1 npm run dev
+if (import.meta.env.VITE_USE_EMULATORS === "1") {
+  connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
+  connectFirestoreEmulator(db, "127.0.0.1", 8080);
+  connectFunctionsEmulator(functions, "127.0.0.1", 5001);
+}
 
 export const callFunction = (name) => httpsCallable(functions, name);

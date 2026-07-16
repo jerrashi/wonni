@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { collection, query, where, orderBy, onSnapshot } from "firebase/firestore";
+import { useNavigate } from "react-router-dom";
 import { db, callFunction } from "../firebase";
 import { auth } from "../firebase";
 import Layout from "../components/Layout";
@@ -145,7 +146,11 @@ function ImportBar({ onImported }) {
     setLoading(true);
     setError("");
     try {
-      const result = await callFunction("aliexpressImportProduct")({ productUrl: url.trim() });
+      const trimmed = url.trim();
+      const fn = trimmed.includes("shop.weverse.io")
+        ? "weverseImportProduct"
+        : "aliexpressImportProduct";
+      const result = await callFunction(fn)({ productUrl: trimmed });
       setUrl("");
       onImported?.(result.data.productId);
     } catch (e) {
@@ -158,12 +163,12 @@ function ImportBar({ onImported }) {
   return (
     <div className="card" style={{ marginBottom: 24 }}>
       <div style={{ marginBottom: 8, fontSize: 13, color: "var(--muted)" }}>
-        Paste an AliExpress product URL to import
+        Paste a Weverse Shop or AliExpress product URL to import
       </div>
       <div className="input-group">
         <input
           className="input"
-          placeholder="https://www.aliexpress.com/item/..."
+          placeholder="https://shop.weverse.io/en/shop/USD/artists/.../sales/..."
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleImport()}
@@ -180,7 +185,27 @@ function ImportBar({ onImported }) {
 // ── Product card ──────────────────────────────────────────────────────────────
 
 function ProductCard({ product }) {
+  const navigate = useNavigate();
   const [showModal, setShowModal] = useState(false);
+  const [ebayState, setEbayState] = useState({ listing: false, error: "" });
+  const primaryImage = product.images?.[0] ?? "";
+  const sourceLabel = product.source === "weverse" ? "Weverse" : "AliExpress";
+
+  async function listOnEbay() {
+    const suggested = (product.suggestedSellPrice ?? Math.ceil((product.aliexpressPrice * 1.35 + 8) * 100) / 100).toFixed(2);
+    const input = window.prompt("eBay sell price (USD):", suggested);
+    if (input === null) return;
+    setEbayState({ listing: true, error: "" });
+    try {
+      await callFunction("ebayCreateListing")({
+        productId: product.id,
+        sellPrice: parseFloat(input) || undefined,
+      });
+      setEbayState({ listing: false, error: "" });
+    } catch (e) {
+      setEbayState({ listing: false, error: e.message ?? "eBay listing failed." });
+    }
+  }
 
   const statusMap = {
     draft: "chip-draft",
@@ -191,16 +216,36 @@ function ProductCard({ product }) {
   return (
     <>
       <div className="product-card">
-        <img src={product.images?.[0] ?? ""} alt={product.title} />
+        <button className="product-card-image" onClick={() => navigate(`/products/${product.id}`)}>
+          {primaryImage ? (
+            <img src={primaryImage} alt={product.title} />
+          ) : (
+            <div className="product-card-placeholder">No image</div>
+          )}
+        </button>
         <div className="product-card-body">
-          <div className="product-card-title">{product.title}</div>
+          <button className="product-card-title-button" onClick={() => navigate(`/products/${product.id}`)}>
+            <div className="product-card-title">{product.title}</div>
+          </button>
+          <div className="product-card-subtitle">
+            <span>{sourceLabel}</span>
+            {product.artistName && <span>{product.artistName}</span>}
+          </div>
           <div className="product-card-meta">
             <span>${product.aliexpressPrice?.toFixed(2) ?? "—"}</span>
             <span className={`chip ${statusMap[product.tiktokStatus ?? "draft"]}`}>
               {product.tiktokStatus ?? "draft"}
             </span>
           </div>
+          <div className="product-card-preview">
+            {product.description?.trim()
+              ? product.description.trim().slice(0, 110)
+              : `Scraped ${product.images?.length ?? 0} images${product.variants?.length ? ` · ${product.variants.length} variants` : ""}`}
+          </div>
           <div className="product-card-actions">
+            <button className="btn btn-ghost" style={{ width: "100%" }} onClick={() => navigate(`/products/${product.id}`)}>
+              View details
+            </button>
             {(!product.tiktokStatus || product.tiktokStatus === "draft") && (
               <button
                 className="btn btn-primary"
@@ -212,6 +257,21 @@ function ProductCard({ product }) {
             )}
             {product.tiktokStatus === "active" && (
               <span style={{ fontSize: 12, color: "var(--success)" }}>Live on TikTok Shop</span>
+            )}
+            {product.ebayStatus === "active" ? (
+              <span style={{ fontSize: 12, color: "var(--success)" }}>Live on eBay</span>
+            ) : (
+              <button
+                className="btn btn-ghost"
+                style={{ width: "100%" }}
+                onClick={listOnEbay}
+                disabled={ebayState.listing}
+              >
+                {ebayState.listing ? "Listing on eBay…" : "List on eBay"}
+              </button>
+            )}
+            {ebayState.error && (
+              <span style={{ fontSize: 11, color: "var(--danger)" }}>{ebayState.error}</span>
             )}
           </div>
         </div>
@@ -232,16 +292,37 @@ function ProductCard({ product }) {
 
 export default function Dashboard() {
   const [products, setProducts] = useState([]);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const uid = auth.currentUser?.uid;
-    if (!uid) return;
+    if (!uid) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setError("");
     const q = query(
       collection(db, "products"),
       where("userId", "==", uid),
       orderBy("importedAt", "desc")
     );
-    return onSnapshot(q, (snap) => setProducts(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
+    return onSnapshot(
+      q,
+      (snap) => {
+        setProducts(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setLoading(false);
+      },
+      (err) => {
+        setError(
+          err?.code === "failed-precondition"
+            ? "Firestore needs the products index before this dashboard can load. Deploy firestore.indexes.json, then refresh."
+            : err?.message ?? "Could not load products."
+        );
+        setLoading(false);
+      }
+    );
   }, []);
 
   return (
@@ -251,10 +332,16 @@ export default function Dashboard() {
         <span style={{ fontSize: 13, color: "var(--muted)" }}>{products.length} imported</span>
       </div>
       <ImportBar />
-      {products.length === 0 ? (
+      {error && <div className="card" style={{ marginBottom: 20, color: "var(--danger)" }}>{error}</div>}
+      {loading ? (
+        <div className="empty-state">
+          <div style={{ fontSize: 32 }}>⏳</div>
+          <p>Loading your imported products…</p>
+        </div>
+      ) : products.length === 0 ? (
         <div className="empty-state">
           <div style={{ fontSize: 32 }}>📦</div>
-          <p>No products yet. Import from AliExpress above or use the Chrome extension.</p>
+          <p>No products yet. Import from Weverse, AliExpress, or use the Chrome extension.</p>
         </div>
       ) : (
         <div className="product-grid">

@@ -1,20 +1,48 @@
-const DASHBOARD_URL = "https://wonni-dropship.web.app";
+const DEFAULT_DASHBOARD_URL = "https://wonni-dropship.web.app";
 
-function openDashboard() {
-  chrome.tabs.create({ url: DASHBOARD_URL });
+function normalizeDashboardUrl(rawUrl) {
+  try {
+    return new URL(rawUrl).origin;
+  } catch {
+    return DEFAULT_DASHBOARD_URL;
+  }
+}
+
+async function getDashboardUrl() {
+  const { dashboardBaseUrl } = await chrome.storage.local.get(["dashboardBaseUrl"]);
+  return normalizeDashboardUrl(dashboardBaseUrl);
+}
+
+async function openDashboard(path = "") {
+  const dashboardUrl = await getDashboardUrl();
+  chrome.tabs.create({ url: `${dashboardUrl}${path}` });
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
   const statusEl = document.getElementById("status");
   const authBtn = document.getElementById("auth-btn");
+  const dashboardUrlInput = document.getElementById("dashboard-url");
+  const saveDashboardBtn = document.getElementById("save-dashboard-btn");
   const recentSection = document.getElementById("recent-section");
   const recentList = document.getElementById("recent-list");
 
-  const { idToken, userEmail, recentImports } = await chrome.storage.local.get([
+  const { idToken, userEmail, recentImports, dashboardBaseUrl } = await chrome.storage.local.get([
     "idToken",
     "userEmail",
     "recentImports",
+    "dashboardBaseUrl",
   ]);
+
+  const currentDashboardUrl = normalizeDashboardUrl(dashboardBaseUrl);
+  if (dashboardUrlInput) dashboardUrlInput.value = currentDashboardUrl;
+  if (saveDashboardBtn) {
+    saveDashboardBtn.onclick = async () => {
+      const nextUrl = normalizeDashboardUrl(dashboardUrlInput?.value);
+      await chrome.storage.local.set({ dashboardBaseUrl: nextUrl });
+      if (dashboardUrlInput) dashboardUrlInput.value = nextUrl;
+      statusEl.textContent = `Dashboard set to ${nextUrl}`;
+    };
+  }
 
   if (idToken && userEmail) {
     statusEl.textContent = "Signed in as ";
@@ -29,7 +57,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   } else {
     statusEl.textContent = "Not signed in";
     authBtn.textContent = "Sign in";
-    authBtn.onclick = () => chrome.tabs.create({ url: DASHBOARD_URL + "/login" });
+    authBtn.onclick = () => openDashboard("/login");
   }
 
   if (recentImports?.length) {

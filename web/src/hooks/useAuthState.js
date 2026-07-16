@@ -14,10 +14,14 @@ export function useAuthState() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      sendToExtension({ type: "SET_DASHBOARD_URL", dashboardBaseUrl: window.location.origin });
+    }
     const unsub = onIdTokenChanged(auth, async (u) => {
       setUser(u);
       setLoading(false);
       if (u) {
+        sendToExtension({ type: "SET_DASHBOARD_URL", dashboardBaseUrl: window.location.origin });
         const idToken = await u.getIdToken();
         sendToExtension({ type: "SET_TOKEN", idToken, email: u.email });
       }
