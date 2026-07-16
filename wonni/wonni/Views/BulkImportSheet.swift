@@ -107,19 +107,27 @@ struct BulkImportSheet: View {
                                                 }
                                                 .frame(width: 110, height: 110)
                                                 .cornerRadius(8)
-                                                
+
                                                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                                                     .font(.title3)
                                                     .foregroundColor(isSelected ? .blue : .white.opacity(0.8))
                                                     .padding(6)
                                             }
-                                            
+
                                             Text(item.title)
                                                 .font(.caption)
                                                 .lineLimit(2)
                                                 .multilineTextAlignment(.leading)
                                                 .foregroundColor(.primary)
-                                            
+
+                                            if let desc = item.description, !desc.isEmpty {
+                                                Text(desc)
+                                                    .font(.caption2)
+                                                    .lineLimit(1)
+                                                    .multilineTextAlignment(.leading)
+                                                    .foregroundColor(.secondary)
+                                            }
+
                                             Text("$\(String(format: "%.2f", item.price))")
                                                 .font(.caption.weight(.semibold))
                                                 .foregroundColor(.secondary)

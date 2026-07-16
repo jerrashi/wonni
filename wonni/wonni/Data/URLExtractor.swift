@@ -21,6 +21,7 @@ struct ListingPreview: Identifiable, Hashable {
     var price: Double
     var thumbnailUrl: String
     var url: String
+    var description: String?
 }
 
 enum ExtractorError: Error, LocalizedError {
@@ -304,48 +305,92 @@ class URLExtractor: NSObject, ObservableObject {
                             let text = link.innerText || "";
                             let priceMatch = text.match(/\\$\\s*([0-9,.]+)/);
                             let priceText = priceMatch ? priceMatch[0] : "$0";
-                            
+
                             let title = "";
+
+                            // Try multiple selectors for the item name
                             let nameNode = link.querySelector('[data-testid="ItemName"]');
                             if (nameNode && nameNode.innerText) {
                                 title = nameNode.innerText.trim();
                             }
-                            
+
+                            // Fallback: look for common heading elements within the link
+                            if (!title) {
+                                let headings = link.querySelectorAll('h2, h3, h4, [role="heading"]');
+                                for (let h of headings) {
+                                    if (h.innerText && h.innerText.trim().length > 0) {
+                                        title = h.innerText.trim();
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Fallback: parse lines to find the title (longest line that's not price/metadata)
                             if (!title) {
                                 let lines = text.split('\\n')
                                     .map(s => s.trim())
-                                    .filter(s => s.length > 0 
-                                              && !s.startsWith('$') 
-                                              && !s.match(/^[0-9,.]+$/) 
+                                    .filter(s => s.length > 2
+                                              && !s.startsWith('$')
+                                              && !s.match(/^[0-9,.%\\s]+$/)
                                               && s.toLowerCase() !== "free shipping"
                                               && s.toLowerCase() !== "sold"
                                               && !s.toLowerCase().includes(" % off")
+                                              && !s.toLowerCase().includes("shipping")
+                                              && !s.toLowerCase().includes("condition")
                                     );
+
+                                // Filter out very short lines and find the longest meaningful text
                                 let longestLine = "";
                                 for (let line of lines) {
-                                    if (line.length > longestLine.length) {
+                                    if (line.length > 4 && line.length > longestLine.length) {
                                         longestLine = line;
                                     }
                                 }
-                                if (longestLine) {
+                                if (longestLine && longestLine.length > 4) {
                                     title = longestLine;
                                 }
                             }
-                            
+
+                            // Fallback: use image alt text
                             if (!title && itemImg && itemImg.alt) {
-                                title = itemImg.alt;
+                                title = itemImg.alt.trim();
                             }
-                            
+
+                            // Last resort: use a placeholder with visible content for debugging
                             if (!title) {
-                                title = "Mercari Item";
+                                title = "Item";
                             }
-                            
+
+                            // Extract description: try to find a text snippet from the listing card
+                            let description = "";
+                            let allText = text.split('\\n')
+                                .map(s => s.trim())
+                                .filter(s => s.length > 0
+                                          && !s.startsWith('$')
+                                          && !s.match(/^[0-9,.%\\s]+$/)
+                                          && s.toLowerCase() !== "free shipping"
+                                          && s.toLowerCase() !== "sold"
+                                          && s !== title
+                                          && !s.toLowerCase().includes(" % off")
+                                    );
+
+                            if (allText.length > 0) {
+                                // Use the first meaningful text line as description
+                                for (let line of allText) {
+                                    if (line.length > 4 && line !== title) {
+                                        description = line.substring(0, 100);
+                                        break;
+                                    }
+                                }
+                            }
+
                             if (url && thumbnailUrl) {
                                 items.push({
                                     url: url,
                                     thumbnailUrl: thumbnailUrl,
                                     title: title,
-                                    priceText: priceText
+                                    priceText: priceText,
+                                    description: description
                                 });
                             }
                         }
@@ -391,11 +436,12 @@ class URLExtractor: NSObject, ObservableObject {
                                   let priceText = item["priceText"] as? String else {
                                 return nil
                             }
-                            
+
                             let digits = priceText.components(separatedBy: CharacterSet(charactersIn: "0123456789.").inverted).joined()
                             let price = Double(digits) ?? 0.0
-                            
-                            return ListingPreview(title: title, price: price, thumbnailUrl: thumbnailUrl, url: url)
+                            let description = item["description"] as? String
+
+                            return ListingPreview(title: title, price: price, thumbnailUrl: thumbnailUrl, url: url, description: description)
                         }
                         
                         isExtracting = false
