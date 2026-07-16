@@ -1,0 +1,15 @@
+rules_version = '2';
+
+// Product images are written only by Cloud Functions (admin SDK bypasses rules).
+// Clients get public read on the dropship folder, nothing else.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /dropship/{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

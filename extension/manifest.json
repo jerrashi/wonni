@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Wonni Drop",
   "version": "1.0.0",
-  "description": "Import AliExpress products to Wonni Drop with one click.",
+  "description": "Import Weverse Shop and AliExpress products to Wonni Drop with one click.",
   "permissions": [
     "storage",
     "activeTab",
@@ -11,7 +11,8 @@
   "host_permissions": [
     "https://www.aliexpress.com/*",
     "https://aliexpress.com/*",
-    "https://us.aliexpress.com/*"
+    "https://us.aliexpress.com/*",
+    "https://shop.weverse.io/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -25,6 +26,11 @@
         "https://us.aliexpress.com/item/*"
       ],
       "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://shop.weverse.io/*"],
+      "js": ["weverse_content.js"],
       "run_at": "document_idle"
     }
   ],
