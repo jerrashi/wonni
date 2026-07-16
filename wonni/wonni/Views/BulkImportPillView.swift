@@ -78,18 +78,24 @@ struct BulkImportProgressView: View {
                 }
                 .frame(width: 44, height: 44)
                 .cornerRadius(6)
-                
+
                 VStack(alignment: .leading, spacing: 2) {
                     Text(job.preview.title)
                         .font(.subheadline)
                         .lineLimit(1)
+                    if let desc = job.preview.description, !desc.isEmpty {
+                        Text(desc)
+                            .font(.caption2)
+                            .lineLimit(1)
+                            .foregroundStyle(.secondary)
+                    }
                     Text("$\(String(format: "%.2f", job.preview.price))")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.tertiary)
                 }
-                
+
                 Spacer()
-                
+
                 statusIcon(for: job.status)
             }
         }
