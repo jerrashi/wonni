@@ -5,6 +5,7 @@ const { aliexpressExchangeToken } = require("./aliexpress_auth");
 const { aliexpressImportProduct } = require("./aliexpress_product");
 const { weverseImportProduct } = require("./weverse_product");
 const { splitProductImage } = require("./split_image");
+const { identifyProductsInImage } = require("./identify_products");
 const { placeAliexpressOrder, confirmTiktokShipment, pollAliexpressTracking } = require("./aliexpress_order");
 const { tiktokExchangeToken } = require("./tiktok_auth");
 const { ebayExchangeToken } = require("./ebay_auth");
@@ -23,6 +24,7 @@ module.exports = {
   aliexpressImportProduct,
   weverseImportProduct,
   splitProductImage,
+  identifyProductsInImage,
 
   // TikTok Shop listings
   getTiktokCategories,
