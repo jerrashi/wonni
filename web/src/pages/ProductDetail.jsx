@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { doc, onSnapshot, serverTimestamp, updateDoc } from "firebase/firestore";
 import { useNavigate, useParams } from "react-router-dom";
 import { db, callFunction } from "../firebase";
@@ -55,6 +55,128 @@ function moveItem(list, from, to) {
   return next;
 }
 
+// ── Thumbnail strip ──────────────────────────────────────────────────────────
+function ImageStrip({ images, activeIndex, onHover, onDrop, onEdit, savingMedia }) {
+  const [dragIndex, setDragIndex] = useState(null);
+  const [dropTarget, setDropTarget] = useState(null);
+
+  function handleDragStart(e, index) {
+    setDragIndex(index);
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  function handleDragOver(e, index) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (index !== dragIndex) setDropTarget(index);
+  }
+
+  function handleDrop(e, index) {
+    e.preventDefault();
+    if (dragIndex !== null && dragIndex !== index) onDrop(dragIndex, index);
+    setDragIndex(null);
+    setDropTarget(null);
+  }
+
+  function handleDragEnd() {
+    setDragIndex(null);
+    setDropTarget(null);
+  }
+
+  return (
+    <div className="img-strip">
+      {images.map((image, index) => {
+        const isActive = index === activeIndex;
+        const isDragging = index === dragIndex;
+        const isDropTarget = index === dropTarget;
+        return (
+          <div
+            key={image.id}
+            className={`img-thumb${isActive ? " img-thumb-active" : ""}${isDragging ? " img-thumb-dragging" : ""}${isDropTarget ? " img-thumb-drop" : ""}`}
+            draggable={!savingMedia}
+            onMouseEnter={() => onHover(index)}
+            onDragStart={(e) => handleDragStart(e, index)}
+            onDragOver={(e) => handleDragOver(e, index)}
+            onDrop={(e) => handleDrop(e, index)}
+            onDragEnd={handleDragEnd}
+          >
+            {/* drag handle */}
+            <span className="img-thumb-handle" title="Drag to reorder">⠿</span>
+
+            <img src={image.url} alt={`Image ${index + 1}`} />
+
+            {/* edit button */}
+            <button
+              className="img-thumb-edit"
+              title="Edit image"
+              onClick={(e) => { e.stopPropagation(); onEdit(index); }}
+              disabled={savingMedia}
+            >
+              ✏
+            </button>
+
+            {isActive && <span className="img-thumb-cover-dot" />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Per-image edit popover ───────────────────────────────────────────────────
+function ImageEditPopover({ image, index, total, onClose, onSplit, onDelete, onSetCover, saving }) {
+  const ref = useRef(null);
+  const isTall = typeof image.height === "number" && typeof image.width === "number"
+    ? image.height / image.width > 1.6
+    : false;
+
+  // Close on outside click
+  useEffect(() => {
+    function handler(e) {
+      if (ref.current && !ref.current.contains(e.target)) onClose();
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [onClose]);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div
+        ref={ref}
+        className="img-edit-popover"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="img-edit-popover-preview">
+          <img src={image.url} alt={`Image ${index + 1}`} />
+        </div>
+        <div className="img-edit-popover-meta">
+          Image {index + 1} of {total}
+          {image.width && image.height ? ` · ${image.width}×${image.height}px` : ""}
+          {image.kind && image.kind !== "catalog" ? ` · ${image.kind}` : ""}
+        </div>
+        <div className="img-edit-popover-actions">
+          {index !== 0 && (
+            <button className="btn btn-ghost" onClick={onSetCover} disabled={saving}>
+              ★ Set as cover
+            </button>
+          )}
+          {isTall && (
+            <button className="btn btn-primary" onClick={onSplit} disabled={saving}>
+              {saving ? "Splitting…" : "✂ Split tall image"}
+            </button>
+          )}
+          <button className="btn btn-danger" onClick={onDelete} disabled={saving}>
+            Delete
+          </button>
+          <button className="btn btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ProductDetail() {
   const { productId } = useParams();
   const navigate = useNavigate();
@@ -64,7 +186,8 @@ export default function ProductDetail() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [images, setImages] = useState([]);
-  const [dragIndex, setDragIndex] = useState(null);
+  const [previewIndex, setPreviewIndex] = useState(0);
+  const [editingIndex, setEditingIndex] = useState(null);
   const [savingText, setSavingText] = useState(false);
   const [savingMedia, setSavingMedia] = useState(false);
   const [mediaError, setMediaError] = useState("");
@@ -94,6 +217,7 @@ export default function ProductDetail() {
         setTitle(next.title ?? "");
         setDescription(next.description ?? "");
         setImages(normalizeImageAssets(next));
+        setPreviewIndex(0);
         setLoading(false);
       },
       (err) => {
@@ -106,7 +230,8 @@ export default function ProductDetail() {
   const variants = product?.variants ?? [];
   const preorder = product?.preOrder;
   const infoTable = product?.weverseInfoTable ?? [];
-  const primaryImage = images[0]?.url ?? "";
+  const safePreviewIndex = Math.min(previewIndex, Math.max(0, images.length - 1));
+  const previewImage = images[safePreviewIndex]?.url ?? "";
   const imageCountLabel = useMemo(() => {
     if (!images.length) return "No images";
     return `${images.length} image${images.length === 1 ? "" : "s"}`;
@@ -181,11 +306,9 @@ export default function ProductDetail() {
         kind: "split",
       }));
 
-      await saveMedia([
-        ...images.slice(0, index),
-        ...splitImages,
-        ...images.slice(index + 1),
-      ]);
+      const nextImages = [...images.slice(0, index), ...splitImages, ...images.slice(index + 1)];
+      await saveMedia(nextImages);
+      setEditingIndex(null);
     } catch (err) {
       setMediaError(err?.message ?? "Could not split image.");
     } finally {
@@ -194,21 +317,26 @@ export default function ProductDetail() {
   }
 
   async function handleDeleteImage(index) {
-    await saveMedia(images.filter((_, i) => i !== index));
+    const nextImages = images.filter((_, i) => i !== index);
+    await saveMedia(nextImages);
+    setEditingIndex(null);
+    setPreviewIndex((prev) => Math.min(prev, Math.max(0, nextImages.length - 1)));
   }
 
-  async function handleMoveImage(from, to) {
-    if (to < 0 || to >= images.length || from === to) return;
-    await saveMedia(moveItem(images, from, to));
+  async function handleSetCover(index) {
+    if (index === 0) return;
+    const nextImages = moveItem(images, index, 0);
+    await saveMedia(nextImages);
+    setPreviewIndex(0);
+    setEditingIndex(null);
   }
 
-  const imageLimitNotes = useMemo(() => {
-    return [
-      "Current images are the curated catalog images.",
-      "Listings will use `listingImages` when present, otherwise this image set.",
-      "We are intentionally keeping editing manual so you can choose the right subset per platform later.",
-    ];
-  }, []);
+  async function handleDropReorder(from, to) {
+    if (from === to) return;
+    const nextImages = moveItem(images, from, to);
+    await saveMedia(nextImages);
+    setPreviewIndex(to);
+  }
 
   return (
     <Layout>
@@ -240,23 +368,41 @@ export default function ProductDetail() {
       ) : product ? (
         <div className="product-detail">
           <div className="card product-detail-hero">
+            {/* ── Left: image viewer ── */}
             <div className="product-detail-gallery">
               <div className="product-detail-main-image">
-                {primaryImage ? (
-                  <img src={primaryImage} alt={product.title} />
+                {previewImage ? (
+                  <img src={previewImage} alt={product.title} />
                 ) : (
                   <div className="product-detail-placeholder">No image</div>
                 )}
+                {images.length > 0 && (
+                  <div className="img-preview-badge">
+                    {safePreviewIndex + 1} / {images.length}
+                  </div>
+                )}
               </div>
-              {images.length > 1 && (
-                <div className="product-detail-thumbs">
-                  {images.slice(1, 6).map((image, index) => (
-                    <img key={`${image.url}-${index}`} src={image.url} alt={`${product.title} ${index + 2}`} />
-                  ))}
-                </div>
+
+              {images.length > 0 && (
+                <ImageStrip
+                  images={images}
+                  activeIndex={safePreviewIndex}
+                  onHover={setPreviewIndex}
+                  onDrop={handleDropReorder}
+                  onEdit={setEditingIndex}
+                  savingMedia={savingMedia}
+                />
+              )}
+
+              {mediaError && (
+                <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 4 }}>{mediaError}</div>
+              )}
+              {savingMedia && (
+                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Saving…</div>
               )}
             </div>
 
+            {/* ── Right: info panel ── */}
             <div className="product-detail-panel">
               <div className="detail-badges">
                 <span className="chip chip-draft">{badgeLabel(product.source)}</span>
@@ -310,7 +456,7 @@ export default function ProductDetail() {
                     {savingText ? "Saving…" : "Save text"}
                   </button>
                   <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                    This is the catalog version of the item. Listings use it as the base source.
+                    Listings use these as the base catalog fields.
                   </span>
                 </div>
               </div>
@@ -383,71 +529,6 @@ export default function ProductDetail() {
             )}
           </div>
 
-          <div className="card detail-section">
-            <h2>Images</h2>
-            <p className="detail-copy" style={{ marginTop: 0 }}>
-              {imageLimitNotes.map((note) => (
-                <span key={note} style={{ display: "block" }}>
-                  • {note}
-                </span>
-              ))}
-            </p>
-
-            {mediaError && <div style={{ color: "var(--danger)", marginBottom: 12 }}>{mediaError}</div>}
-            {images.length === 0 ? (
-              <p className="detail-copy">No images were imported.</p>
-            ) : (
-              <>
-                <div className="image-gallery">
-                  {images.map((image, index) => {
-                    const tall = typeof image.height === "number" && typeof image.width === "number"
-                      ? image.height / image.width > 1.6
-                      : false;
-
-                    return (
-                      <div
-                        key={image.id}
-                        draggable
-                        onDragStart={() => setDragIndex(index)}
-                        onDragOver={(event) => event.preventDefault()}
-                        onDrop={() => {
-                          if (dragIndex !== null) {
-                            handleMoveImage(dragIndex, index);
-                            setDragIndex(null);
-                          }
-                        }}
-                        style={{
-                          position: "relative",
-                          border: "1px solid rgba(255,255,255,0.08)",
-                          borderRadius: 14,
-                          overflow: "hidden",
-                          background: "rgba(255,255,255,0.03)",
-                        }}
-                      >
-                        <img src={image.url} alt={`${product.title} ${index + 1}`} />
-                        <div style={{ display: "flex", gap: 8, padding: 10, flexWrap: "wrap" }}>
-                          <button className="btn btn-ghost" onClick={() => handleMoveImage(index, index - 1)} disabled={index === 0 || savingMedia}>
-                            ←
-                          </button>
-                          <button className="btn btn-ghost" onClick={() => handleMoveImage(index, index + 1)} disabled={index === images.length - 1 || savingMedia}>
-                            →
-                          </button>
-                          <button className="btn btn-ghost" onClick={() => handleDeleteImage(index)} disabled={savingMedia}>
-                            Delete
-                          </button>
-                          <button className="btn btn-primary" onClick={() => handleSplitImage(index)} disabled={savingMedia}>
-                            {tall ? "Split tall image" : "Split image"}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                {savingMedia && <div style={{ marginTop: 12, fontSize: 13, color: "var(--muted)" }}>Saving image changes…</div>}
-              </>
-            )}
-          </div>
-
           {product.sourceUrl && (
             <div className="card detail-section">
               <h2>Source</h2>
@@ -458,6 +539,20 @@ export default function ProductDetail() {
           )}
         </div>
       ) : null}
+
+      {/* Edit popover */}
+      {editingIndex !== null && images[editingIndex] && (
+        <ImageEditPopover
+          image={images[editingIndex]}
+          index={editingIndex}
+          total={images.length}
+          onClose={() => setEditingIndex(null)}
+          onSplit={() => handleSplitImage(editingIndex)}
+          onDelete={() => handleDeleteImage(editingIndex)}
+          onSetCover={() => handleSetCover(editingIndex)}
+          saving={savingMedia}
+        />
+      )}
     </Layout>
   );
 }
