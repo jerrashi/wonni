@@ -580,7 +580,7 @@ a { color: var(--accent); text-decoration: none; }
 .split-editor-wrap {
   position: relative;
   width: 100%;
-  max-height: 420px;
+  max-height: 60vh;
   overflow-y: auto;
   border-radius: 10px;
   border: 1px solid var(--border);
@@ -588,7 +588,12 @@ a { color: var(--accent); text-decoration: none; }
   user-select: none;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
-  isolation: isolate;
+}
+
+.split-editor-img-container {
+  position: relative;
+  width: 100%;
+  display: block;
 }
 
 .split-editor-img {

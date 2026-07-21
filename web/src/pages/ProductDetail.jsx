@@ -532,22 +532,27 @@ function IdentifyEditor({ image, productId, onSave, onCancel, saving, onBusyChan
 // On confirm, slices the full-resolution image client-side at each line.
 
 function SplitEditor({ image, productId, onSave, onCancel, saving, onBusyChange }) {
-  const wrapRef = useRef(null);
+  const imgRef = useRef(null);
   // lines: array of percentages (0-100), sorted ascending
   const [lines, setLines] = useState([]);
   const [activeDragIndex, setActiveDragIndex] = useState(null);
   const [status, setStatus] = useState("");
   const [uploading, setUploading] = useState(false);
 
+  // Calculates exact percentage down the rendered image from any screen clientY
+  function getPctFromClientY(clientY) {
+    if (!imgRef.current) return 50;
+    const rect = imgRef.current.getBoundingClientRect();
+    if (!rect.height) return 50;
+    const offsetY = clientY - rect.top;
+    const pct = (offsetY / rect.height) * 100;
+    return Math.max(0.5, Math.min(99.5, pct));
+  }
+
   // Add a new line where the user clicked on the image
   function handleWrapClick(e) {
     if (e.target.closest(".split-line")) return; // don't add when clicking a line handle
-    const wrap = wrapRef.current;
-    if (!wrap) return;
-    const rect = wrap.getBoundingClientRect();
-    const scrollTop = wrap.scrollTop;
-    const clickY = e.clientY - rect.top + scrollTop;
-    const pct = Math.max(1, Math.min(99, (clickY / wrap.scrollHeight) * 100));
+    const pct = getPctFromClientY(e.clientY);
     setLines((prev) => [...prev, pct].sort((a, b) => a - b));
   }
 
@@ -566,12 +571,7 @@ function SplitEditor({ image, productId, onSave, onCancel, saving, onBusyChange 
         hasMoved = true;
       }
 
-      const wrap = wrapRef.current;
-      if (!wrap) return;
-      const rect = wrap.getBoundingClientRect();
-      const pointerY = moveEvent.clientY - rect.top + wrap.scrollTop;
-      const pct = Math.max(1, Math.min(99, (pointerY / wrap.scrollHeight) * 100));
-
+      const pct = getPctFromClientY(moveEvent.clientY);
       setLines((prev) => {
         const next = [...prev];
         next[lineIndex] = pct;
@@ -685,45 +685,53 @@ function SplitEditor({ image, productId, onSave, onCancel, saving, onBusyChange 
       </p>
 
       <div
-        ref={wrapRef}
         className="split-editor-wrap"
         onClick={handleWrapClick}
         style={{ cursor: activeDragIndex !== null ? "ns-resize" : "crosshair" }}
       >
-        <img src={image.url} alt="split preview" className="split-editor-img" draggable={false} />
+        <div className="split-editor-img-container">
+          <img
+            ref={imgRef}
+            src={image.url}
+            alt="split preview"
+            className="split-editor-img"
+            draggable={false}
+          />
 
-        {/* Slice number badges between lines */}
-        {[0, ...lines, 100].map((pct, i, arr) => {
-          if (i === arr.length - 1) return null;
-          const midPct = (pct + arr[i + 1]) / 2;
-          return (
-            <div key={`badge-${i}`} className="split-slice-badge" style={{ top: `${midPct}%` }}>
-              {i + 1}
-            </div>
-          );
-        })}
+          {/* Slice number badges between lines */}
+          {[0, ...lines, 100].map((pct, i, arr) => {
+            if (i === arr.length - 1) return null;
+            const midPct = (pct + arr[i + 1]) / 2;
+            return (
+              <div key={`badge-${i}`} className="split-slice-badge" style={{ top: `${midPct}%` }}>
+                {i + 1}
+              </div>
+            );
+          })}
 
-        {/* Draggable cut lines */}
-        {lines.map((pct, index) => (
-          <div
-            key={`line-${index}`}
-            className={`split-line${activeDragIndex === index ? " split-line-dragging" : ""}`}
-            style={{ top: `${pct}%` }}
-            onPointerDown={(e) => handleLinePointerDown(e, index)}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <span className="split-line-tag">✂ {index + 1}</span>
-            <span className="split-line-pct">{pct.toFixed(0)}%</span>
-            <button
-              className="split-line-delete"
-              onClick={(e) => { e.stopPropagation(); deleteLine(index); }}
-              title="Remove cut line"
+          {/* Draggable cut lines */}
+          {lines.map((pct, index) => (
+            <div
+              key={`line-${index}`}
+              className={`split-line${activeDragIndex === index ? " split-line-dragging" : ""}`}
+              style={{ top: `${pct}%` }}
+              onPointerDown={(e) => handleLinePointerDown(e, index)}
+              onClick={(e) => e.stopPropagation()}
             >
-              ×
-            </button>
-          </div>
-        ))}
+              <span className="split-line-tag">✂ {index + 1}</span>
+              <span className="split-line-pct">{pct.toFixed(0)}%</span>
+              <button
+                className="split-line-delete"
+                onClick={(e) => { e.stopPropagation(); deleteLine(index); }}
+                title="Remove cut line"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
+
 
 
 
