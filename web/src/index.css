@@ -588,6 +588,7 @@ a { color: var(--accent); text-decoration: none; }
   user-select: none;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
+  isolation: isolate;
 }
 
 .split-editor-img {
@@ -612,7 +613,7 @@ a { color: var(--accent); text-decoration: none; }
   z-index: 20;
 }
 
-/* The actual visible dashed rule */
+/* The actual visible rule using mix-blend-mode: difference to invert underlying pixels */
 .split-line::before {
   content: '';
   position: absolute;
@@ -621,23 +622,13 @@ a { color: var(--accent); text-decoration: none; }
   top: 50%;
   height: 2px;
   transform: translateY(-50%);
-  background: repeating-linear-gradient(
-    90deg,
-    #ff6b35 0px, #ff6b35 10px,
-    transparent 10px, transparent 18px
-  );
+  background: #ffffff;
+  mix-blend-mode: difference;
   pointer-events: none;
 }
 
-.split-line-dragging {
-  cursor: grabbing;
-}
 .split-line-dragging::before {
-  background: repeating-linear-gradient(
-    90deg,
-    #fbbf24 0px, #fbbf24 10px,
-    transparent 10px, transparent 18px
-  );
+  height: 3px;
 }
 
 .split-line-tag {
