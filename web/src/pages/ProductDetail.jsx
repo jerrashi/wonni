@@ -48,12 +48,6 @@ function moveItem(list, from, to) {
   return next;
 }
 
-function isTallImage(image) {
-  return typeof image?.height === "number" && typeof image?.width === "number"
-    ? image.height / image.width > 1.6
-    : false;
-}
-
 // Shared drag/resize-box mechanics used by CropEditor and IdentifyEditor.
 function canvasPos(canvasEl, e) {
   const rect = canvasEl.getBoundingClientRect();
@@ -537,12 +531,13 @@ function IdentifyEditor({ image, productId, onSave, onCancel, saving, onBusyChan
 // Click the image to add a cut line. Drag lines to reposition. × to remove.
 // On confirm, slices the full-resolution image client-side at each line.
 
-function SplitEditor({ image, productId, onSave, onCancel, saving }) {
+function SplitEditor({ image, productId, onSave, onCancel, saving, onBusyChange }) {
   const wrapRef = useRef(null);
   // lines: array of percentages (0-100), sorted ascending
   const [lines, setLines] = useState([]);
   const [dragging, setDragging] = useState(null); // { index, startClientY, startPct }
   const [status, setStatus] = useState("");
+  const [uploading, setUploading] = useState(false);
 
   // Add a new line where the user clicked on the image
   function handleWrapClick(e) {
@@ -589,54 +584,65 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
 
   async function confirmSplit() {
     if (!image?.url || !lines.length) return;
-    setStatus("Loading image…");
     const uid = auth.currentUser?.uid;
-
-    // Load the full-resolution image once
-    let img;
-    try {
-      img = await new Promise((res, rej) => {
-        const el = new Image();
-        el.crossOrigin = "anonymous";
-        el.onload = () => res(el);
-        el.onerror = rej;
-        el.src = image.url;
-      });
-    } catch {
-      setStatus("Failed to load image.");
+    if (!uid) {
+      setStatus("You're signed out — please refresh and try again.");
       return;
     }
 
-    const W = img.naturalWidth;
-    const H = img.naturalHeight;
-    // Build boundary list: 0 → each line pct → 100
-    const boundaries = [0, ...lines, 100].map((p) => Math.round((p / 100) * H));
-    const results = [];
-
-    for (let i = 0; i < boundaries.length - 1; i++) {
-      const y0 = boundaries[i];
-      const y1 = boundaries[i + 1];
-      const sliceH = y1 - y0;
-      if (sliceH < 5) continue;
-
-      const offscreen = document.createElement("canvas");
-      offscreen.width = W;
-      offscreen.height = sliceH;
-      offscreen.getContext("2d").drawImage(img, 0, y0, W, sliceH, 0, 0, W, sliceH);
-
-      setStatus(`Uploading slice ${i + 1} of ${boundaries.length - 1}…`);
+    setStatus("Loading image…");
+    setUploading(true);
+    onBusyChange?.(true);
+    try {
+      // Load the full-resolution image once
+      let img;
       try {
-        const blob = await new Promise((res) => offscreen.toBlob(res, "image/jpeg", 0.92));
-        const url = await uploadImageBlob(uid, productId, blob, `-split-${i}`);
-        results.push({ url, width: W, height: sliceH, kind: "split" });
-      } catch (err) {
-        setStatus(`Upload failed on slice ${i + 1}: ${err.message}`);
+        img = await new Promise((res, rej) => {
+          const el = new Image();
+          el.crossOrigin = "anonymous";
+          el.onload = () => res(el);
+          el.onerror = rej;
+          el.src = image.url;
+        });
+      } catch {
+        setStatus("Failed to load image.");
         return;
       }
-    }
 
-    setStatus("");
-    await onSave(results);
+      const W = img.naturalWidth;
+      const H = img.naturalHeight;
+      // Build boundary list: 0 → each line pct → 100
+      const boundaries = [0, ...lines, 100].map((p) => Math.round((p / 100) * H));
+      const results = [];
+
+      for (let i = 0; i < boundaries.length - 1; i++) {
+        const y0 = boundaries[i];
+        const y1 = boundaries[i + 1];
+        const sliceH = y1 - y0;
+        if (sliceH < 5) continue;
+
+        const offscreen = document.createElement("canvas");
+        offscreen.width = W;
+        offscreen.height = sliceH;
+        offscreen.getContext("2d").drawImage(img, 0, y0, W, sliceH, 0, 0, W, sliceH);
+
+        setStatus(`Uploading slice ${i + 1} of ${boundaries.length - 1}…`);
+        try {
+          const blob = await new Promise((res) => offscreen.toBlob(res, "image/jpeg", 0.92));
+          const url = await uploadImageBlob(uid, productId, blob, `-split-${i}`);
+          results.push({ url, width: W, height: sliceH, kind: "split" });
+        } catch (err) {
+          setStatus(`Upload failed on slice ${i + 1}: ${err.message}`);
+          return;
+        }
+      }
+
+      setStatus("");
+      await onSave(results);
+    } finally {
+      setUploading(false);
+      onBusyChange?.(false);
+    }
   }
 
   const sliceCount = lines.length + 1;
@@ -697,13 +703,13 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
 
       <div className="img-edit-popover-actions">
         {lines.length > 0 ? (
-          <button className="btn btn-primary" onClick={confirmSplit} disabled={saving}>
+          <button className="btn btn-primary" onClick={confirmSplit} disabled={saving || uploading}>
             {saving ? "Splitting…" : `✂ Split into ${sliceCount} images`}
           </button>
         ) : (
           <span className="img-editor-hint">Add at least one cut line to split.</span>
         )}
-        <button className="btn btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn btn-ghost" onClick={onCancel} disabled={uploading}>Cancel</button>
       </div>
     </div>
   );
@@ -867,6 +873,7 @@ function ImageEditModal({ image, index, total, productId, onClose, onDelete, onS
               productId={productId}
               onSave={onSaveSplit}
               onCancel={() => setMode("menu")}
+              onBusyChange={setBusy}
               saving={saving}
             />
           </>
@@ -961,33 +968,6 @@ export default function ProductDetail() {
       });
     } finally {
       setSavingText(false);
-    }
-  }
-
-  async function handleSplitImage(index) {
-    const image = images[index];
-    if (!image?.url) return;
-    setSavingMedia(true);
-    setMediaError("");
-    try {
-      const response = await callFunction("splitProductImage")({
-        productId,
-        imageUrl: image.url,
-        sliceHeight: image.height ? Math.max(1200, Math.min(1800, Math.floor(image.height / 2))) : 1800,
-      });
-      const slices = response?.data?.slices ?? [];
-      if (!slices.length) { setMediaError("That image did not return any slices."); return; }
-      const splitImages = slices.map((slice, i) => ({
-        id: `${slice.url}-${i}`, url: slice.url,
-        sourceUrl: image.sourceUrl ?? image.url,
-        width: slice.width ?? null, height: slice.height ?? null, kind: "split",
-      }));
-      await saveMedia([...images.slice(0, index), ...splitImages, ...images.slice(index + 1)]);
-      setEditingIndex(null);
-    } catch (err) {
-      setMediaError(err?.message ?? "Could not split image.");
-    } finally {
-      setSavingMedia(false);
     }
   }
 
