@@ -15,7 +15,7 @@ exports.splitProductImage = onCall(
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
 
-    const { productId, imageUrl, sliceHeight } = request.data ?? {};
+    const { productId, imageUrl, sliceHeight, slicePoints } = request.data ?? {};
     if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
     if (!imageUrl) throw new HttpsError("invalid-argument", "Missing imageUrl.");
 
@@ -36,7 +36,7 @@ exports.splitProductImage = onCall(
     }
 
     const buffer = await downloadBuffer(imageUrl);
-    const splitResult = await splitImageBuffer(buffer, sliceHeight);
+    const splitResult = await splitImageBuffer(buffer, sliceHeight, slicePoints);
 
     const storage = admin.storage().bucket();
     const sourceImageName = imageUrl.split("/").pop()?.split("?")[0] ?? `image-${Date.now()}`;

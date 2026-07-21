@@ -74,14 +74,32 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-async function splitImageBuffer(buffer, sliceHeight = 1800) {
+async function splitImageBuffer(buffer, sliceHeight = 1800, slicePoints = null) {
   const image = await Jimp.read(buffer);
   const { width, height } = image.bitmap;
-  const safeSliceHeight = clamp(Math.floor(Number(sliceHeight) || 1800), 200, 4000);
+
+  let boundaries = [];
+  if (Array.isArray(slicePoints) && slicePoints.length > 0) {
+    const validPcts = slicePoints
+      .map(Number)
+      .filter((p) => typeof p === "number" && !isNaN(p) && p > 0 && p < 100)
+      .sort((a, b) => a - b);
+    boundaries = [0, ...validPcts.map((p) => Math.round((p / 100) * height)), height];
+  } else {
+    const safeSliceHeight = clamp(Math.floor(Number(sliceHeight) || 1800), 200, 4000);
+    for (let top = 0; top < height; top += safeSliceHeight) {
+      boundaries.push(top);
+    }
+    if (boundaries[boundaries.length - 1] !== height) {
+      boundaries.push(height);
+    }
+  }
 
   const slices = [];
-  for (let top = 0; top < height; top += safeSliceHeight) {
-    const cropHeight = Math.min(safeSliceHeight, height - top);
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const top = boundaries[i];
+    const cropHeight = boundaries[i + 1] - top;
+    if (cropHeight < 5) continue;
     const cropped = image.clone().crop(0, top, width, cropHeight);
     const sliceBuffer = await cropped.getBufferAsync(Jimp.MIME_PNG);
     slices.push({

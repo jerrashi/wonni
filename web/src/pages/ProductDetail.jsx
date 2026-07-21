@@ -619,55 +619,76 @@ function SplitEditor({ image, productId, onSave, onCancel, saving, onBusyChange 
       return;
     }
 
-    setStatus("Loading image…");
+    setStatus("Splitting image…");
     setUploading(true);
     onBusyChange?.(true);
     try {
-      // Load the full-resolution image once
-      let img;
+      // Step 1: Try fast client-side canvas slicing
+      let clientSucceeded = false;
+      const results = [];
       try {
-        img = await new Promise((res, rej) => {
-          const el = new Image();
-          el.crossOrigin = "anonymous";
-          el.onload = () => res(el);
-          el.onerror = rej;
-          el.src = image.url;
-        });
-      } catch {
-        setStatus("Failed to load image.");
+        let img = imgRef.current;
+        if (!img || !img.complete || !img.naturalWidth) {
+          img = await new Promise((res, rej) => {
+            const el = new Image();
+            el.crossOrigin = "anonymous";
+            el.onload = () => res(el);
+            el.onerror = rej;
+            el.src = image.url;
+          });
+        }
+
+        const W = img.naturalWidth;
+        const H = img.naturalHeight;
+        const boundaries = [0, ...lines, 100].map((p) => Math.round((p / 100) * H));
+
+        for (let i = 0; i < boundaries.length - 1; i++) {
+          const y0 = boundaries[i];
+          const y1 = boundaries[i + 1];
+          const sliceH = y1 - y0;
+          if (sliceH < 5) continue;
+
+          const offscreen = document.createElement("canvas");
+          offscreen.width = W;
+          offscreen.height = sliceH;
+          offscreen.getContext("2d").drawImage(img, 0, y0, W, sliceH, 0, 0, W, sliceH);
+
+          setStatus(`Uploading slice ${i + 1} of ${boundaries.length - 1}…`);
+          const blob = await new Promise((res, rej) => {
+            offscreen.toBlob((b) => (b ? res(b) : rej(new Error("Canvas blob error"))), "image/jpeg", 0.92);
+          });
+          const url = await uploadImageBlob(uid, productId, blob, `-split-${i}`);
+          results.push({ url, width: W, height: sliceH, kind: "split" });
+        }
+        clientSucceeded = true;
+      } catch (clientErr) {
+        console.warn("Client canvas split failed (likely CORS), switching to Cloud Function fallback:", clientErr);
+      }
+
+      if (clientSucceeded && results.length > 0) {
+        setStatus("");
+        await onSave(results);
         return;
       }
 
-      const W = img.naturalWidth;
-      const H = img.naturalHeight;
-      // Build boundary list: 0 → each line pct → 100
-      const boundaries = [0, ...lines, 100].map((p) => Math.round((p / 100) * H));
-      const results = [];
+      // Step 2: Fallback to Cloud Function server-side split (bypasses CORS)
+      setStatus("Splitting image via Cloud Function…");
+      const res = await callFunction("splitProductImage")({
+        productId,
+        imageUrl: image.url,
+        slicePoints: lines,
+      });
 
-      for (let i = 0; i < boundaries.length - 1; i++) {
-        const y0 = boundaries[i];
-        const y1 = boundaries[i + 1];
-        const sliceH = y1 - y0;
-        if (sliceH < 5) continue;
-
-        const offscreen = document.createElement("canvas");
-        offscreen.width = W;
-        offscreen.height = sliceH;
-        offscreen.getContext("2d").drawImage(img, 0, y0, W, sliceH, 0, 0, W, sliceH);
-
-        setStatus(`Uploading slice ${i + 1} of ${boundaries.length - 1}…`);
-        try {
-          const blob = await new Promise((res) => offscreen.toBlob(res, "image/jpeg", 0.92));
-          const url = await uploadImageBlob(uid, productId, blob, `-split-${i}`);
-          results.push({ url, width: W, height: sliceH, kind: "split" });
-        } catch (err) {
-          setStatus(`Upload failed on slice ${i + 1}: ${err.message}`);
-          return;
-        }
+      const slices = res?.data?.slices ?? [];
+      if (!slices.length) {
+        setStatus("Cloud Function returned no slices.");
+        return;
       }
 
       setStatus("");
-      await onSave(results);
+      await onSave(slices);
+    } catch (err) {
+      setStatus(`Split failed: ${err.message ?? "Unknown error"}`);
     } finally {
       setUploading(false);
       onBusyChange?.(false);
