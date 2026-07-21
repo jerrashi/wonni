@@ -536,6 +536,7 @@ function SplitEditor({ image, productId, onSave, onCancel, saving, onBusyChange 
   // lines: array of percentages (0-100), sorted ascending
   const [lines, setLines] = useState([]);
   const [draggingIndex, setDraggingIndex] = useState(null);
+  const draggingIndexRef = useRef(null);
   const dragJustEndedRef = useRef(false);
   const [status, setStatus] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -560,11 +561,12 @@ function SplitEditor({ image, productId, onSave, onCancel, saving, onBusyChange 
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch (_) {}
+    draggingIndexRef.current = index;
     setDraggingIndex(index);
   }
 
   function handleLinePointerMove(e, index) {
-    if (draggingIndex !== index) return;
+    if (draggingIndexRef.current !== index) return;
     const wrap = wrapRef.current;
     if (!wrap) return;
     const rect = wrap.getBoundingClientRect();
@@ -578,16 +580,17 @@ function SplitEditor({ image, productId, onSave, onCancel, saving, onBusyChange 
   }
 
   function handleLinePointerUp(e, index) {
-    if (draggingIndex === index) {
+    if (draggingIndexRef.current === index) {
       try {
         e.currentTarget.releasePointerCapture(e.pointerId);
       } catch (_) {}
+      draggingIndexRef.current = null;
       setDraggingIndex(null);
       setLines((prev) => [...prev].sort((a, b) => a - b));
       dragJustEndedRef.current = true;
       setTimeout(() => {
         dragJustEndedRef.current = false;
-      }, 120);
+      }, 150);
     }
   }
 
