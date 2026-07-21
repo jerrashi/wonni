@@ -535,13 +535,15 @@ function SplitEditor({ image, productId, onSave, onCancel, saving, onBusyChange 
   const wrapRef = useRef(null);
   // lines: array of percentages (0-100), sorted ascending
   const [lines, setLines] = useState([]);
-  const [dragging, setDragging] = useState(null); // { index, startClientY, startPct }
+  const [draggingIndex, setDraggingIndex] = useState(null);
+  const dragJustEndedRef = useRef(false);
   const [status, setStatus] = useState("");
   const [uploading, setUploading] = useState(false);
 
-  // Add a new line where the user clicked on the image
+  // Add a new line where the user clicked on the image (unless a drag just ended)
   function handleWrapClick(e) {
-    if (e.target.closest(".split-line")) return; // don't add when clicking a line
+    if (dragJustEndedRef.current) return;
+    if (e.target.closest(".split-line")) return; // don't add when clicking a line handle
     const wrap = wrapRef.current;
     if (!wrap) return;
     const rect = wrap.getBoundingClientRect();
@@ -551,30 +553,41 @@ function SplitEditor({ image, productId, onSave, onCancel, saving, onBusyChange 
     setLines((prev) => [...prev, pct].sort((a, b) => a - b));
   }
 
-  function startDrag(e, index) {
+  function handleLinePointerDown(e, index) {
+    if (e.target.closest(".split-line-delete")) return;
     e.stopPropagation();
     e.preventDefault();
-    setDragging({ index, startClientY: e.clientY, startPct: lines[index] });
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch (_) {}
+    setDraggingIndex(index);
   }
 
-  function onMouseMove(e) {
-    if (!dragging) return;
+  function handleLinePointerMove(e, index) {
+    if (draggingIndex !== index) return;
     const wrap = wrapRef.current;
     if (!wrap) return;
-    const dy = e.clientY - dragging.startClientY;
-    const dpct = (dy / wrap.scrollHeight) * 100;
-    const newPct = Math.max(1, Math.min(99, dragging.startPct + dpct));
+    const rect = wrap.getBoundingClientRect();
+    const pointerY = e.clientY - rect.top + wrap.scrollTop;
+    const pct = Math.max(1, Math.min(99, (pointerY / wrap.scrollHeight) * 100));
     setLines((prev) => {
       const next = [...prev];
-      next[dragging.index] = newPct;
-      return next; // don't sort mid-drag so index stays stable
+      next[index] = pct;
+      return next;
     });
   }
 
-  function stopDrag() {
-    if (dragging) {
+  function handleLinePointerUp(e, index) {
+    if (draggingIndex === index) {
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch (_) {}
+      setDraggingIndex(null);
       setLines((prev) => [...prev].sort((a, b) => a - b));
-      setDragging(null);
+      dragJustEndedRef.current = true;
+      setTimeout(() => {
+        dragJustEndedRef.current = false;
+      }, 120);
     }
   }
 
@@ -659,10 +672,7 @@ function SplitEditor({ image, productId, onSave, onCancel, saving, onBusyChange 
         ref={wrapRef}
         className="split-editor-wrap"
         onClick={handleWrapClick}
-        onMouseMove={onMouseMove}
-        onMouseUp={stopDrag}
-        onMouseLeave={stopDrag}
-        style={{ cursor: dragging ? "ns-resize" : "crosshair" }}
+        style={{ cursor: draggingIndex !== null ? "ns-resize" : "crosshair" }}
       >
         <img src={image.url} alt="split preview" className="split-editor-img" draggable={false} />
 
@@ -681,9 +691,12 @@ function SplitEditor({ image, productId, onSave, onCancel, saving, onBusyChange 
         {lines.map((pct, index) => (
           <div
             key={`line-${index}`}
-            className={`split-line${dragging?.index === index ? " split-line-dragging" : ""}`}
+            className={`split-line${draggingIndex === index ? " split-line-dragging" : ""}`}
             style={{ top: `${pct}%` }}
-            onMouseDown={(e) => startDrag(e, index)}
+            onPointerDown={(e) => handleLinePointerDown(e, index)}
+            onPointerMove={(e) => handleLinePointerMove(e, index)}
+            onPointerUp={(e) => handleLinePointerUp(e, index)}
+            onPointerCancel={(e) => handleLinePointerUp(e, index)}
             onClick={(e) => e.stopPropagation()}
           >
             <span className="split-line-tag">✂ {index + 1}</span>
@@ -698,6 +711,7 @@ function SplitEditor({ image, productId, onSave, onCancel, saving, onBusyChange 
           </div>
         ))}
       </div>
+
 
       {status && <div className="img-editor-status">{status}</div>}
 
