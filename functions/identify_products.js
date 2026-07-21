@@ -2,7 +2,7 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-const { downloadBuffer } = require("./product_media");
+const { downloadBuffer, isOwner, normalizeImageUrl } = require("./product_media");
 
 const GEMINI_MODEL = "gemini-1.5-flash";
 
@@ -17,14 +17,6 @@ Return ONLY valid JSON with this exact structure — no markdown, no explanation
 }
 Coordinates are normalised integers from 0 to 1000 (0 = top/left edge, 1000 = bottom/right edge).
 Include all clearly visible products. Label each with a short descriptive name (e.g. "T-shirt", "Keychain", "Hoodie").`;
-
-function isOwner(product, uid) {
-  return product?.userId && product.userId === uid;
-}
-
-function normalizeImageUrl(entry) {
-  return typeof entry === "string" ? entry : entry?.url ?? "";
-}
 
 exports.identifyProductsInImage = onCall(
   { timeoutSeconds: 60, memory: "512MiB" },
@@ -91,7 +83,9 @@ exports.identifyProductsInImage = onCall(
         return (
           Array.isArray(b) &&
           b.length === 4 &&
-          b.every((v) => typeof v === "number" && v >= 0 && v <= 1000)
+          b.every((v) => typeof v === "number" && v >= 0 && v <= 1000) &&
+          b[0] < b[2] && // ymin < ymax
+          b[1] < b[3]    // xmin < xmax
         );
       })
       .map((obj, i) => ({
