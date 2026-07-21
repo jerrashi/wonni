@@ -1,12 +1,15 @@
 rules_version = '2';
 
-// Product images are written only by Cloud Functions (admin SDK bypasses rules).
-// Clients get public read on the dropship folder, nothing else.
+// Cloud Functions (admin SDK) bypass these rules.
+// Authenticated clients may read all product images and write only
+// to their own folder (dropship/{their uid}/...).
 service firebase.storage {
   match /b/{bucket}/o {
-    match /dropship/{allPaths=**} {
+    match /dropship/{userId}/{allPaths=**} {
+      // Any signed-in user can read product images (they're effectively public)
       allow read: if true;
-      allow write: if false;
+      // Only the owning user can upload to their own folder
+      allow write: if request.auth != null && request.auth.uid == userId;
     }
     match /{allPaths=**} {
       allow read, write: if false;

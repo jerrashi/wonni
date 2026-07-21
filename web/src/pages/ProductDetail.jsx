@@ -48,6 +48,43 @@ function moveItem(list, from, to) {
   return next;
 }
 
+function isTallImage(image) {
+  return typeof image?.height === "number" && typeof image?.width === "number"
+    ? image.height / image.width > 1.6
+    : false;
+}
+
+// Shared drag/resize-box mechanics used by CropEditor and IdentifyEditor.
+function canvasPos(canvasEl, e) {
+  const rect = canvasEl.getBoundingClientRect();
+  const scaleX = canvasEl.width / rect.width;
+  const scaleY = canvasEl.height / rect.height;
+  return { px: (e.clientX - rect.left) * scaleX, py: (e.clientY - rect.top) * scaleY };
+}
+
+// Hit-test corner handles / body of a single rect { x, y, w, h } in canvas px.
+function hitTestHandle(rect, px, py, hs = 14) {
+  if (!rect) return null;
+  const { x, y, w, h } = rect;
+  const corners = { tl: [x, y], tr: [x + w, y], bl: [x, y + h], br: [x + w, y + h] };
+  for (const [name, [cx, cy]] of Object.entries(corners)) {
+    if (Math.abs(px - cx) < hs && Math.abs(py - cy) < hs) return name;
+  }
+  if (px > x && px < x + w && py > y && py < y + h) return "move";
+  return null;
+}
+
+// Apply a drag delta to an initial rect based on which handle is being dragged.
+function applyHandleDelta(initRect, handle, dx, dy) {
+  if (handle === "move") return { ...initRect, x: initRect.x + dx, y: initRect.y + dy };
+  const next = { ...initRect };
+  if (handle.includes("r")) next.w = initRect.w + dx;
+  if (handle.includes("l")) { next.x = initRect.x + dx; next.w = initRect.w - dx; }
+  if (handle.includes("b")) next.h = initRect.h + dy;
+  if (handle.includes("t")) { next.y = initRect.y + dy; next.h = initRect.h - dy; }
+  return next;
+}
+
 // Draw an image from a URL onto an offscreen canvas and return the canvas
 function loadImageOntoCanvas(url, targetWidth, targetHeight) {
   return new Promise((resolve, reject) => {
@@ -69,12 +106,13 @@ function loadImageOntoCanvas(url, targetWidth, targetHeight) {
 
 // ─── CropEditor ───────────────────────────────────────────────────────────────
 
-function CropEditor({ image, productId, onSave, onCancel, saving }) {
+function CropEditor({ image, productId, onSave, onCancel, saving, onBusyChange }) {
   const canvasRef = useRef(null);
   const [sel, setSel] = useState(null);       // { x, y, w, h } in canvas px
   const [dragging, setDragging] = useState(null); // { startX, startY, initSel, handle }
   const [naturalSize, setNaturalSize] = useState(null);
   const [status, setStatus] = useState("");
+  const [uploading, setUploading] = useState(false);
 
   // Draw the image + selection overlay
   const draw = useCallback(() => {
@@ -145,38 +183,18 @@ function CropEditor({ image, productId, onSave, onCancel, saving }) {
     return { x, y, w, h };
   }
 
-  function getHandle(px, py) {
-    if (!sel) return null;
-    const { x, y, w, h } = sel;
-    const corners = { tl: [x, y], tr: [x + w, y], bl: [x, y + h], br: [x + w, y + h] };
-    const hs = 14;
-    for (const [name, [cx, cy]] of Object.entries(corners)) {
-      if (Math.abs(px - cx) < hs && Math.abs(py - cy) < hs) return name;
-    }
-    if (px > x && px < x + w && py > y && py < y + h) return "move";
-    return "new";
-  }
-
-  function canvasPos(e) {
-    const rect = canvasRef.current.getBoundingClientRect();
-    const scaleX = canvasRef.current.width / rect.width;
-    const scaleY = canvasRef.current.height / rect.height;
-    return { px: (e.clientX - rect.left) * scaleX, py: (e.clientY - rect.top) * scaleY };
-  }
-
   function onMouseDown(e) {
-    const { px, py } = canvasPos(e);
-    const handle = getHandle(px, py);
+    const { px, py } = canvasPos(canvasRef.current, e);
+    const handle = hitTestHandle(sel, px, py) ?? "new";
     setDragging({ startX: px, startY: py, initSel: sel ? { ...sel } : null, handle });
   }
 
   function onMouseMove(e) {
     if (!dragging) return;
     const canvas = canvasRef.current;
-    const { px, py } = canvasPos(e);
+    const { px, py } = canvasPos(canvas, e);
     const dx = px - dragging.startX;
     const dy = py - dragging.startY;
-    const is = dragging.initSel;
 
     let next;
     if (dragging.handle === "new") {
@@ -185,14 +203,8 @@ function CropEditor({ image, productId, onSave, onCancel, saving }) {
       const w = Math.abs(px - dragging.startX);
       const h = Math.abs(py - dragging.startY);
       next = { x, y, w, h };
-    } else if (dragging.handle === "move") {
-      next = { ...is, x: is.x + dx, y: is.y + dy };
     } else {
-      next = { ...is };
-      if (dragging.handle.includes("r")) { next.w = is.w + dx; }
-      if (dragging.handle.includes("l")) { next.x = is.x + dx; next.w = is.w - dx; }
-      if (dragging.handle.includes("b")) { next.h = is.h + dy; }
-      if (dragging.handle.includes("t")) { next.y = is.y + dy; next.h = is.h - dy; }
+      next = applyHandleDelta(dragging.initSel, dragging.handle, dx, dy);
     }
     setSel(clampSel(next, canvas.width, canvas.height));
   }
@@ -216,14 +228,24 @@ function CropEditor({ image, productId, onSave, onCancel, saving }) {
     const img = canvas._img;
     ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
 
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      setStatus("You're signed out — please refresh and try again.");
+      return;
+    }
+
     setStatus("Uploading…");
+    setUploading(true);
+    onBusyChange?.(true);
     try {
       const blob = await new Promise((res) => offscreen.toBlob(res, "image/jpeg", 0.92));
-      const uid = auth.currentUser?.uid;
       const url = await uploadImageBlob(uid, productId, blob, "-crop");
       await onSave({ url, width: srcW, height: srcH, kind: "crop" });
     } catch (err) {
       setStatus(err.message ?? "Upload failed.");
+    } finally {
+      setUploading(false);
+      onBusyChange?.(false);
     }
   }
 
@@ -245,10 +267,10 @@ function CropEditor({ image, productId, onSave, onCancel, saving }) {
       </div>
       {status && <div className="img-editor-status">{status}</div>}
       <div className="img-edit-popover-actions">
-        <button className="btn btn-primary" onClick={applyCrop} disabled={saving || !sel}>
+        <button className="btn btn-primary" onClick={applyCrop} disabled={saving || uploading || !sel}>
           Apply crop
         </button>
-        <button className="btn btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn btn-ghost" onClick={onCancel} disabled={uploading}>Cancel</button>
       </div>
     </div>
   );
@@ -258,13 +280,14 @@ function CropEditor({ image, productId, onSave, onCancel, saving }) {
 
 const BOX_COLORS = ["#2dd4bf", "#fbbf24", "#f472b6", "#60a5fa", "#a78bfa", "#34d399"];
 
-function IdentifyEditor({ image, productId, onSave, onCancel, saving }) {
+function IdentifyEditor({ image, productId, onSave, onCancel, saving, onBusyChange }) {
   const canvasRef = useRef(null);
   const [boxes, setBoxes] = useState(null);   // null = loading, [] = none found
   const [loadError, setLoadError] = useState("");
   const [naturalSize, setNaturalSize] = useState(null);
   const [dragging, setDragging] = useState(null); // { boxId, handle, startX, startY, initBox }
   const [status, setStatus] = useState("");
+  const [uploading, setUploading] = useState(false);
 
   // Call Cloud Function on mount
   useEffect(() => {
@@ -337,23 +360,11 @@ function IdentifyEditor({ image, productId, onSave, onCancel, saving }) {
 
   useEffect(() => { draw(); }, [draw]);
 
-  function canvasPos(e) {
-    const rect = canvasRef.current.getBoundingClientRect();
-    const canvas = canvasRef.current;
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    return { px: (e.clientX - rect.left) * scaleX, py: (e.clientY - rect.top) * scaleY };
-  }
-
   function getBoxHandle(px, py, cw, ch) {
-    const hs = 14;
     for (let i = (boxes?.length ?? 0) - 1; i >= 0; i--) {
-      const { x, y, w, h } = boxToPx(boxes[i].box, cw, ch);
-      const corners = { tl: [x, y], tr: [x + w, y], bl: [x, y + h], br: [x + w, y + h] };
-      for (const [name, [cx, cy]] of Object.entries(corners)) {
-        if (Math.abs(px - cx) < hs && Math.abs(py - cy) < hs) return { id: boxes[i].id, handle: name };
-      }
-      if (px > x && px < x + w && py > y && py < y + h) return { id: boxes[i].id, handle: "move" };
+      const rect = boxToPx(boxes[i].box, cw, ch);
+      const handle = hitTestHandle(rect, px, py);
+      if (handle) return { id: boxes[i].id, handle };
     }
     return null;
   }
@@ -369,36 +380,27 @@ function IdentifyEditor({ image, productId, onSave, onCancel, saving }) {
 
   function onMouseDown(e) {
     const canvas = canvasRef.current;
-    const { px, py } = canvasPos(e);
+    const { px, py } = canvasPos(canvas, e);
     const hit = getBoxHandle(px, py, canvas.width, canvas.height);
     if (!hit) return;
     const box = boxes.find((b) => b.id === hit.id);
-    const { x, y, w, h } = boxToPx(box.box, canvas.width, canvas.height);
-    setDragging({ boxId: hit.id, handle: hit.handle, startX: px, startY: py, initRect: { x, y, w, h } });
+    const initRect = boxToPx(box.box, canvas.width, canvas.height);
+    setDragging({ boxId: hit.id, handle: hit.handle, startX: px, startY: py, initRect });
   }
 
   function onMouseMove(e) {
     if (!dragging) return;
     const canvas = canvasRef.current;
-    const { px, py } = canvasPos(e);
+    const { px, py } = canvasPos(canvas, e);
     const dx = px - dragging.startX;
     const dy = py - dragging.startY;
-    const { x: ix, y: iy, w: iw, h: ih } = dragging.initRect;
-    let nx = ix, ny = iy, nw = iw, nh = ih;
-
-    if (dragging.handle === "move") { nx = ix + dx; ny = iy + dy; }
-    else {
-      if (dragging.handle.includes("r")) nw = iw + dx;
-      if (dragging.handle.includes("l")) { nx = ix + dx; nw = iw - dx; }
-      if (dragging.handle.includes("b")) nh = ih + dy;
-      if (dragging.handle.includes("t")) { ny = iy + dy; nh = ih - dy; }
-    }
+    const next = applyHandleDelta(dragging.initRect, dragging.handle, dx, dy);
 
     const cw = canvas.width, ch = canvas.height;
-    nx = Math.max(0, Math.min(nx, cw - 10));
-    ny = Math.max(0, Math.min(ny, ch - 10));
-    nw = Math.max(10, Math.min(nw, cw - nx));
-    nh = Math.max(10, Math.min(nh, ch - ny));
+    const nx = Math.max(0, Math.min(next.x, cw - 10));
+    const ny = Math.max(0, Math.min(next.y, ch - 10));
+    const nw = Math.max(10, Math.min(next.w, cw - nx));
+    const nh = Math.max(10, Math.min(next.h, ch - ny));
 
     setBoxes((prev) => prev.map((b) =>
       b.id === dragging.boxId
@@ -415,35 +417,47 @@ function IdentifyEditor({ image, productId, onSave, onCancel, saving }) {
 
   async function confirmBoxes() {
     if (!boxes?.length || !naturalSize) return;
-    setStatus("Cropping and uploading…");
     const uid = auth.currentUser?.uid;
-    const results = [];
-
-    for (let i = 0; i < boxes.length; i++) {
-      const box = boxes[i];
-      const [ymin, xmin, ymax, xmax] = box.box;
-      const srcX = Math.round((xmin / 1000) * naturalSize.w);
-      const srcY = Math.round((ymin / 1000) * naturalSize.h);
-      const srcW = Math.round(((xmax - xmin) / 1000) * naturalSize.w);
-      const srcH = Math.round(((ymax - ymin) / 1000) * naturalSize.h);
-
-      try {
-        const { canvas } = await loadImageOntoCanvas(image.url, naturalSize.w, naturalSize.h);
-        const offscreen = document.createElement("canvas");
-        offscreen.width = srcW;
-        offscreen.height = srcH;
-        offscreen.getContext("2d").drawImage(canvas, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
-        const blob = await new Promise((res) => offscreen.toBlob(res, "image/jpeg", 0.92));
-        const url = await uploadImageBlob(uid, productId, blob, `-identify-${i}`);
-        results.push({ url, width: srcW, height: srcH, kind: "identified", label: box.label });
-      } catch (err) {
-        setStatus(`Failed on "${box.label}": ${err.message}`);
-        return;
-      }
+    if (!uid) {
+      setStatus("You're signed out — please refresh and try again.");
+      return;
     }
 
-    setStatus("");
-    await onSave(results);
+    setStatus("Cropping and uploading…");
+    setUploading(true);
+    onBusyChange?.(true);
+    const results = [];
+
+    try {
+      for (let i = 0; i < boxes.length; i++) {
+        const box = boxes[i];
+        const [ymin, xmin, ymax, xmax] = box.box;
+        const srcX = Math.round((xmin / 1000) * naturalSize.w);
+        const srcY = Math.round((ymin / 1000) * naturalSize.h);
+        const srcW = Math.round(((xmax - xmin) / 1000) * naturalSize.w);
+        const srcH = Math.round(((ymax - ymin) / 1000) * naturalSize.h);
+
+        try {
+          const { canvas } = await loadImageOntoCanvas(image.url, naturalSize.w, naturalSize.h);
+          const offscreen = document.createElement("canvas");
+          offscreen.width = srcW;
+          offscreen.height = srcH;
+          offscreen.getContext("2d").drawImage(canvas, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
+          const blob = await new Promise((res) => offscreen.toBlob(res, "image/jpeg", 0.92));
+          const url = await uploadImageBlob(uid, productId, blob, `-identify-${i}`);
+          results.push({ url, width: srcW, height: srcH, kind: "identified", label: box.label });
+        } catch (err) {
+          setStatus(`Failed on "${box.label}": ${err.message}`);
+          return;
+        }
+      }
+
+      setStatus("");
+      await onSave(results);
+    } finally {
+      setUploading(false);
+      onBusyChange?.(false);
+    }
   }
 
   const canvasSize = { width: 600, height: 480 };
@@ -509,49 +523,186 @@ function IdentifyEditor({ image, productId, onSave, onCancel, saving }) {
       {status && <div className="img-editor-status">{status}</div>}
       <div className="img-edit-popover-actions">
         {boxes?.length > 0 && (
-          <button className="btn btn-primary" onClick={confirmBoxes} disabled={saving || !boxes.length}>
+          <button className="btn btn-primary" onClick={confirmBoxes} disabled={saving || uploading || !boxes.length}>
             {saving ? "Saving…" : `Confirm & crop ${boxes.length} image${boxes.length === 1 ? "" : "s"}`}
           </button>
         )}
-        <button className="btn btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn btn-ghost" onClick={onCancel} disabled={uploading}>Cancel</button>
       </div>
     </div>
   );
 }
 
-// ─── SplitPreview ─────────────────────────────────────────────────────────────
+// ─── SplitEditor ──────────────────────────────────────────────────────────────
+// Click the image to add a cut line. Drag lines to reposition. × to remove.
+// On confirm, slices the full-resolution image client-side at each line.
 
-function SplitPreview({ image, onConfirm, onCancel, saving }) {
-  const isTall = typeof image.height === "number" && typeof image.width === "number"
-    ? image.height / image.width > 1.6 : false;
-  const sliceHeight = image.height ? Math.max(1200, Math.min(1800, Math.floor(image.height / 2))) : 1800;
-  const sliceCount = image.height ? Math.ceil(image.height / sliceHeight) : "?";
+function SplitEditor({ image, productId, onSave, onCancel, saving }) {
+  const wrapRef = useRef(null);
+  // lines: array of percentages (0-100), sorted ascending
+  const [lines, setLines] = useState([]);
+  const [dragging, setDragging] = useState(null); // { index, startClientY, startPct }
+  const [status, setStatus] = useState("");
 
-  // Visual: draw cut lines as horizontal dashes overlaid on the image
-  const lines = [];
-  if (typeof image.height === "number" && image.height > 0) {
-    for (let y = sliceHeight; y < image.height; y += sliceHeight) {
-      lines.push(((y / image.height) * 100).toFixed(1));
+  // Add a new line where the user clicked on the image
+  function handleWrapClick(e) {
+    if (e.target.closest(".split-line")) return; // don't add when clicking a line
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const rect = wrap.getBoundingClientRect();
+    const scrollTop = wrap.scrollTop;
+    const clickY = e.clientY - rect.top + scrollTop;
+    const pct = Math.max(1, Math.min(99, (clickY / wrap.scrollHeight) * 100));
+    setLines((prev) => [...prev, pct].sort((a, b) => a - b));
+  }
+
+  function startDrag(e, index) {
+    e.stopPropagation();
+    e.preventDefault();
+    setDragging({ index, startClientY: e.clientY, startPct: lines[index] });
+  }
+
+  function onMouseMove(e) {
+    if (!dragging) return;
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const dy = e.clientY - dragging.startClientY;
+    const dpct = (dy / wrap.scrollHeight) * 100;
+    const newPct = Math.max(1, Math.min(99, dragging.startPct + dpct));
+    setLines((prev) => {
+      const next = [...prev];
+      next[dragging.index] = newPct;
+      return next; // don't sort mid-drag so index stays stable
+    });
+  }
+
+  function stopDrag() {
+    if (dragging) {
+      setLines((prev) => [...prev].sort((a, b) => a - b));
+      setDragging(null);
     }
   }
+
+  function deleteLine(index) {
+    setLines((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  async function confirmSplit() {
+    if (!image?.url || !lines.length) return;
+    setStatus("Loading image…");
+    const uid = auth.currentUser?.uid;
+
+    // Load the full-resolution image once
+    let img;
+    try {
+      img = await new Promise((res, rej) => {
+        const el = new Image();
+        el.crossOrigin = "anonymous";
+        el.onload = () => res(el);
+        el.onerror = rej;
+        el.src = image.url;
+      });
+    } catch {
+      setStatus("Failed to load image.");
+      return;
+    }
+
+    const W = img.naturalWidth;
+    const H = img.naturalHeight;
+    // Build boundary list: 0 → each line pct → 100
+    const boundaries = [0, ...lines, 100].map((p) => Math.round((p / 100) * H));
+    const results = [];
+
+    for (let i = 0; i < boundaries.length - 1; i++) {
+      const y0 = boundaries[i];
+      const y1 = boundaries[i + 1];
+      const sliceH = y1 - y0;
+      if (sliceH < 5) continue;
+
+      const offscreen = document.createElement("canvas");
+      offscreen.width = W;
+      offscreen.height = sliceH;
+      offscreen.getContext("2d").drawImage(img, 0, y0, W, sliceH, 0, 0, W, sliceH);
+
+      setStatus(`Uploading slice ${i + 1} of ${boundaries.length - 1}…`);
+      try {
+        const blob = await new Promise((res) => offscreen.toBlob(res, "image/jpeg", 0.92));
+        const url = await uploadImageBlob(uid, productId, blob, `-split-${i}`);
+        results.push({ url, width: W, height: sliceH, kind: "split" });
+      } catch (err) {
+        setStatus(`Upload failed on slice ${i + 1}: ${err.message}`);
+        return;
+      }
+    }
+
+    setStatus("");
+    await onSave(results);
+  }
+
+  const sliceCount = lines.length + 1;
 
   return (
     <div className="img-editor-body">
       <p className="img-editor-hint">
-        {isTall
-          ? `This image is tall (${image.width}×${image.height}px). It will be cut into ${sliceCount} slices of ~${sliceHeight}px each.`
-          : `Split will cut this image horizontally into equal slices (~${sliceHeight}px each).`}
+        Click anywhere on the image to add a cut line.
+        Drag a line to reposition it. Click × to remove it.
+        {lines.length > 0 && ` ${sliceCount} slices.`}
       </p>
-      <div className="split-preview-wrap">
-        <img src={image.url} alt="preview" className="split-preview-img" />
-        {lines.map((pct) => (
-          <div key={pct} className="split-cut-line" style={{ top: `${pct}%` }} />
+
+      <div
+        ref={wrapRef}
+        className="split-editor-wrap"
+        onClick={handleWrapClick}
+        onMouseMove={onMouseMove}
+        onMouseUp={stopDrag}
+        onMouseLeave={stopDrag}
+        style={{ cursor: dragging ? "ns-resize" : "crosshair" }}
+      >
+        <img src={image.url} alt="split preview" className="split-editor-img" draggable={false} />
+
+        {/* Slice number badges between lines */}
+        {[0, ...lines, 100].map((pct, i, arr) => {
+          if (i === arr.length - 1) return null;
+          const midPct = (pct + arr[i + 1]) / 2;
+          return (
+            <div key={`badge-${i}`} className="split-slice-badge" style={{ top: `${midPct}%` }}>
+              {i + 1}
+            </div>
+          );
+        })}
+
+        {/* Draggable cut lines */}
+        {lines.map((pct, index) => (
+          <div
+            key={`line-${index}`}
+            className={`split-line${dragging?.index === index ? " split-line-dragging" : ""}`}
+            style={{ top: `${pct}%` }}
+            onMouseDown={(e) => startDrag(e, index)}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span className="split-line-tag">✂ {index + 1}</span>
+            <span className="split-line-pct">{pct.toFixed(0)}%</span>
+            <button
+              className="split-line-delete"
+              onClick={(e) => { e.stopPropagation(); deleteLine(index); }}
+              title="Remove cut line"
+            >
+              ×
+            </button>
+          </div>
         ))}
       </div>
+
+      {status && <div className="img-editor-status">{status}</div>}
+
       <div className="img-edit-popover-actions">
-        <button className="btn btn-primary" onClick={onConfirm} disabled={saving}>
-          {saving ? "Splitting…" : `✂ Split into ${sliceCount} images`}
-        </button>
+        {lines.length > 0 ? (
+          <button className="btn btn-primary" onClick={confirmSplit} disabled={saving}>
+            {saving ? "Splitting…" : `✂ Split into ${sliceCount} images`}
+          </button>
+        ) : (
+          <span className="img-editor-hint">Add at least one cut line to split.</span>
+        )}
         <button className="btn btn-ghost" onClick={onCancel}>Cancel</button>
       </div>
     </div>
@@ -622,36 +773,37 @@ function ImageStrip({ images, activeIndex, onHover, onDrop, onEdit, savingMedia 
 // ─── ImageEditModal ────────────────────────────────────────────────────────────
 // mode: "menu" | "crop" | "identify" | "split"
 
-function ImageEditModal({ image, index, total, productId, onClose, onSplit, onDelete, onSetCover, onSaveCrop, onSaveIdentify, saving }) {
+function ImageEditModal({ image, index, total, productId, onClose, onDelete, onSetCover, onSaveCrop, onSaveIdentify, onSaveSplit, saving }) {
   const [mode, setMode] = useState("menu");
+  const [busy, setBusy] = useState(false); // true while an editor has an upload in flight
   const ref = useRef(null);
 
-  // Close on outside click only in menu mode (editors handle their own cancel)
+  // Close on outside click in any mode, unless an upload is in flight.
   useEffect(() => {
-    if (mode !== "menu") return;
+    if (busy) return;
     function handler(e) {
       if (ref.current && !ref.current.contains(e.target)) onClose();
     }
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [mode, onClose]);
+  }, [busy, onClose]);
 
   function header(title) {
     return (
       <div className="img-edit-popover-header">
         {mode !== "menu" && (
-          <button className="btn btn-ghost" style={{ padding: "4px 10px", fontSize: 13 }} onClick={() => setMode("menu")}>
+          <button className="btn btn-ghost" style={{ padding: "4px 10px", fontSize: 13 }} onClick={() => setMode("menu")} disabled={busy}>
             ← Back
           </button>
         )}
         <span style={{ fontWeight: 600, fontSize: 14 }}>{title}</span>
-        <button className="btn btn-ghost" style={{ padding: "4px 10px", fontSize: 13, marginLeft: "auto" }} onClick={onClose}>✕</button>
+        <button className="btn btn-ghost" style={{ padding: "4px 10px", fontSize: 13, marginLeft: "auto" }} onClick={onClose} disabled={busy}>✕</button>
       </div>
     );
   }
 
   return (
-    <div className="modal-overlay" onClick={mode === "menu" ? onClose : undefined}>
+    <div className="modal-overlay" onClick={busy ? undefined : onClose}>
       <div
         ref={ref}
         className={`img-edit-popover${mode !== "menu" ? " img-edit-popover-wide" : ""}`}
@@ -687,6 +839,7 @@ function ImageEditModal({ image, index, total, productId, onClose, onSplit, onDe
               productId={productId}
               onSave={onSaveCrop}
               onCancel={() => setMode("menu")}
+              onBusyChange={setBusy}
               saving={saving}
             />
           </>
@@ -700,6 +853,7 @@ function ImageEditModal({ image, index, total, productId, onClose, onSplit, onDe
               productId={productId}
               onSave={onSaveIdentify}
               onCancel={() => setMode("menu")}
+              onBusyChange={setBusy}
               saving={saving}
             />
           </>
@@ -708,9 +862,10 @@ function ImageEditModal({ image, index, total, productId, onClose, onSplit, onDe
         {mode === "split" && (
           <>
             {header("Split image")}
-            <SplitPreview
+            <SplitEditor
               image={image}
-              onConfirm={onSplit}
+              productId={productId}
+              onSave={onSaveSplit}
               onCancel={() => setMode("menu")}
               saving={saving}
             />
@@ -896,6 +1051,27 @@ export default function ProductDetail() {
     setEditingIndex(null);
   }
 
+  // Called by SplitEditor: replace original image with all slices
+  async function handleSaveSplit(results) {
+    const index = editingIndex;
+    if (index === null) return;
+    const newImages = results.map((r, i) => ({
+      id: `${r.url}-split-${i}`,
+      url: r.url,
+      sourceUrl: images[index]?.url ?? r.url,
+      width: r.width ?? null,
+      height: r.height ?? null,
+      kind: "split",
+    }));
+    const nextImages = [
+      ...images.slice(0, index),
+      ...newImages,
+      ...images.slice(index + 1),
+    ];
+    await saveMedia(nextImages);
+    setEditingIndex(null);
+  }
+
   return (
     <Layout>
       <div className="page-header">
@@ -1066,11 +1242,11 @@ export default function ProductDetail() {
           total={images.length}
           productId={productId}
           onClose={() => setEditingIndex(null)}
-          onSplit={() => handleSplitImage(editingIndex)}
           onDelete={() => handleDeleteImage(editingIndex)}
           onSetCover={() => handleSetCover(editingIndex)}
           onSaveCrop={handleSaveCrop}
           onSaveIdentify={handleSaveIdentify}
+          onSaveSplit={handleSaveSplit}
           saving={savingMedia}
         />
       )}

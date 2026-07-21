@@ -1,15 +1,13 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 
-const { downloadBuffer, savePublicBuffer, splitImageBuffer } = require("./product_media");
-
-function normalizeImageUrl(entry) {
-  return typeof entry === "string" ? entry : entry?.url ?? "";
-}
-
-function isOwner(product, uid) {
-  return product?.userId && product.userId === uid;
-}
+const {
+  downloadBuffer,
+  savePublicBuffer,
+  splitImageBuffer,
+  isOwner,
+  normalizeImageUrl,
+} = require("./product_media");
 
 exports.splitProductImage = onCall(
   { timeoutSeconds: 120, memory: "512MiB" },

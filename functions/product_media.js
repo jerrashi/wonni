@@ -96,6 +96,14 @@ async function splitImageBuffer(buffer, sliceHeight = 1800) {
   return { width, height, slices };
 }
 
+function isOwner(product, uid) {
+  return product?.userId && product.userId === uid;
+}
+
+function normalizeImageUrl(entry) {
+  return typeof entry === "string" ? entry : entry?.url ?? "";
+}
+
 module.exports = {
   DEFAULT_ALLOWED_IMAGE_HOSTS,
   MAX_IMAGE_BYTES,
@@ -104,4 +112,6 @@ module.exports = {
   publicStorageUrl,
   savePublicBuffer,
   splitImageBuffer,
+  isOwner,
+  normalizeImageUrl,
 };
