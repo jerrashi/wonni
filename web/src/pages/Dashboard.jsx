@@ -137,24 +137,40 @@ function ListModal({ product, onClose, onListed }) {
 // ── Import bar ────────────────────────────────────────────────────────────────
 
 function ImportBar({ onImported }) {
-  const [url, setUrl] = useState("");
+  const [urlText, setUrlText] = useState("");
+  const [isBulk, setIsBulk] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("");
   const [error, setError] = useState("");
 
   async function handleImport() {
-    if (!url.trim()) return;
+    const rawLines = urlText.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+    if (!rawLines.length) return;
+
     setLoading(true);
     setError("");
+    setStatus("Importing…");
+
     try {
-      const trimmed = url.trim();
-      const fn = trimmed.includes("shop.weverse.io")
-        ? "weverseImportProduct"
-        : "aliexpressImportProduct";
-      const result = await callFunction(fn)({ productUrl: trimmed });
-      setUrl("");
-      onImported?.(result.data.productId);
+      if (rawLines.length === 1) {
+        const url = rawLines[0];
+        const fn = url.includes("shop.weverse.io") ? "weverseImportProduct" : "aliexpressImportProduct";
+        const result = await callFunction(fn)({ productUrl: url });
+        setUrlText("");
+        setStatus("");
+        onImported?.(result.data.productId);
+      } else {
+        // Multi-URL batch import via weverseBulkImportProducts
+        const items = rawLines.map((url) => ({ productUrl: url }));
+        const response = await callFunction("weverseBulkImportProducts")({ items });
+        const res = response?.data;
+        setUrlText("");
+        setStatus(`Bulk import complete! ${res?.importedCount ?? 0} imported, ${res?.existingCount ?? 0} already existing.`);
+        onImported?.(res?.productIds?.[0]);
+      }
     } catch (e) {
       setError(e.message ?? "Import failed");
+      setStatus("");
     } finally {
       setLoading(false);
     }
@@ -162,25 +178,53 @@ function ImportBar({ onImported }) {
 
   return (
     <div className="card" style={{ marginBottom: 24 }}>
-      <div style={{ marginBottom: 8, fontSize: 13, color: "var(--muted)" }}>
-        Paste a Weverse Shop or AliExpress product URL to import
-      </div>
-      <div className="input-group">
-        <input
-          className="input"
-          placeholder="https://shop.weverse.io/en/shop/USD/artists/.../sales/..."
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleImport()}
-        />
-        <button className="btn btn-primary" onClick={handleImport} disabled={loading || !url.trim()}>
-          {loading ? "Importing…" : "Import"}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div style={{ fontSize: 13, color: "var(--muted)" }}>
+          {isBulk ? "Paste multiple Weverse or AliExpress URLs (one per line)" : "Paste a Weverse Shop or AliExpress product URL"}
+        </div>
+        <button
+          className="btn btn-ghost"
+          style={{ fontSize: 12, padding: "2px 8px" }}
+          onClick={() => { setIsBulk(!isBulk); setError(""); setStatus(""); }}
+        >
+          {isBulk ? "Switch to single URL" : "Paste multiple URLs"}
         </button>
       </div>
+
+      <div className="input-group" style={{ flexDirection: isBulk ? "column" : "row", gap: 8 }}>
+        {isBulk ? (
+          <textarea
+            className="input"
+            rows={4}
+            placeholder="https://shop.weverse.io/en/shop/USD/artists/1/sales/101&#10;https://shop.weverse.io/en/shop/USD/artists/1/sales/102"
+            value={urlText}
+            onChange={(e) => setUrlText(e.target.value)}
+          />
+        ) : (
+          <input
+            className="input"
+            placeholder="https://shop.weverse.io/en/shop/USD/artists/.../sales/..."
+            value={urlText}
+            onChange={(e) => setUrlText(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleImport()}
+          />
+        )}
+        <button
+          className="btn btn-primary"
+          style={{ alignSelf: isBulk ? "flex-end" : "auto" }}
+          onClick={handleImport}
+          disabled={loading || !urlText.trim()}
+        >
+          {loading ? "Importing…" : isBulk ? "Import All URLs" : "Import"}
+        </button>
+      </div>
+
+      {status && <div style={{ marginTop: 8, fontSize: 13, color: "var(--success)" }}>{status}</div>}
       {error && <div style={{ marginTop: 8, fontSize: 13, color: "var(--danger)" }}>{error}</div>}
     </div>
   );
 }
+
 
 // ── Product card ──────────────────────────────────────────────────────────────
 
