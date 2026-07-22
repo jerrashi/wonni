@@ -45,6 +45,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .catch((e) => sendResponse({ error: e.message }));
     return true; // keep channel open for async response
   }
+  if (message.type === "BULK_IMPORT_PRODUCTS") {
+    handleBulkImport(message.items, message.source ?? "weverse")
+      .then(sendResponse)
+      .catch((e) => sendResponse({ error: e.message }));
+    return true;
+  }
 });
 
 async function handleImport(productData, source) {
@@ -79,4 +85,31 @@ async function handleImport(productData, source) {
   const productId = json?.result?.productId;
   chrome.tabs.create({ url: `${dashboardUrl}/?imported=${productId}` });
   return { productId };
+}
+
+async function handleBulkImport(items, source) {
+  const { idToken } = await chrome.storage.local.get(["idToken"]);
+  const dashboardUrl = await getDashboardUrl();
+  if (!idToken) {
+    chrome.tabs.create({ url: `${dashboardUrl}/login` });
+    throw new Error("Sign in to Wonni Drop first.");
+  }
+
+  const endpoint = `${FUNCTIONS_BASE}/weverseBulkImportProducts`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${idToken}`,
+    },
+    body: JSON.stringify({ data: { items } }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Bulk import failed (${response.status}): ${body}`);
+  }
+
+  const json = await response.json();
+  return json?.result ?? { importedCount: 0 };
 }

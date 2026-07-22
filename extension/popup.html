@@ -4,66 +4,172 @@
   <meta charset="UTF-8" />
   <style>
     body {
-      width: 280px;
-      min-height: 160px;
+      width: 320px;
+      min-height: 200px;
+      max-height: 520px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: #0f0f0f;
       color: #f0f0f0;
       margin: 0;
-      padding: 16px;
+      padding: 14px;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
     }
-    .logo { font-size: 16px; font-weight: 700; color: #ff6b35; margin-bottom: 12px; }
-    .status { font-size: 13px; color: #888; margin-bottom: 16px; }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .logo { font-size: 15px; font-weight: 700; color: #ff6b35; }
+    .status { font-size: 12px; color: #888; margin-bottom: 10px; }
     .status strong { color: #f0f0f0; }
+
     button {
       display: block;
       width: 100%;
-      padding: 10px;
-      margin-bottom: 8px;
+      padding: 9px 12px;
+      margin-bottom: 6px;
       background: #1a1a1a;
       border: 1px solid #2a2a2a;
       border-radius: 6px;
       color: #f0f0f0;
-      font-size: 13px;
+      font-size: 12px;
       cursor: pointer;
-      text-align: left;
+      text-align: center;
       transition: background 0.15s;
     }
     button:hover { background: #2a2a2a; }
     .btn-primary { background: #ff6b35 !important; border-color: #ff6b35; font-weight: 600; }
     .btn-primary:hover { background: #ff8555 !important; }
-    .recent { margin-top: 12px; border-top: 1px solid #2a2a2a; padding-top: 12px; }
-    .recent-title { font-size: 11px; color: #555; text-transform: uppercase; margin-bottom: 8px; }
-    .recent-item { font-size: 12px; color: #888; padding: 4px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .field { margin: 12px 0; }
-    .field label { display: block; font-size: 11px; color: #555; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Bulk items view */
+    .bulk-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 0;
+      font-size: 11px;
+      color: #888;
+      border-bottom: 1px solid #222;
+      margin-bottom: 8px;
+    }
+    .bulk-list {
+      flex: 1;
+      max-height: 260px;
+      overflow-y: auto;
+      margin-bottom: 10px;
+      border: 1px solid #222;
+      border-radius: 6px;
+      background: #141414;
+    }
+    .bulk-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border-bottom: 1px solid #1e1e1e;
+      font-size: 11px;
+    }
+    .bulk-item:last-child { border-bottom: none; }
+    .bulk-item img {
+      width: 32px;
+      height: 32px;
+      border-radius: 4px;
+      object-fit: cover;
+      background: #222;
+    }
+    .bulk-item-info {
+      flex: 1;
+      overflow: hidden;
+    }
+    .bulk-item-title {
+      font-weight: 500;
+      color: #f0f0f0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .bulk-item-meta {
+      font-size: 10px;
+      color: #666;
+    }
+
+    /* Progress bar */
+    .progress-wrap {
+      margin: 8px 0;
+    }
+    .progress-bar-bg {
+      width: 100%;
+      height: 6px;
+      background: #222;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: #ff6b35;
+      transition: width 0.2s;
+    }
+    .progress-text {
+      font-size: 11px;
+      color: #888;
+      margin-top: 4px;
+      text-align: center;
+    }
+
+    .field { margin: 8px 0; }
+    .field label { display: block; font-size: 10px; color: #666; margin-bottom: 3px; text-transform: uppercase; }
     .field input {
       width: 100%;
-      padding: 8px 10px;
-      background: #0f0f0f;
-      border: 1px solid #2a2a2a;
-      border-radius: 6px;
+      padding: 6px 8px;
+      background: #141414;
+      border: 1px solid #222;
+      border-radius: 4px;
       color: #f0f0f0;
-      font-size: 12px;
+      font-size: 11px;
       box-sizing: border-box;
     }
-    .field button { margin-top: 8px; }
   </style>
 </head>
 <body>
-  <div class="logo">Wonni Drop</div>
-  <div class="status" id="status">Loading…</div>
-  <button class="btn-primary" onclick="openDashboard()">Open Dashboard</button>
-  <button id="auth-btn"></button>
-  <div class="field">
+  <div class="header">
+    <div class="logo">Wonni Drop</div>
+    <button id="auth-btn" style="width:auto;padding:3px 8px;margin:0;font-size:10px"></button>
+  </div>
+
+  <div class="status" id="status">Loading page detection…</div>
+
+  <!-- Detected bulk items section -->
+  <div id="bulk-section" style="display:none">
+    <div class="bulk-header">
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+        <input type="checkbox" id="select-all-cb" checked /> Select all
+      </label>
+      <span id="bulk-count-label">0 items</span>
+    </div>
+    <div class="bulk-list" id="bulk-list"></div>
+
+    <div class="progress-wrap" id="progress-wrap" style="display:none">
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="progress-fill"></div>
+      </div>
+      <div class="progress-text" id="progress-text">Importing…</div>
+    </div>
+
+    <button className="btn-primary" id="import-bulk-btn">Import Selected Items</button>
+  </div>
+
+  <button class="btn-primary" id="open-dashboard-btn" style="margin-top:auto">Open Dashboard</button>
+
+  <div class="field" style="margin-top:8px">
     <label for="dashboard-url">Dashboard URL</label>
     <input id="dashboard-url" type="text" placeholder="http://localhost:5173" />
-    <button id="save-dashboard-btn">Save Dashboard URL</button>
   </div>
-  <div class="recent" id="recent-section" style="display:none">
-    <div class="recent-title">Recently Imported</div>
-    <div id="recent-list"></div>
-  </div>
+
   <script src="popup.js"></script>
 </body>
 </html>
