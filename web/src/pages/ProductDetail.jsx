@@ -611,7 +611,7 @@ function SplitEditor({ image, productId, onSave, onCancel, saving, onBusyChange 
     setLines((prev) => prev.filter((_, i) => i !== index));
   }
 
-  async function confirmSplit() {
+  function confirmSplit() {
     if (!image?.url || !lines.length) return;
     const uid = auth.currentUser?.uid;
     if (!uid) {
@@ -619,81 +619,18 @@ function SplitEditor({ image, productId, onSave, onCancel, saving, onBusyChange 
       return;
     }
 
-    setStatus("Splitting image…");
-    setUploading(true);
-    onBusyChange?.(true);
-    try {
-      // Step 1: Try fast client-side canvas slicing
-      let clientSucceeded = false;
-      const results = [];
-      try {
-        let img = imgRef.current;
-        if (!img || !img.complete || !img.naturalWidth) {
-          img = await new Promise((res, rej) => {
-            const el = new Image();
-            el.crossOrigin = "anonymous";
-            el.onload = () => res(el);
-            el.onerror = rej;
-            el.src = image.url;
-          });
-        }
+    // Capture current lines snapshot and image element
+    const currentLines = [...lines];
+    const currentImg = imgRef.current;
 
-        const W = img.naturalWidth;
-        const H = img.naturalHeight;
-        const boundaries = [0, ...lines, 100].map((p) => Math.round((p / 100) * H));
-
-        for (let i = 0; i < boundaries.length - 1; i++) {
-          const y0 = boundaries[i];
-          const y1 = boundaries[i + 1];
-          const sliceH = y1 - y0;
-          if (sliceH < 5) continue;
-
-          const offscreen = document.createElement("canvas");
-          offscreen.width = W;
-          offscreen.height = sliceH;
-          offscreen.getContext("2d").drawImage(img, 0, y0, W, sliceH, 0, 0, W, sliceH);
-
-          setStatus(`Uploading slice ${i + 1} of ${boundaries.length - 1}…`);
-          const blob = await new Promise((res, rej) => {
-            offscreen.toBlob((b) => (b ? res(b) : rej(new Error("Canvas blob error"))), "image/jpeg", 0.92);
-          });
-          const url = await uploadImageBlob(uid, productId, blob, `-split-${i}`);
-          results.push({ url, width: W, height: sliceH, kind: "split" });
-        }
-        clientSucceeded = true;
-      } catch (clientErr) {
-        console.warn("Client canvas split failed (likely CORS), switching to Cloud Function fallback:", clientErr);
-      }
-
-      if (clientSucceeded && results.length > 0) {
-        setStatus("");
-        await onSave(results);
-        return;
-      }
-
-      // Step 2: Fallback to Cloud Function server-side split (bypasses CORS)
-      setStatus("Splitting image via Cloud Function…");
-      const res = await callFunction("splitProductImage")({
-        productId,
-        imageUrl: image.url,
-        slicePoints: lines,
-      });
-
-      const slices = res?.data?.slices ?? [];
-      if (!slices.length) {
-        setStatus("Cloud Function returned no slices.");
-        return;
-      }
-
-      setStatus("");
-      await onSave(slices);
-    } catch (err) {
-      setStatus(`Split failed: ${err.message ?? "Unknown error"}`);
-    } finally {
-      setUploading(false);
-      onBusyChange?.(false);
-    }
+    // Immediately trigger background save callback (closes modal instantly)
+    onSave({
+      lines: currentLines,
+      imgElement: currentImg,
+      imageUrl: image.url,
+    });
   }
+
 
   const sliceCount = lines.length + 1;
 
@@ -1088,26 +1025,106 @@ export default function ProductDetail() {
     setEditingIndex(null);
   }
 
-  // Called by SplitEditor: replace original image with all slices
-  async function handleSaveSplit(results) {
+  const [bgTasks, setBgTasks] = useState([]);
+
+  // Called by SplitEditor: closes modal instantly and executes split in background
+  function handleSaveSplit({ lines, imgElement, imageUrl }) {
     const index = editingIndex;
     if (index === null) return;
-    const newImages = results.map((r, i) => ({
-      id: `${r.url}-split-${i}`,
-      url: r.url,
-      sourceUrl: images[index]?.url ?? r.url,
-      width: r.width ?? null,
-      height: r.height ?? null,
-      kind: "split",
-    }));
-    const nextImages = [
-      ...images.slice(0, index),
-      ...newImages,
-      ...images.slice(index + 1),
-    ];
-    await saveMedia(nextImages);
+    const targetImage = images[index];
+
+    // Close popover modal immediately
     setEditingIndex(null);
+
+    const taskId = `split-${Date.now()}`;
+    setBgTasks((prev) => [...prev, { id: taskId, message: "Splitting image in background…" }]);
+
+    // Execute split pipeline in background promise
+    (async () => {
+      const uid = auth.currentUser?.uid;
+      let results = [];
+      let clientSucceeded = false;
+
+      if (uid) {
+        try {
+          let img = imgElement;
+          if (!img || !img.complete || !img.naturalWidth) {
+            img = await new Promise((res, rej) => {
+              const el = new Image();
+              el.crossOrigin = "anonymous";
+              el.onload = () => res(el);
+              el.onerror = rej;
+              el.src = imageUrl;
+            });
+          }
+
+          const W = img.naturalWidth;
+          const H = img.naturalHeight;
+          const boundaries = [0, ...lines, 100].map((p) => Math.round((p / 100) * H));
+
+          for (let i = 0; i < boundaries.length - 1; i++) {
+            const y0 = boundaries[i];
+            const y1 = boundaries[i + 1];
+            const sliceH = y1 - y0;
+            if (sliceH < 5) continue;
+
+            const offscreen = document.createElement("canvas");
+            offscreen.width = W;
+            offscreen.height = sliceH;
+            offscreen.getContext("2d").drawImage(img, 0, y0, W, sliceH, 0, 0, W, sliceH);
+
+            const blob = await new Promise((res, rej) => {
+              offscreen.toBlob((b) => (b ? res(b) : rej(new Error("Canvas blob error"))), "image/jpeg", 0.92);
+            });
+            const url = await uploadImageBlob(uid, productId, blob, `-split-${i}`);
+            results.push({ url, width: W, height: sliceH, kind: "split" });
+          }
+          clientSucceeded = true;
+        } catch (err) {
+          console.warn("Client background split failed, trying Cloud Function fallback:", err);
+        }
+      }
+
+      if (!clientSucceeded || !results.length) {
+        try {
+          const res = await callFunction("splitProductImage")({
+            productId,
+            imageUrl,
+            slicePoints: lines,
+          });
+          results = res?.data?.slices ?? [];
+        } catch (err) {
+          console.error("Background split error:", err);
+        }
+      }
+
+      if (results.length > 0) {
+        const newImages = results.map((r, i) => ({
+          id: `${r.url}-split-${i}`,
+          url: r.url,
+          sourceUrl: targetImage?.url ?? r.url,
+          width: r.width ?? null,
+          height: r.height ?? null,
+          kind: "split",
+        }));
+
+        setImages((prevImages) => {
+          const currIdx = prevImages.findIndex((img) => img.url === targetImage?.url);
+          const idx = currIdx !== -1 ? currIdx : index;
+          const next = [
+            ...prevImages.slice(0, idx),
+            ...newImages,
+            ...prevImages.slice(idx + 1),
+          ];
+          saveMedia(next);
+          return next;
+        });
+      }
+
+      setBgTasks((prev) => prev.filter((t) => t.id !== taskId));
+    })();
   }
+
 
   return (
     <Layout>
@@ -1165,6 +1182,12 @@ export default function ProductDetail() {
 
               {mediaError && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 4 }}>{mediaError}</div>}
               {savingMedia && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Saving…</div>}
+              {bgTasks.length > 0 && (
+                <div style={{ fontSize: 12, color: "#ff6b35", marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ display: "inline-block", animation: "spin 1s linear infinite" }}>⏳</span>
+                  {bgTasks[bgTasks.length - 1].message}
+                </div>
+              )}
             </div>
 
             {/* ── Right: info panel ── */}
