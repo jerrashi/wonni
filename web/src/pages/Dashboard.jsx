@@ -160,12 +160,17 @@ function ImportBar({ onImported }) {
         setStatus("");
         onImported?.(result.data.productId);
       } else {
-        // Multi-URL batch import via weverseBulkImportProducts
+        // Multi-URL batch import via weverseBulkImportProducts (Weverse URLs only)
         const items = rawLines.map((url) => ({ productUrl: url }));
         const response = await callFunction("weverseBulkImportProducts")({ items });
         const res = response?.data;
         setUrlText("");
+        const errors = res?.errors ?? [];
         setStatus(`Bulk import complete! ${res?.importedCount ?? 0} imported, ${res?.existingCount ?? 0} already existing.`);
+        if (errors.length) {
+          const preview = errors.slice(0, 3).map((e) => `${e.title ?? "Item"}: ${e.error}`).join("; ");
+          setError(`${errors.length} item${errors.length === 1 ? "" : "s"} failed — ${preview}${errors.length > 3 ? "…" : ""}`);
+        }
         onImported?.(res?.productIds?.[0]);
       }
     } catch (e) {
@@ -180,7 +185,7 @@ function ImportBar({ onImported }) {
     <div className="card" style={{ marginBottom: 24 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <div style={{ fontSize: 13, color: "var(--muted)" }}>
-          {isBulk ? "Paste multiple Weverse or AliExpress URLs (one per line)" : "Paste a Weverse Shop or AliExpress product URL"}
+          {isBulk ? "Paste multiple Weverse Shop URLs (one per line)" : "Paste a Weverse Shop or AliExpress product URL"}
         </div>
         <button
           className="btn btn-ghost"

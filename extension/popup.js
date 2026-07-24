@@ -52,6 +52,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   if (idToken && userEmail) {
     authBtn.textContent = "Sign out";
+    authBtn.title = `Signed in as ${userEmail}`;
     authBtn.onclick = () => {
       chrome.storage.local.remove(["idToken", "userEmail"]);
       window.close();
