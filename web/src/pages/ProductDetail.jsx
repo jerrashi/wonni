@@ -773,7 +773,7 @@ function ImageStrip({ images, activeIndex, onHover, onDrop, onEdit, savingMedia 
 // ─── ImageEditModal ────────────────────────────────────────────────────────────
 // mode: "menu" | "crop" | "identify" | "split"
 
-function ImageEditModal({ image, index, total, productId, onClose, onDelete, onSetCover, onSaveCrop, onSaveIdentify, onSaveSplit, saving }) {
+function ImageEditModal({ image, index, total, productId, onClose, onDelete, onSetCover, onSaveCrop, onSaveIdentify, onSaveSplit, saving, splitInProgress }) {
   const [mode, setMode] = useState("menu");
   const [busy, setBusy] = useState(false); // true while an editor has an upload in flight
   const ref = useRef(null);
@@ -825,7 +825,9 @@ function ImageEditModal({ image, index, total, productId, onClose, onDelete, onS
               )}
               <button className="btn btn-ghost" onClick={() => setMode("crop")} disabled={saving}>✂ Crop</button>
               <button className="btn btn-ghost" onClick={() => setMode("identify")} disabled={saving}>🔍 Identify products</button>
-              <button className="btn btn-ghost" onClick={() => setMode("split")} disabled={saving}>⚡ Split</button>
+              <button className="btn btn-ghost" onClick={() => setMode("split")} disabled={saving || splitInProgress}>
+                {splitInProgress ? "⚡ Splitting…" : "⚡ Split"}
+              </button>
               <button className="btn btn-danger" onClick={onDelete} disabled={saving}>Delete</button>
             </div>
           </>
@@ -1026,16 +1028,19 @@ export default function ProductDetail() {
   }
 
   const [bgTasks, setBgTasks] = useState([]);
+  const [splittingUrls, setSplittingUrls] = useState(() => new Set());
 
   // Called by SplitEditor: closes modal instantly and executes split in background
   function handleSaveSplit({ lines, imgElement, imageUrl }) {
     const index = editingIndex;
     if (index === null) return;
     const targetImage = images[index];
+    if (!targetImage?.url || splittingUrls.has(targetImage.url)) return;
 
     // Close popover modal immediately
     setEditingIndex(null);
 
+    setSplittingUrls((prev) => new Set(prev).add(targetImage.url));
     const taskId = `split-${Date.now()}`;
     setBgTasks((prev) => [...prev, { id: taskId, message: "Splitting image in background…" }]);
 
@@ -1108,19 +1113,30 @@ export default function ProductDetail() {
           kind: "split",
         }));
 
+        // Compute the next array via the pure updater, then save as a
+        // separate step — a state updater can be invoked more than once
+        // (e.g. React StrictMode), so a network write must not live inside it.
+        let next;
         setImages((prevImages) => {
           const currIdx = prevImages.findIndex((img) => img.url === targetImage?.url);
           const idx = currIdx !== -1 ? currIdx : index;
-          const next = [
+          next = [
             ...prevImages.slice(0, idx),
             ...newImages,
             ...prevImages.slice(idx + 1),
           ];
-          saveMedia(next);
           return next;
         });
+        if (next) await saveMedia(next);
+      } else {
+        setMediaError(`Could not split "${targetImage?.kind ?? "image"}" — please try again.`);
       }
 
+      setSplittingUrls((prev) => {
+        const next = new Set(prev);
+        next.delete(targetImage.url);
+        return next;
+      });
       setBgTasks((prev) => prev.filter((t) => t.id !== taskId));
     })();
   }
@@ -1308,6 +1324,7 @@ export default function ProductDetail() {
           onSaveIdentify={handleSaveIdentify}
           onSaveSplit={handleSaveSplit}
           saving={savingMedia}
+          splitInProgress={splittingUrls.has(images[editingIndex]?.url)}
         />
       )}
     </Layout>

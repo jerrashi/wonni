@@ -55,9 +55,10 @@ exports.weverseBulkImportProducts = onCall(
     for (const chunk of itemChunks) {
       await Promise.all(
         chunk.map(async (item) => {
+          let saleId;
           try {
             const parsed = parseWeverseUrl(item.productUrl ?? "");
-            const saleId = parsed?.saleId ?? item.saleId;
+            saleId = parsed?.saleId ?? item.saleId;
             if (!saleId || !parsed) {
               errors.push({ title: item.title ?? item.productUrl, error: "Invalid Weverse URL." });
               return;
@@ -67,6 +68,9 @@ exports.weverseBulkImportProducts = onCall(
               existingProductIds.push(saleId);
               return;
             }
+            // Claim the saleId synchronously (before any await) so a duplicate
+            // saleId in the same concurrency chunk can't both pass this check.
+            existingSaleIds.add(saleId);
 
             const sale = await fetchWeverseSale(parsed.url, saleId);
             const verdict = validateSaleForImport(sale);
@@ -123,9 +127,11 @@ exports.weverseBulkImportProducts = onCall(
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             });
 
-            existingSaleIds.add(saleId);
             importedProductIds.push(docRef.id);
           } catch (err) {
+            // Release the claim so this saleId isn't misreported as "existing"
+            // when it never actually got created.
+            existingSaleIds.delete(saleId);
             errors.push({ title: item.title ?? item.saleId, error: err.message ?? "Import failed." });
           }
         })

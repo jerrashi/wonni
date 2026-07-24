@@ -183,6 +183,11 @@ function mapSaleToProduct(sale, sourceUrl) {
   };
 }
 
+module.exports.parseWeverseUrl = parseWeverseUrl;
+module.exports.fetchWeverseSale = fetchWeverseSale;
+module.exports.validateSaleForImport = validateSaleForImport;
+module.exports.mapSaleToProduct = mapSaleToProduct;
+
 // Import a product from a Weverse Shop sale URL (URL-paste flow, no extension needed)
 exports.weverseImportProduct = onCall(
   { timeoutSeconds: 120, memory: "512MiB" },
