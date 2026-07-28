@@ -355,13 +355,28 @@ function resolveCondition(intendedEnum, allowedIds) {
   return CONDITION_ID_TO_ENUM[allowedIds[0]] || intendedEnum;
 }
 
-/** True if a publish error body is the "invalid condition for this category" failure (25021). */
+/**
+ * True if a publish error body is an "invalid condition for this category" failure. eBay reports
+ * this as 25021 for most categories, but Trading Card Game categories (individual cards, sealed
+ * packs, etc.) report it as 25059 instead — the get_item_condition_policies metadata call can
+ * still list a condition ID as allowed for these categories even though publish rejects it, so
+ * this needs to be retryable with a different condition, not just detected once.
+ *
+ * Also treated as a condition error: 25064 "Professional Grader is a required field" / "Grade is
+ * a required field". In TCG categories (e.g. 183454), the condition ID our generic fallback maps
+ * to LIKE_NEW (2750) actually means "Graded" in that category's own condition enum, which then
+ * demands grading fields we don't have and can't legitimately fabricate (users list raw/ungraded
+ * cards). There's no recovery for this other than trying a different condition ID — same fix as
+ * the 25021/25059 cases — so it's folded into the same retry path.
+ */
 function isConditionError(responseBody) {
   try {
     const obj = JSON.parse(responseBody);
     return (obj.errors || []).some(e =>
       e.errorId === 25021 ||
-      (e.parameters || []).some(p => p.value === "CONDITION_ID")
+      e.errorId === 25059 ||
+      (e.parameters || []).some(p => p.value === "CONDITION_ID") ||
+      (e.errorId === 25064 && /professional grader|^grade\b/i.test(e.message || ""))
     );
   } catch (e) {
     return false;
@@ -694,10 +709,13 @@ async function ensureBusinessPolicies(accessToken, isSandbox, sellingSettings, u
     ) {
       const settingsRef = db.collection("users").doc(uid).collection("sellingSettings").doc("default");
       await settingsRef.set({ businessPoliciesDisabled: true }, { merge: true });
-      throw new HttpsError(
-        "failed-precondition",
-        "eBay Business Policies are not enabled. Please visit ebay.com/bp/manage to enable them, then try again."
-      );
+      // A 403 here is a permission/scope problem with the connected token (Access denied,
+      // not "not eligible"/"opt in required") — reconnecting re-requests the full OAuth scope
+      // list including sell.account, which is more likely to fix it than an eBay-side setting.
+      const message = response.statusCode === 403
+        ? "Your eBay connection is missing a required permission. Please reconnect your eBay account in Settings, then try again."
+        : "eBay Business Policies are not enabled. Please visit ebay.com/bp/manage to enable them, then try again.";
+      throw new HttpsError("failed-precondition", message);
     }
     throw new Error(`Failed to query eBay Business Policies (${response.statusCode}): ${response.body}`);
   }
@@ -1087,9 +1105,12 @@ exports.ebayCreateListing = onCall(
       // aspects (25002), an invalid condition for the category (25021), and a missing/invalid
       // package weight (25020). Each round mutates the inventory item, re-PUTs it, and
       // republishes. Bounded to avoid loops.
-      let conditionFallbackTried = false;
+      // Every condition ID already attempted (starting with whatever we sent first), so the
+      // fallback below always moves to a genuinely untried candidate instead of re-offering
+      // one eBay just rejected (which happened when this only ever fell back to USED_EXCELLENT).
+      const triedConditionIds = new Set([CONDITION_ENUM_TO_ID[itemBody.condition]].filter(Boolean));
       let packageTypeFallbackTried = false;
-      for (let round = 0; round < 4 && publishRes.statusCode !== 200; round++) {
+      for (let round = 0; round < 6 && publishRes.statusCode !== 200; round++) {
         let changed = false;
 
         // (a) Fill any required item aspects the error names.
@@ -1104,13 +1125,23 @@ exports.ebayCreateListing = onCall(
           console.log(`[ebayCreateListing] Filling missing aspects and retrying: ${missing.join(", ")}`);
         }
 
-        // (b) Category rejected the condition — fall back to generic "Used" once. (The proactive
-        //     remap usually prevents this; this only fires if the condition-policy fetch failed.)
-        if (isConditionError(publishRes.body) && !conditionFallbackTried) {
-          conditionFallbackTried = true;
-          if (itemBody.condition !== "USED_EXCELLENT") {
-            console.log(`[ebayCreateListing] Condition ${itemBody.condition} rejected by ${categoryId}; retrying as USED_EXCELLENT`);
-            itemBody.condition = "USED_EXCELLENT";
+        // (b) Category rejected the condition — step to the next untried candidate. Prefers the
+        //     category's own allowed-condition list (if we have one) so we don't guess blindly,
+        //     but appends the fixed general-purpose order as a second-tier fallback: some
+        //     categories (e.g. TCG individual-card categories like 183454) have a metadata API
+        //     that lists a condition as allowed when publish actually rejects it, so the
+        //     allowed-list alone can run out of untried candidates with nothing left to try.
+        if (isConditionError(publishRes.body)) {
+          const genericFallback = ["3000", "4000", "5000", "6000", "1000", "1500", "2750", "7000"];
+          const candidates = allowedConditionIds && allowedConditionIds.length > 0
+            ? [...allowedConditionIds, ...genericFallback]
+            : genericFallback;
+          const nextId = candidates.find(id => !triedConditionIds.has(id) && CONDITION_ID_TO_ENUM[id]);
+          if (nextId) {
+            triedConditionIds.add(nextId);
+            const nextEnum = CONDITION_ID_TO_ENUM[nextId];
+            console.log(`[ebayCreateListing] Condition ${itemBody.condition} rejected by ${categoryId}; retrying as ${nextEnum}`);
+            itemBody.condition = nextEnum;
             changed = true;
           }
         }

@@ -80,7 +80,6 @@
 		A1B2C3D4E5F6A7B82E9D0001 /* ActiveDraftCarouselView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B82E9D0002 /* ActiveDraftCarouselView.swift */; };
 		AA0011223344556677AABBFF /* MercariObservedDataRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0011223344556677AABBEE /* MercariObservedDataRepository.swift */; };
 		AABB00112233445566778802 /* AppTaskQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB00112233445566778801 /* AppTaskQueue.swift */; };
-		AB12CD342FB76C1A007C3979 /* PublishProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB12CD332FB76C1A007C3979 /* PublishProgressView.swift */; };
 		B02F2E0D8C10F3EFEB9588F2 /* BulkImportPillView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 954511D35EA0839747028ADA /* BulkImportPillView.swift */; };
 		BA84B11A8C0F8D5B789AC1DF /* AddSaleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 170EF2F9EA31030386E584A7 /* AddSaleSheet.swift */; };
 		CCDD00112233445566778801 /* ListingTemplate.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00112233445566778800 /* ListingTemplate.swift */; };
@@ -189,7 +188,6 @@
 		A9D1D2B4BED80AB257DFE4C7 /* MercariScanJSTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MercariScanJSTests.swift; sourceTree = "<group>"; };
 		AA0011223344556677AABBEE /* MercariObservedDataRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MercariObservedDataRepository.swift; sourceTree = "<group>"; };
 		AABB00112233445566778801 /* AppTaskQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTaskQueue.swift; sourceTree = "<group>"; };
-		AB12CD332FB76C1A007C3979 /* PublishProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublishProgressView.swift; sourceTree = "<group>"; };
 		BE61D7FFD8544A048901939D /* wonniUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = wonniUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CCDD00112233445566778800 /* ListingTemplate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListingTemplate.swift; sourceTree = "<group>"; };
 		CCDD00112233445566778802 /* ListingTemplatesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListingTemplatesView.swift; sourceTree = "<group>"; };
@@ -337,7 +335,6 @@
 				61EE00672D765D37006063C3 /* MainView.swift */,
 				61FAA5842FAF22A0001C28CE /* OnboardingView.swift */,
 				6134E14F2FB76C1A007C3979 /* ProcessProgressView.swift */,
-				AB12CD332FB76C1A007C3979 /* PublishProgressView.swift */,
 				6192AA5F2D7F583E00EC2EFA /* ProfileView.swift */,
 				6134E1572FDCB206007C3979 /* PublishedPhotoModal.swift */,
 				209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */,
@@ -571,7 +568,6 @@
 				6192AA782D7F65DE00EC2EFA /* CachedImageManager.swift in Sources */,
 				6192AA602D7F583E00EC2EFA /* ProfileView.swift in Sources */,
 				6134E1502FB76C1A007C3979 /* ProcessProgressView.swift in Sources */,
-				AB12CD342FB76C1A007C3979 /* PublishProgressView.swift in Sources */,
 				6192AA742D7F65DE00EC2EFA /* DataModel.swift in Sources */,
 				61EE007D2D778EFA006063C3 /* Listing.swift in Sources */,
 				6192AA7B2D7F65DF00EC2EFA /* PhotoLibrary.swift in Sources */,

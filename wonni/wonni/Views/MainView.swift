@@ -89,12 +89,6 @@ struct MainView: View {
             NavigationStack { MercariSyncProgressSheet() }
                 .environmentObject(mercariSyncManager)
         }
-        .fullScreenCover(isPresented: $uploadManager.showPublishProgress) {
-            NavigationStack {
-                PublishProgressView(onMinimize: { uploadManager.showPublishProgress = false })
-            }
-            .environmentObject(uploadManager)
-        }
         // When AI processing finishes, show the publish overview globally.
         // The 0.5 s delay lets any open cover/sheet (ProcessProgressView fullScreenCover
         // or pill sheet) finish its dismiss animation before the results view appears —
@@ -184,11 +178,16 @@ struct MainView: View {
             NavigationStack {
                 CrossPostStatusView(
                     items: uploadManager.sessionCrossPostItems,
-                    onDone: {
-                        uploadManager.crossPostStatusPending = false
+                    onDone: { resolved in
                         uploadManager.showCrossPostStatus = false
-                        uploadManager.sessionCrossPostItems = []
                         uploadManager.shouldReturnToRoot = true
+                        if resolved {
+                            uploadManager.crossPostStatusPending = false
+                            uploadManager.sessionCrossPostItems = []
+                        }
+                        // Minimize (resolved == false): leave session state intact — the
+                        // pill still tracks progress and re-tapping it reopens this same,
+                        // still-live list instead of an empty one.
                     }
                 )
             }

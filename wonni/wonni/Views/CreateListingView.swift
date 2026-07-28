@@ -2115,12 +2115,13 @@ struct ProcessResultsOverviewView: View {
             // post-publish continuation that mutates other sheet state.
             uploadManager.publishConfirmationSheetVisible = false
             uploadManager.runPublishContinuationIfReady(modelContext: modelContext)
-            // If beginPublish was called (i.e. user didn't cancel), swap to PublishProgressView.
+            // If beginPublish was called (i.e. user didn't cancel), swap to CrossPostStatusView —
+            // the single post-publish status screen (Wonni + eBay + Mercari, live per row).
             // Delay matches the existing AI→results transition to avoid overlapping covers.
             if uploadManager.isPublishing || !uploadManager.publishStatuses.isEmpty {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     uploadManager.showResultsOverview = false
-                    uploadManager.showPublishProgress = true
+                    uploadManager.showCrossPostStatus = true
                 }
             }
         }) {
@@ -2146,6 +2147,7 @@ struct ProcessResultsOverviewView: View {
                 guard let listingId = item.firestoreListingId else { return nil }
                 return CrossPostSessionItem(
                     id: listingId,
+                    draftId: item.id,
                     title: item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled",
                     description: item.userEditedDescription ?? item.aiSuggestedDescription ?? "",
                     price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
@@ -2230,6 +2232,7 @@ struct ProcessResultsOverviewView: View {
 /// survives the SwiftData draft being deleted.
 struct CrossPostSessionItem: Identifiable, Equatable {
     let id: String              // Firestore listing document ID
+    let draftId: UUID           // SwiftData Item.id — keys uploadManager.publishStatuses
     let title: String
     let description: String
     let price: Double
@@ -2245,16 +2248,36 @@ struct CrossPostSessionItem: Identifiable, Equatable {
 /// "see status + retry" screen, shown in place of silently bouncing home after a cross-post.
 struct CrossPostStatusView: View {
     let items: [CrossPostSessionItem]
-    var onDone: () -> Void
+    /// Called with `true` when every row has resolved (posted or failed) — the caller can
+    /// safely discard session state. Called with `false` on "Minimize", where the queue
+    /// keeps running in the background and the caller should keep the session around so
+    /// re-opening (e.g. via the AppTaskQueue pill) shows the same, still-updating list.
+    var onDone: (Bool) -> Void
 
     @State private var statuses: [String: [String: String]] = [:]   // listingId -> platform -> status
     @State private var listeners: [ListenerRegistration] = []
     @State private var retryJob: CrossPostJob? = nil
     @State private var retryingEbay: Set<String> = []
     @EnvironmentObject private var uploadManager: UploadManager
+    @Environment(\.modelContext) private var modelContext
+    @Query private var allDraftItems: [Item]
+
+    /// Wonni's own publish (photo upload + Firestore write) is tracked separately from
+    /// cross-post platforms, in uploadManager.publishStatuses (keyed by the SwiftData
+    /// draft id, not the Firestore listing id) — this view auto-opens the instant publish
+    /// begins, before the "wonni" row even has a status. Maps DraftUploadStatus onto the
+    /// same pending/posted/failed vocabulary the rest of this view already speaks.
+    private func wonniStatus(for item: CrossPostSessionItem) -> String {
+        switch uploadManager.publishStatuses[item.draftId] ?? .pending {
+        case .pending, .uploading: return "pending"
+        case .done:                return "posted"
+        case .failed:              return "failed"
+        }
+    }
 
     private var allResolved: Bool {
         for item in items {
+            if wonniStatus(for: item) == "pending" { return false }
             for platform in item.platforms where platform != "wonni" {
                 let status = statuses[item.id]?[platform] ?? "pending"
                 if status == "pending" || status == "removing" { return false }
@@ -2293,7 +2316,7 @@ struct CrossPostStatusView: View {
             // N6: still-in-flight jobs can be minimized (mirrors ProcessProgressView) —
             // the queue keeps running via UploadManager, this view just steps aside.
             // Once everything has resolved (posted or failed), it reads "Done".
-            Button(action: { stopListeners(); onDone() }) {
+            Button(action: { stopListeners(); onDone(allResolved) }) {
                 Text(allResolved ? "Done" : "Minimize")
                     .fontWeight(.semibold)
                     .foregroundStyle(.white)
@@ -2346,8 +2369,7 @@ struct CrossPostStatusView: View {
 
     @ViewBuilder
     private func platformRow(item: CrossPostSessionItem, platform: String) -> some View {
-        // Wonni is always "posted" — the listing reached Firestore. Others reflect live status.
-        let status = platform == "wonni" ? "posted" : (statuses[item.id]?[platform] ?? "pending")
+        let status = platform == "wonni" ? wonniStatus(for: item) : (statuses[item.id]?[platform] ?? "pending")
         HStack(spacing: 12) {
             Image(systemName: platformIcon(platform))
                 .frame(width: 22)
@@ -2404,6 +2426,9 @@ struct CrossPostStatusView: View {
 
     private func retry(item: CrossPostSessionItem, platform: String) {
         switch platform {
+        case "wonni":
+            guard let draft = allDraftItems.first(where: { $0.id == item.draftId }) else { return }
+            uploadManager.retryFailedPublish(drafts: [draft], modelContext: modelContext)
         case "ebay", "etsy":
             retryingEbay.insert(item.id)
             Task {
