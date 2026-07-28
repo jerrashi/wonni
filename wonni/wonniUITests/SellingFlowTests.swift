@@ -233,6 +233,74 @@ final class SellingFlowTests: XCTestCase {
         }
     }
 
+    /// Repro for "no way to delete drafts": after selecting a full draft in the
+    /// drafts history modal, the Delete button is reportedly replaced by a "..."
+    /// overflow button that does nothing when tapped.
+    func testDeleteDraftFromHistoryModal() throws {
+        let photosInterruption = addUIInterruptionMonitor(withDescription: "Photos permission") { alert in
+            let allowButtons = alert.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'Allow' OR label CONTAINS 'OK'")
+            )
+            if allowButtons.count > 0 {
+                allowButtons.firstMatch.tap()
+                return true
+            }
+            return false
+        }
+        defer { removeUIInterruptionMonitor(photosInterruption) }
+
+        app.tabBars.buttons["Sell"].tap()
+
+        let galleryButton = app.buttons["cameraGalleryButton"]
+        XCTAssert(galleryButton.waitForExistence(timeout: 5), "Camera gallery button should appear")
+
+        // Build two committed drafts.
+        for _ in 0..<2 {
+            galleryButton.tap()
+            app.tap()
+
+            let firstPhoto = app.descendants(matching: .any).matching(identifier: "photoGridItem").firstMatch
+            XCTAssert(firstPhoto.waitForExistence(timeout: 30), "At least one photo grid item should load")
+            firstPhoto.tap()
+
+            let commitButton = app.buttons.matching(identifier: "draftsCarousel").firstMatch
+            XCTAssert(commitButton.waitForExistence(timeout: 5))
+            commitButton.tap()
+
+            let backButton = app.buttons["pickerBackButton"]
+            XCTAssert(backButton.waitForExistence(timeout: 5))
+            backButton.tap()
+        }
+
+        let stackIcon = app.descendants(matching: .any).matching(identifier: "draftsStackIcon").firstMatch
+        XCTAssert(stackIcon.waitForExistence(timeout: 5), "Drafts stack icon should appear")
+        stackIcon.tap()
+
+        let selectButton = app.buttons["draftHistorySelectButton"]
+        XCTAssert(selectButton.waitForExistence(timeout: 5), "Select button should appear")
+        selectButton.tap()
+
+        let fullSelectToggle = app.descendants(matching: .any).matching(identifier: "draftFullSelectToggle").firstMatch
+        XCTAssert(fullSelectToggle.waitForExistence(timeout: 5), "Full-select toggle should appear")
+        fullSelectToggle.tap()
+
+        // Snapshot the toolbar state right after a full draft is selected.
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "after-full-select"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        let deleteButton = app.buttons["draftHistoryDeleteButton"]
+        XCTAssert(deleteButton.exists, "Delete button should still exist in the accessibility tree: \(app.debugDescription)")
+        XCTAssert(deleteButton.isHittable, "Delete button should be hittable, not collapsed into an overflow menu")
+
+        deleteButton.tap()
+
+        let confirmDelete = app.alerts.buttons["Delete"]
+        XCTAssert(confirmDelete.waitForExistence(timeout: 5), "Delete confirmation alert should appear")
+        confirmDelete.tap()
+    }
+
     /// Test that editing fields saves correctly (deferred saves)
     func testEditingDraftFieldsSaves() throws {
         // Navigate to Sell tab

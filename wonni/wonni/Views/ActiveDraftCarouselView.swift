@@ -66,6 +66,7 @@ struct ActiveDraftCarouselView: View {
                                 .scaleEffect(stackBouncing ? 1.08 : 1.0)
                                 .animation(.spring(response: 0.35, dampingFraction: 0.45), value: stackBouncing)
                                 .onTapGesture { onOpenDraftHistory() }
+                                .accessibilityIdentifier("draftsStackIcon")
                         }
 
                         // Divider between active and committed (if both exist)
