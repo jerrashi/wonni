@@ -619,6 +619,7 @@ struct CustomPhotoPickerView: View {
                                                             for id in draftCompositeIDs { selectedPhotos.insert(id) }
                                                         }
                                                     }
+                                                    .accessibilityIdentifier("draftFullSelectToggle")
                                             }
                                             
                                             let hasUserTitle = draft.userEditedTitle != nil
@@ -802,21 +803,32 @@ struct CustomPhotoPickerView: View {
                             Button("Select") {
                                 isSelectionMode = true
                             }
+                            .accessibilityIdentifier("draftHistorySelectButton")
+                        }
+                    }
+                    // Two buttons that can appear together (Bulk Edit + Delete) must be
+                    // separate ToolbarItems, not one custom HStack in a single item — a
+                    // combined HStack is opaque to the system's toolbar layout, so when it
+                    // doesn't fit and iOS 26 collapses the trailing group into a "..."
+                    // overflow button, the buttons inside lose their individual tap targets
+                    // and the overflow menu does nothing when tapped.
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        if isSelectionMode {
+                            if !fullySelectedDrafts.isEmpty {
+                                Button("Bulk Edit") { showingDraftBulkEdit = true }
+                                    .foregroundStyle(Color.accentColor)
+                                    .accessibilityIdentifier("draftHistoryBulkEditButton")
+                            }
+                        } else {
+                            Button("Done") { dismiss() }
                         }
                     }
                     ToolbarItem(placement: .navigationBarTrailing) {
                         if isSelectionMode {
-                            HStack(spacing: 16) {
-                                if !fullySelectedDrafts.isEmpty {
-                                    Button("Bulk Edit") { showingDraftBulkEdit = true }
-                                        .foregroundStyle(Color.accentColor)
-                                }
-                                Button("Delete") { showingDeleteConfirm = true }
-                                    .foregroundColor(.red)
-                                    .disabled(selectedPhotos.isEmpty)
-                            }
-                        } else {
-                            Button("Done") { dismiss() }
+                            Button("Delete") { showingDeleteConfirm = true }
+                                .foregroundColor(.red)
+                                .disabled(selectedPhotos.isEmpty)
+                                .accessibilityIdentifier("draftHistoryDeleteButton")
                         }
                     }
                 }
