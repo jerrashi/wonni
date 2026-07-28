@@ -124,8 +124,8 @@ class UploadManager: ObservableObject {
     @Published var crossPostError: String? = nil
 
     // ── Publish Progress Phase (mirrors AI processing progress tracking) ────
-    /// Per-item publish status — drives PublishProgressView rows. Throttled like
-    /// processStatuses so BulkListingOverviewView doesn't reconstruct on every tick.
+    /// Per-item publish status — drives CrossPostStatusView's live "Wonni" row. Throttled
+    /// like processStatuses so BulkListingOverviewView doesn't reconstruct on every tick.
     var publishStatuses: [UUID: DraftUploadStatus] {
         get { _publishStatuses }
         set { _publishStatuses = newValue; scheduleThrottledChangeNotify() }
@@ -141,8 +141,6 @@ class UploadManager: ObservableObject {
     /// publishedAt=nil). Cleared when the user taps Retry or Dismiss in the alert.
     /// In-memory only — persisted state lives on the Item's pendingPublish flag.
     @Published var failedPublishDrafts: [Item] = []
-    /// Controls the PublishProgressView fullScreenCover in MainView.
-    @Published var showPublishProgress = false
     /// Set in publishDrafts when a listing published (and any cross-post proceeded) with fewer
     /// photos than the user selected — a photo silently failed every upload retry. Previously
     /// this was invisible: the publish guard only checked photoPaths wasn't *empty*, so a
@@ -832,7 +830,8 @@ class UploadManager: ObservableObject {
         }
         try? modelContext.save()
 
-        // Init publish progress state for PublishProgressView
+        // Init publish progress state — drives the AppTaskQueue pill label and
+        // CrossPostStatusView's live "Wonni" row.
         publishTotalCount = drafts.count
         publishCurrentIndex = 0
         for draft in drafts {
@@ -870,7 +869,7 @@ class UploadManager: ObservableObject {
             label: "Publishing 0/\(drafts.count) listings",
             progress: 0,
             accentColor: .blue,
-            onTap: { [weak self] in self?.showPublishProgress = true }
+            onTap: { [weak self] in self?.showCrossPostStatus = true }
         )
 
         Task {
