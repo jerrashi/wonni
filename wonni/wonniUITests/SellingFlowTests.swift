@@ -13,6 +13,7 @@ final class SellingFlowTests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
+        app.launchArguments += ["-uiTesting"]
         app.launch()
     }
 
@@ -132,6 +133,103 @@ final class SellingFlowTests: XCTestCase {
                 let newState = ebayToggle.value as? NSNumber
                 XCTAssertNotEqual(initialState?.boolValue, newState?.boolValue, "eBay toggle should change state")
             }
+        }
+    }
+
+    /// Repro for the "drafts carousel renders mid-screen instead of pinned to the
+    /// bottom" bug: after a draft is committed and the user bounces camera -> picker
+    /// -> camera -> picker (repeatedly), ActiveDraftCarouselView must stay pinned to
+    /// the true screen bottom in both hosts, never floating mid-screen or overlapping
+    /// the photo grid.
+    func testDraftsCarouselStaysPinnedToBottomAfterPickerRoundTrip() throws {
+        // Photos permission alert may appear the first time the picker touches the
+        // library — auto-allow it so the flow isn't blocked.
+        let photosInterruption = addUIInterruptionMonitor(withDescription: "Photos permission") { alert in
+            let allowButtons = alert.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'Allow' OR label CONTAINS 'OK'")
+            )
+            if allowButtons.count > 0 {
+                allowButtons.firstMatch.tap()
+                return true
+            }
+            return false
+        }
+        defer { removeUIInterruptionMonitor(photosInterruption) }
+
+        app.tabBars.buttons["Sell"].tap()
+
+        let galleryButton = app.buttons["cameraGalleryButton"]
+        XCTAssert(galleryButton.waitForExistence(timeout: 5), "Camera gallery button should appear")
+
+        // Build one committed draft so hasContent is true for the rest of the test.
+        galleryButton.tap()
+        app.tap() // flush the permission-alert interruption monitor if it fired
+
+        // SwiftUI exposes SelectablePhotoGridItem as an Image-typed AX element (since
+        // its overlay image becomes the combined accessibility trait), not "Other" —
+        // match by identifier across all element types rather than assuming a type.
+        let firstPhoto = app.descendants(matching: .any).matching(identifier: "photoGridItem").firstMatch
+        // Generous timeout: the permission alert + PHPhotoLibrary fetch can take a
+        // while on a simulator, especially right after a fresh install/grant.
+        XCTAssert(firstPhoto.waitForExistence(timeout: 30), "At least one photo grid item should load")
+        firstPhoto.tap()
+
+        // The Button's own "commitDraftButton" identifier gets clobbered by the
+        // ancestor HStack's "draftsCarousel" identifier (same override behavior noted
+        // above) — disambiguate from the carousel's ScrollView by element type instead.
+        let commitButton = app.buttons.matching(identifier: "draftsCarousel").firstMatch
+        XCTAssert(commitButton.waitForExistence(timeout: 5), "Commit ('+') button should appear once a photo is selected")
+        commitButton.tap()
+
+        let backButton = app.buttons["pickerBackButton"]
+        XCTAssert(backButton.waitForExistence(timeout: 5))
+        backButton.tap()
+
+        // Round-trip camera <-> picker a few times — the reported glitch "persists"
+        // across repeated visits, not just the first.
+        for iteration in 1...3 {
+            XCTAssert(galleryButton.waitForExistence(timeout: 5), "Camera view should reappear (iteration \(iteration))")
+
+            let screenHeight = app.windows.firstMatch.frame.height
+            // Camera's bottom-pinned row has no single container identifier (nesting
+            // one broke the leaf buttons' own identifiers — see draftsCarousel note
+            // below), so use the gallery button itself as a proxy for "did the whole
+            // bottom-pinned block render where it should."
+            XCTAssertGreaterThan(
+                galleryButton.frame.minY, screenHeight * 0.5,
+                "Camera bottom controls rendered mid-screen instead of pinned to the bottom (iteration \(iteration)): \(galleryButton.frame) vs screen height \(screenHeight)"
+            )
+
+            galleryButton.tap()
+
+            // ActiveDraftCarouselView is the single shared component used identically
+            // by both hosts, tagged "draftsCarousel" once at its own root — no extra
+            // per-host wrapper identifier, since SwiftUI applies an ancestor's
+            // accessibilityIdentifier to descendants and clobbers their own explicit
+            // identifiers (confirmed via the accessibility hierarchy dump). It's exposed
+            // as a ScrollView-typed element — the commit button below shares the same
+            // clobbered identifier, so scope by type to get the carousel specifically.
+            let pickerCarousel = app.scrollViews.matching(identifier: "draftsCarousel").firstMatch
+            XCTAssert(pickerCarousel.waitForExistence(timeout: 5), "Picker drafts carousel should exist (iteration \(iteration))")
+            XCTAssertGreaterThan(
+                pickerCarousel.frame.minY, screenHeight * 0.5,
+                "Picker drafts carousel rendered mid-grid instead of pinned to the bottom (iteration \(iteration)): \(pickerCarousel.frame) vs screen height \(screenHeight)"
+            )
+
+            // The carousel must sit BELOW every currently-visible grid cell, never
+            // overlapping/embedded among them.
+            let gridItems = app.descendants(matching: .any).matching(identifier: "photoGridItem")
+            let visibleGridItemCount = min(gridItems.count, 6)
+            for i in 0..<visibleGridItemCount {
+                let cell = gridItems.element(boundBy: i)
+                guard cell.exists, cell.frame.height > 0 else { continue }
+                XCTAssertGreaterThanOrEqual(
+                    pickerCarousel.frame.minY, cell.frame.maxY,
+                    "Drafts carousel overlaps grid cell \(i) (iteration \(iteration)): carousel \(pickerCarousel.frame) vs cell \(cell.frame)"
+                )
+            }
+
+            backButton.tap()
         }
     }
 

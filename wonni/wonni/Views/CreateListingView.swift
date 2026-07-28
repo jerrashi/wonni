@@ -88,6 +88,7 @@ struct SelectablePhotoGridItem: View {
                 .onAppear {
                     Task { await cache.startCaching(for: [asset], targetSize: imageSize) }
                 }
+                .accessibilityIdentifier("photoGridItem")
 
             if let index = selectionIndex {
                 Circle()
@@ -234,9 +235,16 @@ struct CustomPhotoPickerView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                // Unified carousel — identical to camera view bottom panel
-                let hasContent = activeDraft?.sourceAssetIdentifiers.isEmpty == false
-                    || !committedDrafts.isEmpty
+                // Unified carousel — identical to camera view bottom panel.
+                // Also requires photoAssets to have loaded: on a fresh push, hasContent
+                // can already be true (from a draft committed on a prior visit) while
+                // the LazyVGrid above hasn't measured any rows yet. ScrollView doesn't
+                // always reserve the safeAreaInset's space correctly when the inset is
+                // present from the very first layout pass, so the carousel could render
+                // overlapping the grid instead of pinned below it.
+                let hasContent = (activeDraft?.sourceAssetIdentifiers.isEmpty == false
+                    || !committedDrafts.isEmpty)
+                    && !photoCollection.photoAssets.isEmpty
                 if hasContent {
                     VStack(spacing: 0) {
                         Divider()
@@ -264,6 +272,7 @@ struct CustomPhotoPickerView: View {
                             Text("Camera")
                         }
                     }
+                    .accessibilityIdentifier("pickerBackButton")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     let hasActiveDraft = uploadManager.activeDraftID != nil

@@ -19,6 +19,17 @@ struct MainView: View {
     @Environment(\.modelContext) private var modelContext
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
 
+    /// Lets XCUITest runs (launched with `-uiTesting`) skip the Sign in with Apple
+    /// and onboarding gates and land directly on the tab bar. #if DEBUG-gated so a
+    /// launch argument can never bypass auth in a Release/App Store build.
+    private static var isUITesting: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.arguments.contains("-uiTesting")
+        #else
+        return false
+        #endif
+    }
+
     var body: some View {
         tabContent
         .background(
@@ -184,14 +195,14 @@ struct MainView: View {
             .environmentObject(uploadManager)
         }
         .fullScreenCover(isPresented: Binding(
-            get: { authManager.currentUser == nil },
+            get: { !Self.isUITesting && authManager.currentUser == nil },
             set: { _ in }
         )) {
             SignInView()
                 .environmentObject(authManager)
         }
         .fullScreenCover(isPresented: Binding(
-            get: { authManager.currentUser != nil && !hasSeenOnboarding },
+            get: { !Self.isUITesting && authManager.currentUser != nil && !hasSeenOnboarding },
             set: { _ in }
         )) {
             OnboardingView()
