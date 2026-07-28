@@ -43,7 +43,6 @@ struct CameraView: View {
         GeometryReader { geo in
             let screenW     = geo.size.width
             let safeTop     = geo.safeAreaInsets.top
-            let safeBottom  = geo.safeAreaInsets.bottom
             let viewfinderH = screenW * (4.0 / 3.0)
             let topBarH: CGFloat = safeTop + 56
 
@@ -72,24 +71,30 @@ struct CameraView: View {
                 topBarView(safeTop: safeTop)
                     .frame(height: topBarH)
                     .frame(maxWidth: .infinity)
-
-                // 4. Bottom controls pinned to screen bottom
-                VStack(spacing: 8) {
-                    // Shared carousel (identical to picker bottom bar)
-                    if hasAnyContent {
-                        ActiveDraftCarouselView(
-                            cache: model.photoCollection.cache,
-                            onOpenDraftHistory: { route = .draftHistory }
-                        )
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-                    cameraButtonsView()
-                }
-                .padding(.bottom, safeBottom + 12)
-                .frame(maxWidth: .infinity)
-                .frame(maxHeight: .infinity, alignment: .bottom)
             }
             .ignoresSafeArea()
+        }
+        // Bottom controls reserved via safeAreaInset — same primitive the photo picker
+        // uses for its bottom bar. The previous GeometryReader + frame(maxHeight:
+        // .infinity, alignment: .bottom) approach could latch onto a stale size/safe-area
+        // reading across the nav-bar show/hide transition triggered by pushing/popping
+        // CustomPhotoPickerView (which, unlike this view, shows a nav bar), rendering the
+        // carousel and camera buttons mid-screen instead of pinned to the bottom.
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 8) {
+                // Shared carousel (identical to picker bottom bar)
+                if hasAnyContent {
+                    ActiveDraftCarouselView(
+                        cache: model.photoCollection.cache,
+                        onOpenDraftHistory: { route = .draftHistory }
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                cameraButtonsView()
+            }
+            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity)
+            .background(Color.black)
         }
         .toolbar(.hidden, for: .tabBar)
         .toolbar(.hidden, for: .navigationBar)
@@ -223,6 +228,7 @@ struct CameraView: View {
                     .frame(width: 46, height: 46)
                     .cornerRadius(8)
             }
+            .accessibilityIdentifier("cameraGalleryButton")
 
             Spacer()
 

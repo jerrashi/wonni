@@ -122,8 +122,10 @@ struct ActiveDraftCarouselView: View {
                     .disabled(!hasActive)
                     .padding(.trailing, 12)
                     .animation(.easeInOut(duration: 0.15), value: hasActive)
+                    .accessibilityIdentifier("commitDraftButton")
                 }
             }
+            .accessibilityIdentifier("draftsCarousel")
         }
     }
 
