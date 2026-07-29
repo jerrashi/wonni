@@ -7,12 +7,13 @@ import Layout from "../components/Layout";
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 function money(value) {
-  if (typeof value !== "number" || Number.isNaN(value)) return "—";
-  return `$${value.toFixed(2)}`;
+  const num = typeof value === "number" ? value : parseFloat(value);
+  if (typeof num !== "number" || Number.isNaN(num)) return "$0.00";
+  return `$${num.toFixed(2)}`;
 }
 
 function formatDate(value) {
-  if (!value?.toDate) return "—";
+  if (!value?.toDate) return "Just now";
   return new Intl.DateTimeFormat("en", {
     month: "short", day: "numeric", year: "numeric",
     hour: "numeric", minute: "2-digit",
@@ -27,19 +28,28 @@ function badgeLabel(source) {
 }
 
 function normalizeImageAssets(product) {
-  if (Array.isArray(product?.imageAssets) && product.imageAssets.length) {
-    return product.imageAssets.map((image, index) => ({
-      id: image.id ?? `${image.url}-${index}`,
-      url: image.url,
-      sourceUrl: image.sourceUrl ?? image.url,
-      width: image.width ?? null,
-      height: image.height ?? null,
-      kind: image.kind ?? "catalog",
-    }));
+  if (!product) return [];
+  if (Array.isArray(product.imageAssets) && product.imageAssets.length) {
+    return product.imageAssets
+      .filter(Boolean)
+      .map((image, index) => {
+        const url = typeof image === "string" ? image : image?.url ?? "";
+        return {
+          id: (typeof image === "object" && image?.id) ? image.id : `${url || "img"}-${index}`,
+          url: url || "",
+          sourceUrl: (typeof image === "object" && image?.sourceUrl) ? image.sourceUrl : url || "",
+          width: typeof image === "object" ? image?.width ?? null : null,
+          height: typeof image === "object" ? image?.height ?? null : null,
+          kind: typeof image === "object" ? image?.kind ?? "catalog" : "catalog",
+        };
+      })
+      .filter((img) => img.url);
   }
-  return (product?.images ?? []).map((url, index) => ({
-    id: `${url}-${index}`, url, sourceUrl: url, width: null, height: null, kind: "catalog",
-  }));
+  return (product.images ?? [])
+    .filter((url) => typeof url === "string" && url)
+    .map((url, index) => ({
+      id: `${url}-${index}`, url, sourceUrl: url, width: null, height: null, kind: "catalog",
+    }));
 }
 
 function moveItem(list, from, to) {
