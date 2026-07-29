@@ -205,11 +205,15 @@ async function suggestEbayCategory(accessToken, title, geminiCategory) {
 }
 
 /**
- * Fetches the REQUIRED item aspects for a category so we can fill them before publishing.
- * Returns [{ name, mode, values }]. Production only; returns [] on any failure (the reactive
- * recovery in the publish loop is the safety net).
+ * Fetches ALL item aspects for a category (not just the ones eBay's metadata flags required at
+ * the category level) so both the proactive pre-fill and the reactive publish-error recovery can
+ * look up an aspect's mode/allowed-values by name. Some aspects — e.g. Trading Card categories'
+ * "Card Condition", "Professional Grader", "Grade" — are only conditionally required depending on
+ * which condition ID we send, so they don't show up here as aspectRequired but are still exactly
+ * the aspects publish rejects us for. Returns [{ name, mode, values, required }]. Production
+ * only; returns [] on any failure (the reactive recovery in the publish loop is the safety net).
  */
-async function getRequiredAspects(accessToken, categoryId) {
+async function getCategoryAspects(accessToken, categoryId) {
   const options = {
     hostname: "api.ebay.com",
     path: `/commerce/taxonomy/v1/category_tree/0/get_item_aspects_for_category?category_id=${encodeURIComponent(categoryId)}`,
@@ -222,21 +226,33 @@ async function getRequiredAspects(accessToken, categoryId) {
   try {
     const res = await makeHttpRequest(options);
     if (res.statusCode !== 200) {
-      console.warn(`[getRequiredAspects] ${res.statusCode}: ${res.body}`);
+      console.warn(`[getCategoryAspects] ${res.statusCode}: ${res.body}`);
       return [];
     }
     const data = JSON.parse(res.body);
-    return (data.aspects || [])
-      .filter(a => a.aspectConstraint && a.aspectConstraint.aspectRequired)
-      .map(a => ({
-        name: a.localizedAspectName,
-        mode: a.aspectConstraint.aspectMode, // FREE_TEXT | SELECTION_ONLY
-        values: (a.aspectValues || []).map(v => v.localizedValue),
-      }));
+    return (data.aspects || []).map(a => ({
+      name: a.localizedAspectName,
+      mode: a.aspectConstraint ? a.aspectConstraint.aspectMode : "FREE_TEXT", // FREE_TEXT | SELECTION_ONLY
+      values: (a.aspectValues || []).map(v => v.localizedValue),
+      required: !!(a.aspectConstraint && a.aspectConstraint.aspectRequired),
+    }));
   } catch (err) {
-    console.warn(`[getRequiredAspects] request failed: ${err.message}`);
+    console.warn(`[getCategoryAspects] request failed: ${err.message}`);
     return [];
   }
+}
+
+/**
+ * Picks a value for one aspect the same way buildProductAspects does: a valid SELECTION_ONLY
+ * value from eBay's allowed list (a free string would be rejected), or a neutral placeholder for
+ * FREE_TEXT / unrecognized aspects. Best-effort by design — the goal is "the listing posts."
+ */
+function fillValueForAspect(name, categoryAspects, brand) {
+  const meta = categoryAspects.find(a => a.name === name);
+  if (meta && meta.mode === "SELECTION_ONLY" && meta.values.length > 0) {
+    return [meta.values[0]];
+  }
+  return [brand && brand !== "Generic" ? brand : "Unbranded"];
 }
 
 /**
@@ -245,22 +261,21 @@ async function getRequiredAspects(accessToken, categoryId) {
  * string would be rejected); FREE_TEXT aspects we have no data for get a neutral placeholder the
  * seller can refine on eBay. Best-effort by design — the goal is "the listing posts."
  */
-function buildProductAspects(requiredAspects, brand) {
+function buildProductAspects(categoryAspects, brand) {
   const aspects = { Brand: [brand] };
-  for (const aspect of requiredAspects) {
-    if (aspects[aspect.name]) continue; // already supplied (e.g. Brand)
-    if (aspect.mode === "SELECTION_ONLY" && aspect.values.length > 0) {
-      aspects[aspect.name] = [aspect.values[0]];
-    } else {
-      aspects[aspect.name] = [brand && brand !== "Generic" ? brand : "Unbranded"];
-    }
+  for (const aspect of categoryAspects) {
+    if (!aspect.required || aspects[aspect.name]) continue; // already supplied (e.g. Brand)
+    aspects[aspect.name] = fillValueForAspect(aspect.name, categoryAspects, brand);
   }
   return aspects;
 }
 
 /**
- * Parses the aspect name(s) eBay reported as missing from a failed publish response, e.g.
- * "The item specific Release Title is missing." -> ["Release Title"]. Used to reactively fill
+ * Parses the aspect name(s) eBay reported as missing/required from a failed publish response.
+ * Two phrasings observed: "The item specific Release Title is missing." (25002) and "Card
+ * Condition (40001) is a required field." (25064, conditionally-required aspects like Trading
+ * Card categories' Card Condition/Professional Grader/Grade — see isConditionError for the
+ * subset of these that mean "pick a different condition ID instead"). Used to reactively fill
  * required aspects the proactive lookup didn't cover, then retry the publish.
  */
 function extractMissingAspects(responseBody) {
@@ -268,8 +283,18 @@ function extractMissingAspects(responseBody) {
   try {
     const obj = JSON.parse(responseBody);
     for (const err of (obj.errors || [])) {
-      const match = (err.message || "").match(/item specific (.+?) is missing/i);
-      if (match && match[1]) names.add(match[1].trim());
+      const message = err.message || "";
+      const missingMatch = message.match(/item specific (.+?) is missing/i);
+      if (missingMatch && missingMatch[1]) names.add(missingMatch[1].trim());
+      const requiredMatch = message.match(/^(.+?)\s*\(\d+\)\s*is a required field/i);
+      // "Professional Grader"/"Grade" are excluded here on purpose: they only become required
+      // when the condition ID we sent means "Graded" (see isConditionError), and we have no real
+      // grading data to fill them with — fabricating a value would misrepresent the listing.
+      // isConditionError already routes this exact error to "try a different condition ID"
+      // instead, which is the only correct recovery.
+      if (requiredMatch && requiredMatch[1] && !/^(professional grader|grade)$/i.test(requiredMatch[1].trim())) {
+        names.add(requiredMatch[1].trim());
+      }
       // eBay also echoes the aspect name as the parameter named "3".
       for (const p of (err.parameters || [])) {
         if (p.name === "3" && p.value) names.add(String(p.value).trim());
@@ -901,12 +926,15 @@ exports.ebayCreateListing = onCall(
       if (!categoryId) categoryId = "99"; // "Everything Else" — minimal required aspects
       console.log(`[ebayCreateListing] Using category ${categoryId}`);
 
-      // Pre-fetch the category's required item aspects so we can fill them before publishing.
-      // (Production only — getRequiredAspects returns [] in sandbox; the publish loop below also
+      // Pre-fetch the category's item aspects (required and conditionally-required) so we can
+      // fill them before publishing, and so the reactive recovery below can look up a valid
+      // SELECTION_ONLY value for any conditionally-required aspect publish later demands.
+      // (Production only — getCategoryAspects returns [] in sandbox; the publish loop below also
       // recovers reactively from any missing-aspect error the pre-fetch didn't cover.)
-      const requiredAspects = isSandbox ? [] : await getRequiredAspects(accessToken, categoryId);
-      if (requiredAspects.length > 0) {
-        console.log(`[ebayCreateListing] Required aspects for ${categoryId}: ${requiredAspects.map(a => a.name).join(", ")}`);
+      const categoryAspects = isSandbox ? [] : await getCategoryAspects(accessToken, categoryId);
+      const requiredAspectNames = categoryAspects.filter(a => a.required).map(a => a.name);
+      if (requiredAspectNames.length > 0) {
+        console.log(`[ebayCreateListing] Required aspects for ${categoryId}: ${requiredAspectNames.join(", ")}`);
       }
 
       // Pre-fetch which conditions this category accepts. Many categories reject the generic
@@ -966,7 +994,7 @@ exports.ebayCreateListing = onCall(
           imageUrls: imageUrls.slice(0, 12),
           brand: brand,
           mpn: "Does Not Apply",
-          aspects: buildProductAspects(requiredAspects, brand)
+          aspects: buildProductAspects(categoryAspects, brand)
         },
         packageWeightAndSize: {
           weight: {
@@ -1117,7 +1145,7 @@ exports.ebayCreateListing = onCall(
         const missing = extractMissingAspects(publishRes.body);
         for (const name of missing) {
           if (!itemBody.product.aspects[name]) {
-            itemBody.product.aspects[name] = [brand && brand !== "Generic" ? brand : "Unbranded"];
+            itemBody.product.aspects[name] = fillValueForAspect(name, categoryAspects, brand);
             changed = true;
           }
         }
