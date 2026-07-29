@@ -844,15 +844,16 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
     setHorizontalCutPcts((prev) => [...prev, 50].sort((a, b) => a - b));
   }
 
-  // Draw Canvas content
+  // Draw Canvas content with CORS Fallback
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
 
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => {
+    let img = new Image();
+
+    function renderCanvas() {
+      if (!img.naturalWidth || !img.naturalHeight) return;
       canvas.width = img.naturalWidth || 800;
       canvas.height = img.naturalHeight || 600;
       imgRef.current = img;
@@ -957,7 +958,22 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
           ctx.setLineDash([]);
         }
       }
+    }
+
+    img.onload = renderCanvas;
+    img.onerror = () => {
+      if (img.crossOrigin) {
+        // Retry loading without crossOrigin attribute if blocked by host CORS policy
+        const fallbackImg = new Image();
+        fallbackImg.onload = () => {
+          img = fallbackImg;
+          renderCanvas();
+        };
+        fallbackImg.src = image.url;
+      }
     };
+
+    img.crossOrigin = "anonymous";
     img.src = image.url;
   }, [image.url, boxes, horizontalCutPcts, splitMethod, selectedBoxId, drawingBox]);
 
