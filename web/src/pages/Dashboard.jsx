@@ -239,7 +239,16 @@ function ProductCard({ product }) {
   const [showModal, setShowModal] = useState(false);
   const [ebayState, setEbayState] = useState({ listing: false, error: "" });
   const primaryImage = product.images?.[0] ?? "";
-  const sourceLabel = product.source === "weverse" ? "Weverse" : "AliExpress";
+  const sourceLabel =
+    product.source === "weverse"
+      ? "Weverse"
+      : product.source === "photo_upload" || product.source === "photo_upload_split" || product.source === "manual" || product.source === "image"
+      ? "Photo Upload"
+      : product.source === "aliexpress"
+      ? "AliExpress"
+      : product.source
+      ? product.source.charAt(0).toUpperCase() + product.source.slice(1)
+      : "Photo Upload";
 
   async function listOnEbay() {
     const suggested = (product.suggestedSellPrice ?? Math.ceil((product.aliexpressPrice * 1.35 + 8) * 100) / 100).toFixed(2);
