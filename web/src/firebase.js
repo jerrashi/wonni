@@ -42,3 +42,14 @@ export async function uploadImageBlob(uid, productId, blob, suffix = "") {
   await uploadBytes(fileRef, blob, { contentType: blob.type });
   return getDownloadURL(fileRef);
 }
+
+// Upload a File or Blob directly for a new photo draft and return the public URL.
+export async function uploadFileToStorage(uid, draftId, fileOrBlob, filename = "photo") {
+  const type = fileOrBlob.type || "image/jpeg";
+  const ext = type.includes("png") ? "png" : "jpg";
+  const ts = Date.now();
+  const path = `dropship/${uid}/drafts/${draftId}/${ts}-${filename}.${ext}`;
+  const fileRef = ref(storage, path);
+  await uploadBytes(fileRef, fileOrBlob, { contentType: type });
+  return getDownloadURL(fileRef);
+}
