@@ -22,7 +22,8 @@ function formatDate(value) {
 function badgeLabel(source) {
   if (source === "weverse") return "Weverse";
   if (source === "aliexpress") return "AliExpress";
-  return source ?? "Imported";
+  if (source === "photo_upload" || source === "photo_upload_split" || source === "manual" || source === "image") return "Photo Upload";
+  return source ? source.charAt(0).toUpperCase() + source.slice(1) : "Photo Upload";
 }
 
 function normalizeImageAssets(product) {
