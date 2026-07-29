@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { db, callFunction } from "../firebase";
 import { auth } from "../firebase";
 import Layout from "../components/Layout";
+import CreateDraftModal from "../components/CreateDraftModal";
 
 // ── List Modal ────────────────────────────────────────────────────────────────
 
@@ -343,6 +344,7 @@ export default function Dashboard() {
   const [products, setProducts] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   useEffect(() => {
     const uid = auth.currentUser?.uid;
@@ -376,26 +378,44 @@ export default function Dashboard() {
 
   return (
     <Layout>
-      <div className="page-header">
-        <h1>Products</h1>
-        <span style={{ fontSize: 13, color: "var(--muted)" }}>{products.length} imported</span>
+      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <h1 style={{ margin: 0 }}>Products</h1>
+          <span style={{ fontSize: 13, color: "var(--muted)" }}>{products.length} imported / drafts</span>
+        </div>
+        <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
+          📷 Create Draft from Photo
+        </button>
       </div>
+
       <ImportBar />
+
       {error && <div className="card" style={{ marginBottom: 20, color: "var(--danger)" }}>{error}</div>}
+
       {loading ? (
         <div className="empty-state">
           <div style={{ fontSize: 32 }}>⏳</div>
-          <p>Loading your imported products…</p>
+          <p>Loading your products…</p>
         </div>
       ) : products.length === 0 ? (
         <div className="empty-state">
           <div style={{ fontSize: 32 }}>📦</div>
-          <p>No products yet. Import from Weverse, AliExpress, or use the Chrome extension.</p>
+          <p>No products yet. Import from Weverse, AliExpress, or create a draft from a photo.</p>
+          <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={() => setShowCreateModal(true)}>
+            📷 Create Draft from Photo
+          </button>
         </div>
       ) : (
         <div className="product-grid">
           {products.map((p) => <ProductCard key={p.id} product={p} />)}
         </div>
+      )}
+
+      {showCreateModal && (
+        <CreateDraftModal
+          onClose={() => setShowCreateModal(false)}
+          onCreated={() => setShowCreateModal(false)}
+        />
       )}
     </Layout>
   );
