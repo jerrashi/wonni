@@ -589,10 +589,6 @@ export default function CreateDraftModal({ onClose, onCreated }) {
 
   // ── Submit Single Product Draft ─────────────────────────────────────────────
   async function handleSingleDraftSubmit() {
-    if (!title.trim()) {
-      setError("Please enter a title for the product draft.");
-      return;
-    }
     if (!filePreviews.length) {
       setError("Please upload at least one photo.");
       return;
@@ -606,6 +602,7 @@ export default function CreateDraftModal({ onClose, onCreated }) {
     setError("");
 
     try {
+      const finalTitle = title.trim() || `Item #${Math.floor(Math.random() * 9000 + 1000)}`;
       // 1. Upload all selected photos to Firebase Storage
       const draftTempId = `draft-${Date.now()}`;
       const storedImages = [];
@@ -647,7 +644,7 @@ export default function CreateDraftModal({ onClose, onCreated }) {
       const docRef = await addDoc(collection(db, "products"), {
         userId: uid,
         source: "photo_upload",
-        title: title.trim(),
+        title: finalTitle,
         description: description.trim(),
         images: storedImages,
         imageAssets: storedImageAssets,
