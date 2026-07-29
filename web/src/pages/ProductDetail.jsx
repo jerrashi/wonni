@@ -1253,7 +1253,7 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
 
         {splitMethod === "horizontal" && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-            <span>Split evenly into:</span>
+            <span>Split into:</span>
             <input
               type="number"
               min="2"
@@ -1261,20 +1261,15 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
               value={evenSliceCount}
               style={{ width: 44, padding: 4 }}
               className="input"
-              onChange={(e) => setEvenSliceCount(e.target.value)}
-            />
-            <span>pieces</span>
-            <button
-              className="btn btn-ghost"
-              style={{ fontSize: 12, padding: "4px 8px" }}
-              onClick={() => {
-                const n = Math.max(2, Math.min(20, parseInt(evenSliceCount, 10) || 2));
+              onChange={(e) => {
+                const val = e.target.value;
+                setEvenSliceCount(val);
+                const n = Math.max(2, Math.min(20, parseInt(val, 10) || 2));
                 const newPcts = Array.from({ length: n - 1 }, (_, i) => ((i + 1) / n) * 100);
                 setHorizontalCutPcts(newPcts);
               }}
-            >
-              Split evenly
-            </button>
+            />
+            <span>equal slices</span>
             <button className="btn btn-ghost" style={{ fontSize: 12, padding: "4px 8px" }} onClick={addCutLine}>
               + Add Cut Line
             </button>
