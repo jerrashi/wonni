@@ -5,7 +5,6 @@ import { db, callFunction } from "../firebase";
 import { auth } from "../firebase";
 import Layout from "../components/Layout";
 import CreateDraftModal from "../components/CreateDraftModal";
-import MercariListModal from "../components/MercariListModal";
 
 // ── List Modal ────────────────────────────────────────────────────────────────
 
@@ -341,6 +340,17 @@ function ProductCard({ product }) {
             {product.tiktokStatus === "active" && (
               <span style={{ fontSize: 12, color: "var(--success)" }}>Live on TikTok Shop</span>
             )}
+            {product.listingStatus?.mercari === "active" ? (
+              <span style={{ fontSize: 12, color: "var(--success)" }}>Live on Mercari</span>
+            ) : (
+              <button
+                className="btn btn-ghost"
+                style={{ width: "100%" }}
+                onClick={() => navigate(`/products/${product.id}`)}
+              >
+                {product.listingStatus?.mercari === "posting" ? "⏳ Mercari Posting…" : "Cross-post to Mercari"}
+              </button>
+            )}
             {product.ebayStatus === "active" ? (
               <span style={{ fontSize: 12, color: "var(--success)" }}>Live on eBay</span>
             ) : (
@@ -380,14 +390,6 @@ function ProductCard({ product }) {
           product={product}
           onClose={() => setShowModal(false)}
           onListed={() => setShowModal(false)}
-        />
-      )}
-
-      {showMercariModal && (
-        <MercariListModal
-          product={product}
-          onClose={() => setShowMercariModal(false)}
-          onSaved={() => setShowMercariModal(false)}
         />
       )}
     </>

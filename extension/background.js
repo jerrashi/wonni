@@ -36,6 +36,12 @@ chrome.runtime.onMessageExternal.addListener((message, _sender, sendResponse) =>
     chrome.storage.local.set({ tiktokFeeRate: message.feeRate });
     sendResponse({ ok: true });
   }
+  if (message.type === "START_MERCARI_CROSS_POST") {
+    handleStartMercariCrossPost(message.payload)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ error: e.message }));
+    return true;
+  }
   if (message.type === "MERCARI_POST_QUEUE") {
     handleMercariPostQueue(message.listings ?? [])
       .then(sendResponse)
@@ -45,7 +51,7 @@ chrome.runtime.onMessageExternal.addListener((message, _sender, sendResponse) =>
   return true;
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "IMPORT_PRODUCT") {
     handleImport(message.data, message.source ?? "aliexpress")
       .then(sendResponse)
@@ -58,7 +64,33 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .catch((e) => sendResponse({ error: e.message }));
     return true;
   }
+  if (message.type === "START_MERCARI_CROSS_POST") {
+    handleStartMercariCrossPost(message.payload)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ error: e.message }));
+    return true;
+  }
+  if (message.type === "GET_MERCARI_PAYLOAD") {
+    chrome.storage.local.get(["pendingMercariPayload"], (res) => {
+      sendResponse({ payload: res.pendingMercariPayload ?? null });
+    });
+    return true;
+  }
+  if (message.type === "MERCARI_CROSS_POST_RESULT") {
+    chrome.storage.local.remove(["pendingMercariPayload"]);
+    sendResponse({ ok: true });
+    return true;
+  }
 });
+
+async function handleStartMercariCrossPost(payload) {
+  if (!payload || !payload.title) {
+    throw new Error("Invalid cross-post payload.");
+  }
+  await chrome.storage.local.set({ pendingMercariPayload: payload });
+  const tab = await chrome.tabs.create({ url: "https://www.mercari.com/sell/", active: true });
+  return { ok: true, tabId: tab.id };
+}
 
 async function handleImport(productData, source) {
   const { idToken } = await chrome.storage.local.get(["idToken"]);
