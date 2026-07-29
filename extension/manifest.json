@@ -12,7 +12,8 @@
     "https://www.aliexpress.com/*",
     "https://aliexpress.com/*",
     "https://us.aliexpress.com/*",
-    "https://shop.weverse.io/*"
+    "https://shop.weverse.io/*",
+    "https://www.mercari.com/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -32,6 +33,11 @@
       "matches": ["https://shop.weverse.io/*"],
       "js": ["weverse_content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.mercari.com/sell/*"],
+      "js": ["mercari_content.js"],
+      "run_at": "document_idle"
     }
   ],
   "externally_connectable": {
@@ -40,6 +46,12 @@
       "http://localhost:5173/*"
     ]
   },
+  "web_accessible_resources": [
+    {
+      "resources": ["popup.html", "popup.js", "icons/icon16.png", "icons/icon48.png", "icons/icon128.png"],
+      "matches": ["https://shop.weverse.io/*"]
+    }
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {

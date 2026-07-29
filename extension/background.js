@@ -7,6 +7,7 @@ const IMPORT_FUNCTIONS = {
   aliexpress: `${FUNCTIONS_BASE}/aliexpressImportProduct`,
   weverse: `${FUNCTIONS_BASE}/weverseImportProduct`,
 };
+const MERCARI_SELL_URL = "https://www.mercari.com/sell/";
 
 function normalizeDashboardUrl(rawUrl) {
   try {
@@ -34,6 +35,12 @@ chrome.runtime.onMessageExternal.addListener((message, _sender, sendResponse) =>
   if (message.type === "SET_FEE_RATE") {
     chrome.storage.local.set({ tiktokFeeRate: message.feeRate });
     sendResponse({ ok: true });
+  }
+  if (message.type === "MERCARI_POST_QUEUE") {
+    handleMercariPostQueue(message.listings ?? [])
+      .then(sendResponse)
+      .catch((e) => sendResponse({ error: e.message }));
+    return true; // async
   }
   return true;
 });
@@ -112,4 +119,81 @@ async function handleBulkImport(items, source) {
 
   const json = await response.json();
   return json?.result ?? { importedCount: 0 };
+}
+
+// Posts a queue of Mercari listings one at a time — unlike import, this
+// can't be handed off to a Cloud Function chunk-runner: each listing needs
+// its own real browser tab to actually drive Mercari's sell form. Reports
+// each outcome (success or failure) individually via updateMercariListingStatus
+// so the web app's live Firestore listener reflects progress without any
+// separate messaging channel back to it.
+async function handleMercariPostQueue(listings) {
+  const { idToken } = await chrome.storage.local.get(["idToken"]);
+  if (!idToken) throw new Error("Sign in to Wonni Drop first.");
+  if (!listings.length) return { ok: true, postedCount: 0 };
+
+  let postedCount = 0;
+  for (const listing of listings) {
+    try {
+      const result = await postOneMercariListing(listing);
+      await reportMercariStatus(idToken, listing, { status: "active", ...result });
+      postedCount += 1;
+    } catch (err) {
+      await reportMercariStatus(idToken, listing, { status: "failed", error: err.message ?? "Unknown error." });
+    }
+  }
+  return { ok: true, postedCount };
+}
+
+async function reportMercariStatus(idToken, listing, outcome) {
+  // Best-effort — a failed status write shouldn't stop the rest of the
+  // queue from being attempted.
+  await fetch(`${FUNCTIONS_BASE}/updateMercariListingStatus`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+    body: JSON.stringify({
+      data: {
+        productId: listing.productId,
+        variantId: listing.variantId ?? null,
+        status: outcome.status,
+        listingId: outcome.listingId ?? null,
+        url: outcome.url ?? null,
+        category: outcome.category ?? null,
+        error: outcome.error ?? null,
+      },
+    }),
+  }).catch(() => {});
+}
+
+function waitForTabComplete(tabId) {
+  return new Promise((resolve) => {
+    function listener(id, info) {
+      if (id === tabId && info.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    }
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+// Opens a real tab on Mercari's sell page (active, not backgrounded — some
+// sites throttle/behave differently in inactive tabs, and this needs to
+// reliably drive a live form) and hands the listing payload to
+// mercari_content.js to fill in and submit. Leaves the tab open on failure
+// so the user (or a debugging pass) can see exactly what went wrong; only
+// closes it on success.
+async function postOneMercariListing(listing) {
+  const tab = await chrome.tabs.create({ url: MERCARI_SELL_URL, active: true });
+  await waitForTabComplete(tab.id);
+  // The sell page is a client-rendered SPA — "complete" fires once the HTML
+  // shell loads, not once the form has actually hydrated and is ready for
+  // scripted input, so give it a moment before messaging the content script.
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+
+  const response = await chrome.tabs.sendMessage(tab.id, { type: "FILL_AND_SUBMIT_LISTING", listing });
+  if (!response?.ok) throw new Error(response?.error ?? "Mercari posting failed.");
+
+  await chrome.tabs.remove(tab.id).catch(() => {});
+  return { listingId: response.listingId, url: response.url, category: response.category };
 }

@@ -1,17 +1,18 @@
 import { useState, useEffect, useRef } from "react";
-import { collection, query, where, orderBy, onSnapshot } from "firebase/firestore";
+import { collection, doc, deleteDoc, query, where, orderBy, onSnapshot } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import { db, callFunction } from "../firebase";
 import { auth } from "../firebase";
 import Layout from "../components/Layout";
 import CreateDraftModal from "../components/CreateDraftModal";
+import MercariListModal from "../components/MercariListModal";
 
 // ── List Modal ────────────────────────────────────────────────────────────────
 
 function ListModal({ product, onClose, onListed }) {
   const [title, setTitle] = useState(product.title.slice(0, 255));
   const [price, setPrice] = useState(
-    ((product.suggestedSellPrice ?? product.aliexpressPrice * 2.5) || 0).toFixed(2)
+    ((product.listingPrice ?? product.aliexpressPrice * 2.5) || 0).toFixed(2)
   );
   const [categories, setCategories] = useState([]);
   const [loadingCats, setLoadingCats] = useState(true);
@@ -237,7 +238,9 @@ function ImportBar({ onImported }) {
 function ProductCard({ product }) {
   const navigate = useNavigate();
   const [showModal, setShowModal] = useState(false);
+  const [showMercariModal, setShowMercariModal] = useState(false);
   const [ebayState, setEbayState] = useState({ listing: false, error: "" });
+  const [deleting, setDeleting] = useState(false);
   const primaryImage = product.images?.[0] ?? "";
   const sourceLabel =
     product.source === "weverse"
@@ -250,8 +253,29 @@ function ProductCard({ product }) {
       ? product.source.charAt(0).toUpperCase() + product.source.slice(1)
       : "Photo Upload";
 
+  async function handleDelete() {
+    const liveOn = [
+      product.tiktokStatus === "active" ? "TikTok Shop" : null,
+      product.ebayStatus === "active" ? "eBay" : null,
+    ].filter(Boolean);
+    if (liveOn.length) {
+      window.alert(
+        `Can't delete "${product.title}" — it's still active on ${liveOn.join(" and ")}. Take it down there first, then delete it here.`
+      );
+      return;
+    }
+    if (!window.confirm(`Delete "${product.title}"? This can't be undone.`)) return;
+    setDeleting(true);
+    try {
+      await deleteDoc(doc(db, "products", product.id));
+    } catch (e) {
+      setDeleting(false);
+      window.alert(e.message ?? "Delete failed.");
+    }
+  }
+
   async function listOnEbay() {
-    const suggested = (product.suggestedSellPrice ?? Math.ceil((product.aliexpressPrice * 1.35 + 8) * 100) / 100).toFixed(2);
+    const suggested = (product.listingPrice ?? Math.ceil((product.aliexpressPrice * 1.35 + 8) * 100) / 100).toFixed(2);
     const input = window.prompt("eBay sell price (USD):", suggested);
     if (input === null) return;
     setEbayState({ listing: true, error: "" });
@@ -332,6 +356,21 @@ function ProductCard({ product }) {
             {ebayState.error && (
               <span style={{ fontSize: 11, color: "var(--danger)" }}>{ebayState.error}</span>
             )}
+            <button
+              className="btn btn-ghost"
+              style={{ width: "100%" }}
+              onClick={() => setShowMercariModal(true)}
+            >
+              List on Mercari
+            </button>
+            <button
+              className="btn btn-danger"
+              style={{ width: "100%" }}
+              onClick={handleDelete}
+              disabled={deleting}
+            >
+              {deleting ? "Deleting…" : "Delete"}
+            </button>
           </div>
         </div>
       </div>
@@ -341,6 +380,14 @@ function ProductCard({ product }) {
           product={product}
           onClose={() => setShowModal(false)}
           onListed={() => setShowModal(false)}
+        />
+      )}
+
+      {showMercariModal && (
+        <MercariListModal
+          product={product}
+          onClose={() => setShowMercariModal(false)}
+          onSaved={() => setShowMercariModal(false)}
         />
       )}
     </>

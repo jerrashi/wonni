@@ -133,6 +133,23 @@
       font-size: 11px;
       box-sizing: border-box;
     }
+
+    /* Single-item primary card */
+    .single-card { margin-bottom: 10px; }
+    .single-card img {
+      width: 100%; height: 160px; object-fit: cover; border-radius: 8px;
+      background: #1a1a1a; margin-bottom: 8px;
+    }
+    .single-title { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+    .single-meta { font-size: 11px; color: #888; margin-bottom: 8px; }
+
+    /* Shared checklist block */
+    .checklist-header {
+      font-size: 12px; font-weight: 600; margin: 10px 0 6px;
+      padding-top: 8px; border-top: 1px solid #222;
+    }
+    .checklist-gate { display: flex; gap: 6px; }
+    .checklist-gate button { margin-bottom: 0; }
   </style>
 </head>
 <body>
@@ -143,24 +160,41 @@
 
   <div class="status" id="status">Loading page detection…</div>
 
-  <!-- Detected bulk items section -->
-  <div id="bulk-section" style="display:none">
-    <div class="bulk-header">
-      <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
-        <input type="checkbox" id="select-all-cb" checked /> Select all
-      </label>
-      <span id="bulk-count-label">0 items</span>
-    </div>
-    <div class="bulk-list" id="bulk-list"></div>
+  <!-- Single product/sale page primary card -->
+  <div id="single-card" class="single-card" style="display:none">
+    <img id="single-photo" alt="" />
+    <div id="single-title" class="single-title"></div>
+    <div id="single-meta" class="single-meta"></div>
+    <button class="btn-primary" id="single-import-btn">Import</button>
+  </div>
 
-    <div class="progress-wrap" id="progress-wrap" style="display:none">
-      <div class="progress-bar-bg">
-        <div class="progress-bar-fill" id="progress-fill"></div>
+  <!-- Shared checklist: related items (single mode) or the whole list (order history / generic list pages) -->
+  <div id="checklist-section" style="display:none">
+    <div class="checklist-header" id="checklist-header"></div>
+
+    <div class="checklist-gate" id="checklist-gate" style="display:none">
+      <button class="btn-primary" id="import-all-btn">Import All</button>
+      <button id="select-btn">Select</button>
+    </div>
+
+    <div id="checklist-body" style="display:none">
+      <div class="bulk-header">
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+          <input type="checkbox" id="select-all-cb" checked /> Select all
+        </label>
+        <span id="bulk-count-label">0 items</span>
       </div>
-      <div class="progress-text" id="progress-text">Importing…</div>
-    </div>
+      <div class="bulk-list" id="bulk-list"></div>
 
-    <button class="btn-primary" id="import-bulk-btn">Import Selected Items</button>
+      <div class="progress-wrap" id="progress-wrap" style="display:none">
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" id="progress-fill"></div>
+        </div>
+        <div class="progress-text" id="progress-text">Importing…</div>
+      </div>
+
+      <button class="btn-primary" id="import-selected-btn">Import Selected Items</button>
+    </div>
   </div>
 
   <button class="btn-primary" id="open-dashboard-btn" style="margin-top:auto">Open Dashboard</button>
