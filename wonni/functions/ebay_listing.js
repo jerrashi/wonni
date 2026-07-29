@@ -1188,7 +1188,7 @@ exports.ebayCreateListing = onCall(
         // Map our condition enum to the closest of eBay's four fixed value IDs.
         if (isCardConditionError(publishRes.body) && !itemBody.conditionDescriptors) {
           const valueId = CARD_CONDITION_VALUE_IDS[itemBody.condition] || CARD_CONDITION_VALUE_IDS.USED_GOOD;
-          itemBody.conditionDescriptors = [{ name: CARD_CONDITION_DESCRIPTOR_ID, values: [{ value: valueId }] }];
+          itemBody.conditionDescriptors = [{ name: CARD_CONDITION_DESCRIPTOR_ID, values: [valueId] }];
           console.log(`[ebayCreateListing] Setting Card Condition descriptor (${CARD_CONDITION_DESCRIPTOR_ID}) to ${valueId} for condition ${itemBody.condition}`);
           changed = true;
         }
