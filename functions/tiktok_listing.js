@@ -92,7 +92,7 @@ exports.tiktokCreateListing = onCall(
     if (!imgIds.length) throw new HttpsError("internal", "No images could be uploaded to TikTok.");
 
     const finalPrice = sellPrice
-      ?? product.suggestedSellPrice
+      ?? product.listingPrice
       ?? product.aliexpressPrice * 2.5;
 
     const { images: _ignoredImages, ...basePayload } = toTiktokProductPayload(product, {

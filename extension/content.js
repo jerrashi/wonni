@@ -64,16 +64,111 @@
       });
     }
 
-    // Variants
+    // Variants — prefer the real per-SKU price/stock table (each entry
+    // carries a skuAttr string like "14:200000343#Red;200007763:201336100#L"
+    // plus a sku id) so the backend's skuAttr parser
+    // (functions/aliexpress_product.js's mapAliexpressVariants) can build
+    // real options/variants exactly like the DS-API import path does.
+    // AliExpress's client-side JSON layout varies across pages/experiments,
+    // so this searches for the list by shape (an array of objects each
+    // carrying a skuAttr string) instead of one hardcoded key, since the
+    // previous code (skuPropertyList's propId/propName/valueId/valueName
+    // taxonomy) never matched what the backend parser reads and silently
+    // produced zero variants for every extension-scraped import.
+    const variants = scrapeVariants(skuInfo, price);
+
+    return { productId, productUrl: location.href, title, price, images, variants };
+  }
+
+  function findSkuAttrList(root, depth) {
+    if (!root || typeof root !== "object" || depth > 4) return null;
+    if (Array.isArray(root)) {
+      if (root.length && root.every((e) => e && typeof e === "object" && typeof e.skuAttr === "string")) {
+        return root;
+      }
+      for (const entry of root) {
+        const found = findSkuAttrList(entry, depth + 1);
+        if (found) return found;
+      }
+      return null;
+    }
+    for (const key of Object.keys(root)) {
+      const found = findSkuAttrList(root[key], depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  // The backend (functions/aliexpress_product.js's parseSkuAttr) expects
+  // "pid:vid#Name:Value" segments — but the page's internal per-SKU id list
+  // may only carry bare "pid:vid" pairs with the human-readable name/value
+  // living separately in skuPropertyList. Rebuild the canonical labeled
+  // string from that taxonomy rather than assuming the scraped string
+  // already has a label, so parsing is correct either way.
+  function buildCanonicalSkuAttr(rawAttr, skuPropertyList) {
+    if (typeof rawAttr !== "string" || !rawAttr) return "";
+    const propById = new Map();
+    (skuPropertyList ?? []).forEach((prop) => {
+      const valueById = new Map();
+      prop.skuPropertyValues?.forEach((val) => {
+        valueById.set(String(val.propertyValueId), val.propertyValueDisplayName ?? val.skuPropertyImagePath ?? "");
+      });
+      propById.set(String(prop.skuPropertyId), { name: prop.skuPropertyName ?? "Option", valueById });
+    });
+
+    return rawAttr
+      .split(";")
+      .map((segment) => {
+        const hashIdx = segment.indexOf("#");
+        const idPart = hashIdx === -1 ? segment : segment.slice(0, hashIdx);
+        const existingLabel = hashIdx === -1 ? "" : segment.slice(hashIdx + 1);
+        const [pid, vid] = idPart.split(":");
+        const prop = propById.get(pid);
+        const valueName = prop?.valueById.get(vid);
+        const label = valueName ? `${prop.name}:${valueName}` : existingLabel;
+        return label ? `${idPart}#${label}` : idPart;
+      })
+      .filter(Boolean)
+      .join(";");
+  }
+
+  function scrapeVariants(skuInfo, fallbackPrice) {
+    const skuAttrList = findSkuAttrList(skuInfo, 0);
+    if (skuAttrList) {
+      return skuAttrList.map((sku) => ({
+        skuId: sku.skuId ?? sku.skuID ?? sku.id ?? "",
+        skuAttr: buildCanonicalSkuAttr(sku.skuAttr, skuInfo.skuPropertyList),
+        price:
+          parseFloat(
+            sku.skuVal?.skuAmount?.value ??
+              sku.skuVal?.actAmount?.value ??
+              sku.skuActivityAmount?.value ??
+              sku.price
+          ) || fallbackPrice,
+      }));
+    }
+
+    // Fallback: only the property/value taxonomy is available (no real SKU
+    // combos linking them together) — seed one opaque "Option" dimension
+    // (mirroring Weverse's opaque-variant-name fallback) so the import at
+    // least captures something the user can split into real dimensions
+    // later, instead of silently importing with zero variants.
     const variants = [];
     const skuProps = skuInfo.skuPropertyList ?? [];
     skuProps.forEach((prop) => {
       prop.skuPropertyValues?.forEach((val) => {
-        variants.push({ propId: prop.skuPropertyId, propName: prop.skuPropertyName, valueId: val.propertyValueId, valueName: val.propertyValueDisplayName ?? val.skuPropertyImagePath });
+        const label = `${prop.skuPropertyName ?? "Option"} - ${
+          val.propertyValueDisplayName ?? val.skuPropertyImagePath ?? ""
+        }`.trim();
+        if (!label) return;
+        variants.push({
+          skuId: `${prop.skuPropertyId}-${val.propertyValueId}`,
+          skuAttr: `Option:${label}`,
+          price: fallbackPrice,
+        });
       });
     });
-
-    return { productId, productUrl: location.href, title, price, images, variants };
+    return variants;
   }
 
   // ── 2. Inject overlay UI ───────────────────────────────────────────────

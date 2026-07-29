@@ -12,8 +12,10 @@ const { tiktokExchangeToken } = require("./tiktok_auth");
 const { ebayExchangeToken } = require("./ebay_auth");
 const { ebayCreateListing } = require("./ebay_listing");
 const { tiktokCreateListing, tiktokUpdateListing, tiktokDeleteListing, getTiktokCategories } = require("./tiktok_listing");
+const { updateMercariListingStatus, ensureMercariListingDetails } = require("./mercari_listing");
 const { syncTiktokOrders, syncTiktokOrdersScheduled } = require("./tiktok_orders");
 const { disconnectPlatform, updateSettings, generateOAuthState } = require("./user_settings");
+const { onProductDeleted } = require("./product_cleanup");
 
 module.exports = {
   // Auth
@@ -27,6 +29,7 @@ module.exports = {
   weverseBulkImportProducts,
   splitProductImage,
   identifyProductsInImage,
+  onProductDeleted,
 
   // TikTok Shop listings
   getTiktokCategories,
@@ -36,6 +39,10 @@ module.exports = {
 
   // eBay listings
   ebayCreateListing,
+
+  // Mercari listings
+  updateMercariListingStatus,
+  ensureMercariListingDetails,
 
   // User settings
   generateOAuthState,

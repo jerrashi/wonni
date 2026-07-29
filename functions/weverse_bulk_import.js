@@ -3,6 +3,7 @@ const admin = require("firebase-admin");
 
 const { downloadBuffer, savePublicBuffer } = require("./product_media");
 const { fetchWeverseSale, validateSaleForImport, mapSaleToProduct, parseWeverseUrl } = require("./weverse_product");
+const { importTimeGeminiFields, geminiApiKey } = require("./gemini_identify");
 
 const BATCH_SIZE_LIMIT = 25;
 const CONCURRENCY_CHUNK_SIZE = 4;
@@ -16,9 +17,13 @@ function chunkArray(array, size) {
 }
 
 // Bulk import a list of Weverse items (up to 25 per request).
-// Expects: { items: [{ productUrl, saleId, title }] }
+// Expects: { items: [{ productUrl, saleId, title, orderSheetNumber? }] }
+// orderSheetNumber (present when importing from Order History) is the
+// user-facing order number, kept for accounting reconciliation.
 exports.weverseBulkImportProducts = onCall(
-  { timeoutSeconds: 120, memory: "1GiB" },
+  // Bumped from 120s: each item now also does a best-effort Gemini call
+  // (capped at 15s) on top of the existing scrape/image work.
+  { timeoutSeconds: 300, memory: "1GiB", secrets: [geminiApiKey] },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
@@ -104,6 +109,13 @@ exports.weverseBulkImportProducts = onCall(
               }
             }
 
+            const finalImages = storedImages.length ? storedImages : product.images;
+            const geminiFields = await importTimeGeminiFields({
+              title: product.title,
+              description: product.description,
+              images: finalImages,
+            });
+
             const docRef = db.collection("products").doc();
             await docRef.set({
               userId: uid,
@@ -112,17 +124,22 @@ exports.weverseBulkImportProducts = onCall(
               title: product.title,
               description: product.description,
               weverseInfoTable: product.infoTable,
-              images: storedImages.length ? storedImages : product.images,
+              images: finalImages,
               imageAssets: storedImageAssets.length ? storedImageAssets : product.imageAssets,
-              listingImages: storedImages.length ? storedImages : product.images,
+              listingImages: finalImages,
               price: product.price,
               aliexpressPrice: product.price,
+              options: product.options,
               variants: product.variants,
+              hasVariants: product.options.length > 0,
               artistName: product.artistName,
               saleStatus: product.saleStatus,
               preOrder: product.preOrder,
               sourceUrl: parsed.url,
+              orderSheetNumber: item.orderSheetNumber ?? null,
+              orderSheetGroupNumber: item.orderSheetGroupNumber ?? null,
               tiktokStatus: "draft",
+              ...geminiFields,
               importedAt: admin.firestore.FieldValue.serverTimestamp(),
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             });

@@ -2,6 +2,7 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const https = require("https");
 const { callAliexpressApi } = require("./aliexpress_auth");
+const { importTimeGeminiFields, geminiApiKey } = require("./gemini_identify");
 
 const ALLOWED_IMAGE_HOSTS = [".alicdn.com", ".aliexpress-media.com"];
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -44,9 +45,67 @@ function extractItemId(url) {
   return match?.[1] ?? null;
 }
 
+// AliExpress sku_attr is a ";"-separated list of "pid:vid#Name:Value" pairs
+// (the "#Name:Value" label suffix is what carries the human-readable
+// attribute — pid/vid are internal AliExpress property/value ids).
+function parseSkuAttr(skuAttr) {
+  if (!skuAttr || typeof skuAttr !== "string") return [];
+  return skuAttr
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const labelPart = part.includes("#") ? part.slice(part.indexOf("#") + 1) : part;
+      const colonIdx = labelPart.indexOf(":");
+      if (colonIdx === -1) return { name: "Option", value: labelPart.trim() };
+      return { name: labelPart.slice(0, colonIdx).trim() || "Option", value: labelPart.slice(colonIdx + 1).trim() };
+    })
+    .filter((p) => p.value);
+}
+
+// Map AliExpress SKUs (each carrying a skuAttr like "Color:Red;Size:L") into
+// the product's normalized options/variants shape. Falls back to no
+// options/variants (single-SKU product) if nothing structured can be parsed.
+function mapAliexpressVariants(skus, productId) {
+  const parsedSkus = (skus ?? []).map((s) => ({ ...s, parsed: parseSkuAttr(s.skuAttr) }));
+
+  const dimensions = new Map(); // optionName -> ordered Set of values
+  parsedSkus.forEach(({ parsed }) => {
+    parsed.forEach(({ name, value }) => {
+      if (!dimensions.has(name)) dimensions.set(name, new Set());
+      dimensions.get(name).add(value);
+    });
+  });
+
+  if (!dimensions.size) return { options: [], variants: [] };
+
+  const options = Array.from(dimensions.entries()).map(([name, values], i) => ({
+    id: `opt-${i}`,
+    name,
+    values: Array.from(values),
+  }));
+
+  const variants = parsedSkus.map((s, i) => {
+    const optionValues = {};
+    s.parsed.forEach(({ name, value }) => { optionValues[name] = value; });
+    return {
+      id: `v${Date.now()}${i}`,
+      optionValues,
+      sku: `${productId}-${i + 1}`,
+      price: typeof s.price === "number" ? s.price : null,
+      quantity: 1,
+      sourcePrice: typeof s.price === "number" ? s.price : null,
+      sourceVariantId: s.skuId ?? null,
+      active: true,
+    };
+  });
+
+  return { options, variants };
+}
+
 // Import a product from AliExpress — called by Chrome extension (scrapedData) or web URL paste
 exports.aliexpressImportProduct = onCall(
-  { timeoutSeconds: 120, memory: "512MiB" },
+  { timeoutSeconds: 120, memory: "512MiB", secrets: [geminiApiKey] },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
@@ -114,17 +173,27 @@ exports.aliexpressImportProduct = onCall(
 
     // Create Firestore product document
     const docRef = db.collection("products").doc();
+    const { options, variants } = mapAliexpressVariants(product.variants, docRef.id);
+    const finalImages = storedImages.length ? storedImages : product.images.slice(0, 5);
+    const geminiFields = await importTimeGeminiFields({
+      title: product.title,
+      description: product.description ?? "",
+      images: finalImages,
+    });
     await docRef.set({
       userId: uid,
       aliexpressProductId: product.productId,
       aliexpressProductUrl: product.productUrl ?? productUrl ?? "",
       title: product.title,
       description: product.description ?? "",
-      images: storedImages.length ? storedImages : product.images.slice(0, 5),
+      images: finalImages,
       aliexpressPrice: product.price,
-      suggestedSellPrice: typeof product.suggestedSellPrice === "number" ? product.suggestedSellPrice : null,
-      variants: product.variants ?? [],
+      listingPrice: typeof product.listingPrice === "number" ? product.listingPrice : null,
+      options,
+      variants,
+      hasVariants: options.length > 0,
       tiktokStatus: "draft",
+      ...geminiFields,
       importedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });

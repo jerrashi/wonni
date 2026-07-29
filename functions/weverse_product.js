@@ -2,6 +2,7 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 
 const { downloadBuffer, savePublicBuffer } = require("./product_media");
+const { importTimeGeminiFields, geminiApiKey } = require("./gemini_identify");
 
 const MAX_IMAGES = 24;
 const USER_AGENT =
@@ -130,6 +131,81 @@ function validateSaleForImport(sale) {
   return { ok: true };
 }
 
+// Weverse variant names look like "55 RM Jersey / M-L" (two dimensions) or
+// "5 Plush Keyring" (one) — a leading sequential index Weverse assigns
+// internally (not meaningful data), then "<Style>" or "<Style> / <Size>".
+// Split on " / " to recover real Style/Size dimensions instead of treating
+// the whole string as one opaque value.
+function stripWeverseOptionIndex(name) {
+  return (name ?? "").replace(/^\d+\s+/, "").trim();
+}
+
+// If every distinct Style value ends with the same trailing word(s) (e.g.
+// every jersey style is "<Member> Jersey"), that trailing word carries no
+// distinguishing information — strip it so values read as "RM" instead of
+// "RM Jersey". Only strips when ALL values share the exact same trailing
+// token(s); a mixed/ambiguous set is left untouched rather than guessed at.
+function stripCommonTrailingWords(values) {
+  if (values.length < 2) return values;
+  const tokenLists = values.map((v) => v.split(/\s+/));
+  const minLen = Math.min(...tokenLists.map((t) => t.length));
+  let commonSuffixLen = 0;
+  for (let i = 1; i <= minLen - 1; i++) { // keep at least 1 leading token
+    const candidate = tokenLists[0].slice(-i).join(" ");
+    if (tokenLists.every((t) => t.slice(-i).join(" ") === candidate)) commonSuffixLen = i;
+    else break;
+  }
+  if (!commonSuffixLen) return values;
+  return tokenLists.map((tokens) => tokens.slice(0, -commonSuffixLen).join(" "));
+}
+
+function mapWeverseVariantsToOptions(rawVariants) {
+  const parsed = rawVariants.map((v) => {
+    const cleaned = stripWeverseOptionIndex(v.name);
+    const slashIdx = cleaned.indexOf(" / ");
+    return slashIdx === -1
+      ? { ...v, style: cleaned, size: null }
+      : { ...v, style: cleaned.slice(0, slashIdx).trim(), size: cleaned.slice(slashIdx + 3).trim() };
+  });
+
+  const rawStyleValues = [...new Set(parsed.map((v) => v.style).filter(Boolean))];
+  if (!rawStyleValues.length) return { options: [], variants: [] };
+
+  const hasSize = parsed.some((v) => v.size);
+  // Only clean up trailing words for the two-dimension case — a lone
+  // dimension (e.g. just sizes, or just member names) doesn't have this
+  // "<Member> <ItemType>" pattern to clean up.
+  if (hasSize) {
+    const cleanedStyleValues = stripCommonTrailingWords(rawStyleValues);
+    const styleRename = new Map(rawStyleValues.map((v, i) => [v, cleanedStyleValues[i]]));
+    parsed.forEach((v) => { v.style = styleRename.get(v.style) ?? v.style; });
+  }
+
+  const styleValues = [...new Set(parsed.map((v) => v.style).filter(Boolean))];
+  const options = [{ id: "opt-0", name: "Style", values: styleValues }];
+  if (hasSize) {
+    const sizeValues = [...new Set(parsed.map((v) => v.size).filter(Boolean))];
+    options.push({ id: "opt-1", name: "Size", values: sizeValues });
+  }
+
+  const variants = parsed.map((v, i) => {
+    const optionValues = { Style: v.style };
+    if (hasSize) optionValues.Size = v.size ?? "";
+    return {
+      id: `v${Date.now()}${i}`,
+      optionValues,
+      sku: v.stockId ? `w-${v.stockId}` : `w-${i + 1}`,
+      price: typeof v.price === "number" ? v.price + (v.addPrice ?? 0) : null,
+      quantity: typeof v.maxOrderQuantity === "number" ? v.maxOrderQuantity : 1,
+      sourcePrice: typeof v.price === "number" ? v.price : null,
+      sourceVariantId: v.stockId ?? null,
+      active: !v.soldOut,
+    };
+  });
+
+  return { options, variants };
+}
+
 function mapSaleToProduct(sale, sourceUrl) {
   const price = sale.price?.salePrice ?? sale.price?.originalPrice ?? 0;
   const infoTable = normalizeInfoTable(sale.notificationInfos);
@@ -154,7 +230,7 @@ function mapSaleToProduct(sale, sourceUrl) {
     })),
   ].filter((entry) => entry.url && isAllowedImageUrl(entry.url));
 
-  const variants = (sale.option?.options ?? []).map((opt) => ({
+  const rawVariants = (sale.option?.options ?? []).map((opt) => ({
     stockId: opt.saleStockId,
     name: opt.saleOptionName,
     price: opt.optionSalePrice ?? price,
@@ -162,6 +238,7 @@ function mapSaleToProduct(sale, sourceUrl) {
     soldOut: Boolean(opt.isSoldOut),
     maxOrderQuantity: opt.optionOrderLimit?.maxOrderQuantity ?? null,
   }));
+  const { options, variants } = mapWeverseVariantsToOptions(rawVariants);
 
   return {
     title: sale.name ?? "",
@@ -170,6 +247,7 @@ function mapSaleToProduct(sale, sourceUrl) {
     infoTable,
     images: images.slice(0, MAX_IMAGES).map((image) => image.url),
     imageAssets: images.slice(0, MAX_IMAGES),
+    options,
     variants,
     artistName: sale.labelArtistInfo?.artistName ?? sale.labelArtistInfo?.name ?? "",
     saleStatus: sale.status ?? "",
@@ -190,7 +268,7 @@ module.exports.mapSaleToProduct = mapSaleToProduct;
 
 // Import a product from a Weverse Shop sale URL (URL-paste flow, no extension needed)
 exports.weverseImportProduct = onCall(
-  { timeoutSeconds: 120, memory: "512MiB" },
+  { timeoutSeconds: 120, memory: "512MiB", secrets: [geminiApiKey] },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
@@ -239,6 +317,13 @@ exports.weverseImportProduct = onCall(
       }
     }
 
+    const finalImages = storedImages.length ? storedImages : product.images;
+    const geminiFields = await importTimeGeminiFields({
+      title: product.title,
+      description: product.description,
+      images: finalImages,
+    });
+
     const docRef = db.collection("products").doc();
     await docRef.set({
       userId: uid,
@@ -248,19 +333,21 @@ exports.weverseImportProduct = onCall(
       sourceUrl: product.sourceUrl,
       title: product.title,
       description: product.description,
-      images: storedImages.length ? storedImages : product.images,
+      images: finalImages,
       imageAssets: storedImageAssets.length ? storedImageAssets : product.imageAssets,
       weverseInfoTable: product.infoTable,
       sourcePrice: product.price,
       // Kept for compatibility with Dashboard/ListModal which read aliexpressPrice
       aliexpressPrice: product.price,
-      suggestedSellPrice: null,
+      listingPrice: null,
+      options: product.options,
       variants: product.variants,
+      hasVariants: product.options.length > 0,
       artistName: product.artistName,
       saleStatus: product.saleStatus,
       preOrder: product.preOrder,
-      listingStatus: { ebay: "draft", mercari: "draft", etsy: "draft" },
       tiktokStatus: "draft",
+      ...geminiFields,
       importedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });

@@ -10,7 +10,7 @@ const MARKETPLACE_ID = "EBAY_US";
 // Weverse price + Weverse shipping to you + shipping to the buyer.
 function computeEbaySellPrice(product) {
   const cost = product.sourcePrice ?? product.aliexpressPrice ?? 0;
-  if (product.suggestedSellPrice) return product.suggestedSellPrice;
+  if (product.listingPrice) return product.listingPrice;
   // markup covers fees (~13.5%), ~US shipping, and margin
   return Math.ceil((cost * 1.35 + 8) * 100) / 100;
 }
