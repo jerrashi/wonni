@@ -44,12 +44,13 @@ export default function CreateDraftModal({ onClose, onCreated }) {
   const [variants, setVariants] = useState([]); // [{ name: "Red", price: 19.99, imageId: "" }]
 
   // ── Photo Split State ───────────────────────────────────────────────────────
-  const [splitMethod, setSplitMethod] = useState("grid"); // "grid" | "horizontal" | "ai"
+  const [splitMethod, setSplitMethod] = useState("custom"); // "custom" | "grid" | "horizontal"
   const [gridRows, setGridRows] = useState(3);
   const [gridCols, setGridCols] = useState(3);
   const [horizontalCutPcts, setHorizontalCutPcts] = useState([33, 66]); // Percentages 0..100
   const [boxes, setBoxes] = useState([]); // [{ id, label, price, box: [ymin, xmin, ymax, xmax] }] (0..1000 scale)
   const [selectedBoxId, setSelectedBoxId] = useState(null);
+  const [drawingBox, setDrawingBox] = useState(null); // { startX, startY, currentX, currentY }
   const [aiLoading, setAiLoading] = useState(false);
   const [batchBaseCost, setBatchBaseCost] = useState("");
   const [batchBaseSell, setBatchBaseSell] = useState("");
@@ -229,7 +230,7 @@ export default function CreateDraftModal({ onClose, onCreated }) {
     return () => {
       isCancelled = true;
     };
-  }, [mode, activePhotoUrl, boxes, horizontalCutPcts, splitMethod, selectedBoxId]);
+  }, [mode, activePhotoUrl, boxes, horizontalCutPcts, splitMethod, selectedBoxId, drawingBox]);
 
   function drawCanvasContent(ctx, canvas, img, boxList, cutPcts, currentMethod, activeBoxId) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -319,6 +320,28 @@ export default function CreateDraftModal({ onClose, onCreated }) {
           });
         }
       });
+
+      // Render live drawing box rectangle
+      if (drawingBox) {
+        const drawX = Math.min(drawingBox.startX, drawingBox.currentX);
+        const drawY = Math.min(drawingBox.startY, drawingBox.currentY);
+        const drawW = Math.abs(drawingBox.currentX - drawingBox.startX);
+        const drawH = Math.abs(drawingBox.currentY - drawingBox.startY);
+
+        ctx.fillStyle = "rgba(16, 185, 129, 0.2)";
+        ctx.fillRect(drawX, drawY, drawW, drawH);
+        ctx.strokeStyle = "#10b981";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(drawX, drawY, drawW, drawH);
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = "#10b981";
+        ctx.fillRect(drawX, drawY, Math.min(100, drawW), 18);
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 10px sans-serif";
+        ctx.fillText("New Box", drawX + 4, drawY + 13);
+      }
     }
   }
 
@@ -389,15 +412,24 @@ export default function CreateDraftModal({ onClose, onCreated }) {
       }
     }
 
+    // Clicked on empty space: start drawing a new custom box
     setSelectedBoxId(null);
+    setDrawingBox({ startX: x, startY: y, currentX: x, currentY: y });
   }
 
   function handleCanvasMouseMove(e) {
-    if (!dragState || !canvasRef.current) return;
     const { x, y } = getCanvasCoords(e);
     const canvas = canvasRef.current;
+    if (!canvas) return;
     const w = canvas.width;
     const h = canvas.height;
+
+    if (drawingBox) {
+      setDrawingBox((prev) => (prev ? { ...prev, currentX: x, currentY: y } : null));
+      return;
+    }
+
+    if (!dragState) return;
 
     const dxNorm = ((x - dragState.startX) / w) * 1000;
     const dyNorm = ((y - dragState.startY) / h) * 1000;
@@ -432,6 +464,36 @@ export default function CreateDraftModal({ onClose, onCreated }) {
   }
 
   function handleCanvasMouseUp() {
+    if (drawingBox && canvasRef.current) {
+      const canvas = canvasRef.current;
+      const w = canvas.width;
+      const h = canvas.height;
+
+      const pxX1 = Math.min(drawingBox.startX, drawingBox.currentX);
+      const pxX2 = Math.max(drawingBox.startX, drawingBox.currentX);
+      const pxY1 = Math.min(drawingBox.startY, drawingBox.currentY);
+      const pxY2 = Math.max(drawingBox.startY, drawingBox.currentY);
+
+      const boxW = pxX2 - pxX1;
+      const boxH = pxY2 - pxY1;
+
+      if (boxW > 12 && boxH > 12) {
+        const xmin = Math.round((pxX1 / w) * 1000);
+        const xmax = Math.round((pxX2 / w) * 1000);
+        const ymin = Math.round((pxY1 / h) * 1000);
+        const ymax = Math.round((pxY2 / h) * 1000);
+
+        const newId = `box-${Date.now()}`;
+        const newBox = {
+          id: newId,
+          label: `Item #${boxes.length + 1}`,
+          box: [ymin, xmin, ymax, xmax],
+        };
+        setBoxes((prev) => [...prev, newBox]);
+        setSelectedBoxId(newId);
+      }
+      setDrawingBox(null);
+    }
     setDragState(null);
   }
 
@@ -921,6 +983,13 @@ export default function CreateDraftModal({ onClose, onCreated }) {
               >
                 <div style={{ display: "flex", gap: 6 }}>
                   <button
+                    className={`btn ${splitMethod === "custom" ? "btn-primary" : "btn-ghost"}`}
+                    style={{ fontSize: 12, padding: "4px 10px" }}
+                    onClick={() => setSplitMethod("custom")}
+                  >
+                    📦 Custom Boxes
+                  </button>
+                  <button
                     className={`btn ${splitMethod === "grid" ? "btn-primary" : "btn-ghost"}`}
                     style={{ fontSize: 12, padding: "4px 10px" }}
                     onClick={() => {
@@ -928,7 +997,7 @@ export default function CreateDraftModal({ onClose, onCreated }) {
                       generateGridBoxes(gridRows, gridCols);
                     }}
                   >
-                    田 Grid Split
+                    田 Uniform Grid
                   </button>
                   <button
                     className={`btn ${splitMethod === "horizontal" ? "btn-primary" : "btn-ghost"}`}
@@ -938,6 +1007,27 @@ export default function CreateDraftModal({ onClose, onCreated }) {
                     ✂ Horizontal Slice
                   </button>
                 </div>
+
+                {splitMethod !== "horizontal" && (
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      className="btn btn-ghost"
+                      style={{ fontSize: 11, padding: "3px 8px" }}
+                      onClick={addBox}
+                    >
+                      + Add Box
+                    </button>
+                    {boxes.length > 0 && (
+                      <button
+                        className="btn btn-ghost"
+                        style={{ fontSize: 11, padding: "3px 8px", color: "var(--danger)" }}
+                        onClick={() => { setBoxes([]); setSelectedBoxId(null); }}
+                      >
+                        Clear All
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {splitMethod === "grid" && (
                   <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
@@ -970,13 +1060,6 @@ export default function CreateDraftModal({ onClose, onCreated }) {
                       }}
                     />
                     <span>cols</span>
-                    <button
-                      className="btn btn-ghost"
-                      style={{ fontSize: 11, padding: "2px 6px" }}
-                      onClick={addBox}
-                    >
-                      + Add Box
-                    </button>
                   </div>
                 )}
 
@@ -1026,11 +1109,13 @@ export default function CreateDraftModal({ onClose, onCreated }) {
                     <div style={{ padding: 40, color: "var(--muted)" }}>Upload a photo above to display split canvas.</div>
                   )}
                   <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
-                    {splitMethod === "grid"
+                    {splitMethod === "custom"
+                      ? "Click & drag anywhere on the photo to draw a custom box around any item, or click a box to resize/move."
+                      : splitMethod === "grid"
                       ? "Boxes start aligned in a grid but can be independently dragged, resized, or removed."
                       : splitMethod === "horizontal"
                       ? "Horizontal cut lines slice long images vertically into separate items."
-                      : "Items detected by AI. Click any box to adjust crop edges."}
+                      : "Click & drag on the photo to draw or adjust item boxes."}
                   </div>
                 </div>
 
