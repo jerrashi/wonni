@@ -13,7 +13,8 @@
     "https://aliexpress.com/*",
     "https://us.aliexpress.com/*",
     "https://shop.weverse.io/*",
-    "https://www.mercari.com/*"
+    "https://www.mercari.com/*",
+    "https://mercari.com/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -35,7 +36,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://www.mercari.com/sell/*"],
+      "matches": ["https://www.mercari.com/sell/*", "https://mercari.com/sell/*"],
       "js": ["mercari_content.js"],
       "run_at": "document_idle"
     }

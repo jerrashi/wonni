@@ -3,7 +3,6 @@ import { doc, deleteDoc, onSnapshot, serverTimestamp, updateDoc } from "firebase
 import { useNavigate, useParams } from "react-router-dom";
 import { auth, db, callFunction, uploadImageBlob } from "../firebase";
 import Layout from "../components/Layout";
-import MercariListModal from "../components/MercariListModal";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -2023,6 +2022,167 @@ export function ActionToast({ message, actions, onDismiss, autoDismissMs = 6000 
 
 // ─── ProductDetail page ───────────────────────────────────────────────────────
 
+// ─── Mercari Cross-Post Modal ──────────────────────────────────────────────────
+
+function MercariModal({ product, weightLbs, weightOz, lengthIn, widthIn, heightIn, onClose, onLaunched }) {
+  const [price, setPrice] = useState(
+    ((product.suggestedSellPrice ?? product.aliexpressPrice * 2.2) || 15).toFixed(2)
+  );
+  const [condition, setCondition] = useState(product.condition ?? "good");
+  const [buyerPaysShipping, setBuyerPaysShipping] = useState(false);
+  const [shipOnOwn, setShipOnOwn] = useState(false);
+  const [posting, setPosting] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleLaunch() {
+    setPosting(true);
+    setError("");
+
+    const payload = {
+      productId: product.id,
+      title: product.title,
+      description: product.description,
+      price: parseFloat(price) || product.aliexpressPrice * 2.2 || 15,
+      condition,
+      brand: product.brand || product.artistName || "",
+      suggestedCategory: product.category || product.artistName || product.title,
+      images: product.images ?? [],
+      weightLbs: (parseInt(weightLbs, 10) || 0) + (parseInt(weightOz, 10) || 0) / 16,
+      lengthIn: parseFloat(lengthIn) || null,
+      widthIn: parseFloat(widthIn) || null,
+      heightIn: parseFloat(heightIn) || null,
+      buyerPaysShipping,
+      shipOnOwn,
+    };
+
+    try {
+      await updateDoc(doc(db, "products", product.id), {
+        "listingStatus.mercari": "posting",
+        updatedAt: serverTimestamp(),
+      });
+
+      let sentToExtension = false;
+      const extensionId = import.meta.env.VITE_CHROME_EXTENSION_ID;
+
+      if (window.chrome && chrome.runtime && chrome.runtime.sendMessage) {
+        try {
+          if (extensionId) {
+            await new Promise((res, rej) => {
+              chrome.runtime.sendMessage(extensionId, { type: "START_MERCARI_CROSS_POST", payload }, (resp) => {
+                if (chrome.runtime.lastError || resp?.error) {
+                  rej(new Error(resp?.error || chrome.runtime.lastError?.message || "Extension message failed"));
+                } else {
+                  res(resp);
+                }
+              });
+            });
+            sentToExtension = true;
+          } else {
+            await new Promise((res, rej) => {
+              chrome.runtime.sendMessage({ type: "START_MERCARI_CROSS_POST", payload }, (resp) => {
+                if (chrome.runtime.lastError || resp?.error) rej(new Error("Extension not connected"));
+                else res(resp);
+              });
+            });
+            sentToExtension = true;
+          }
+        } catch {
+          /* Fall back */
+        }
+      }
+
+      if (!sentToExtension) {
+        localStorage.setItem("pendingMercariPayload", JSON.stringify(payload));
+        window.open("https://www.mercari.com/sell/", "_blank");
+      }
+
+      onLaunched?.();
+      onClose();
+    } catch (e) {
+      setError(e.message ?? "Cross-post launch failed.");
+    } finally {
+      setPosting(false);
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
+        <div className="modal-header">
+          <h2>Cross-Post to Mercari</h2>
+          <button className="btn btn-ghost" style={{ padding: "4px 8px" }} onClick={onClose}>✕</button>
+        </div>
+
+        <div className="modal-body">
+          <div className="modal-field">
+            <label>Mercari Sell Price (USD)</label>
+            <input
+              className="input"
+              type="number"
+              step="0.01"
+              min="1"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+            />
+            {product.aliexpressPrice > 0 && (
+              <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                Cost: ${product.aliexpressPrice.toFixed(2)} · Est Proceeds: ${(parseFloat(price || 0) * 0.9).toFixed(2)}
+              </span>
+            )}
+          </div>
+
+          <div className="modal-field">
+            <label>Item Condition</label>
+            <select className="input" value={condition} onChange={(e) => setCondition(e.target.value)}>
+              <option value="new">New (Unopened / Brand New)</option>
+              <option value="likenew">Like New (Mint / Unused)</option>
+              <option value="good">Good (Minor wear)</option>
+              <option value="fair">Fair (Visible wear)</option>
+              <option value="poor">Poor (For parts / Heavy wear)</option>
+            </select>
+          </div>
+
+          <div className="modal-field" style={{ background: "var(--surface-hover)", padding: 10, borderRadius: 6 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>Package Weight & Dimensions</label>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+              {weightLbs || weightOz ? `${weightLbs || 0} lb ${weightOz || 0} oz` : "6 oz (Default light package)"}
+              {lengthIn && widthIn && heightIn ? ` · ${lengthIn}×${widthIn}×${heightIn} in` : " · Shoebox fit"}
+            </div>
+          </div>
+
+          <div className="modal-field" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
+              <input
+                type="checkbox"
+                checked={buyerPaysShipping}
+                onChange={(e) => setBuyerPaysShipping(e.target.checked)}
+              />
+              Buyer pays shipping (Default: Seller pays / Free shipping)
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
+              <input
+                type="checkbox"
+                checked={shipOnOwn}
+                onChange={(e) => setShipOnOwn(e.target.checked)}
+              />
+              Ship on your own (SOYO) instead of Mercari prepaid label
+            </label>
+          </div>
+
+          {error && <div style={{ fontSize: 13, color: "var(--danger)", marginTop: 8 }}>{error}</div>}
+        </div>
+
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={handleLaunch} disabled={posting}>
+            {posting ? "Launching…" : "🚀 Launch Mercari Cross-Post"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProductDetail() {
   const { productId } = useParams();
   const navigate = useNavigate();
@@ -2034,6 +2194,12 @@ function ProductDetail() {
   const [description, setDescription] = useState("");
   const [listingPrice, setListingPrice] = useState(null);
   const [savingListingPrice, setSavingListingPrice] = useState(false);
+  const [weightLbs, setWeightLbs] = useState("0");
+  const [weightOz, setWeightOz] = useState("6");
+  const [lengthIn, setLengthIn] = useState("");
+  const [widthIn, setWidthIn] = useState("");
+  const [heightIn, setHeightIn] = useState("");
+  const [savingShipping, setSavingShipping] = useState(false);
   const [images, setImages] = useState([]);
   const [previewIndex, setPreviewIndex] = useState(0);
   // Tracked by stable image id, not array position — a background split of a
@@ -2073,6 +2239,11 @@ function ProductDetail() {
         setTitle(next.title ?? "");
         setDescription(next.description ?? "");
         setListingPrice(typeof next.listingPrice === "number" ? next.listingPrice : null);
+        setWeightLbs(String(next.weightLbs ?? 0));
+        setWeightOz(String(next.weightOz ?? 6));
+        setLengthIn(next.lengthIn ? String(next.lengthIn) : "");
+        setWidthIn(next.widthIn ? String(next.widthIn) : "");
+        setHeightIn(next.heightIn ? String(next.heightIn) : "");
         setImages(normalizeImageAssets(next));
 
         const rawVariants = Array.isArray(next.variants) ? next.variants : [];
@@ -2098,6 +2269,10 @@ function ProductDetail() {
   const preorder = product?.preOrder;
   const infoTable = product?.weverseInfoTable ?? [];
   const safePreviewIndex = Math.min(previewIndex, Math.max(0, images.length - 1));
+
+  const mercariStatus = product?.listingStatus?.mercari ?? "draft";
+  const mercariUrl = product?.listingUrl?.mercari ?? null;
+  const mercariItemId = product?.listingId?.mercari ?? null;
   const previewImage = images[safePreviewIndex]?.url ?? "";
   const imageCountLabel = useMemo(() => {
     if (!images.length) return "No images";
@@ -2183,6 +2358,46 @@ function ProductDetail() {
       });
     } finally {
       setSavingText(false);
+    }
+  }
+
+  async function saveShippingInfo() {
+    if (!productId) return;
+    setSavingShipping(true);
+    try {
+      await updateDoc(doc(db, "products", productId), {
+        weightLbs: parseInt(weightLbs, 10) || 0,
+        weightOz: parseInt(weightOz, 10) || 0,
+        lengthIn: parseFloat(lengthIn) || null,
+        widthIn: parseFloat(widthIn) || null,
+        heightIn: parseFloat(heightIn) || null,
+        updatedAt: serverTimestamp(),
+      });
+    } finally {
+      setSavingShipping(false);
+    }
+  }
+
+  function applyAIShipping() {
+    const titleLower = (title || "").toLowerCase();
+    if (titleLower.includes("keyring") || titleLower.includes("photocard") || titleLower.includes("sticker") || titleLower.includes("pin")) {
+      setWeightLbs("0");
+      setWeightOz("4");
+      setLengthIn("6");
+      setWidthIn("4");
+      setHeightIn("1");
+    } else if (titleLower.includes("hoodie") || titleLower.includes("jacket") || titleLower.includes("plush")) {
+      setWeightLbs("1");
+      setWeightOz("4");
+      setLengthIn("12");
+      setWidthIn("10");
+      setHeightIn("4");
+    } else {
+      setWeightLbs("0");
+      setWeightOz("8");
+      setLengthIn("9");
+      setWidthIn("6");
+      setHeightIn("3");
     }
   }
 
@@ -2586,7 +2801,16 @@ function ProductDetail() {
             {badgeLabel(product?.source)}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {mercariStatus === "active" ? (
+            <a href={mercariUrl || "#"} target="_blank" rel="noreferrer" className="btn btn-ghost" style={{ color: "#22c55e" }}>
+              ✓ Live on Mercari ({mercariItemId || "view"})
+            </a>
+          ) : (
+            <button className="btn btn-primary" onClick={() => setShowMercariModal(true)}>
+              {mercariStatus === "posting" ? "⏳ Cross-posting to Mercari…" : "Cross-post to Mercari"}
+            </button>
+          )}
           {product?.sourceUrl && (
             <a href={product.sourceUrl} target="_blank" rel="noreferrer" className="btn btn-ghost">
               Open source listing
@@ -2662,7 +2886,10 @@ function ProductDetail() {
               <div className="detail-badges">
                 <span className="chip chip-draft">{badgeLabel(product.source)}</span>
                 <span className={`chip ${product.tiktokStatus === "active" ? "chip-active" : "chip-draft"}`}>
-                  {product.tiktokStatus ?? "draft"}
+                  TikTok: {product.tiktokStatus ?? "draft"}
+                </span>
+                <span className={`chip ${mercariStatus === "active" ? "chip-active" : mercariStatus === "posting" ? "chip-pending" : "chip-draft"}`}>
+                  Mercari: {mercariStatus}
                 </span>
                 {product.saleStatus && <span className="chip chip-pending">{product.saleStatus}</span>}
               </div>
@@ -2719,6 +2946,48 @@ function ProductDetail() {
                 <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 12 }}>
                   {savingText && <span style={{ fontSize: 12, color: "var(--muted)" }}>Saving…</span>}
                   <span style={{ fontSize: 12, color: "var(--muted)" }}>Listings use these as the base catalog fields.</span>
+                </div>
+              </div>
+
+              {/* ── Draft Shipping Weight & Package Dimensions Section ── */}
+              <div className="detail-section" style={{ background: "var(--surface-hover)", padding: 14, borderRadius: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <h2 style={{ margin: 0, fontSize: 14 }}>Shipping Weight & Package Dimensions</h2>
+                  <button className="btn btn-ghost" style={{ fontSize: 11, padding: "2px 6px" }} onClick={applyAIShipping}>
+                    ✨ Apply AI Suggested
+                  </button>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 10 }}>
+                  <div className="modal-field">
+                    <label style={{ fontSize: 11 }}>Weight (Pounds)</label>
+                    <input className="input" type="number" min="0" value={weightLbs} onChange={(e) => setWeightLbs(e.target.value)} />
+                  </div>
+                  <div className="modal-field">
+                    <label style={{ fontSize: 11 }}>Weight (Ounces)</label>
+                    <input className="input" type="number" min="0" max="15" value={weightOz} onChange={(e) => setWeightOz(e.target.value)} />
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
+                  <div className="modal-field">
+                    <label style={{ fontSize: 11 }}>Length (in)</label>
+                    <input className="input" type="number" min="0" placeholder="10" value={lengthIn} onChange={(e) => setLengthIn(e.target.value)} />
+                  </div>
+                  <div className="modal-field">
+                    <label style={{ fontSize: 11 }}>Width (in)</label>
+                    <input className="input" type="number" min="0" placeholder="6" value={widthIn} onChange={(e) => setWidthIn(e.target.value)} />
+                  </div>
+                  <div className="modal-field">
+                    <label style={{ fontSize: 11 }}>Height (in)</label>
+                    <input className="input" type="number" min="0" placeholder="4" value={heightIn} onChange={(e) => setHeightIn(e.target.value)} />
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                  <button className="btn btn-primary" style={{ padding: "6px 12px", fontSize: 12 }} onClick={saveShippingInfo} disabled={savingShipping}>
+                    {savingShipping ? "Saving…" : "Save shipping info"}
+                  </button>
+                  <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                    Used for Mercari prepaid labels & weight calculations.
+                  </span>
                 </div>
               </div>
 
@@ -2797,11 +3066,17 @@ function ProductDetail() {
         </div>
       ) : null}
 
-      {showMercariModal && (
-        <MercariListModal
+      {/* Mercari Cross-Post Modal */}
+      {showMercariModal && product && (
+        <MercariModal
           product={product}
+          weightLbs={weightLbs}
+          weightOz={weightOz}
+          lengthIn={lengthIn}
+          widthIn={widthIn}
+          heightIn={heightIn}
           onClose={() => setShowMercariModal(false)}
-          onSaved={() => setShowMercariModal(false)}
+          onLaunched={() => setShowMercariModal(false)}
         />
       )}
 
