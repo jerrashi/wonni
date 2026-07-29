@@ -1058,8 +1058,14 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
         }
       }
       const newPct = Math.max(1, Math.min(99, (y / h) * 100));
-      setHorizontalCutPcts((prev) => [...prev, newPct].sort((a, b) => a - b));
-      setSelectedLineIndex(null);
+      let newIdx = 0;
+      setHorizontalCutPcts((prev) => {
+        const next = [...prev, newPct].sort((a, b) => a - b);
+        newIdx = next.indexOf(newPct);
+        return next;
+      });
+      setSelectedLineIndex(newIdx);
+      setDragState({ type: "line", lineIndex: newIdx });
       return;
     }
 
