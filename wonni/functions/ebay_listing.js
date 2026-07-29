@@ -316,6 +316,18 @@ const CONDITION_ID_TO_ENUM = Object.fromEntries(
   Object.entries(CONDITION_ENUM_TO_ID).map(([k, v]) => [v, k])
 );
 
+// Trading Card categories moved "Card Condition" out of product.aspects into a separate
+// conditionDescriptors field (eBay Connect 2023 card-condition overhaul) — a descriptor named
+// "40001" whose value must be one of these fixed IDs, not a free-text or aspect value. Filling
+// it as a regular aspect (the old approach) gets silently rejected with the same "required
+// field" error, which is what made this look unfixed even after extractMissingAspects caught it.
+const CARD_CONDITION_DESCRIPTOR_ID = "40001";
+const CARD_CONDITION_VALUE_IDS = {
+  NEW: "400010", LIKE_NEW: "400010", USED_EXCELLENT: "400010",
+  USED_VERY_GOOD: "400011", USED_GOOD: "400012", USED_ACCEPTABLE: "400012",
+  FOR_PARTS_OR_NOT_WORKING: "400013",
+};
+
 /**
  * Preference order (by condition ID) for degrading to an allowed condition when the category
  * doesn't accept the one we intended. Stays as close as possible to the seller's stated grade,
@@ -402,6 +414,23 @@ function isConditionError(responseBody) {
       e.errorId === 25059 ||
       (e.parameters || []).some(p => p.value === "CONDITION_ID") ||
       (e.errorId === 25064 && /professional grader|^grade\b/i.test(e.message || ""))
+    );
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * True if a publish error body is eBay's "Card Condition (40001) is a required field" failure —
+ * see CARD_CONDITION_DESCRIPTOR_ID. Distinct from isConditionError: this isn't about the
+ * condition ID itself being rejected, it's a Trading Card category demanding the separate
+ * conditionDescriptors field once an ungraded condition ID is accepted.
+ */
+function isCardConditionError(responseBody) {
+  try {
+    const obj = JSON.parse(responseBody);
+    return (obj.errors || []).some(e =>
+      e.errorId === 25064 && /^card condition\b/i.test(e.message || "")
     );
   } catch (e) {
     return false;
@@ -1141,8 +1170,9 @@ exports.ebayCreateListing = onCall(
       for (let round = 0; round < 6 && publishRes.statusCode !== 200; round++) {
         let changed = false;
 
-        // (a) Fill any required item aspects the error names.
-        const missing = extractMissingAspects(publishRes.body);
+        // (a) Fill any required item aspects the error names. "Card Condition" is handled
+        // separately below (a1) — it's not a product.aspects entry, see CARD_CONDITION_DESCRIPTOR_ID.
+        const missing = extractMissingAspects(publishRes.body).filter(name => name !== "Card Condition");
         for (const name of missing) {
           if (!itemBody.product.aspects[name]) {
             itemBody.product.aspects[name] = fillValueForAspect(name, categoryAspects, brand);
@@ -1151,6 +1181,16 @@ exports.ebayCreateListing = onCall(
         }
         if (missing.length > 0 && changed) {
           console.log(`[ebayCreateListing] Filling missing aspects and retrying: ${missing.join(", ")}`);
+        }
+
+        // (a1) Trading Card categories require "Card Condition" as a conditionDescriptor, not a
+        // product aspect — eBay's 2023 card-condition overhaul moved it out of Item Specifics.
+        // Map our condition enum to the closest of eBay's four fixed value IDs.
+        if (isCardConditionError(publishRes.body) && !itemBody.conditionDescriptors) {
+          const valueId = CARD_CONDITION_VALUE_IDS[itemBody.condition] || CARD_CONDITION_VALUE_IDS.USED_GOOD;
+          itemBody.conditionDescriptors = [{ name: CARD_CONDITION_DESCRIPTOR_ID, values: [{ value: valueId }] }];
+          console.log(`[ebayCreateListing] Setting Card Condition descriptor (${CARD_CONDITION_DESCRIPTOR_ID}) to ${valueId} for condition ${itemBody.condition}`);
+          changed = true;
         }
 
         // (b) Category rejected the condition — step to the next untried candidate. Prefers the
