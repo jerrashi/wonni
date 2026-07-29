@@ -751,205 +751,538 @@ function IdentifyEditor({ image, productId, onSave, onCancel, saving, onBusyChan
 // Click the image to add a cut line. Drag lines to reposition. × to remove.
 // On confirm, slices the full-resolution image client-side at each line.
 
-function SplitEditor({ image, productId, onSave, onCancel, saving, onBusyChange }) {
+function SplitEditor({ image, productId, onSave, onCancel, saving }) {
+  const [splitMethod, setSplitMethod] = useState("custom"); // "custom" | "grid" | "horizontal"
+  const [gridRows, setGridRows] = useState(3);
+  const [gridCols, setGridCols] = useState(3);
+  const [boxes, setBoxes] = useState([]);
+  const [horizontalCutPcts, setHorizontalCutPcts] = useState([33, 66]);
+  const [selectedBoxId, setSelectedBoxId] = useState(null);
+  const [drawingBox, setDrawingBox] = useState(null);
+  const [dragState, setDragState] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const canvasRef = useRef(null);
   const imgRef = useRef(null);
-  // lines: array of percentages (0-100), sorted ascending
-  const [lines, setLines] = useState([]);
-  const [activeDragIndex, setActiveDragIndex] = useState(null);
-  const [status, setStatus] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const [evenCount, setEvenCount] = useState(2);
 
-  // Replaces any existing lines with evenly-spaced cuts for N pieces — the
-  // result is still just regular `lines`, so the user can drag/delete
-  // individual cuts afterward to fine-tune the even split.
-  function splitEvenly() {
-    const n = Math.max(2, Math.min(20, Math.floor(evenCount) || 2));
-    setLines(Array.from({ length: n - 1 }, (_, i) => ((i + 1) / n) * 100));
-  }
-
-  // Calculates exact percentage down the rendered image from any screen clientY
-  function getPctFromClientY(clientY) {
-    if (!imgRef.current) return 50;
-    const rect = imgRef.current.getBoundingClientRect();
-    if (!rect.height) return 50;
-    const offsetY = clientY - rect.top;
-    const pct = (offsetY / rect.height) * 100;
-    return Math.max(0.5, Math.min(99.5, pct));
-  }
-
-  // Add a new line where the user clicked on the image
-  function handleWrapClick(e) {
-    if (e.target.closest(".split-line")) return; // don't add when clicking a line handle
-    const pct = getPctFromClientY(e.clientY);
-    setLines((prev) => [...prev, pct].sort((a, b) => a - b));
-  }
-
-  function handleLinePointerDown(e, lineIndex) {
-    if (e.target.closest(".split-line-delete")) return;
-    e.stopPropagation();
-    e.preventDefault();
-
-    const startClientY = e.clientY;
-    let hasMoved = false;
-
-    setActiveDragIndex(lineIndex);
-
-    function onPointerMove(moveEvent) {
-      if (Math.abs(moveEvent.clientY - startClientY) > 3) {
-        hasMoved = true;
+  // Keyboard shortcut listener to delete active box
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if (
+        (e.key === "Delete" || e.key === "Backspace") &&
+        selectedBoxId &&
+        !["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)
+      ) {
+        setBoxes((prev) => prev.filter((b) => b.id !== selectedBoxId));
+        setSelectedBoxId(null);
       }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedBoxId]);
 
-      const pct = getPctFromClientY(moveEvent.clientY);
-      setLines((prev) => {
-        const next = [...prev];
-        next[lineIndex] = pct;
-        return next;
+  function generateGridBoxes(r, c) {
+    const rows = Math.max(1, parseInt(r, 10) || 1);
+    const cols = Math.max(1, parseInt(c, 10) || 1);
+    const newBoxes = [];
+    const cellW = Math.floor(1000 / cols);
+    const cellH = Math.floor(1000 / rows);
+
+    let count = 1;
+    for (let i = 0; i < rows; i++) {
+      for (let j = 0; j < cols; j++) {
+        const ymin = i * cellH;
+        const xmin = j * cellW;
+        const ymax = i === rows - 1 ? 1000 : (i + 1) * cellH;
+        const xmax = j === cols - 1 ? 1000 : (j + 1) * cellW;
+        newBoxes.push({
+          id: `box-${i}-${j}-${Date.now()}`,
+          label: `Item #${count++}`,
+          box: [ymin, xmin, ymax, xmax],
+        });
+      }
+    }
+    setBoxes(newBoxes);
+    setSelectedBoxId(null);
+  }
+
+  async function runAiDetection() {
+    setAiLoading(true);
+    setError("");
+    try {
+      const res = await callFunction("identifyProductsInImage")({
+        productId,
+        imageUrl: image.url,
       });
+      const detected = res.data?.objects ?? [];
+      if (!detected.length) {
+        setError("AI could not identify items in this image. Try grid split instead.");
+        return;
+      }
+      setBoxes(detected);
+      setSelectedBoxId(detected[0]?.id ?? null);
+    } catch (e) {
+      setError(e.message ?? "AI detection failed.");
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  function addBox() {
+    const id = `box-${Date.now()}`;
+    const newBox = {
+      id,
+      label: `Item #${boxes.length + 1}`,
+      box: [250, 250, 750, 750],
+    };
+    setBoxes((prev) => [...prev, newBox]);
+    setSelectedBoxId(id);
+  }
+
+  function addCutLine() {
+    setHorizontalCutPcts((prev) => [...prev, 50].sort((a, b) => a - b));
+  }
+
+  // Draw Canvas content
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      canvas.width = img.naturalWidth || 800;
+      canvas.height = img.naturalHeight || 600;
+      imgRef.current = img;
+
+      const w = canvas.width;
+      const h = canvas.height;
+
+      ctx.clearRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+
+      if (splitMethod === "horizontal") {
+        const sortedPcts = [0, ...horizontalCutPcts.slice().sort((a, b) => a - b), 100];
+        for (let i = 0; i < sortedPcts.length - 1; i++) {
+          const topY = (sortedPcts[i] / 100) * h;
+          const botY = (sortedPcts[i + 1] / 100) * h;
+          ctx.fillStyle = i % 2 === 0 ? "rgba(99, 102, 241, 0.08)" : "rgba(16, 185, 129, 0.08)";
+          ctx.fillRect(0, topY, w, botY - topY);
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "bold 12px sans-serif";
+          ctx.fillText(`Slice #${i + 1}`, 12, topY + (botY - topY) / 2 + 4);
+        }
+
+        horizontalCutPcts.forEach((pct, idx) => {
+          const y = (pct / 100) * h;
+          ctx.strokeStyle = "#ef4444";
+          ctx.lineWidth = 2;
+          ctx.setLineDash([6, 4]);
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(w, y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = "#ef4444";
+          ctx.fillRect(w / 2 - 24, y - 10, 48, 20);
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "bold 11px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText(`✂ ${idx + 1}`, w / 2, y + 4);
+          ctx.textAlign = "left";
+        });
+      } else {
+        boxes.forEach((item) => {
+          const [ymin, xmin, ymax, xmax] = item.box;
+          const boxX = (xmin / 1000) * w;
+          const boxY = (ymin / 1000) * h;
+          const boxW = ((xmax - xmin) / 1000) * w;
+          const boxH = ((ymax - ymin) / 1000) * h;
+          const isSelected = item.id === selectedBoxId;
+
+          ctx.fillStyle = isSelected ? "rgba(99, 102, 241, 0.25)" : "rgba(59, 130, 246, 0.12)";
+          ctx.fillRect(boxX, boxY, boxW, boxH);
+          ctx.strokeStyle = isSelected ? "#4f46e5" : "#3b82f6";
+          ctx.lineWidth = isSelected ? 3 : 2;
+          ctx.setLineDash(isSelected ? [] : [4, 4]);
+          ctx.strokeRect(boxX, boxY, boxW, boxH);
+          ctx.setLineDash([]);
+
+          ctx.fillStyle = isSelected ? "#4f46e5" : "#3b82f6";
+          ctx.fillRect(boxX, boxY, Math.min(100, boxW), 20);
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "bold 11px sans-serif";
+          ctx.fillText(item.label.slice(0, 14), boxX + 6, boxY + 14);
+
+          if (isSelected) {
+            const handles = [
+              [boxX, boxY],
+              [boxX + boxW, boxY],
+              [boxX, boxY + boxH],
+              [boxX + boxW, boxY + boxH],
+            ];
+            handles.forEach(([hx, hy]) => {
+              ctx.fillStyle = "#ffffff";
+              ctx.strokeStyle = "#4f46e5";
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.arc(hx, hy, 5, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+            });
+
+            ctx.fillStyle = "#ef4444";
+            ctx.fillRect(boxX + boxW - 20, boxY, 20, 20);
+            ctx.fillStyle = "#ffffff";
+            ctx.font = "bold 12px sans-serif";
+            ctx.textAlign = "center";
+            ctx.fillText("✕", boxX + boxW - 10, boxY + 14);
+            ctx.textAlign = "left";
+          }
+        });
+
+        if (drawingBox) {
+          const drawX = Math.min(drawingBox.startX, drawingBox.currentX);
+          const drawY = Math.min(drawingBox.startY, drawingBox.currentY);
+          const drawW = Math.abs(drawingBox.currentX - drawingBox.startX);
+          const drawH = Math.abs(drawingBox.currentY - drawingBox.startY);
+          ctx.fillStyle = "rgba(16, 185, 129, 0.2)";
+          ctx.fillRect(drawX, drawY, drawW, drawH);
+          ctx.strokeStyle = "#10b981";
+          ctx.lineWidth = 2;
+          ctx.setLineDash([4, 4]);
+          ctx.strokeRect(drawX, drawY, drawW, drawH);
+          ctx.setLineDash([]);
+        }
+      }
+    };
+    img.src = image.url;
+  }, [image.url, boxes, horizontalCutPcts, splitMethod, selectedBoxId, drawingBox]);
+
+  function getCanvasCoords(e) {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY,
+    };
+  }
+
+  function testBoxHit(b, x, y, w, h, isSelected) {
+    const [ymin, xmin, ymax, xmax] = b.box;
+    const boxX = (xmin / 1000) * w;
+    const boxY = (ymin / 1000) * h;
+    const boxW = ((xmax - xmin) / 1000) * w;
+    const boxH = ((ymax - ymin) / 1000) * h;
+
+    if (isSelected && x >= boxX + boxW - 24 && x <= boxX + boxW + 4 && y >= boxY - 4 && y <= boxY + 24) {
+      return { type: "delete", boxId: b.id };
     }
 
-    function onPointerUp() {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerUp);
+    const hs = isSelected ? 16 : 12;
+    const corners = {
+      tl: [boxX, boxY],
+      tr: [boxX + boxW, boxY],
+      bl: [boxX, boxY + boxH],
+      br: [boxX + boxW, boxY + boxH],
+    };
 
-      setActiveDragIndex(null);
-
-      if (hasMoved) {
-        setLines((prev) => [...prev].sort((a, b) => a - b));
-
-        // Intercept and swallow the trailing click event on window capture phase
-        function captureClick(clickEvent) {
-          clickEvent.stopPropagation();
-          clickEvent.preventDefault();
-          window.removeEventListener("click", captureClick, true);
-        }
-        window.addEventListener("click", captureClick, true);
-        setTimeout(() => {
-          window.removeEventListener("click", captureClick, true);
-        }, 100);
+    for (const [name, [cx, cy]] of Object.entries(corners)) {
+      if (Math.abs(x - cx) <= hs && Math.abs(y - cy) <= hs) {
+        return { type: "handle", handle: name, boxId: b.id, box: [...b.box] };
       }
     }
 
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerUp);
+    if (x >= boxX && x <= boxX + boxW && y >= boxY && y <= boxY + boxH) {
+      return { type: "body", handle: "move", boxId: b.id, box: [...b.box] };
+    }
+
+    return null;
   }
 
-  function deleteLine(index) {
-    setLines((prev) => prev.filter((_, i) => i !== index));
+  function handleCanvasMouseDown(e) {
+    if (splitMethod === "horizontal") return;
+    const { x, y } = getCanvasCoords(e);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const w = canvas.width;
+    const h = canvas.height;
+
+    const activeBox = selectedBoxId ? boxes.find((b) => b.id === selectedBoxId) : null;
+    if (activeBox) {
+      const activeHit = testBoxHit(activeBox, x, y, w, h, true);
+      if (activeHit) {
+        if (activeHit.type === "delete") {
+          setBoxes((prev) => prev.filter((b) => b.id !== activeHit.boxId));
+          setSelectedBoxId(null);
+          return;
+        }
+        setDragState({
+          boxId: activeHit.boxId,
+          handle: activeHit.handle,
+          startX: x,
+          startY: y,
+          startBox: activeHit.box,
+        });
+        return;
+      }
+    }
+
+    for (let i = boxes.length - 1; i >= 0; i--) {
+      const b = boxes[i];
+      if (b.id === selectedBoxId) continue;
+      const hit = testBoxHit(b, x, y, w, h, false);
+      if (hit) {
+        setSelectedBoxId(b.id);
+        setDragState({
+          boxId: hit.boxId,
+          handle: hit.handle,
+          startX: x,
+          startY: y,
+          startBox: hit.box,
+        });
+        return;
+      }
+    }
+
+    setSelectedBoxId(null);
+    setDrawingBox({ startX: x, startY: y, currentX: x, currentY: y });
   }
 
-  function confirmSplit() {
-    if (!image?.url || !lines.length) return;
-    const uid = auth.currentUser?.uid;
-    if (!uid) {
-      setStatus("You're signed out — please refresh and try again.");
+  function handleCanvasMouseMove(e) {
+    if (!canvasRef.current) return;
+    const { x, y } = getCanvasCoords(e);
+    const canvas = canvasRef.current;
+    const w = canvas.width;
+    const h = canvas.height;
+
+    if (drawingBox) {
+      setDrawingBox((prev) => ({ ...prev, currentX: x, currentY: y }));
       return;
     }
 
-    // Capture current lines snapshot and image element
-    const currentLines = [...lines];
-    const currentImg = imgRef.current;
+    if (!dragState) return;
 
-    // Immediately trigger background save callback (closes modal instantly)
+    const dx = x - dragState.startX;
+    const dy = y - dragState.startY;
+
+    const [startYmin, startXmin, startYmax, startXmax] = dragState.startBox;
+
+    const pxXmin = (startXmin / 1000) * w;
+    const pxXmax = (startXmax / 1000) * w;
+    const pxYmin = (startYmin / 1000) * h;
+    const pxYmax = (startYmax / 1000) * h;
+
+    let nXmin = pxXmin;
+    let nXmax = pxXmax;
+    let nYmin = pxYmin;
+    let nYmax = pxYmax;
+
+    if (dragState.handle === "move") {
+      nXmin = pxXmin + dx;
+      nXmax = pxXmax + dx;
+      nYmin = pxYmin + dy;
+      nYmax = pxYmax + dy;
+    } else {
+      if (dragState.handle.includes("l")) nXmin = pxXmin + dx;
+      if (dragState.handle.includes("r")) nXmax = pxXmax + dx;
+      if (dragState.handle.includes("t")) nYmin = pxYmin + dy;
+      if (dragState.handle.includes("b")) nYmax = pxYmax + dy;
+    }
+
+    const nxMin = Math.max(0, Math.min(1000, (nXmin / w) * 1000));
+    const nxMax = Math.max(0, Math.min(1000, (nXmax / w) * 1000));
+    const nyMin = Math.max(0, Math.min(1000, (nYmin / h) * 1000));
+    const nyMax = Math.max(0, Math.min(1000, (nYmax / h) * 1000));
+
+    setBoxes((prev) =>
+      prev.map((b) =>
+        b.id === dragState.boxId
+          ? { ...b, box: [Math.round(nyMin), Math.round(nxMin), Math.round(nyMax), Math.round(nxMax)] }
+          : b
+      )
+    );
+  }
+
+  function handleCanvasMouseUp() {
+    if (drawingBox && canvasRef.current) {
+      const canvas = canvasRef.current;
+      const w = canvas.width;
+      const h = canvas.height;
+
+      const pxX1 = Math.min(drawingBox.startX, drawingBox.currentX);
+      const pxX2 = Math.max(drawingBox.startX, drawingBox.currentX);
+      const pxY1 = Math.min(drawingBox.startY, drawingBox.currentY);
+      const pxY2 = Math.max(drawingBox.startY, drawingBox.currentY);
+
+      if (pxX2 - pxX1 > 12 && pxY2 - pxY1 > 12) {
+        const xmin = Math.round((pxX1 / w) * 1000);
+        const xmax = Math.round((pxX2 / w) * 1000);
+        const ymin = Math.round((pxY1 / h) * 1000);
+        const ymax = Math.round((pxY2 / h) * 1000);
+
+        const newId = `box-${Date.now()}`;
+        const newBox = {
+          id: newId,
+          label: `Item #${boxes.length + 1}`,
+          box: [ymin, xmin, ymax, xmax],
+        };
+        setBoxes((prev) => [...prev, newBox]);
+        setSelectedBoxId(newId);
+      }
+      setDrawingBox(null);
+    }
+    setDragState(null);
+  }
+
+  function confirmSplit() {
     onSave({
-      lines: currentLines,
-      imgElement: currentImg,
+      splitMethod,
+      lines: horizontalCutPcts,
+      boxes,
+      imgElement: imgRef.current,
       imageUrl: image.url,
     });
   }
 
-
-  const sliceCount = lines.length + 1;
+  const sliceCount = splitMethod === "horizontal" ? horizontalCutPcts.length + 1 : boxes.length;
 
   return (
-    <div className="img-editor-body">
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-        <span style={{ fontSize: 13, color: "var(--muted)" }}>Split evenly into</span>
-        <input
-          className="input"
-          type="number"
-          min={2}
-          max={20}
-          value={evenCount}
-          onChange={(e) => setEvenCount(e.target.value)}
-          style={{ width: 56, padding: "4px 8px" }}
-        />
-        <span style={{ fontSize: 13, color: "var(--muted)" }}>pieces</span>
-        <button className="btn btn-ghost" style={{ padding: "4px 10px", fontSize: 13 }} onClick={splitEvenly}>
-          Split evenly
-        </button>
-      </div>
+    <div className="img-editor-body" style={{ width: "100%", maxWidth: 850 }}>
+      {/* Method tabs and controls */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button
+            className={`btn ${splitMethod === "custom" ? "btn-primary" : "btn-ghost"}`}
+            style={{ fontSize: 12, padding: "4px 10px" }}
+            onClick={() => setSplitMethod("custom")}
+          >
+            📦 Custom Boxes
+          </button>
+          <button
+            className={`btn ${splitMethod === "grid" ? "btn-primary" : "btn-ghost"}`}
+            style={{ fontSize: 12, padding: "4px 10px" }}
+            onClick={() => {
+              setSplitMethod("grid");
+              generateGridBoxes(gridRows, gridCols);
+            }}
+          >
+            田 Uniform Grid
+          </button>
+          <button
+            className={`btn ${splitMethod === "horizontal" ? "btn-primary" : "btn-ghost"}`}
+            style={{ fontSize: 12, padding: "4px 10px" }}
+            onClick={() => setSplitMethod("horizontal")}
+          >
+            ✂ Horizontal Slice
+          </button>
+        </div>
 
-      <p className="img-editor-hint">
-        Click anywhere on the image to add a cut line.
-        Drag a line to reposition it. Click × to remove it.
-        {lines.length > 0 && ` ${sliceCount} slices.`}
-      </p>
-
-      <div
-        className="split-editor-wrap"
-        onClick={handleWrapClick}
-        style={{ cursor: activeDragIndex !== null ? "ns-resize" : "crosshair" }}
-      >
-        <div className="split-editor-img-container">
-          <img
-            ref={imgRef}
-            src={image.url}
-            alt="split preview"
-            className="split-editor-img"
-            draggable={false}
-          />
-
-          {/* Slice number badges between lines */}
-          {[0, ...lines, 100].map((pct, i, arr) => {
-            if (i === arr.length - 1) return null;
-            const midPct = (pct + arr[i + 1]) / 2;
-            return (
-              <div key={`badge-${i}`} className="split-slice-badge" style={{ top: `${midPct}%` }}>
-                {i + 1}
-              </div>
-            );
-          })}
-
-          {/* Draggable cut lines */}
-          {lines.map((pct, index) => (
-            <div
-              key={`line-${index}`}
-              className={`split-line${activeDragIndex === index ? " split-line-dragging" : ""}`}
-              style={{ top: `${pct}%` }}
-              onPointerDown={(e) => handleLinePointerDown(e, index)}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <span className="split-line-tag">✂ {index + 1}</span>
-              <span className="split-line-pct">{pct.toFixed(0)}%</span>
+        {splitMethod !== "horizontal" && (
+          <div style={{ display: "flex", gap: 6 }}>
+            <button className="btn btn-ghost" style={{ fontSize: 11, padding: "3px 8px" }} onClick={addBox}>
+              + Add Box
+            </button>
+            {boxes.length > 0 && (
               <button
-                className="split-line-delete"
-                onClick={(e) => { e.stopPropagation(); deleteLine(index); }}
-                title="Remove cut line"
+                className="btn btn-ghost"
+                style={{ fontSize: 11, padding: "3px 8px", color: "var(--danger)" }}
+                onClick={() => { setBoxes([]); setSelectedBoxId(null); }}
               >
-                ×
+                Clear All
               </button>
-            </div>
-          ))}
+            )}
+          </div>
+        )}
+
+        {splitMethod === "grid" && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+            <span>Grid:</span>
+            <input
+              type="number"
+              min="1"
+              max="10"
+              value={gridRows}
+              style={{ width: 40, padding: 4 }}
+              className="input"
+              onChange={(e) => {
+                const r = e.target.value;
+                setGridRows(r);
+                generateGridBoxes(r, gridCols);
+              }}
+            />
+            <span>rows ×</span>
+            <input
+              type="number"
+              min="1"
+              max="10"
+              value={gridCols}
+              style={{ width: 40, padding: 4 }}
+              className="input"
+              onChange={(e) => {
+                const c = e.target.value;
+                setGridCols(c);
+                generateGridBoxes(gridRows, c);
+              }}
+            />
+            <span>cols</span>
+          </div>
+        )}
+
+        {splitMethod === "horizontal" && (
+          <button className="btn btn-ghost" style={{ fontSize: 12, padding: "4px 8px" }} onClick={addCutLine}>
+            + Add Cut Line
+          </button>
+        )}
+
+        <div style={{ marginLeft: "auto" }}>
+          <button
+            className="btn btn-ghost"
+            style={{ fontSize: 12, padding: "4px 10px", borderColor: "var(--primary)", color: "var(--primary)" }}
+            onClick={runAiDetection}
+            disabled={aiLoading}
+          >
+            {aiLoading ? "⚡ AI Detecting…" : "⚡ AI Auto-Detect Items"}
+          </button>
         </div>
       </div>
 
+      {error && <div style={{ color: "var(--danger)", fontSize: 12, marginBottom: 8 }}>{error}</div>}
 
-
-
-      {status && <div className="img-editor-status">{status}</div>}
+      {/* Canvas container */}
+      <div style={{ textAlign: "center", position: "relative", marginBottom: 12 }}>
+        <div style={{ display: "inline-block", position: "relative", border: "1px solid var(--border)", maxWidth: "100%", overflow: "hidden" }}>
+          <canvas
+            ref={canvasRef}
+            onMouseDown={handleCanvasMouseDown}
+            onMouseMove={handleCanvasMouseMove}
+            onMouseUp={handleCanvasMouseUp}
+            style={{ cursor: dragState ? "grabbing" : "crosshair", display: "block", maxWidth: "100%", height: "auto" }}
+          />
+        </div>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
+          {splitMethod === "custom"
+            ? "Click & drag anywhere on the photo to draw a custom box, or click a box to resize/delete."
+            : splitMethod === "grid"
+            ? "Boxes start aligned in a grid but can be independently dragged, resized, or deleted."
+            : "Horizontal cut lines slice long images vertically into separate images."}
+        </div>
+      </div>
 
       <div className="img-edit-popover-actions">
-        {lines.length > 0 ? (
-          <button className="btn btn-primary" onClick={confirmSplit} disabled={saving || uploading}>
+        {sliceCount > 0 ? (
+          <button className="btn btn-primary" onClick={confirmSplit} disabled={saving}>
             {saving ? "Splitting…" : `✂ Split into ${sliceCount} images`}
           </button>
         ) : (
-          <span className="img-editor-hint">Add at least one cut line to split.</span>
+          <span className="img-editor-hint">Add at least one item box to split.</span>
         )}
-        <button className="btn btn-ghost" onClick={onCancel} disabled={uploading}>Cancel</button>
+        <button className="btn btn-ghost" onClick={onCancel}>Cancel</button>
       </div>
     </div>
   );
@@ -2655,7 +2988,7 @@ function ProductDetail() {
   const [splittingUrls, setSplittingUrls] = useState(() => new Set());
 
   // Called by SplitEditor: closes modal instantly and executes split in background
-  function handleSaveSplit({ lines, imgElement, imageUrl }) {
+  function handleSaveSplit({ splitMethod, lines, boxes, imgElement, imageUrl }) {
     const index = editingIndex;
     if (index === null || index === -1) return;
     const targetImage = images[index];
@@ -2689,28 +3022,52 @@ function ProductDetail() {
 
           const W = img.naturalWidth;
           const H = img.naturalHeight;
-          const boundaries = [0, ...lines, 100].map((p) => Math.round((p / 100) * H));
 
-          for (let i = 0; i < boundaries.length - 1; i++) {
-            const y0 = boundaries[i];
-            const y1 = boundaries[i + 1];
-            const sliceH = y1 - y0;
-            if (sliceH < 5) continue;
+          if (splitMethod === "horizontal") {
+            const boundaries = [0, ...(lines ?? []), 100].map((p) => Math.round((p / 100) * H));
+            for (let i = 0; i < boundaries.length - 1; i++) {
+              const y0 = boundaries[i];
+              const y1 = boundaries[i + 1];
+              const sliceH = y1 - y0;
+              if (sliceH < 5) continue;
 
-            const offscreen = document.createElement("canvas");
-            offscreen.width = W;
-            offscreen.height = sliceH;
-            offscreen.getContext("2d").drawImage(img, 0, y0, W, sliceH, 0, 0, W, sliceH);
+              const offscreen = document.createElement("canvas");
+              offscreen.width = W;
+              offscreen.height = sliceH;
+              offscreen.getContext("2d").drawImage(img, 0, y0, W, sliceH, 0, 0, W, sliceH);
 
-            const blob = await new Promise((res, rej) => {
-              offscreen.toBlob((b) => (b ? res(b) : rej(new Error("Canvas blob error"))), "image/jpeg", 0.92);
-            });
-            const url = await uploadImageBlob(uid, productId, blob, `-split-${i}`);
-            results.push({ url, width: W, height: sliceH, kind: "split" });
+              const blob = await new Promise((res, rej) => {
+                offscreen.toBlob((b) => (b ? res(b) : rej(new Error("Canvas blob error"))), "image/jpeg", 0.92);
+              });
+              const url = await uploadImageBlob(uid, productId, blob, `-split-${i}`);
+              results.push({ url, width: W, height: sliceH, kind: "split" });
+            }
+          } else {
+            // 2D Bounding Boxes (Custom, Grid, AI)
+            const boxList = Array.isArray(boxes) ? boxes : [];
+            for (let i = 0; i < boxList.length; i++) {
+              const [ymin, xmin, ymax, xmax] = boxList[i].box;
+              const cropX = Math.round((xmin / 1000) * W);
+              const cropY = Math.round((ymin / 1000) * H);
+              const cropW = Math.max(1, Math.round(((xmax - xmin) / 1000) * W));
+              const cropH = Math.max(1, Math.round(((ymax - ymin) / 1000) * H));
+
+              const offscreen = document.createElement("canvas");
+              offscreen.width = cropW;
+              offscreen.height = cropH;
+              const ctx = offscreen.getContext("2d");
+              ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+              const blob = await new Promise((res, rej) => {
+                offscreen.toBlob((b) => (b ? res(b) : rej(new Error("Canvas blob error"))), "image/jpeg", 0.92);
+              });
+              const url = await uploadImageBlob(uid, productId, blob, `-crop-${i}`);
+              results.push({ url, width: cropW, height: cropH, kind: "split" });
+            }
           }
           clientSucceeded = true;
         } catch (err) {
-          console.warn("Client background split failed, trying Cloud Function fallback:", err);
+          console.warn("Client background split failed:", err);
         }
       }
 
@@ -2719,7 +3076,7 @@ function ProductDetail() {
           const res = await callFunction("splitProductImage")({
             productId,
             imageUrl,
-            slicePoints: lines,
+            slicePoints: lines ?? [50],
           });
           results = res?.data?.slices ?? [];
         } catch (err) {
