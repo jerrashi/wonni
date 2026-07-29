@@ -6,18 +6,20 @@ const { downloadBuffer, isOwner, normalizeImageUrl } = require("./product_media"
 
 const GEMINI_MODEL = "gemini-1.5-flash";
 
-// System prompt that asks Gemini to return normalised bounding boxes (0–1000 scale) and optional detected price/text.
-const SYSTEM_PROMPT = `You are an e-commerce product photo analyst.
-Identify every distinct product or item visible in the image (e.g. cards in a binder page, items in a flat lay photo, trading cards, merchandise).
-If any price or label text is visible near or on an item, extract it into 'price' (number) or 'label' (string).
+// System prompt that asks Gemini to return normalised bounding boxes (0–1000 scale) and extracted product titles and prices.
+const SYSTEM_PROMPT = `You are an expert e-commerce product photo and merchandise list analyst.
+Analyze the image to detect every distinct product, item, card, or listed merchandise entry visible (e.g. merchandise posters, pop-up store flyers, binder pages, flat-lays).
+For each item:
+1. "box": Return normalized bounding box coordinates [ymin, xmin, ymax, xmax] as integers from 0 to 1000. The box should bound the product image and its title/price label together.
+2. "label": Extract the exact printed product title/name if visible (e.g. "Mug", "Shoulder Bag", "Link Keychain", "BTS OFFICIAL LIGHT STICK").
+3. "price": Extract the price as a number if visible (e.g. 25.00 for "$25" or "$25.00", 100 for "$100.00"). If no price is visible, set to null.
+
 Return ONLY valid JSON with this exact structure — no markdown, no explanation:
 {
   "objects": [
-    { "label": "product name or card name", "price": 0.00, "box": [ymin, xmin, ymax, xmax] }
+    { "label": "Product Title", "price": 25.00, "box": [ymin, xmin, ymax, xmax] }
   ]
-}
-Coordinates are normalised integers from 0 to 1000 (0 = top/left edge, 1000 = bottom/right edge).
-Include all clearly visible products. Label each with a short descriptive name. If no price is visible, omit price or set to null.`;
+}`;
 
 exports.identifyProductsInImage = onCall(
   { timeoutSeconds: 60, memory: "512MiB" },
