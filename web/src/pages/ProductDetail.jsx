@@ -1580,6 +1580,7 @@ function VariantsEditor({
   const activeVariants = variants.filter((v) => v.active);
   const unmatchedVariants = variants.filter((v) => !v.active && v.needsReview);
   const quietInactiveVariants = variants.filter((v) => !v.active && !v.needsReview);
+  const quietInactiveCount = quietInactiveVariants.length;
   const [inactiveExpanded, setInactiveExpanded] = useState(false);
   // Only offer blank (unpopulated) active rows as merge targets — merging
   // real data onto a row that already has its own would silently overwrite it.
