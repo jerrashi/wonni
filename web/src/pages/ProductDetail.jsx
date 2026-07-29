@@ -757,6 +757,7 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
   const [gridCols, setGridCols] = useState(3);
   const [boxes, setBoxes] = useState([]);
   const [horizontalCutPcts, setHorizontalCutPcts] = useState([33, 66]);
+  const [selectedLineIndex, setSelectedLineIndex] = useState(null);
   const [evenSliceCount, setEvenSliceCount] = useState(2);
   const [selectedBoxId, setSelectedBoxId] = useState(null);
   const [drawingBox, setDrawingBox] = useState(null);
@@ -767,21 +768,25 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
   const canvasRef = useRef(null);
   const imgRef = useRef(null);
 
-  // Keyboard shortcut listener to delete active box
+  // Keyboard shortcut listener to delete active box or cut line
   useEffect(() => {
     function handleKeyDown(e) {
       if (
         (e.key === "Delete" || e.key === "Backspace") &&
-        selectedBoxId &&
         !["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)
       ) {
-        setBoxes((prev) => prev.filter((b) => b.id !== selectedBoxId));
-        setSelectedBoxId(null);
+        if (splitMethod === "horizontal" && selectedLineIndex !== null) {
+          setHorizontalCutPcts((prev) => prev.filter((_, idx) => idx !== selectedLineIndex));
+          setSelectedLineIndex(null);
+        } else if (selectedBoxId) {
+          setBoxes((prev) => prev.filter((b) => b.id !== selectedBoxId));
+          setSelectedBoxId(null);
+        }
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedBoxId]);
+  }, [selectedBoxId, selectedLineIndex, splitMethod]);
 
   function generateGridBoxes(r, c) {
     const rows = Math.max(1, parseInt(r, 10) || 1);
@@ -879,20 +884,29 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
 
         horizontalCutPcts.forEach((pct, idx) => {
           const y = (pct / 100) * h;
-          ctx.strokeStyle = "#ef4444";
-          ctx.lineWidth = 2;
-          ctx.setLineDash([6, 4]);
+          const isSelected = idx === selectedLineIndex;
+
+          ctx.strokeStyle = isSelected ? "#3b82f6" : "#ef4444";
+          ctx.lineWidth = isSelected ? 3 : 2;
+          ctx.setLineDash(isSelected ? [] : [6, 4]);
           ctx.beginPath();
           ctx.moveTo(0, y);
           ctx.lineTo(w, y);
           ctx.stroke();
           ctx.setLineDash([]);
-          ctx.fillStyle = "#ef4444";
-          ctx.fillRect(w / 2 - 24, y - 10, 48, 20);
+
+          ctx.fillStyle = isSelected ? "#3b82f6" : "#ef4444";
+          ctx.fillRect(w / 2 - 40, y - 10, 80, 20);
           ctx.fillStyle = "#ffffff";
           ctx.font = "bold 11px sans-serif";
           ctx.textAlign = "center";
-          ctx.fillText(`✂ ${idx + 1}`, w / 2, y + 4);
+          ctx.fillText(`✂ Cut #${idx + 1} (${pct.toFixed(0)}%)`, w / 2, y + 4);
+
+          ctx.fillStyle = "#ef4444";
+          ctx.fillRect(w - 24, y - 10, 24, 20);
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "bold 12px sans-serif";
+          ctx.fillText("✕", w - 12, y + 4);
           ctx.textAlign = "left";
         });
       } else {
@@ -1023,12 +1037,31 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
   }
 
   function handleCanvasMouseDown(e) {
-    if (splitMethod === "horizontal") return;
     const { x, y } = getCanvasCoords(e);
     const canvas = canvasRef.current;
     if (!canvas) return;
     const w = canvas.width;
     const h = canvas.height;
+
+    if (splitMethod === "horizontal") {
+      for (let i = 0; i < horizontalCutPcts.length; i++) {
+        const lineY = (horizontalCutPcts[i] / 100) * h;
+        if (Math.abs(y - lineY) <= 14) {
+          if (x >= w - 30) {
+            setHorizontalCutPcts((prev) => prev.filter((_, idx) => idx !== i));
+            setSelectedLineIndex(null);
+            return;
+          }
+          setSelectedLineIndex(i);
+          setDragState({ type: "line", lineIndex: i });
+          return;
+        }
+      }
+      const newPct = Math.max(1, Math.min(99, (y / h) * 100));
+      setHorizontalCutPcts((prev) => [...prev, newPct].sort((a, b) => a - b));
+      setSelectedLineIndex(null);
+      return;
+    }
 
     const activeBox = selectedBoxId ? boxes.find((b) => b.id === selectedBoxId) : null;
     if (activeBox) {
@@ -1077,6 +1110,16 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
     const canvas = canvasRef.current;
     const w = canvas.width;
     const h = canvas.height;
+
+    if (dragState?.type === "line") {
+      const newPct = Math.max(1, Math.min(99, (y / h) * 100));
+      setHorizontalCutPcts((prev) => {
+        const next = [...prev];
+        next[dragState.lineIndex] = newPct;
+        return next;
+      });
+      return;
+    }
 
     if (drawingBox) {
       setDrawingBox((prev) => ({ ...prev, currentX: x, currentY: y }));
@@ -1127,6 +1170,11 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
   }
 
   function handleCanvasMouseUp() {
+    if (dragState?.type === "line") {
+      setHorizontalCutPcts((prev) => [...prev].sort((a, b) => a - b));
+      setDragState(null);
+      return;
+    }
     if (drawingBox && canvasRef.current) {
       const canvas = canvasRef.current;
       const w = canvas.width;
@@ -1251,30 +1299,47 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
           </div>
         )}
 
-        {splitMethod === "horizontal" && (
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-            <span>Split into:</span>
-            <input
-              type="number"
-              min="2"
-              max="20"
-              value={evenSliceCount}
-              style={{ width: 44, padding: 4 }}
-              className="input"
-              onChange={(e) => {
-                const val = e.target.value;
-                setEvenSliceCount(val);
-                const n = Math.max(2, Math.min(20, parseInt(val, 10) || 2));
-                const newPcts = Array.from({ length: n - 1 }, (_, i) => ((i + 1) / n) * 100);
-                setHorizontalCutPcts(newPcts);
-              }}
-            />
-            <span>equal slices</span>
-            <button className="btn btn-ghost" style={{ fontSize: 12, padding: "4px 8px" }} onClick={addCutLine}>
-              + Add Cut Line
-            </button>
-          </div>
-        )}
+        {splitMethod === "horizontal" && (() => {
+          const idealPcts = Array.from(
+            { length: horizontalCutPcts.length },
+            (_, i) => ((i + 1) / (horizontalCutPcts.length + 1)) * 100
+          );
+          const isOffCenter = horizontalCutPcts.some((pct, i) => Math.abs(pct - idealPcts[i]) > 0.5);
+          return (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+              <span>Split into:</span>
+              <input
+                type="number"
+                min="2"
+                max="20"
+                value={horizontalCutPcts.length + 1}
+                style={{ width: 44, padding: 4 }}
+                className="input"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setEvenSliceCount(val);
+                  const n = Math.max(2, Math.min(20, parseInt(val, 10) || 2));
+                  const newPcts = Array.from({ length: n - 1 }, (_, i) => ((i + 1) / n) * 100);
+                  setHorizontalCutPcts(newPcts);
+                }}
+              />
+              <span>slices</span>
+              {isOffCenter && (
+                <button
+                  className="btn btn-ghost"
+                  style={{ fontSize: 12, padding: "4px 8px", color: "var(--primary)", borderColor: "var(--primary)" }}
+                  onClick={() => setHorizontalCutPcts(idealPcts)}
+                  title="Re-space cut lines back into equal slices"
+                >
+                  ⚡ Evenly slice
+                </button>
+              )}
+              <button className="btn btn-ghost" style={{ fontSize: 12, padding: "4px 8px" }} onClick={addCutLine}>
+                + Add Cut Line
+              </button>
+            </div>
+          );
+        })()}
 
         <div style={{ marginLeft: "auto" }}>
           <button
