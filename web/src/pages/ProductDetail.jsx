@@ -757,6 +757,7 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
   const [gridCols, setGridCols] = useState(3);
   const [boxes, setBoxes] = useState([]);
   const [horizontalCutPcts, setHorizontalCutPcts] = useState([33, 66]);
+  const [evenSliceCount, setEvenSliceCount] = useState(2);
   const [selectedBoxId, setSelectedBoxId] = useState(null);
   const [drawingBox, setDrawingBox] = useState(null);
   const [dragState, setDragState] = useState(null);
@@ -1251,9 +1252,33 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
         )}
 
         {splitMethod === "horizontal" && (
-          <button className="btn btn-ghost" style={{ fontSize: 12, padding: "4px 8px" }} onClick={addCutLine}>
-            + Add Cut Line
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+            <span>Split evenly into:</span>
+            <input
+              type="number"
+              min="2"
+              max="20"
+              value={evenSliceCount}
+              style={{ width: 44, padding: 4 }}
+              className="input"
+              onChange={(e) => setEvenSliceCount(e.target.value)}
+            />
+            <span>pieces</span>
+            <button
+              className="btn btn-ghost"
+              style={{ fontSize: 12, padding: "4px 8px" }}
+              onClick={() => {
+                const n = Math.max(2, Math.min(20, parseInt(evenSliceCount, 10) || 2));
+                const newPcts = Array.from({ length: n - 1 }, (_, i) => ((i + 1) / n) * 100);
+                setHorizontalCutPcts(newPcts);
+              }}
+            >
+              Split evenly
+            </button>
+            <button className="btn btn-ghost" style={{ fontSize: 12, padding: "4px 8px" }} onClick={addCutLine}>
+              + Add Cut Line
+            </button>
+          </div>
         )}
 
         <div style={{ marginLeft: "auto" }}>
