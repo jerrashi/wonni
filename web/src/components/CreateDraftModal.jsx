@@ -382,6 +382,41 @@ export default function CreateDraftModal({ onClose, onCreated }) {
     };
   }
 
+  function testBoxHit(b, x, y, w, h, isSelected) {
+    const [ymin, xmin, ymax, xmax] = b.box;
+    const boxX = (xmin / 1000) * w;
+    const boxY = (ymin / 1000) * h;
+    const boxW = ((xmax - xmin) / 1000) * w;
+    const boxH = ((ymax - ymin) / 1000) * h;
+
+    // 1. Check delete '✕' badge (only for selected box)
+    if (isSelected && x >= boxX + boxW - 24 && x <= boxX + boxW + 4 && y >= boxY - 4 && y <= boxY + 24) {
+      return { type: "delete", boxId: b.id };
+    }
+
+    // 2. Check corner handles (slightly larger hit radius for selected box)
+    const hs = isSelected ? 16 : 12;
+    const corners = {
+      tl: [boxX, boxY],
+      tr: [boxX + boxW, boxY],
+      bl: [boxX, boxY + boxH],
+      br: [boxX + boxW, boxY + boxH],
+    };
+
+    for (const [name, [cx, cy]] of Object.entries(corners)) {
+      if (Math.abs(x - cx) <= hs && Math.abs(y - cy) <= hs) {
+        return { type: "handle", handle: name, boxId: b.id, box: [...b.box] };
+      }
+    }
+
+    // 3. Check body
+    if (x >= boxX && x <= boxX + boxW && y >= boxY && y <= boxY + boxH) {
+      return { type: "body", handle: "move", boxId: b.id, box: [...b.box] };
+    }
+
+    return null;
+  }
+
   function handleCanvasMouseDown(e) {
     if (splitMethod === "horizontal") return;
     const { x, y } = getCanvasCoords(e);
@@ -390,59 +425,45 @@ export default function CreateDraftModal({ onClose, onCreated }) {
     const w = canvas.width;
     const h = canvas.height;
 
-    // Check hit test starting from top box
-    for (let i = boxes.length - 1; i >= 0; i--) {
-      const b = boxes[i];
-      const [ymin, xmin, ymax, xmax] = b.box;
-      const boxX = (xmin / 1000) * w;
-      const boxY = (ymin / 1000) * h;
-      const boxW = ((xmax - xmin) / 1000) * w;
-      const boxH = ((ymax - ymin) / 1000) * h;
-
-      // Check if delete '✕' badge clicked
-      if (b.id === selectedBoxId && x >= boxX + boxW - 24 && x <= boxX + boxW + 4 && y >= boxY - 4 && y <= boxY + 24) {
-        removeBox(b.id);
-        return;
-      }
-
-      // Check handles
-      const hs = 12;
-      const corners = {
-        tl: [boxX, boxY],
-        tr: [boxX + boxW, boxY],
-        bl: [boxX, boxY + boxH],
-        br: [boxX + boxW, boxY + boxH],
-      };
-
-      for (const [name, [cx, cy]] of Object.entries(corners)) {
-        if (Math.abs(x - cx) <= hs && Math.abs(y - cy) <= hs) {
-          setSelectedBoxId(b.id);
-          setDragState({
-            boxId: b.id,
-            handle: name,
-            startX: x,
-            startY: y,
-            startBox: [...b.box],
-          });
+    // STEP 1: PRIORITIZE CURRENTLY SELECTED BOX if present
+    const activeBox = selectedBoxId ? boxes.find((b) => b.id === selectedBoxId) : null;
+    if (activeBox) {
+      const activeHit = testBoxHit(activeBox, x, y, w, h, true);
+      if (activeHit) {
+        if (activeHit.type === "delete") {
+          removeBox(activeHit.boxId);
           return;
         }
-      }
-
-      // Check body
-      if (x >= boxX && x <= boxX + boxW && y >= boxY && y <= boxY + boxH) {
-        setSelectedBoxId(b.id);
         setDragState({
-          boxId: b.id,
-          handle: "move",
+          boxId: activeHit.boxId,
+          handle: activeHit.handle,
           startX: x,
           startY: y,
-          startBox: [...b.box],
+          startBox: activeHit.box,
         });
         return;
       }
     }
 
-    // Clicked on empty space: start drawing a new custom box
+    // STEP 2: Check remaining boxes starting from top layer down
+    for (let i = boxes.length - 1; i >= 0; i--) {
+      const b = boxes[i];
+      if (b.id === selectedBoxId) continue; // Already checked above
+      const hit = testBoxHit(b, x, y, w, h, false);
+      if (hit) {
+        setSelectedBoxId(b.id);
+        setDragState({
+          boxId: hit.boxId,
+          handle: hit.handle,
+          startX: x,
+          startY: y,
+          startBox: hit.box,
+        });
+        return;
+      }
+    }
+
+    // STEP 3: Clicked on empty space: start drawing a new custom box
     setSelectedBoxId(null);
     setDrawingBox({ startX: x, startY: y, currentX: x, currentY: y });
   }
