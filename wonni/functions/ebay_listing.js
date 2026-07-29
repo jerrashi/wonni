@@ -321,11 +321,18 @@ const CONDITION_ID_TO_ENUM = Object.fromEntries(
 // "40001" whose value must be one of these fixed IDs, not a free-text or aspect value. Filling
 // it as a regular aspect (the old approach) gets silently rejected with the same "required
 // field" error, which is what made this look unfixed even after extractMissingAspects caught it.
+//
+// The valid value-ID set is different for different trading-card category families — eBay
+// rejects Sports Trading Cards' IDs (400010-400013) in Collectible Card Game categories like
+// 183454/183456 with "Condition descriptor value X is not valid for condition descriptor 40001"
+// (confirmed against production). These are the CCG-family IDs; if this ever fires for a Sports
+// or Non-Sport Trading Card category, this map needs a second (400010-400013) branch by category.
 const CARD_CONDITION_DESCRIPTOR_ID = "40001";
 const CARD_CONDITION_VALUE_IDS = {
-  NEW: "400010", LIKE_NEW: "400010", USED_EXCELLENT: "400010",
-  USED_VERY_GOOD: "400011", USED_GOOD: "400012", USED_ACCEPTABLE: "400012",
-  FOR_PARTS_OR_NOT_WORKING: "400013",
+  NEW: "400010", LIKE_NEW: "400010", USED_EXCELLENT: "400010",       // Near Mint or Better
+  USED_VERY_GOOD: "400015",                                          // Lightly Played (Excellent)
+  USED_GOOD: "400016", USED_ACCEPTABLE: "400016",                    // Moderately Played (Very Good)
+  FOR_PARTS_OR_NOT_WORKING: "400017",                                // Heavily Played (Poor)
 };
 
 /**
