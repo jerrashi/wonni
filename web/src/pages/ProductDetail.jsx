@@ -1326,7 +1326,7 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
 
 // ─── ImageStrip ───────────────────────────────────────────────────────────────
 
-function ImageStrip({ images, activeIndex, onHover, onDrop, onEdit, savingMedia }) {
+function ImageStrip({ images, activeIndex, onHover, onDrop, onEdit, savingMedia, onAddPhotos }) {
   const [dragIndex, setDragIndex] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
   const [limitInfoOpen, setLimitInfoOpen] = useState(false);
@@ -1404,6 +1404,44 @@ function ImageStrip({ images, activeIndex, onHover, onDrop, onEdit, savingMedia 
             </div>
           );
         })}
+
+        {/* '+' Add Photo button at end of thumbnail carousel */}
+        <label
+          className="img-thumb"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            border: "2px dashed var(--border)",
+            background: "rgba(255, 255, 255, 0.03)",
+            cursor: savingMedia ? "not-allowed" : "pointer",
+            width: 72,
+            height: 72,
+            borderRadius: 8,
+            flexShrink: 0,
+            transition: "all 0.15s ease",
+            margin: 0,
+          }}
+          title="Add photo to listing"
+        >
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            disabled={savingMedia}
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const files = Array.from(e.target.files ?? []);
+              if (files.length > 0 && onAddPhotos) {
+                onAddPhotos(files);
+              }
+              e.target.value = "";
+            }}
+          />
+          <span style={{ fontSize: 24, fontWeight: "bold", color: "var(--primary)", lineHeight: 1 }}>+</span>
+          <span style={{ fontSize: 10, color: "var(--muted)", marginTop: 2, fontWeight: 500 }}>Add Photo</span>
+        </label>
       </div>
       {overLimitCount > 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
@@ -3159,6 +3197,44 @@ function ProductDetail() {
   }
 
 
+  async function handleAddPhotos(files) {
+    if (!files || !files.length) return;
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      setMediaError("You're signed out — please refresh and try again.");
+      return;
+    }
+
+    const taskId = `upload-${Date.now()}`;
+    setBgTasks((prev) => [...prev, { id: taskId, message: `Uploading ${files.length} photo(s)…` }]);
+
+    try {
+      const uploadedImages = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const url = await uploadImageBlob(uid, productId, file, `-added-${Date.now()}-${i}`);
+        uploadedImages.push({
+          id: `${url}-added-${i}`,
+          url,
+          sourceUrl: url,
+          kind: "added",
+        });
+      }
+
+      let next;
+      setImages((prevImages) => {
+        next = [...prevImages, ...uploadedImages];
+        return next;
+      });
+      if (next) await saveMedia(next);
+    } catch (err) {
+      console.error("Failed to add photos:", err);
+      setMediaError("Failed to upload photo(s) — please try again.");
+    } finally {
+      setBgTasks((prev) => prev.filter((t) => t.id !== taskId));
+    }
+  }
+
   async function handleDeleteProduct() {
     const liveOn = [
       product?.tiktokStatus === "active" ? "TikTok Shop" : null,
@@ -3240,16 +3316,15 @@ function ProductDetail() {
                 )}
               </div>
 
-              {images.length > 0 && (
-                <ImageStrip
-                  images={images}
-                  activeIndex={safePreviewIndex}
-                  onHover={setPreviewIndex}
-                  onDrop={handleDropReorder}
-                  onEdit={(idx) => setEditingImageId(images[idx]?.id ?? null)}
-                  savingMedia={savingMedia}
-                />
-              )}
+              <ImageStrip
+                images={images}
+                activeIndex={safePreviewIndex}
+                onHover={setPreviewIndex}
+                onDrop={handleDropReorder}
+                onEdit={(idx) => setEditingImageId(images[idx]?.id ?? null)}
+                savingMedia={savingMedia}
+                onAddPhotos={handleAddPhotos}
+              />
 
               {photoPickerValue !== null && (
                 <SelectPhotoModal
