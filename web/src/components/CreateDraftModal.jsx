@@ -162,6 +162,21 @@ export default function CreateDraftModal({ onClose, onCreated }) {
     }
   }, [mode, filePreviews]);
 
+  // Keyboard shortcut to delete active box
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if (
+        (e.key === "Delete" || e.key === "Backspace") &&
+        selectedBoxId &&
+        !["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)
+      ) {
+        removeBox(selectedBoxId);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedBoxId]);
+
   // ── AI Auto-Detection (Gemini Vision) ────────────────────────────────────────
   async function runAiDetection() {
     const activePhoto = filePreviews[targetPhotoIndex];
@@ -301,7 +316,7 @@ export default function CreateDraftModal({ onClose, onCreated }) {
         ctx.font = "bold 11px sans-serif";
         ctx.fillText(item.label.slice(0, 14), boxX + 6, boxY + 14);
 
-        // Corner handles for active box
+        // Corner handles and delete badge for active box
         if (isSelected) {
           const handles = [
             [boxX, boxY],
@@ -318,6 +333,15 @@ export default function CreateDraftModal({ onClose, onCreated }) {
             ctx.fill();
             ctx.stroke();
           });
+
+          // Draw canvas delete '✕' badge on top right of box
+          ctx.fillStyle = "#ef4444";
+          ctx.fillRect(boxX + boxW - 20, boxY, 20, 20);
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "bold 12px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText("✕", boxX + boxW - 10, boxY + 14);
+          ctx.textAlign = "left";
         }
       });
 
@@ -374,6 +398,12 @@ export default function CreateDraftModal({ onClose, onCreated }) {
       const boxY = (ymin / 1000) * h;
       const boxW = ((xmax - xmin) / 1000) * w;
       const boxH = ((ymax - ymin) / 1000) * h;
+
+      // Check if delete '✕' badge clicked
+      if (b.id === selectedBoxId && x >= boxX + boxW - 24 && x <= boxX + boxW + 4 && y >= boxY - 4 && y <= boxY + 24) {
+        removeBox(b.id);
+        return;
+      }
 
       // Check handles
       const hs = 12;
