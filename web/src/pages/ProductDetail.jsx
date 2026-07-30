@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, Component } from "react";
-import { doc, deleteDoc, onSnapshot, serverTimestamp, updateDoc } from "firebase/firestore";
-import { useNavigate, useParams } from "react-router-dom";
+import { deleteField, doc, deleteDoc, onSnapshot, serverTimestamp, updateDoc } from "firebase/firestore";
+import { useBlocker, useNavigate, useParams } from "react-router-dom";
 import { auth, db, callFunction, uploadImageBlob } from "../firebase";
 import Layout from "../components/Layout";
+import UnsavedChangesModal from "../components/UnsavedChangesModal";
+import { useDebouncedCallback } from "../hooks/useDebouncedCallback";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -132,6 +134,21 @@ function migrateLegacyVariants(rawVariants) {
   }));
 
   return { options, variants };
+}
+
+// Shared by the onSnapshot hydration and handleDiscard's revert-to-live-values
+// path so both apply the exact same legacy-shape detection/migration —
+// calling normalizeOptions/normalizeVariants directly on a legacy-shaped
+// product silently drops every variant's optionValues instead of migrating.
+function deriveOptionsAndVariants(productLike) {
+  const rawVariants = Array.isArray(productLike?.variants) ? productLike.variants : [];
+  const hasNoOptions = !Array.isArray(productLike?.options) || productLike.options.length === 0;
+  const isLegacy = hasNoOptions && rawVariants.length > 0 && rawVariants.every(isLegacyShapedVariant);
+  if (isLegacy) {
+    const migrated = migrateLegacyVariants(rawVariants);
+    return { options: migrated.options, variants: migrated.variants, isLegacy: true };
+  }
+  return { options: normalizeOptions(productLike), variants: normalizeVariants(productLike), isLegacy: false };
 }
 
 // Cartesian product of every option's values, as an array of { optionName: value } combos.
@@ -2687,13 +2704,11 @@ function ProductDetail() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [listingPrice, setListingPrice] = useState(null);
-  const [savingListingPrice, setSavingListingPrice] = useState(false);
   const [weightLbs, setWeightLbs] = useState("0");
   const [weightOz, setWeightOz] = useState("6");
   const [lengthIn, setLengthIn] = useState("");
   const [widthIn, setWidthIn] = useState("");
   const [heightIn, setHeightIn] = useState("");
-  const [savingShipping, setSavingShipping] = useState(false);
   const [images, setImages] = useState([]);
   const [previewIndex, setPreviewIndex] = useState(0);
   // Tracked by stable image id, not array position — a background split of a
@@ -2701,7 +2716,6 @@ function ProductDetail() {
   // which would otherwise shift this index out from under the open editor.
   const [editingImageId, setEditingImageId] = useState(null);
   const editingIndex = editingImageId === null ? null : images.findIndex((img) => img.id === editingImageId);
-  const [savingText, setSavingText] = useState(false);
   const [savingMedia, setSavingMedia] = useState(false);
   const [mediaError, setMediaError] = useState("");
   // Serializes saveMedia's Firestore writes so concurrent callers (e.g.
@@ -2723,6 +2737,45 @@ function ProductDetail() {
   const [aiDescSuggestion, setAiDescSuggestion] = useState(null); // string | null
   const [aiDescError, setAiDescError] = useState("");
 
+  // ── Unsaved-changes staging ──────────────────────────────────────────────
+  // { fields: {...changed}, updatedAt } | null — mirrors the doc's own
+  // `pendingEdits` field and doubles as the write buffer for markFieldsDirty.
+  const [pendingEdits, setPendingEdits] = useState(null);
+  const isDirty = !!pendingEdits && Object.keys(pendingEdits.fields || {}).length > 0;
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  // Always holds this tab's own latest intended values for whatever it has
+  // staged — the onSnapshot hydration below trusts this over anything the
+  // server echoes back, so a keystroke never gets clobbered by a delayed
+  // round-trip of an earlier debounced write.
+  const localPendingFieldsRef = useRef(null);
+
+  async function writePendingEditsNow() {
+    if (!productId) return;
+    const fields = localPendingFieldsRef.current;
+    if (!fields || Object.keys(fields).length === 0) return;
+    try {
+      await updateDoc(doc(db, "products", productId), {
+        pendingEdits: { fields, updatedAt: serverTimestamp() },
+      });
+    } catch (err) {
+      // Non-fatal: the edit is still safe in localPendingFieldsRef/pendingEdits
+      // state and will be retried by the next markFieldsDirty call or by Save.
+      console.warn("Could not sync pending edit:", err);
+    }
+  }
+  const scheduleWritePendingEdits = useDebouncedCallback(writePendingEditsNow, 1000);
+
+  // Stages a patch of field(s) into the local unsaved-edit buffer (instant,
+  // optimistic) and schedules a debounced sync to Firestore so the edit
+  // survives a crash/reload — see pendingEdits doc-field in the plan.
+  function markFieldsDirty(patch) {
+    const fields = { ...(localPendingFieldsRef.current ?? {}), ...patch };
+    localPendingFieldsRef.current = fields;
+    setPendingEdits({ fields, updatedAt: null });
+    scheduleWritePendingEdits();
+  }
+
   useEffect(() => {
     if (!productId) { setError("Missing product ID."); setLoading(false); return; }
     setLoading(true);
@@ -2733,29 +2786,45 @@ function ProductDetail() {
         if (!snap.exists()) { setProduct(null); setError("Product not found."); setLoading(false); return; }
         const next = { id: snap.id, ...snap.data() };
         setProduct(next);
-        setTitle(next.title ?? "");
-        setDescription(next.description ?? "");
-        setListingPrice(typeof next.listingPrice === "number" ? next.listingPrice : null);
-        setWeightLbs(String(next.weightLbs ?? 0));
-        setWeightOz(String(next.weightOz ?? 6));
-        setLengthIn(next.lengthIn ? String(next.lengthIn) : "");
-        setWidthIn(next.widthIn ? String(next.widthIn) : "");
-        setHeightIn(next.heightIn ? String(next.heightIn) : "");
-        setImages(normalizeImageAssets(next));
 
-        const rawVariants = Array.isArray(next.variants) ? next.variants : [];
-        const hasNoOptions = !Array.isArray(next.options) || next.options.length === 0;
-        const isLegacy = hasNoOptions && rawVariants.length > 0 && rawVariants.every(isLegacyShapedVariant);
-        if (isLegacy) {
-          const migrated = migrateLegacyVariants(rawVariants);
-          setOptions(migrated.options);
-          setVariants(migrated.variants);
-          setLegacyMigrationPending(true);
-        } else {
-          setOptions(normalizeOptions(next));
-          setVariants(normalizeVariants(next));
-          setLegacyMigrationPending(false);
-        }
+        // Merge this tab's own unconfirmed edits (always freshest) over
+        // whatever the server's pendingEdits currently holds (may include
+        // another tab/device's still-unsaved edits) — this is what makes an
+        // interrupted draft reappear, still unsaved, on reload/another device,
+        // without a delayed round-trip of our own write stomping a live keystroke.
+        const remotePendingFields = next.pendingEdits?.fields ?? null;
+        const localPendingFields = localPendingFieldsRef.current;
+        const effectiveFields = { ...(remotePendingFields ?? {}), ...(localPendingFields ?? {}) };
+        localPendingFieldsRef.current = Object.keys(effectiveFields).length ? effectiveFields : null;
+        setPendingEdits(localPendingFieldsRef.current ? { fields: effectiveFields, updatedAt: next.pendingEdits?.updatedAt ?? null } : null);
+
+        setTitle(effectiveFields.title ?? next.title ?? "");
+        setDescription(effectiveFields.description ?? next.description ?? "");
+        const effListingPrice = "listingPrice" in effectiveFields ? effectiveFields.listingPrice : next.listingPrice;
+        setListingPrice(typeof effListingPrice === "number" ? effListingPrice : null);
+        setWeightLbs(String(effectiveFields.weightLbs ?? next.weightLbs ?? 0));
+        setWeightOz(String(effectiveFields.weightOz ?? next.weightOz ?? 6));
+        const effLengthIn = "lengthIn" in effectiveFields ? effectiveFields.lengthIn : next.lengthIn;
+        const effWidthIn = "widthIn" in effectiveFields ? effectiveFields.widthIn : next.widthIn;
+        const effHeightIn = "heightIn" in effectiveFields ? effectiveFields.heightIn : next.heightIn;
+        setLengthIn(effLengthIn ? String(effLengthIn) : "");
+        setWidthIn(effWidthIn ? String(effWidthIn) : "");
+        setHeightIn(effHeightIn ? String(effHeightIn) : "");
+
+        const mergedForImages = { ...next };
+        if ("images" in effectiveFields) mergedForImages.images = effectiveFields.images;
+        if ("imageAssets" in effectiveFields) mergedForImages.imageAssets = effectiveFields.imageAssets;
+        setImages(normalizeImageAssets(mergedForImages));
+
+        const mergedForVariants = { ...next };
+        if ("options" in effectiveFields) mergedForVariants.options = effectiveFields.options;
+        if ("variants" in effectiveFields) mergedForVariants.variants = effectiveFields.variants;
+        if ("hasVariants" in effectiveFields) mergedForVariants.hasVariants = effectiveFields.hasVariants;
+
+        const derived = deriveOptionsAndVariants(mergedForVariants);
+        setOptions(derived.options);
+        setVariants(derived.variants);
+        setLegacyMigrationPending(derived.isLegacy);
         setPreviewIndex(0);
         setLoading(false);
       },
@@ -2776,13 +2845,8 @@ function ProductDetail() {
     return `${images.length} image${images.length === 1 ? "" : "s"}`;
   }, [images.length]);
 
-  async function saveMedia(nextImages) {
-    if (!productId) return;
-    setImages(nextImages);
-    pendingMediaSavesRef.current += 1;
-    setSavingMedia(true);
-    setMediaError("");
-    const payload = nextImages.map((image, index) => ({
+  function buildImagePayload(nextImages) {
+    return nextImages.map((image, index) => ({
       id: image.id ?? `${image.url}-${index}`,
       url: image.url,
       sourceUrl: image.sourceUrl ?? image.url,
@@ -2791,6 +2855,21 @@ function ProductDetail() {
       kind: image.kind ?? "catalog",
       variantTags: Array.isArray(image.variantTags) ? image.variantTags : [],
     }));
+  }
+
+  // Writes straight to the LIVE image fields, bypassing the unsaved-edits
+  // buffer entirely. Used only by the background photo-split pipeline
+  // (handleSaveSplit), which is deliberately excluded from dirty-tracking —
+  // it keeps running (and saving) after the user has navigated away, so it
+  // must never be gated behind Save. Every other photo action goes through
+  // stageMediaEdit below instead.
+  async function saveMedia(nextImages) {
+    if (!productId) return;
+    setImages(nextImages);
+    pendingMediaSavesRef.current += 1;
+    setSavingMedia(true);
+    setMediaError("");
+    const payload = buildImagePayload(nextImages);
     // Serialize writes in call order. Concurrent background splits (or any
     // overlapping edit) each call saveMedia independently and race their own
     // updateDoc — without this chain, a slower-landing write built from an
@@ -2817,85 +2896,174 @@ function ProductDetail() {
     }
   }
 
-  // Every variant whose price still equals the *old* listing price is
-  // "following" it, not a deliberate override — bump those to the new value
-  // so they keep following. Anything the user already typed a different
-  // number into is left untouched. Writes options/variants explicitly (not
-  // via the `variants` state closure) since this needs to land immediately.
-  async function saveListingPrice(nextPrice) {
-    if (!productId) return;
-    setSavingListingPrice(true);
+  // User-driven photo edits (add/delete/reorder/crop/identify/link-to-variant)
+  // stage into the unsaved-edits buffer instead of writing live fields —
+  // mirrors every other field's new staged-until-Save behavior.
+  function stageMediaEdit(nextImages) {
+    setImages(nextImages);
+    const payload = buildImagePayload(nextImages);
+    markFieldsDirty({
+      images: payload.map((image) => image.url),
+      imageAssets: payload,
+      listingImages: payload.map((image) => image.url),
+    });
+  }
+
+  function handleTitleChange(value) {
+    setTitle(value);
+    markFieldsDirty({ title: value });
+  }
+
+  function handleDescriptionChange(value) {
+    setDescription(value);
+    markFieldsDirty({ description: value });
+  }
+
+  // Every variant whose price still equals the price *before this keystroke*
+  // is "following" it, not a deliberate override — bump those to the new
+  // value so they keep following. Anything the user already typed a
+  // different number into is left untouched. Runs per-change (not just on
+  // blur) so a follower tracks correctly through a whole typing sequence.
+  function handleListingPriceChange(rawValue) {
+    const prevPrice = listingPrice;
+    const nextPrice = rawValue === "" ? null : Number(rawValue);
+    const nextVariants = variants.map((v) => (v.price === prevPrice ? { ...v, price: nextPrice } : v));
+    setListingPrice(nextPrice);
+    setVariants(nextVariants);
+    markFieldsDirty({ listingPrice: nextPrice, variants: nextVariants });
+  }
+
+  function handleWeightLbsChange(raw) {
+    setWeightLbs(raw);
+    markFieldsDirty({ weightLbs: parseInt(raw, 10) || 0 });
+  }
+
+  function handleWeightOzChange(raw) {
+    setWeightOz(raw);
+    markFieldsDirty({ weightOz: parseInt(raw, 10) || 0 });
+  }
+
+  function handleLengthInChange(raw) {
+    setLengthIn(raw);
+    markFieldsDirty({ lengthIn: parseFloat(raw) || null });
+  }
+
+  function handleWidthInChange(raw) {
+    setWidthIn(raw);
+    markFieldsDirty({ widthIn: parseFloat(raw) || null });
+  }
+
+  function handleHeightInChange(raw) {
+    setHeightIn(raw);
+    markFieldsDirty({ heightIn: parseFloat(raw) || null });
+  }
+
+  // Commits the staged buffer into the live fields and clears it — the
+  // unified Save button's click handler.
+  async function handleSave() {
+    if (!productId || !isDirty) return true;
+    scheduleWritePendingEdits.flush();
+    setSaving(true);
+    setSaveError("");
     try {
-      const nextVariants = variants.map((v) => (v.price === listingPrice ? { ...v, price: nextPrice } : v));
+      const fields = localPendingFieldsRef.current || {};
       await updateDoc(doc(db, "products", productId), {
-        listingPrice: nextPrice,
-        variants: nextVariants,
+        ...fields,
+        pendingEdits: deleteField(),
         updatedAt: serverTimestamp(),
       });
-      setListingPrice(nextPrice);
-      setVariants(nextVariants);
+      localPendingFieldsRef.current = null;
+      setPendingEdits(null);
+      return true;
+    } catch (err) {
+      setSaveError(err?.message ?? "Could not save changes.");
+      return false;
     } finally {
-      setSavingListingPrice(false);
+      setSaving(false);
     }
   }
 
-  // Auto-saves on blur — only writes if the trimmed value actually changed
-  // from what's persisted, so tabbing through untouched fields is a no-op.
-  async function saveTextFields() {
+  // Reverts the staged buffer and restores every editable field to the last
+  // live (already-saved) values — the Discard action in the unsaved-changes
+  // prompt.
+  async function handleDiscard() {
     if (!productId) return;
-    const nextTitle = title.trim();
-    const nextDescription = description.trim();
-    if (nextTitle === (product?.title ?? "") && nextDescription === (product?.description ?? "")) return;
-    setSavingText(true);
+    scheduleWritePendingEdits.cancel();
+    localPendingFieldsRef.current = null;
+    setPendingEdits(null);
+    if (product) {
+      setTitle(product.title ?? "");
+      setDescription(product.description ?? "");
+      setListingPrice(typeof product.listingPrice === "number" ? product.listingPrice : null);
+      setWeightLbs(String(product.weightLbs ?? 0));
+      setWeightOz(String(product.weightOz ?? 6));
+      setLengthIn(product.lengthIn ? String(product.lengthIn) : "");
+      setWidthIn(product.widthIn ? String(product.widthIn) : "");
+      setHeightIn(product.heightIn ? String(product.heightIn) : "");
+      setImages(normalizeImageAssets(product));
+      const derived = deriveOptionsAndVariants(product);
+      setOptions(derived.options);
+      setVariants(derived.variants);
+      setLegacyMigrationPending(derived.isLegacy);
+    }
     try {
-      await updateDoc(doc(db, "products", productId), {
-        title: nextTitle,
-        description: nextDescription,
-        updatedAt: serverTimestamp(),
-      });
-    } finally {
-      setSavingText(false);
+      await updateDoc(doc(db, "products", productId), { pendingEdits: deleteField() });
+    } catch (err) {
+      console.warn("Could not clear pending edits:", err);
     }
   }
 
-  async function saveShippingInfo() {
-    if (!productId) return;
-    setSavingShipping(true);
-    try {
-      await updateDoc(doc(db, "products", productId), {
-        weightLbs: parseInt(weightLbs, 10) || 0,
-        weightOz: parseInt(weightOz, 10) || 0,
-        lengthIn: parseFloat(lengthIn) || null,
-        widthIn: parseFloat(widthIn) || null,
-        heightIn: parseFloat(heightIn) || null,
-        updatedAt: serverTimestamp(),
-      });
-    } finally {
-      setSavingShipping(false);
-    }
+  // In-app navigation guard (Back button, sidebar links, browser back/
+  // forward) — only fires for a real page change, not e.g. re-rendering on
+  // the same route. Requires the data-router (createBrowserRouter) set up
+  // in main.jsx; useBlocker is a no-op under plain BrowserRouter.
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) => isDirty && currentLocation.pathname !== nextLocation.pathname
+  );
+
+  async function handleBlockerSave() {
+    const ok = await handleSave();
+    if (ok) blocker.proceed?.();
   }
+
+  async function handleBlockerDiscard() {
+    await handleDiscard();
+    blocker.proceed?.();
+  }
+
+  function handleBlockerCancel() {
+    blocker.reset?.();
+  }
+
+  // Tab close/refresh — no in-app prompt is possible here, so this only
+  // triggers the browser's native "leave site?" dialog. Recovery relies on
+  // the debounced pendingEdits write having already landed moments earlier
+  // (see markFieldsDirty/scheduleWritePendingEdits) rather than a save here.
+  useEffect(() => {
+    if (!isDirty) return;
+    function handleBeforeUnload(e) {
+      e.preventDefault();
+      e.returnValue = "";
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [isDirty]);
 
   function applyAIShipping() {
     const titleLower = (title || "").toLowerCase();
+    let suggestion;
     if (titleLower.includes("keyring") || titleLower.includes("photocard") || titleLower.includes("sticker") || titleLower.includes("pin")) {
-      setWeightLbs("0");
-      setWeightOz("4");
-      setLengthIn("6");
-      setWidthIn("4");
-      setHeightIn("1");
+      suggestion = { weightLbs: "0", weightOz: "4", lengthIn: "6", widthIn: "4", heightIn: "1" };
     } else if (titleLower.includes("hoodie") || titleLower.includes("jacket") || titleLower.includes("plush")) {
-      setWeightLbs("1");
-      setWeightOz("4");
-      setLengthIn("12");
-      setWidthIn("10");
-      setHeightIn("4");
+      suggestion = { weightLbs: "1", weightOz: "4", lengthIn: "12", widthIn: "10", heightIn: "4" };
     } else {
-      setWeightLbs("0");
-      setWeightOz("8");
-      setLengthIn("9");
-      setWidthIn("6");
-      setHeightIn("3");
+      suggestion = { weightLbs: "0", weightOz: "8", lengthIn: "9", widthIn: "6", heightIn: "3" };
     }
+    handleWeightLbsChange(suggestion.weightLbs);
+    handleWeightOzChange(suggestion.weightOz);
+    handleLengthInChange(suggestion.lengthIn);
+    handleWidthInChange(suggestion.widthIn);
+    handleHeightInChange(suggestion.heightIn);
   }
 
   // Calls Gemini to generate a suggested product description from the title
@@ -2920,32 +3088,20 @@ function ProductDetail() {
     }
   }
 
-  // Writes options/variants straight to Firestore with explicit values
+  // Stages options/variants/hasVariants into the unsaved-edits buffer
   // (rather than the `options`/`variants` state closure, which would still
-  // be stale immediately after a setOptions/setVariants call) and only
-  // updates local state once the write actually succeeds — so a failed save
-  // doesn't leave the UI showing a structure that was never persisted.
-  async function persistVariants(nextOptions, nextVariants) {
-    if (!productId) return false;
-    setSavingVariants(true);
-    setVariantsError("");
-    try {
-      await updateDoc(doc(db, "products", productId), {
-        options: nextOptions,
-        variants: nextVariants,
-        hasVariants: nextOptions.length > 0,
-        updatedAt: serverTimestamp(),
-      });
-      setOptions(nextOptions);
-      setVariants(nextVariants);
-      setLegacyMigrationPending(false);
-      return true;
-    } catch (err) {
-      setVariantsError(err?.message ?? "Could not save options & variants.");
-      return false;
-    } finally {
-      setSavingVariants(false);
-    }
+  // be stale immediately after a setOptions/setVariants call) — actual
+  // persistence now happens via the unified Save button (handleSave).
+  function persistVariants(nextOptions, nextVariants) {
+    setOptions(nextOptions);
+    setVariants(nextVariants);
+    setLegacyMigrationPending(false);
+    markFieldsDirty({
+      options: nextOptions,
+      variants: nextVariants,
+      hasVariants: nextOptions.length > 0,
+    });
+    return true;
   }
 
   // A hard-delete (removing a value or a whole option) is only worth
@@ -3089,7 +3245,7 @@ function ProductDetail() {
   // tag replacing any prior tag for this option name (so moving a photo from
   // one value to another just re-tags it); images that had exactly this tag
   // but were unchecked lose it — any other tags they carry are left alone.
-  async function linkPhotosToValue(optionName, value, selectedImageIds) {
+  function linkPhotosToValue(optionName, value, selectedImageIds) {
     const selectedSet = new Set(selectedImageIds);
     const nextImages = images.map((img) => {
       const tags = img.variantTags ?? [];
@@ -3102,38 +3258,38 @@ function ProductDetail() {
       }
       return img;
     });
-    await saveMedia(nextImages);
+    stageMediaEdit(nextImages);
   }
 
-  async function handleDeleteImage(index) {
+  function handleDeleteImage(index) {
     const prevImages = images;
     const nextImages = images.filter((_, i) => i !== index);
-    await saveMedia(nextImages);
+    stageMediaEdit(nextImages);
     setEditingImageId(null);
     setPreviewIndex((prev) => Math.min(prev, Math.max(0, nextImages.length - 1)));
     setToast({
       message: "Photo deleted.",
-      actions: [{ label: "Undo", onClick: () => saveMedia(prevImages) }],
+      actions: [{ label: "Undo", onClick: () => stageMediaEdit(prevImages) }],
     });
   }
 
-  async function handleSetCover(index) {
+  function handleSetCover(index) {
     if (index === 0) return;
     const nextImages = moveItem(images, index, 0);
-    await saveMedia(nextImages);
+    stageMediaEdit(nextImages);
     setPreviewIndex(0);
     setEditingImageId(null);
   }
 
-  async function handleDropReorder(from, to) {
+  function handleDropReorder(from, to) {
     if (from === to) return;
     const nextImages = moveItem(images, from, to);
-    await saveMedia(nextImages);
+    stageMediaEdit(nextImages);
     setPreviewIndex(to);
   }
 
   // Called by CropEditor: replace original image with the cropped version
-  async function handleSaveCrop(cropResult) {
+  function handleSaveCrop(cropResult) {
     const index = editingIndex;
     if (index === null || index === -1) return;
     const newImage = {
@@ -3145,12 +3301,12 @@ function ProductDetail() {
       kind: "crop",
     };
     const nextImages = images.map((img, i) => (i === index ? newImage : img));
-    await saveMedia(nextImages);
+    stageMediaEdit(nextImages);
     setEditingImageId(null);
   }
 
   // Called by IdentifyEditor: replace original image with all cropped boxes
-  async function handleSaveIdentify(results) {
+  function handleSaveIdentify(results) {
     const index = editingIndex;
     if (index === null || index === -1) return;
     const newImages = results.map((r, i) => ({
@@ -3166,7 +3322,7 @@ function ProductDetail() {
       ...newImages,
       ...images.slice(index + 1),
     ];
-    await saveMedia(nextImages);
+    stageMediaEdit(nextImages);
     setEditingImageId(null);
   }
 
@@ -3308,7 +3464,23 @@ function ProductDetail() {
           ];
           return next;
         });
-        if (next) await saveMedia(next);
+        if (next) {
+          await saveMedia(next);
+          // If the user has *other* image edits staged (not yet Saved), the
+          // buffer's stale snapshot would otherwise clobber this split's
+          // result on the next Save — fold the split into it too, matching
+          // exactly the live array saveMedia just committed.
+          const staged = localPendingFieldsRef.current;
+          const hasPendingImageEdit = !!staged && ("images" in staged || "imageAssets" in staged || "listingImages" in staged);
+          if (hasPendingImageEdit) {
+            const payload = buildImagePayload(next);
+            markFieldsDirty({
+              images: payload.map((image) => image.url),
+              imageAssets: payload,
+              listingImages: payload.map((image) => image.url),
+            });
+          }
+        }
       } else {
         setMediaError(`Could not split "${targetImage?.kind ?? "image"}" — please try again.`);
       }
@@ -3352,7 +3524,7 @@ function ProductDetail() {
         next = [...prevImages, ...uploadedImages];
         return next;
       });
-      if (next) await saveMedia(next);
+      if (next) stageMediaEdit(next);
     } catch (err) {
       console.error("Failed to add photos:", err);
       setMediaError("Failed to upload photo(s) — please try again.");
@@ -3397,6 +3569,12 @@ function ProductDetail() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {saveError && <span style={{ fontSize: 12, color: "var(--danger)" }}>{saveError}</span>}
+          {isDirty && (
+            <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+          )}
           {mercariStatus === "active" ? (
             <a href={mercariUrl || "#"} target="_blank" rel="noreferrer" className="btn btn-ghost" style={{ color: "#22c55e" }}>
               ✓ Live on Mercari ({mercariItemId || "view"})
@@ -3499,12 +3677,7 @@ function ProductDetail() {
                   min="0"
                   placeholder="(not set)"
                   value={listingPrice ?? ""}
-                  onChange={(e) => setListingPrice(e.target.value === "" ? null : Number(e.target.value))}
-                  onBlur={(e) => {
-                    const value = e.target.value === "" ? null : Number(e.target.value);
-                    if (value !== (product.listingPrice ?? null)) saveListingPrice(value);
-                  }}
-                  disabled={savingListingPrice}
+                  onChange={(e) => handleListingPriceChange(e.target.value)}
                 />
                 <span style={{ fontSize: 11, color: "var(--muted)" }}>
                   Variants default to this price unless overridden individually below.
@@ -3525,7 +3698,7 @@ function ProductDetail() {
                 <h2>Edit catalog text</h2>
                 <div className="modal-field" style={{ marginBottom: 12 }}>
                   <label>Title</label>
-                  <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} onBlur={saveTextFields} />
+                  <input className="input" value={title} onChange={(e) => handleTitleChange(e.target.value)} />
                 </div>
                 <div className="modal-field">
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
@@ -3560,22 +3733,9 @@ function ProductDetail() {
                           <button
                             className="btn btn-primary"
                             style={{ fontSize: 11, padding: "2px 10px" }}
-                            onClick={async () => {
-                              const accepted = aiDescSuggestion;
-                              setDescription(accepted);
+                            onClick={() => {
+                              handleDescriptionChange(aiDescSuggestion);
                               setAiDescSuggestion(null);
-                              // Save directly — saveTextFields closes over the old state value
-                              if (productId) {
-                                setSavingText(true);
-                                try {
-                                  await updateDoc(doc(db, "products", productId), {
-                                    description: accepted,
-                                    updatedAt: serverTimestamp(),
-                                  });
-                                } finally {
-                                  setSavingText(false);
-                                }
-                              }
                             }}
                           >
                             Accept
@@ -3599,12 +3759,10 @@ function ProductDetail() {
                     className="input"
                     rows={8}
                     value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    onBlur={saveTextFields}
+                    onChange={(e) => handleDescriptionChange(e.target.value)}
                   />
                 </div>
                 <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 12 }}>
-                  {savingText && <span style={{ fontSize: 12, color: "var(--muted)" }}>Saving…</span>}
                   <span style={{ fontSize: 12, color: "var(--muted)" }}>Listings use these as the base catalog fields.</span>
                 </div>
               </div>
@@ -3620,31 +3778,28 @@ function ProductDetail() {
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 10 }}>
                   <div className="modal-field">
                     <label style={{ fontSize: 11 }}>Weight (Pounds)</label>
-                    <input className="input" type="number" min="0" value={weightLbs} onChange={(e) => setWeightLbs(e.target.value)} />
+                    <input className="input" type="number" min="0" value={weightLbs} onChange={(e) => handleWeightLbsChange(e.target.value)} />
                   </div>
                   <div className="modal-field">
                     <label style={{ fontSize: 11 }}>Weight (Ounces)</label>
-                    <input className="input" type="number" min="0" max="15" value={weightOz} onChange={(e) => setWeightOz(e.target.value)} />
+                    <input className="input" type="number" min="0" max="15" value={weightOz} onChange={(e) => handleWeightOzChange(e.target.value)} />
                   </div>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
                   <div className="modal-field">
                     <label style={{ fontSize: 11 }}>Length (in)</label>
-                    <input className="input" type="number" min="0" placeholder="10" value={lengthIn} onChange={(e) => setLengthIn(e.target.value)} />
+                    <input className="input" type="number" min="0" placeholder="10" value={lengthIn} onChange={(e) => handleLengthInChange(e.target.value)} />
                   </div>
                   <div className="modal-field">
                     <label style={{ fontSize: 11 }}>Width (in)</label>
-                    <input className="input" type="number" min="0" placeholder="6" value={widthIn} onChange={(e) => setWidthIn(e.target.value)} />
+                    <input className="input" type="number" min="0" placeholder="6" value={widthIn} onChange={(e) => handleWidthInChange(e.target.value)} />
                   </div>
                   <div className="modal-field">
                     <label style={{ fontSize: 11 }}>Height (in)</label>
-                    <input className="input" type="number" min="0" placeholder="4" value={heightIn} onChange={(e) => setHeightIn(e.target.value)} />
+                    <input className="input" type="number" min="0" placeholder="4" value={heightIn} onChange={(e) => handleHeightInChange(e.target.value)} />
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                  <button className="btn btn-primary" style={{ padding: "6px 12px", fontSize: 12 }} onClick={saveShippingInfo} disabled={savingShipping}>
-                    {savingShipping ? "Saving…" : "Save shipping info"}
-                  </button>
                   <span style={{ fontSize: 11, color: "var(--muted)" }}>
                     Used for Mercari prepaid labels & weight calculations.
                   </span>
@@ -3759,6 +3914,16 @@ function ProductDetail() {
       )}
 
       {toast && <ActionToast message={toast.message} actions={toast.actions} onDismiss={() => setToast(null)} />}
+
+      {blocker.state === "blocked" && (
+        <UnsavedChangesModal
+          saving={saving}
+          error={saveError}
+          onSave={handleBlockerSave}
+          onDiscard={handleBlockerDiscard}
+          onCancel={handleBlockerCancel}
+        />
+      )}
     </Layout>
   );
 }

@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { createBrowserRouter, RouterProvider, Navigate } from "react-router-dom";
 import { useAuthState } from "./hooks/useAuthState";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
@@ -15,16 +15,16 @@ function ProtectedRoute({ children }) {
   return user ? children : <Navigate to="/login" replace />;
 }
 
+const router = createBrowserRouter([
+  { path: "/login", element: <Login /> },
+  { path: "/", element: <ProtectedRoute><Dashboard /></ProtectedRoute> },
+  { path: "/products/:productId", element: <ProtectedRoute><ProductDetail /></ProtectedRoute> },
+  { path: "/orders", element: <ProtectedRoute><Orders /></ProtectedRoute> },
+  { path: "/settings", element: <ProtectedRoute><Settings /></ProtectedRoute> },
+]);
+
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-        <Route path="/products/:productId" element={<ProtectedRoute><ProductDetail /></ProtectedRoute>} />
-        <Route path="/orders" element={<ProtectedRoute><Orders /></ProtectedRoute>} />
-        <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
-      </Routes>
-    </BrowserRouter>
+    <RouterProvider router={router} />
   </React.StrictMode>
 );
