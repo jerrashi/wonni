@@ -610,7 +610,7 @@ async function getOrCreateReturnPolicy(accessToken, host, returnsAccepted, retur
 /**
  * Helper to get or create eBay Fulfillment Policy.
  */
-async function getOrCreateFulfillmentPolicy(accessToken, host, shippingType, buyerPaysShipping) {
+async function getOrCreateFulfillmentPolicy(accessToken, host, shippingType, buyerPaysShipping, handlingTimeDays) {
   const listOptions = {
     hostname: host,
     path:     "/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US",
@@ -621,7 +621,8 @@ async function getOrCreateFulfillmentPolicy(accessToken, host, shippingType, buy
     },
   };
   const listRes = await makeHttpRequest(listOptions);
-  const policyName = `Wonni Ship Policy - ${shippingType} - ${buyerPaysShipping ? "Buyer Pays" : "Free"}`;
+  const handlingDays = handlingTimeDays || 1;
+  const policyName = `Wonni Ship Policy - ${shippingType} - ${buyerPaysShipping ? "Buyer Pays" : "Free"} - ${handlingDays}d`;
 
   let allPolicies = [];
   if (listRes.statusCode === 200) {
@@ -672,7 +673,7 @@ async function getOrCreateFulfillmentPolicy(accessToken, host, shippingType, buy
     marketplaceId: "EBAY_US",
     categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES" }],
     handlingTime: {
-      value: 1,
+      value: handlingDays,
       unit: "DAY"
     },
     shippingOptions: [shippingOption],
@@ -801,15 +802,21 @@ async function ensureBusinessPolicies(accessToken, isSandbox, sellingSettings, u
     updated = true;
   }
   
-  if (!ebayPolicyIds.fulfillmentPolicyId) {
-    const fulfillmentPolicyId = await getOrCreateFulfillmentPolicy(accessToken, host, sellingSettings.shippingType, sellingSettings.buyerPaysShipping);
+  // Re-derive the fulfillment policy whenever the shipping config it's built from
+  // has changed, not just when we've never created one — otherwise editing shipping
+  // type / handling time in Settings would silently keep using the stale eBay policy.
+  const handlingTimeDays = sellingSettings.handlingTimeDays || 1;
+  const fulfillmentConfigKey = `${sellingSettings.shippingType}|${sellingSettings.buyerPaysShipping}|${handlingTimeDays}`;
+  if (!ebayPolicyIds.fulfillmentPolicyId || sellingSettings.ebayFulfillmentConfigKey !== fulfillmentConfigKey) {
+    const fulfillmentPolicyId = await getOrCreateFulfillmentPolicy(accessToken, host, sellingSettings.shippingType, sellingSettings.buyerPaysShipping, handlingTimeDays);
     ebayPolicyIds.fulfillmentPolicyId = fulfillmentPolicyId;
+    sellingSettings.ebayFulfillmentConfigKey = fulfillmentConfigKey;
     updated = true;
   }
-  
+
   if (updated) {
     const settingsRef = db.collection("users").doc(uid).collection("sellingSettings").doc("default");
-    await settingsRef.set({ ebayPolicyIds }, { merge: true });
+    await settingsRef.set({ ebayPolicyIds, ebayFulfillmentConfigKey: sellingSettings.ebayFulfillmentConfigKey }, { merge: true });
   }
   
   return ebayPolicyIds;
