@@ -58,11 +58,18 @@ agent runs) have been reconciled and removed.
   creation. Ported that diff to main (commit `cb563b1`) to bring the two
   editors back to parity, then removed the worktree/branch.
 
-**Cleanup backlog (not urgent, tracked, do next):**
-- 3 git stashes — `stash@{2}` is superseded Phase-1 WIP; `stash@{0}`/`{1}`
-  are near-duplicate pre-commit safety snapshots of `3e52231`, already
-  landed on main. Believed safe to drop, pending a closer look (learned from
-  the worktree above not to assume "looks superseded" without verifying).
+**Cleanup backlog: closed out 2026-07-29.** All 3 leftover git stashes were
+verified line-by-line against current main and dropped:
+- `stash@{2}` was literally the pre-patch old Phase-1 WIP (old single-"Option"
+  variant seeding, old `suggestedSellPrice`/`listingStatus` shape) kept as a
+  rollback reference during the variant-redesign patch — long since obsolete.
+- `stash@{0}`/`{1}` were two checkpoints of an abandoned alternate
+  implementation: a `MercariListModal` component (never committed, file
+  unrecoverable) invoked per-card from the Dashboard, and a DOM/CSS-based
+  split-line editor — both superseded by what actually shipped (the inline
+  `MercariModal` in `ProductDetail.jsx`, and the canvas-drawn cut-line editor).
+
+No more worktrees, extra branches, or stashes outstanding as of this pass.
 
 ## Phase 1 notes (variations)
 - `MAX_VARIATION_DIMENSIONS` in `ProductDetail.jsx` caps variation structure
