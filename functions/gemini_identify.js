@@ -8,7 +8,7 @@ const geminiApiKey = "GEMINI_API_KEY";
 
 exports.geminiApiKey = geminiApiKey;
 
-const GEMINI_MODEL = "gemini-1.5-flash";
+const GEMINI_MODEL = "gemini-2.5-flash";
 
 // Called once per product at import time. Returns a best-effort set of
 // Gemini-enriched fields to merge into the Firestore product document.
