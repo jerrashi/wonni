@@ -42,6 +42,10 @@ export default function CreateDraftModal({ onClose, onCreated }) {
   const [costPrice, setCostPrice] = useState("");
   const [sellPrice, setSellPrice] = useState("");
   const [variants, setVariants] = useState([]); // [{ name: "Red", price: 19.99, imageId: "" }]
+  const [aiDescLoading, setAiDescLoading] = useState(false);
+  const [aiDescSuggestion, setAiDescSuggestion] = useState(null); // string | null
+  const [aiDescError, setAiDescError] = useState("");
+
 
   // ── Photo Split State ───────────────────────────────────────────────────────
   const [splitMethod, setSplitMethod] = useState("custom"); // "custom" | "grid" | "horizontal"
@@ -217,6 +221,30 @@ export default function CreateDraftModal({ onClose, onCreated }) {
       setError(e.message ?? "AI item detection failed.");
     } finally {
       setAiLoading(false);
+    }
+  }
+
+  // ── AI Description Suggestion ─────────────────────────────────────────────────
+  async function generateAIDescription() {
+    if (!title && !filePreviews.length) {
+      setAiDescError("Add a title or photo first.");
+      return;
+    }
+    setAiDescLoading(true);
+    setAiDescError("");
+    setAiDescSuggestion(null);
+    try {
+      const res = await callFunction("generateProductDescription")({
+        title,
+        existingDescription: description,
+        // Pass the first uploaded photo as base64 if available
+        ...(filePreviews[0]?.dataUrl ? { imageBase64: filePreviews[0].dataUrl } : {}),
+      });
+      setAiDescSuggestion(res.data?.description ?? "");
+    } catch (e) {
+      setAiDescError(e.message ?? "AI description generation failed.");
+    } finally {
+      setAiDescLoading(false);
     }
   }
 
@@ -932,7 +960,57 @@ export default function CreateDraftModal({ onClose, onCreated }) {
               </div>
 
               <div className="modal-field">
-                <label>Description</label>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                  <label style={{ margin: 0 }}>Description</label>
+                  <button
+                    className="btn btn-ghost"
+                    style={{ fontSize: 11, padding: "2px 8px", display: "flex", alignItems: "center", gap: 4 }}
+                    onClick={generateAIDescription}
+                    disabled={aiDescLoading}
+                  >
+                    {aiDescLoading ? (
+                      <>
+                        <span style={{ display: "inline-block", width: 10, height: 10, border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
+                        Generating…
+                      </>
+                    ) : (
+                      <>✨ AI Suggest</>
+                    )}
+                  </button>
+                </div>
+                {aiDescSuggestion !== null && (
+                  <div style={{
+                    marginBottom: 10,
+                    background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(168,85,247,0.08) 100%)",
+                    border: "1px solid rgba(99,102,241,0.3)",
+                    borderRadius: 8,
+                    padding: "10px 12px",
+                  }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent, #6366f1)", letterSpacing: "0.04em" }}>✨ AI SUGGESTED</span>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button
+                          className="btn btn-primary"
+                          style={{ fontSize: 11, padding: "2px 10px" }}
+                          onClick={() => { setDescription(aiDescSuggestion); setAiDescSuggestion(null); }}
+                        >
+                          Accept
+                        </button>
+                        <button
+                          className="btn btn-ghost"
+                          style={{ fontSize: 11, padding: "2px 8px" }}
+                          onClick={() => setAiDescSuggestion(null)}
+                        >
+                          Discard
+                        </button>
+                      </div>
+                    </div>
+                    <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary, var(--muted))" }}>{aiDescSuggestion}</p>
+                  </div>
+                )}
+                {aiDescError && (
+                  <div style={{ fontSize: 12, color: "#ef4444", marginBottom: 6 }}>{aiDescError}</div>
+                )}
                 <textarea
                   className="input"
                   rows={3}

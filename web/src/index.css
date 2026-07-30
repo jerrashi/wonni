@@ -1182,3 +1182,7 @@ a { color: var(--accent); text-decoration: none; }
 
 .category-item:hover { background: var(--border); }
 .category-item.selected { background: var(--border); color: var(--accent); }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

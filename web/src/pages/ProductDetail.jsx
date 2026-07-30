@@ -756,7 +756,7 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
   const [gridRows, setGridRows] = useState(3);
   const [gridCols, setGridCols] = useState(3);
   const [boxes, setBoxes] = useState([]);
-  const [horizontalCutPcts, setHorizontalCutPcts] = useState([33, 66]);
+  const [horizontalCutPcts, setHorizontalCutPcts] = useState([]);
   const [selectedLineIndex, setSelectedLineIndex] = useState(null);
   const [evenSliceCount, setEvenSliceCount] = useState(2);
   const [selectedBoxId, setSelectedBoxId] = useState(null);
@@ -1306,11 +1306,14 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
         )}
 
         {splitMethod === "horizontal" && (() => {
-          const idealPcts = Array.from(
-            { length: horizontalCutPcts.length },
-            (_, i) => ((i + 1) / (horizontalCutPcts.length + 1)) * 100
-          );
-          const isOffCenter = horizontalCutPcts.some((pct, i) => Math.abs(pct - idealPcts[i]) > 0.5);
+          const hasCuts = horizontalCutPcts.length > 0;
+          const idealPcts = hasCuts
+            ? Array.from(
+                { length: horizontalCutPcts.length },
+                (_, i) => ((i + 1) / (horizontalCutPcts.length + 1)) * 100
+              )
+            : [];
+          const isOffCenter = hasCuts && horizontalCutPcts.some((pct, i) => Math.abs(pct - idealPcts[i]) > 0.5);
           return (
             <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
               <span>Split into:</span>
@@ -1318,12 +1321,16 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
                 type="number"
                 min="2"
                 max="20"
-                value={horizontalCutPcts.length + 1}
-                style={{ width: 44, padding: 4 }}
+                placeholder="Custom"
+                value={hasCuts ? horizontalCutPcts.length + 1 : ""}
+                style={{ width: 58, padding: 4 }}
                 className="input"
                 onChange={(e) => {
                   const val = e.target.value;
-                  setEvenSliceCount(val);
+                  if (!val || parseInt(val, 10) < 2) {
+                    setHorizontalCutPcts([]);
+                    return;
+                  }
                   const n = Math.max(2, Math.min(20, parseInt(val, 10) || 2));
                   const newPcts = Array.from({ length: n - 1 }, (_, i) => ((i + 1) / n) * 100);
                   setHorizontalCutPcts(newPcts);
@@ -1340,9 +1347,18 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
                   ⚡ Evenly slice
                 </button>
               )}
-              <button className="btn btn-ghost" style={{ fontSize: 12, padding: "4px 8px" }} onClick={addCutLine}>
-                + Add Cut Line
-              </button>
+              {hasCuts && (
+                <button
+                  className="btn btn-ghost"
+                  style={{ fontSize: 12, padding: "4px 8px", color: "var(--danger)" }}
+                  onClick={() => {
+                    setHorizontalCutPcts([]);
+                    setSelectedLineIndex(null);
+                  }}
+                >
+                  Clear Lines
+                </button>
+              )}
             </div>
           );
         })()}
@@ -2703,6 +2719,9 @@ function ProductDetail() {
   const [photoPickerValue, setPhotoPickerValue] = useState(null);
   const [showMercariModal, setShowMercariModal] = useState(false);
   const [toast, setToast] = useState(null); // { message, actions } | null
+  const [aiDescLoading, setAiDescLoading] = useState(false);
+  const [aiDescSuggestion, setAiDescSuggestion] = useState(null); // string | null
+  const [aiDescError, setAiDescError] = useState("");
 
   useEffect(() => {
     if (!productId) { setError("Missing product ID."); setLoading(false); return; }
@@ -2876,6 +2895,28 @@ function ProductDetail() {
       setLengthIn("9");
       setWidthIn("6");
       setHeightIn("3");
+    }
+  }
+
+  // Calls Gemini to generate a suggested product description from the title
+  // and first product image. Shows the result inline with Accept/Discard.
+  async function generateAIDescription() {
+    setAiDescLoading(true);
+    setAiDescError("");
+    setAiDescSuggestion(null);
+    try {
+      const firstImageUrl = images[0]?.url ?? null;
+      const res = await callFunction("generateProductDescription")({
+        productId,
+        title,
+        existingDescription: description,
+        imageUrl: firstImageUrl,
+      });
+      setAiDescSuggestion(res.data?.description ?? "");
+    } catch (e) {
+      setAiDescError(e.message ?? "AI description generation failed.");
+    } finally {
+      setAiDescLoading(false);
     }
   }
 
@@ -3154,15 +3195,28 @@ function ProductDetail() {
 
       if (uid) {
         try {
-          let img = imgElement;
-          if (!img || !img.complete || !img.naturalWidth) {
-            img = await new Promise((res, rej) => {
+          // Always load a fresh crossOrigin image for pixel access.
+          // Reusing imgElement from SplitEditor is unsafe: the canvas there
+          // may have fallen back to a non-CORS image (tainted), which makes
+          // canvas.toBlob() throw a SecurityError.
+          const loadCorsImage = (src) =>
+            new Promise((res, rej) => {
               const el = new Image();
               el.crossOrigin = "anonymous";
               el.onload = () => res(el);
               el.onerror = rej;
-              el.src = imageUrl;
+              el.src = src;
             });
+
+          let img;
+          try {
+            img = await loadCorsImage(imageUrl);
+          } catch {
+            // Some hosts reject CORS preflight — bust the cache to get a
+            // fresh response that may carry permissive headers.
+            img = await loadCorsImage(
+              imageUrl + (imageUrl.includes("?") ? "&" : "?") + "_cb=" + Date.now()
+            );
           }
 
           const W = img.naturalWidth;
@@ -3215,6 +3269,7 @@ function ProductDetail() {
           console.warn("Client background split failed:", err);
         }
       }
+
 
       if (!clientSucceeded || !results.length) {
         try {
@@ -3473,7 +3528,73 @@ function ProductDetail() {
                   <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} onBlur={saveTextFields} />
                 </div>
                 <div className="modal-field">
-                  <label>Description</label>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                    <label style={{ margin: 0 }}>Description</label>
+                    <button
+                      className="btn btn-ghost"
+                      style={{ fontSize: 11, padding: "2px 8px", display: "flex", alignItems: "center", gap: 4 }}
+                      onClick={generateAIDescription}
+                      disabled={aiDescLoading}
+                    >
+                      {aiDescLoading ? (
+                        <>
+                          <span style={{ display: "inline-block", width: 10, height: 10, border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
+                          Generating…
+                        </>
+                      ) : (
+                        <>✨ AI Suggest</>
+                      )}
+                    </button>
+                  </div>
+                  {aiDescSuggestion !== null && (
+                    <div style={{
+                      marginBottom: 10,
+                      background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(168,85,247,0.08) 100%)",
+                      border: "1px solid rgba(99,102,241,0.3)",
+                      borderRadius: 8,
+                      padding: "10px 12px",
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent, #6366f1)", letterSpacing: "0.04em" }}>✨ AI SUGGESTED</span>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button
+                            className="btn btn-primary"
+                            style={{ fontSize: 11, padding: "2px 10px" }}
+                            onClick={async () => {
+                              const accepted = aiDescSuggestion;
+                              setDescription(accepted);
+                              setAiDescSuggestion(null);
+                              // Save directly — saveTextFields closes over the old state value
+                              if (productId) {
+                                setSavingText(true);
+                                try {
+                                  await updateDoc(doc(db, "products", productId), {
+                                    description: accepted,
+                                    updatedAt: serverTimestamp(),
+                                  });
+                                } finally {
+                                  setSavingText(false);
+                                }
+                              }
+                            }}
+                          >
+                            Accept
+                          </button>
+                          <button
+                            className="btn btn-ghost"
+                            style={{ fontSize: 11, padding: "2px 8px" }}
+                            onClick={() => setAiDescSuggestion(null)}
+                          >
+                            Discard
+                          </button>
+                        </div>
+                      </div>
+                      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary, var(--muted))" }}>{aiDescSuggestion}</p>
+                    </div>
+                  )}
+                  {aiDescError && (
+                    <div style={{ fontSize: 12, color: "#ef4444", marginBottom: 6 }}>{aiDescError}</div>
+                  )}
                   <textarea
                     className="input"
                     rows={8}
