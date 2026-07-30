@@ -4,7 +4,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const { downloadBuffer, isOwner, normalizeImageUrl } = require("./product_media");
 
-const GEMINI_MODEL = "gemini-1.5-flash";
+const GEMINI_MODEL = "gemini-2.5-flash";
 
 // System prompt that asks Gemini to return normalised bounding boxes (0–1000 scale) and extracted product titles and prices.
 const SYSTEM_PROMPT = `You are an expert e-commerce product photo and merchandise list analyst.
