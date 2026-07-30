@@ -16,6 +16,7 @@ const { updateMercariListingStatus, ensureMercariListingDetails } = require("./m
 const { syncTiktokOrders, syncTiktokOrdersScheduled } = require("./tiktok_orders");
 const { disconnectPlatform, updateSettings, generateOAuthState } = require("./user_settings");
 const { onProductDeleted } = require("./product_cleanup");
+const { generateProductDescription } = require("./generate_description");
 
 module.exports = {
   // Auth
@@ -29,6 +30,7 @@ module.exports = {
   weverseBulkImportProducts,
   splitProductImage,
   identifyProductsInImage,
+  generateProductDescription,
   onProductDeleted,
 
   // TikTok Shop listings
