@@ -4,7 +4,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const { downloadBuffer, isOwner, normalizeImageUrl } = require("./product_media");
 
-const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_MODEL = "gemini-flash-lite-latest";
 
 // Prompt instructs Gemini to write a clean, buyer-facing Mercari / resale
 // listing description for a K-pop / pop-culture merchandise item.
