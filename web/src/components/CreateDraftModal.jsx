@@ -51,7 +51,9 @@ export default function CreateDraftModal({ onClose, onCreated }) {
   const [splitMethod, setSplitMethod] = useState("custom"); // "custom" | "grid" | "horizontal"
   const [gridRows, setGridRows] = useState(3);
   const [gridCols, setGridCols] = useState(3);
-  const [horizontalCutPcts, setHorizontalCutPcts] = useState([33, 66]); // Percentages 0..100
+  const [horizontalCutPcts, setHorizontalCutPcts] = useState([]); // Percentages 0..100
+  const [selectedLineIndex, setSelectedLineIndex] = useState(null);
+  const [evenSliceCount, setEvenSliceCount] = useState(2);
   const [boxes, setBoxes] = useState([]); // [{ id, label, price, box: [ymin, xmin, ymax, xmax] }] (0..1000 scale)
   const [selectedBoxId, setSelectedBoxId] = useState(null);
   const [drawingBox, setDrawingBox] = useState(null); // { startX, startY, currentX, currentY }
@@ -273,7 +275,7 @@ export default function CreateDraftModal({ onClose, onCreated }) {
     return () => {
       isCancelled = true;
     };
-  }, [mode, activePhotoUrl, boxes, horizontalCutPcts, splitMethod, selectedBoxId, drawingBox]);
+  }, [mode, activePhotoUrl, boxes, horizontalCutPcts, splitMethod, selectedBoxId, selectedLineIndex, drawingBox]);
 
   function drawCanvasContent(ctx, canvas, img, boxList, cutPcts, currentMethod, activeBoxId) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -298,21 +300,29 @@ export default function CreateDraftModal({ onClose, onCreated }) {
 
       cutPcts.forEach((pct, idx) => {
         const y = (pct / 100) * h;
-        ctx.strokeStyle = "#ef4444";
-        ctx.lineWidth = 2;
-        ctx.setLineDash([6, 4]);
+        const isSelected = idx === selectedLineIndex;
+
+        ctx.strokeStyle = isSelected ? "#3b82f6" : "#ef4444";
+        ctx.lineWidth = isSelected ? 3 : 2;
+        ctx.setLineDash(isSelected ? [] : [6, 4]);
         ctx.beginPath();
         ctx.moveTo(0, y);
         ctx.lineTo(w, y);
         ctx.stroke();
         ctx.setLineDash([]);
 
-        ctx.fillStyle = "#ef4444";
-        ctx.fillRect(w / 2 - 24, y - 10, 48, 20);
+        ctx.fillStyle = isSelected ? "#3b82f6" : "#ef4444";
+        ctx.fillRect(w / 2 - 40, y - 10, 80, 20);
         ctx.fillStyle = "#ffffff";
         ctx.font = "bold 11px sans-serif";
         ctx.textAlign = "center";
-        ctx.fillText(`✂ ${idx + 1}`, w / 2, y + 4);
+        ctx.fillText(`✂ Cut #${idx + 1} (${pct.toFixed(0)}%)`, w / 2, y + 4);
+
+        ctx.fillStyle = "#ef4444";
+        ctx.fillRect(w - 24, y - 10, 24, 20);
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 12px sans-serif";
+        ctx.fillText("✕", w - 12, y + 4);
         ctx.textAlign = "left";
       });
     } else {
@@ -446,12 +456,37 @@ export default function CreateDraftModal({ onClose, onCreated }) {
   }
 
   function handleCanvasMouseDown(e) {
-    if (splitMethod === "horizontal") return;
     const { x, y } = getCanvasCoords(e);
     const canvas = canvasRef.current;
     if (!canvas) return;
     const w = canvas.width;
     const h = canvas.height;
+
+    if (splitMethod === "horizontal") {
+      for (let i = 0; i < horizontalCutPcts.length; i++) {
+        const lineY = (horizontalCutPcts[i] / 100) * h;
+        if (Math.abs(y - lineY) <= 14) {
+          if (x >= w - 30) {
+            setHorizontalCutPcts((prev) => prev.filter((_, idx) => idx !== i));
+            setSelectedLineIndex(null);
+            return;
+          }
+          setSelectedLineIndex(i);
+          setDragState({ type: "line", lineIndex: i });
+          return;
+        }
+      }
+      const newPct = Math.max(1, Math.min(99, (y / h) * 100));
+      let newIdx = 0;
+      setHorizontalCutPcts((prev) => {
+        const next = [...prev, newPct].sort((a, b) => a - b);
+        newIdx = next.indexOf(newPct);
+        return next;
+      });
+      setSelectedLineIndex(newIdx);
+      setDragState({ type: "line", lineIndex: newIdx });
+      return;
+    }
 
     // STEP 1: PRIORITIZE CURRENTLY SELECTED BOX if present
     const activeBox = selectedBoxId ? boxes.find((b) => b.id === selectedBoxId) : null;
@@ -503,6 +538,16 @@ export default function CreateDraftModal({ onClose, onCreated }) {
     const w = canvas.width;
     const h = canvas.height;
 
+    if (dragState?.type === "line") {
+      const newPct = Math.max(1, Math.min(99, (y / h) * 100));
+      setHorizontalCutPcts((prev) => {
+        const next = [...prev];
+        next[dragState.lineIndex] = newPct;
+        return next;
+      });
+      return;
+    }
+
     if (drawingBox) {
       setDrawingBox((prev) => (prev ? { ...prev, currentX: x, currentY: y } : null));
       return;
@@ -543,6 +588,11 @@ export default function CreateDraftModal({ onClose, onCreated }) {
   }
 
   function handleCanvasMouseUp() {
+    if (dragState?.type === "line") {
+      setHorizontalCutPcts((prev) => [...prev].sort((a, b) => a - b));
+      setDragState(null);
+      return;
+    }
     if (drawingBox && canvasRef.current) {
       const canvas = canvasRef.current;
       const w = canvas.width;
@@ -1189,15 +1239,63 @@ export default function CreateDraftModal({ onClose, onCreated }) {
                   </div>
                 )}
 
-                {splitMethod === "horizontal" && (
-                  <button
-                    className="btn btn-ghost"
-                    style={{ fontSize: 12, padding: "4px 8px" }}
-                    onClick={addCutLine}
-                  >
-                    + Add Cut Line
-                  </button>
-                )}
+                {splitMethod === "horizontal" && (() => {
+                  const hasCuts = horizontalCutPcts.length > 0;
+                  const idealPcts = hasCuts
+                    ? Array.from(
+                        { length: horizontalCutPcts.length },
+                        (_, i) => ((i + 1) / (horizontalCutPcts.length + 1)) * 100
+                      )
+                    : [];
+                  const isOffCenter = hasCuts && horizontalCutPcts.some((pct, i) => Math.abs(pct - idealPcts[i]) > 0.5);
+                  return (
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+                      <span>Split into:</span>
+                      <input
+                        type="number"
+                        min="2"
+                        max="20"
+                        placeholder="Custom"
+                        value={hasCuts ? horizontalCutPcts.length + 1 : ""}
+                        style={{ width: 58, padding: 4 }}
+                        className="input"
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (!val || parseInt(val, 10) < 2) {
+                            setHorizontalCutPcts([]);
+                            return;
+                          }
+                          const n = Math.max(2, Math.min(20, parseInt(val, 10) || 2));
+                          const newPcts = Array.from({ length: n - 1 }, (_, i) => ((i + 1) / n) * 100);
+                          setHorizontalCutPcts(newPcts);
+                        }}
+                      />
+                      <span>slices</span>
+                      {isOffCenter && (
+                        <button
+                          className="btn btn-ghost"
+                          style={{ fontSize: 12, padding: "4px 8px", color: "var(--primary)", borderColor: "var(--primary)" }}
+                          onClick={() => setHorizontalCutPcts(idealPcts)}
+                          title="Re-space cut lines back into equal slices"
+                        >
+                          ⚡ Evenly slice
+                        </button>
+                      )}
+                      {hasCuts && (
+                        <button
+                          className="btn btn-ghost"
+                          style={{ fontSize: 12, padding: "4px 8px", color: "var(--danger)" }}
+                          onClick={() => {
+                            setHorizontalCutPcts([]);
+                            setSelectedLineIndex(null);
+                          }}
+                        >
+                          Clear Lines
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* AI Toggle / Button */}
                 <div style={{ marginLeft: "auto" }}>
