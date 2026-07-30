@@ -44,19 +44,25 @@ title+photo). **Not yet pushed to origin.**
 - `product_cleanup.js` — `onProductDeleted` Firestore trigger, deletes
   orphaned Storage files when a product doc is deleted.
 
-**In-flight branch, not yet merged:** `implement-mercari-cross-posting-phase3`
-— the Chrome-extension side of Mercari cross-posting (`extension/
-mercari_content.js` new, `background.js`/`manifest.json` updated,
-`Dashboard.jsx`/`ProductDetail.jsx` edited). Branched before `3e52231`, so it
-will conflict with `ProductDetail.jsx` on merge. This is the piece that
-actually calls `mercari_listing.js`'s functions at runtime.
+**Resolved 2026-07-29:** the `implement-mercari-cross-posting-phase3` branch
+and `draft-photo-split-flow` worktree (both leftover from interrupted parallel
+agent runs) have been reconciled and removed.
+- `implement-mercari-cross-posting-phase3` turned out fully redundant — main
+  already had the same feature independently via commit `e867310`, with a
+  byte-identical `mercari_content.js` and a superset of the message-passing
+  wiring. Deleted without merging.
+- `draft-photo-split-flow`'s one uncommitted tweak was **not** stale (initial
+  assessment was wrong): the recent cut-line UX commits (drag lines, ✕
+  delete, real-time evenly-slice) only ever touched `ProductDetail.jsx`'s
+  split editor, never `CreateDraftModal.jsx`'s own copy used during draft
+  creation. Ported that diff to main (commit `cb563b1`) to bring the two
+  editors back to parity, then removed the worktree/branch.
 
 **Cleanup backlog (not urgent, tracked, do next):**
-- `draft-photo-split-flow` worktree — fully merged into main already;
-  has one stale/superseded uncommitted tweak, worktree can be removed.
 - 3 git stashes — `stash@{2}` is superseded Phase-1 WIP; `stash@{0}`/`{1}`
   are near-duplicate pre-commit safety snapshots of `3e52231`, already
-  landed on main. All believed safe to drop, pending confirmation.
+  landed on main. Believed safe to drop, pending a closer look (learned from
+  the worktree above not to assume "looks superseded" without verifying).
 
 ## Phase 1 notes (variations)
 - `MAX_VARIATION_DIMENSIONS` in `ProductDetail.jsx` caps variation structure
