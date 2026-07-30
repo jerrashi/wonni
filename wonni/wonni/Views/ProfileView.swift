@@ -282,7 +282,10 @@ struct ProfileView: View {
                 get: { showCrossPostError && uploadManager.activeAutofillJob == nil },
                 set: { showCrossPostError = $0 }
             ), presenting: crossPostErrorMessage) { _ in
-                if crossPostErrorMessage?.contains("ebay.com/bp/manage") == true || crossPostErrorMessage?.contains("bizpolicy.ebay.com") == true || crossPostErrorMessage?.contains("Business Policies") == true {
+                if crossPostErrorMessage?.contains("reconnect your eBay account") == true {
+                    Button("Reconnect eBay") { showSettings = true }
+                    Button("Dismiss", role: .cancel) {}
+                } else if crossPostErrorMessage?.contains("ebay.com/bp/manage") == true || crossPostErrorMessage?.contains("bizpolicy.ebay.com") == true || crossPostErrorMessage?.contains("Business Policies") == true {
                     Button("Enable on eBay") {
                         if let url = URL(string: "https://www.ebay.com/bp/manage") {
                             UIApplication.shared.open(url)
@@ -1045,6 +1048,10 @@ struct EditListingSheet: View {
     @State private var initialPlatforms: Set<String> = []
     @State private var crossPostErrorMessage: String? = nil
     @State private var showCrossPostError = false
+    /// Platforms with a repost in flight from `repostToPlatform`, so the status badge can show
+    /// "In progress" immediately — `listing` here is a `let` snapshot that won't reflect the
+    /// Firestore write until the parent reloads and re-presents this sheet.
+    @State private var repostingPlatforms: Set<String> = []
 
     // Manual Mercari-link entry: lets the seller attach a Mercari item ID to a listing whose ID
     // wasn't captured automatically (older posts, or a run where capture missed).
@@ -1239,7 +1246,10 @@ struct EditListingSheet: View {
                 Text("You changed who pays shipping. Remember to update your shipping profile on eBay or Etsy to match.")
             }
             .alert("Cross-Post Failed", isPresented: $showCrossPostError, presenting: crossPostErrorMessage) { _ in
-                if crossPostErrorMessage?.contains("ebay.com/bp/manage") == true || crossPostErrorMessage?.contains("bizpolicy.ebay.com") == true || crossPostErrorMessage?.contains("Business Policies") == true {
+                if crossPostErrorMessage?.contains("reconnect your eBay account") == true {
+                    Button("Reconnect eBay") { reconnectPlatform("ebay") }
+                    Button("Dismiss", role: .cancel) {}
+                } else if crossPostErrorMessage?.contains("ebay.com/bp/manage") == true || crossPostErrorMessage?.contains("bizpolicy.ebay.com") == true || crossPostErrorMessage?.contains("Business Policies") == true {
                     Button("Enable on eBay") {
                         if let url = URL(string: "https://www.ebay.com/bp/manage") {
                             UIApplication.shared.open(url)
@@ -1254,7 +1264,7 @@ struct EditListingSheet: View {
             }
         }
     }
-    
+
     // MARK: - Mark as Sold Out
 
     @ViewBuilder private var markSoldOutSection: some View {
@@ -1502,7 +1512,9 @@ struct EditListingSheet: View {
 
     @ViewBuilder
     private func crossPostPlatformRow(platform: String, statusMap: [String: String]) -> some View {
-        let status = statusMap[platform] ?? (platform == "mercari" && linkedMercariId != nil ? "posted" : "")
+        let status = repostingPlatforms.contains(platform)
+            ? "pending"
+            : (statusMap[platform] ?? (platform == "mercari" && linkedMercariId != nil ? "posted" : ""))
         let isAPIplatform = platform == "ebay" || platform == "etsy"
         let integration = integrationRepo.integrations.first(where: { $0.platform == platform })
         let isDisconnected = isAPIplatform && status == "posted" && integration?.isConnected == false
@@ -1688,15 +1700,22 @@ struct EditListingSheet: View {
 
     private func repostToPlatform(_ platform: String) {
         guard let id = listing.id else { return }
+        repostingPlatforms.insert(platform)
         Task {
             do {
                 let functions = Functions.functions()
                 if platform == "ebay" {
                     let _ = try await functions.httpsCallable("ebayCreateListing").call(["listingId": id])
                 }
+                await MainActor.run { repostingPlatforms.remove(platform) }
+                onSave([])
             } catch {
                 let msg = extractCrossPostErrorMessage(error)
-                await MainActor.run { crossPostErrorMessage = msg; showCrossPostError = true }
+                await MainActor.run {
+                    repostingPlatforms.remove(platform)
+                    crossPostErrorMessage = msg
+                    showCrossPostError = true
+                }
             }
         }
     }
@@ -2239,6 +2258,7 @@ struct SettingsSheet: View {
     @State private var buyerPaysShipping = true
     @State private var returnsAccepted = false
     @State private var returnWindowDays = 30
+    @State private var handlingTimeDays = 1
     @State private var isSavingSettings = false
     
     @State private var settingsAlertTitle = ""
@@ -2433,6 +2453,15 @@ struct SettingsSheet: View {
                         .pickerStyle(.menu)
 
                         Toggle("Buyer Pays Shipping", isOn: $buyerPaysShipping)
+
+                        Stepper(value: $handlingTimeDays, in: 1...30) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Handling Time: \(handlingTimeDays) \(handlingTimeDays == 1 ? "day" : "days")")
+                                Text("How long after a sale before you ship. Reported to eBay as your fulfillment policy's handling time.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
 
                         // Returns
                         Toggle("Accept Returns", isOn: $returnsAccepted)
@@ -2705,6 +2734,7 @@ struct SettingsSheet: View {
             self.buyerPaysShipping = currentSettings.buyerPaysShipping
             self.returnsAccepted = currentSettings.returnsAccepted
             self.returnWindowDays = currentSettings.returnWindowDays
+            self.handlingTimeDays = currentSettings.handlingTimeDays ?? 1
         }
     }
     
@@ -2733,7 +2763,8 @@ struct SettingsSheet: View {
             updated.buyerPaysShipping = buyerPaysShipping
             updated.returnsAccepted = returnsAccepted
             updated.returnWindowDays = returnWindowDays
-            
+            updated.handlingTimeDays = handlingTimeDays
+
             do {
                 try await settingsRepo.saveSettings(updated)
                 if showAlertOnSuccess {
@@ -3038,6 +3069,12 @@ struct SellingSettings: Codable {
     var returnsAccepted: Bool
     var returnWindowDays: Int // 14 | 30 | 60
 
+    // Days after purchase before the item ships, reported to eBay as the
+    // fulfillment policy's handlingTime. eBay requires an integer >= 1.
+    // Optional (rather than defaulted) so existing Firestore docs that predate
+    // this field still decode instead of falling back to a blank settings object.
+    var handlingTimeDays: Int?
+
     var defaultLocation: DefaultLocation
     var ebayPolicyIds: EbayPolicyIds?
     var businessPoliciesDisabled: Bool?
@@ -3047,6 +3084,7 @@ struct SellingSettings: Codable {
         buyerPaysShipping: Bool = true,
         returnsAccepted: Bool = false,
         returnWindowDays: Int = 30,
+        handlingTimeDays: Int? = 1,
         defaultLocation: DefaultLocation = DefaultLocation(),
         ebayPolicyIds: EbayPolicyIds? = nil,
         businessPoliciesDisabled: Bool? = nil
@@ -3055,6 +3093,7 @@ struct SellingSettings: Codable {
         self.buyerPaysShipping = buyerPaysShipping
         self.returnsAccepted = returnsAccepted
         self.returnWindowDays = returnWindowDays
+        self.handlingTimeDays = handlingTimeDays
         self.defaultLocation = defaultLocation
         self.ebayPolicyIds = ebayPolicyIds
         self.businessPoliciesDisabled = businessPoliciesDisabled
