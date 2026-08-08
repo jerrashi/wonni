@@ -57,6 +57,16 @@ service cloud.firestore {
                              && request.auth.uid == resource.data.userId;
     }
 
+    // ── Orders (merged from wonni_dropship) ─────────────────────────────────────
+    // Fulfillment tracking for dropship's AliExpress/TikTok pipeline — a
+    // deliberately separate concept from `sales` above (see the Phase 3
+    // sales-tracking spec: sales are per-platform completed-sale records,
+    // orders are the optional sourcing/fulfillment step after one).
+    match /orders/{orderId} {
+      allow read, write: if request.auth != null && request.auth.uid == resource.data.userId;
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.userId;
+    }
+
     // ── Conversations ─────────────────────────────────────────────────────────
     // Participants only. Buyers can create; both parties can update (send messages).
     match /conversations/{conversationId} {

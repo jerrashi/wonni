@@ -24,6 +24,9 @@
       "firebase.json",
       "**/.*",
       "**/node_modules/**"
+    ],
+    "rewrites": [
+      { "source": "/web/**", "destination": "/web/index.html" }
     ]
   },
   "functions": [
