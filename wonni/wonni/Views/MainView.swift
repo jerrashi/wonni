@@ -148,6 +148,13 @@ struct MainView: View {
         .background(
             Group {
                 if let job = uploadManager.globalMercariJob {
+                    // .id(job.id) forces SwiftUI to tear down and recreate this view (and its
+                    // @StateObject) per job. Without it, a nil->non-nil round-trip of
+                    // globalMercariJob within the same synchronous update (see onDismiss below,
+                    // which reassigns the next job before this frame renders) gets collapsed by
+                    // SwiftUI's diffing into an in-place update — the second listing then reused
+                    // job #1's already-`.success` state, so its `.task` never re-ran and the pill
+                    // spun forever with no error.
                     MercariAutoPosterView(job: job) {
                         let completion = uploadManager.onMercariJobComplete
                         AppTaskQueue.shared.complete(id: job.id)
@@ -155,6 +162,7 @@ struct MainView: View {
                         uploadManager.onMercariJobComplete = nil
                         completion?()
                     }
+                    .id(job.id)
                 }
             }
         )
