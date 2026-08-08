@@ -1027,6 +1027,11 @@ struct EditListingSheet: View {
     let onSave: ([CrossPostJob]) -> Void
     
     @Environment(\.dismiss) private var dismiss
+    /// Observed (not just read via .shared) so this view actually re-renders once
+    /// the .task-triggered loadSettings() finishes — a plain SellingSettingsRepository.shared
+    /// read here wouldn't be tracked by SwiftUI, so the account default handling time
+    /// silently stayed stuck at the "not loaded yet" fallback of 1.
+    @StateObject private var settingsRepo = SellingSettingsRepository.shared
     @State private var title: String
     @State private var price: Double?
     @State private var description: String
@@ -1038,6 +1043,8 @@ struct EditListingSheet: View {
     @State private var lengthIn: Double?
     @State private var widthIn: Double?
     @State private var heightIn: Double?
+    /// nil = inherit the account's default handling time; set = this listing's own override.
+    @State private var handlingTimeDaysOverride: Int?
     @State private var quantity: Int
     @State private var isSaving = false
     @State private var showAddressSetupSheet = false
@@ -1106,7 +1113,8 @@ struct EditListingSheet: View {
         _lengthIn = State(initialValue: ship?.packageDimensions?.lengthIn)
         _widthIn = State(initialValue: ship?.packageDimensions?.widthIn)
         _heightIn = State(initialValue: ship?.packageDimensions?.heightIn)
-        
+        _handlingTimeDaysOverride = State(initialValue: ship?.handlingTimeDays)
+
         let posted = listing.crossPostStatus?
             .filter { $1 == "posted" || $1 == "pending" }
             .map { $0.key } ?? []
@@ -1437,6 +1445,18 @@ struct EditListingSheet: View {
         }
     }
 
+    private var accountDefaultHandlingTimeDays: Int {
+        settingsRepo.settings?.handlingTimeDays ?? 1
+    }
+
+    /// Preset options plus whatever value is currently selected, so a legacy/custom
+    /// value from before this list existed still shows up instead of vanishing.
+    private func handlingTimeMenuOptions(currentlySelected days: Int) -> [Int] {
+        HandlingTimeOptions.days.contains(days)
+            ? HandlingTimeOptions.days
+            : (HandlingTimeOptions.days + [days]).sorted()
+    }
+
     @ViewBuilder private var shippingSection: some View {
         Section("Shipping") {
             Toggle("Free Shipping (Seller Pays)", isOn: $isFreeShipping)
@@ -1448,6 +1468,40 @@ struct EditListingSheet: View {
                     .multilineTextAlignment(.trailing)
             }
             dimensionsRow
+            handlingTimeRow
+        }
+    }
+
+    @ViewBuilder private var handlingTimeRow: some View {
+        let effectiveDays = handlingTimeDaysOverride ?? accountDefaultHandlingTimeDays
+        VStack(alignment: .leading, spacing: 4) {
+            Picker(
+                "Handling Time",
+                selection: Binding(
+                    get: { effectiveDays },
+                    set: { handlingTimeDaysOverride = $0 }
+                )
+            ) {
+                ForEach(handlingTimeMenuOptions(currentlySelected: effectiveDays), id: \.self) { days in
+                    Text(HandlingTimeOptions.label(for: days)).tag(days)
+                }
+            }
+            .pickerStyle(.menu)
+            if handlingTimeDaysOverride == nil {
+                Text("Uses your default shipping time — change it in Settings.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Text("Overridden for this listing only.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        if handlingTimeDaysOverride != nil {
+            Button("Reset to Default") {
+                handlingTimeDaysOverride = nil
+            }
+            .font(.caption)
         }
     }
 
@@ -1795,7 +1849,8 @@ struct EditListingSheet: View {
             weightLbs != s?.weightLbs ||
             lengthIn != s?.packageDimensions?.lengthIn ||
             widthIn != s?.packageDimensions?.widthIn ||
-            heightIn != s?.packageDimensions?.heightIn
+            heightIn != s?.packageDimensions?.heightIn ||
+            handlingTimeDaysOverride != s?.handlingTimeDays
     }
 
     private var hasChanges: Bool {
@@ -1936,6 +1991,8 @@ struct EditListingSheet: View {
                 weightLbs: weightLbs,
                 packageDimensions: dims,
                 buyerPaysShipping: !isFreeShipping,
+                handlingTimeDays: handlingTimeDaysOverride,
+                resetHandlingTimeDays: handlingTimeDaysOverride == nil && listing.shippingInfo?.handlingTimeDays != nil,
                 photoPaths: finalPhotoPaths,
                 coverPhotoPath: finalPhotoPaths.first
             )
@@ -2454,13 +2511,16 @@ struct SettingsSheet: View {
 
                         Toggle("Buyer Pays Shipping", isOn: $buyerPaysShipping)
 
-                        Stepper(value: $handlingTimeDays, in: 1...30) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Handling Time: \(handlingTimeDays) \(handlingTimeDays == 1 ? "day" : "days")")
-                                Text("How long after a sale before you ship. Reported to eBay as your fulfillment policy's handling time.")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Picker("Handling Time", selection: $handlingTimeDays) {
+                                ForEach(HandlingTimeOptions.days.contains(handlingTimeDays) ? HandlingTimeOptions.days : (HandlingTimeOptions.days + [handlingTimeDays]).sorted(), id: \.self) { days in
+                                    Text(HandlingTimeOptions.label(for: days)).tag(days)
+                                }
                             }
+                            .pickerStyle(.menu)
+                            Text("How long after a sale before you ship. Reported to eBay as your fulfillment policy's handling time.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
 
                         // Returns
@@ -3079,6 +3139,19 @@ struct SellingSettings: Codable {
     var ebayPolicyIds: EbayPolicyIds?
     var businessPoliciesDisabled: Bool?
 
+    // Server-managed bookkeeping for the fulfillment-policy split (see
+    // functions/ebay_listing.js: ensureDefaultFulfillmentPolicy /
+    // getOrCreateOverrideFulfillmentPolicy). The app never sets these, but must
+    // round-trip them through decode/encode — otherwise saving settings from
+    // here would blow away what the Cloud Function last wrote.
+    // ebayFulfillmentConfigKey: fingerprint of the config the default policy was
+    //   last updated to match, e.g. "calculated|true|3".
+    var ebayFulfillmentConfigKey: String?
+    // ebayHandlingOverridePolicyIds: shared per-listing-override policies, keyed
+    //   by the same "shippingType|buyerPaysShipping|handlingTimeDays" fingerprint,
+    //   so listings sharing an override value share one eBay policy object.
+    var ebayHandlingOverridePolicyIds: [String: String]?
+
     init(
         shippingType: String = "calculated",
         buyerPaysShipping: Bool = true,
@@ -3087,7 +3160,9 @@ struct SellingSettings: Codable {
         handlingTimeDays: Int? = 1,
         defaultLocation: DefaultLocation = DefaultLocation(),
         ebayPolicyIds: EbayPolicyIds? = nil,
-        businessPoliciesDisabled: Bool? = nil
+        businessPoliciesDisabled: Bool? = nil,
+        ebayFulfillmentConfigKey: String? = nil,
+        ebayHandlingOverridePolicyIds: [String: String]? = nil
     ) {
         self.shippingType = shippingType
         self.buyerPaysShipping = buyerPaysShipping
@@ -3097,6 +3172,8 @@ struct SellingSettings: Codable {
         self.defaultLocation = defaultLocation
         self.ebayPolicyIds = ebayPolicyIds
         self.businessPoliciesDisabled = businessPoliciesDisabled
+        self.ebayFulfillmentConfigKey = ebayFulfillmentConfigKey
+        self.ebayHandlingOverridePolicyIds = ebayHandlingOverridePolicyIds
     }
 }
 
@@ -3146,7 +3223,10 @@ class SellingSettingsRepository: ObservableObject {
             .document(uid)
             .collection("sellingSettings")
             .document("default")
-        try docRef.setData(from: newSettings)
+        // merge:true — a plain overwrite would wipe any field the Cloud Function
+        // has written server-side that this client's SellingSettings snapshot
+        // doesn't happen to carry forward (e.g. policy ID bookkeeping added later).
+        try docRef.setData(from: newSettings, merge: true)
         self.settings = newSettings
     }
 }

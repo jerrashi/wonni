@@ -29,6 +29,9 @@ class Item {
     var lengthIn: Double?
     var widthIn: Double?
     var heightIn: Double?
+    /// Per-listing eBay handling time override; nil inherits the account default
+    /// (SellingSettings.handlingTimeDays). See ShippingInfo.handlingTimeDays.
+    var handlingTimeDays: Int?
     var isDraft: Bool
     var sourceAssetIdentifiers: [String]
     var tags: [String]
@@ -84,7 +87,7 @@ class Item {
     var aiSuggestedBrand: String?
     var condition: String? // Maps to ItemCondition rawValue
 
-    init(id: UUID = UUID(), createdAt: Date = Date(), photosData: [Data] = [], blurb: String = "", buyerPaysShipping: Bool = true, handlingFee: Double = 0.0, estimatedShippingDays: Int = 3, weightLbs: Double? = nil, lengthIn: Double? = nil, widthIn: Double? = nil, heightIn: Double? = nil, isDraft: Bool = true, sourceAssetIdentifiers: [String] = [], tags: [String] = [], personalNote: String? = nil, firebasePhotoPathsByAsset: [String: String]? = nil, firestoreListingId: String? = nil, processedAt: Date? = nil, visionTitle: String? = nil, isLocalPhotoOnly: Bool = false, originalUserTitleBeforeAI: String? = nil, originalUserDescriptionBeforeAI: String? = nil, aiSuggestedCategory: String? = nil, aiSuggestedBrand: String? = nil, condition: String? = nil) {
+    init(id: UUID = UUID(), createdAt: Date = Date(), photosData: [Data] = [], blurb: String = "", buyerPaysShipping: Bool = true, handlingFee: Double = 0.0, estimatedShippingDays: Int = 3, weightLbs: Double? = nil, lengthIn: Double? = nil, widthIn: Double? = nil, heightIn: Double? = nil, handlingTimeDays: Int? = nil, isDraft: Bool = true, sourceAssetIdentifiers: [String] = [], tags: [String] = [], personalNote: String? = nil, firebasePhotoPathsByAsset: [String: String]? = nil, firestoreListingId: String? = nil, processedAt: Date? = nil, visionTitle: String? = nil, isLocalPhotoOnly: Bool = false, originalUserTitleBeforeAI: String? = nil, originalUserDescriptionBeforeAI: String? = nil, aiSuggestedCategory: String? = nil, aiSuggestedBrand: String? = nil, condition: String? = nil) {
         self.id = id
         self.createdAt = createdAt
         self.photosData = photosData
@@ -96,6 +99,7 @@ class Item {
         self.lengthIn = lengthIn
         self.widthIn = widthIn
         self.heightIn = heightIn
+        self.handlingTimeDays = handlingTimeDays
         self.isDraft = isDraft
         self.sourceAssetIdentifiers = sourceAssetIdentifiers
         self.tags = tags

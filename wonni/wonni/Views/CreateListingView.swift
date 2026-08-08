@@ -1345,6 +1345,7 @@ struct DraftEditSheet: View {
     let item: Item
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @StateObject private var settingsRepo = SellingSettingsRepository.shared
 
     @State private var cache = CachedImageManager()
     @State private var title: String = ""
@@ -1365,6 +1366,8 @@ struct DraftEditSheet: View {
     @State private var lengthText: String = ""
     @State private var widthText: String = ""
     @State private var heightText: String = ""
+    /// nil = inherit the account's default handling time at publish time.
+    @State private var handlingTimeDaysOverride: Int? = nil
 
     @State private var showTemplatePicker = false
     @State private var isApplyingTemplate = false
@@ -1496,7 +1499,22 @@ struct DraftEditSheet: View {
                             .multilineTextAlignment(.trailing)
                             .frame(width: 60)
                     }
-                    
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Picker("Handling Time", selection: $handlingTimeDaysOverride) {
+                            Text("Default (\(HandlingTimeOptions.label(for: settingsRepo.settings?.handlingTimeDays ?? 1)))").tag(Int?.none)
+                            ForEach(HandlingTimeOptions.days, id: \.self) { days in
+                                Text(HandlingTimeOptions.label(for: days)).tag(Int?.some(days))
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        if handlingTimeDaysOverride == nil {
+                            Text("Uses your default shipping time — change it in Settings.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
                     HStack {
                         Text("Weight (lbs)")
                         Spacer()
@@ -1569,6 +1587,7 @@ struct DraftEditSheet: View {
                 DraftPhotoEditModal(item: item)
             }
             .onAppear { loadFromDraft() }
+            .task { await SellingSettingsRepository.shared.loadSettings() }
         }
     }
 
@@ -1614,6 +1633,7 @@ struct DraftEditSheet: View {
         buyerPaysShipping = item.buyerPaysShipping
         handlingFee = item.handlingFee > 0 ? String(format: "%.2f", item.handlingFee) : ""
         estimatedDays = "\(item.estimatedShippingDays)"
+        handlingTimeDaysOverride = item.handlingTimeDays
         tagsText = item.tags.joined(separator: ", ")
         
         // Dimensions & Weight
@@ -1643,6 +1663,7 @@ struct DraftEditSheet: View {
         item.buyerPaysShipping = buyerPaysShipping
         item.handlingFee = Double(handlingFee.filter { $0.isNumber || $0 == "." }) ?? 0
         item.estimatedShippingDays = Int(estimatedDays) ?? 3
+        item.handlingTimeDays = handlingTimeDaysOverride
         item.tags = tagsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         
         // Dimensions & Weight
