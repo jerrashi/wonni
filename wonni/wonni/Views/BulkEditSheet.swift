@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import FirebaseFunctions
+import FirebaseFirestore
 
 struct BulkEditSheet: View {
     let selectedListingIds: Set<String>
@@ -28,6 +29,13 @@ struct BulkEditSheet: View {
     @State private var lengthIn: Double? = nil
     @State private var widthIn: Double? = nil
     @State private var heightIn: Double? = nil
+    /// 0 = leave each listing's handling time unchanged, matching the weight fields'
+    /// "0 means unchanged" convention below.
+    @State private var handlingTimeDaysValue: Int = 0
+    /// Resets every selected listing back to inheriting the account default,
+    /// clearing any per-listing override. Mutually exclusive with setting an
+    /// explicit value above.
+    @State private var resetHandlingTimeToDefault = false
 
     @State private var isApplying = false
 
@@ -191,6 +199,22 @@ struct BulkEditSheet: View {
                             Text(policy.rawValue).tag(policy)
                         }
                     }
+
+                    Picker("Handling Time", selection: $handlingTimeDaysValue) {
+                        Text("Unchanged").tag(0)
+                        ForEach(HandlingTimeOptions.days, id: \.self) { days in
+                            Text(HandlingTimeOptions.label(for: days)).tag(days)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .onChange(of: handlingTimeDaysValue) { _, newValue in
+                        if newValue > 0 { resetHandlingTimeToDefault = false }
+                    }
+
+                    Toggle("Reset Handling Time to Default", isOn: $resetHandlingTimeToDefault)
+                        .onChange(of: resetHandlingTimeToDefault) { _, newValue in
+                            if newValue { handlingTimeDaysValue = 0 }
+                        }
                 } header: {
                     Text("Details")
                 }
@@ -412,7 +436,8 @@ struct BulkEditSheet: View {
         !titlePrepend.isEmpty || !titleAppend.isEmpty ||
         !descriptionPrepend.isEmpty || !descriptionAppend.isEmpty ||
         selectedCondition != nil || selectedShipping != .unchanged ||
-        combinedWeightLbs != nil || hasDimensions
+        combinedWeightLbs != nil || hasDimensions ||
+        handlingTimeDaysValue > 0 || resetHandlingTimeToDefault
     }
 
     private var hasChanges: Bool {
@@ -464,7 +489,9 @@ struct BulkEditSheet: View {
                         condition: selectedCondition,
                         buyerPaysShipping: buyerPaysShipping,
                         setWeightLbs: combinedWeightLbs,
-                        setPackageDimensions: dims
+                        setPackageDimensions: dims,
+                        setHandlingTimeDays: handlingTimeDaysValue > 0 ? handlingTimeDaysValue : nil,
+                        resetHandlingTimeDays: resetHandlingTimeToDefault
                     )
 
                     // markSoldOutAndCascade hides the eBay listing with qty=0 anyway,
@@ -530,9 +557,27 @@ struct BulkEditSheet: View {
             if let error = lastError {
                 failedCount += 1
                 print("[BulkEdit] markSoldOutAndCascade failed for \(id) after 3 attempts: \(error)")
+                continue
             }
+            await deactivateOnMercariIfLinked(listingId: id)
         }
         return (ids.count - failedCount, failedCount)
+    }
+
+    /// Best-effort headless Mercari deactivation for a listing that just went out of stock.
+    /// markSoldOutAndCascade already succeeded and set pendingMercariDeactivation, so a failed
+    /// automation attempt here isn't counted against the bulk-edit result — it just leaves the
+    /// existing "Action needed" manual-deactivate entry point (MercariProfileSyncSheet) as the
+    /// fallback, same as before this automation existed.
+    private func deactivateOnMercariIfLinked(listingId: String) async {
+        guard let listing = try? await ListingRepository.shared.fetchListing(id: listingId),
+              let mercariId = listing.crossPostListingIds?["mercari"] else { return }
+        let automator = MercariListingStateAutomator(mercariItemId: mercariId, action: .deactivate)
+        let phase = await automator.run()
+        if case .success = phase {
+            try? await Firestore.firestore().collection("listings").document(listingId)
+                .updateData(["pendingMercariDeactivation": FieldValue.delete()])
+        }
     }
 }
 
