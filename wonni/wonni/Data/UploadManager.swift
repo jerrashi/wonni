@@ -762,7 +762,8 @@ class UploadManager: ObservableObject {
                 handlingFee: draft.handlingFee,
                 estimatedShippingDays: draft.estimatedShippingDays,
                 weightLbs: draft.weightLbs,
-                packageDimensions: dimensions
+                packageDimensions: dimensions,
+                handlingTimeDays: draft.handlingTimeDays
             )
             data["shippingInfo"] = (try? Firestore.Encoder().encode(shippingInfo)) ?? [:]
         }
@@ -973,7 +974,8 @@ class UploadManager: ObservableObject {
                     handlingFee: draft.handlingFee,
                     estimatedShippingDays: draft.estimatedShippingDays,
                     weightLbs: draft.weightLbs,
-                    packageDimensions: packageDimensions
+                    packageDimensions: packageDimensions,
+                    handlingTimeDays: draft.handlingTimeDays
                 )
 
                 print("[UploadManager] Writing listing to Firestore: \(listing.id ?? "nil"), \(photoPaths.count) photos")

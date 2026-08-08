@@ -608,31 +608,9 @@ async function getOrCreateReturnPolicy(accessToken, host, returnsAccepted, retur
 }
 
 /**
- * Helper to get or create eBay Fulfillment Policy.
+ * Builds the eBay Fulfillment Policy request body for a given shipping config.
  */
-async function getOrCreateFulfillmentPolicy(accessToken, host, shippingType, buyerPaysShipping, handlingTimeDays) {
-  const listOptions = {
-    hostname: host,
-    path:     "/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US",
-    method:   "GET",
-    headers: {
-      "Authorization": `Bearer ${accessToken}`,
-      "Content-Type":  "application/json",
-    },
-  };
-  const listRes = await makeHttpRequest(listOptions);
-  const handlingDays = handlingTimeDays || 1;
-  const policyName = `Wonni Ship Policy - ${shippingType} - ${buyerPaysShipping ? "Buyer Pays" : "Free"} - ${handlingDays}d`;
-
-  let allPolicies = [];
-  if (listRes.statusCode === 200) {
-    const data = JSON.parse(listRes.body);
-    allPolicies = data.fulfillmentPolicies || [];
-    // First try exact name match
-    const existing = allPolicies.find(p => p.name === policyName);
-    if (existing) return existing.fulfillmentPolicyId;
-  }
-  
+function buildFulfillmentPolicyPayload(name, shippingType, buyerPaysShipping, handlingTimeDays) {
   // Map shippingType to valid eBay ShippingServiceCode values
   // These must match codes from GeteBayDetails/ShippingServiceDetails with ValidForSellingFlow=true
   let serviceCode = "USPSParcel"; // USPS Ground Advantage (formerly USPSParcel)
@@ -644,11 +622,11 @@ async function getOrCreateFulfillmentPolicy(accessToken, host, shippingType, buy
   } else if (shippingType === "priorityUSPS") {
     serviceCode = "USPSPriority";
   }
-  
+
   const shippingOption = {
     optionType: "DOMESTIC",
   };
-  
+
   if (buyerPaysShipping) {
     shippingOption.costType = "CALCULATED";
     shippingOption.shippingServices = [{
@@ -667,21 +645,41 @@ async function getOrCreateFulfillmentPolicy(accessToken, host, shippingType, buy
       shippingCost: { value: "0.00", currency: "USD" }
     }];
   }
-  
-  const payload = {
-    name: policyName,
+
+  return {
+    name,
     marketplaceId: "EBAY_US",
     categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES" }],
     handlingTime: {
-      value: handlingDays,
+      value: handlingTimeDays || 1,
       unit: "DAY"
     },
     shippingOptions: [shippingOption],
     localPickup: false,
     freightShipping: false
   };
-  
-  // Create new
+}
+
+async function listFulfillmentPolicies(accessToken, host) {
+  const listOptions = {
+    hostname: host,
+    path:     "/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US",
+    method:   "GET",
+    headers: {
+      "Authorization": `Bearer ${accessToken}`,
+      "Content-Type":  "application/json",
+    },
+  };
+  const listRes = await makeHttpRequest(listOptions);
+  if (listRes.statusCode !== 200) return [];
+  return JSON.parse(listRes.body).fulfillmentPolicies || [];
+}
+
+/**
+ * Creates a new eBay Fulfillment Policy, falling back to a duplicate or any
+ * existing policy if eBay reports the name already exists / creation fails.
+ */
+async function createFulfillmentPolicy(accessToken, host, payload, allPolicies) {
   const createOptions = {
     hostname: host,
     path:     "/sell/account/v1/fulfillment_policy",
@@ -697,22 +695,90 @@ async function getOrCreateFulfillmentPolicy(accessToken, host, shippingType, buy
     return JSON.parse(createRes.body).fulfillmentPolicyId;
   }
 
-  // Handle duplicate
   const duplicateId = extractDuplicatePolicyId(createRes.body);
   if (duplicateId) {
-    console.log(`[getOrCreateFulfillmentPolicy] Found duplicate fulfillment policy ID: ${duplicateId}`);
+    console.log(`[createFulfillmentPolicy] Found duplicate fulfillment policy ID: ${duplicateId}`);
     return duplicateId;
   }
 
-  // If creation failed for any reason, fall back to using any existing fulfillment policy
-  // (the user may have manually created one on ebay.com)
   if (allPolicies.length > 0) {
     const fallbackPolicy = allPolicies[0];
-    console.log(`[getOrCreateFulfillmentPolicy] Creation failed, falling back to existing policy: ${fallbackPolicy.name} (${fallbackPolicy.fulfillmentPolicyId})`);
+    console.log(`[createFulfillmentPolicy] Creation failed, falling back to existing policy: ${fallbackPolicy.name} (${fallbackPolicy.fulfillmentPolicyId})`);
     return fallbackPolicy.fulfillmentPolicyId;
   }
 
   throw new Error(`Failed to create eBay fulfillment policy (${createRes.statusCode}): ${createRes.body}`);
+}
+
+/**
+ * Ensures the account's single "default" fulfillment policy exists and matches
+ * the current shipping settings, updating it IN PLACE (same policy ID, PUT) when
+ * settings change instead of creating a new policy every time. This keeps the
+ * seller's eBay Business Policies list from accumulating one entry per edit, and
+ * it means changing the default retroactively applies to every listing already
+ * using it, since they all reference the same policy ID.
+ */
+async function ensureDefaultFulfillmentPolicy(accessToken, host, sellingSettings, ebayPolicyIds) {
+  const handlingTimeDays = sellingSettings.handlingTimeDays || 1;
+  const configKey = `${sellingSettings.shippingType}|${sellingSettings.buyerPaysShipping}|${handlingTimeDays}`;
+  const policyName = "Wonni Default Policy";
+
+  if (ebayPolicyIds.fulfillmentPolicyId && sellingSettings.ebayFulfillmentConfigKey === configKey) {
+    return { fulfillmentPolicyId: ebayPolicyIds.fulfillmentPolicyId, configKey, changed: false };
+  }
+
+  const payload = buildFulfillmentPolicyPayload(policyName, sellingSettings.shippingType, sellingSettings.buyerPaysShipping, handlingTimeDays);
+
+  if (ebayPolicyIds.fulfillmentPolicyId) {
+    const updateOptions = {
+      hostname: host,
+      path:     `/sell/account/v1/fulfillment_policy/${ebayPolicyIds.fulfillmentPolicyId}`,
+      method:   "PUT",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type":  "application/json",
+      },
+    };
+    const updateRes = await makeHttpRequest(updateOptions, payload);
+    if (updateRes.statusCode === 200) {
+      return { fulfillmentPolicyId: ebayPolicyIds.fulfillmentPolicyId, configKey, changed: true };
+    }
+    console.warn(`[ensureDefaultFulfillmentPolicy] PUT update failed (${updateRes.statusCode}): ${updateRes.body} — falling back to create`);
+  }
+
+  const allPolicies = await listFulfillmentPolicies(accessToken, host);
+  const existing = allPolicies.find(p => p.name === policyName);
+  if (existing) {
+    return { fulfillmentPolicyId: existing.fulfillmentPolicyId, configKey, changed: true };
+  }
+  const fulfillmentPolicyId = await createFulfillmentPolicy(accessToken, host, payload, allPolicies);
+  return { fulfillmentPolicyId, configKey, changed: true };
+}
+
+/**
+ * Gets or creates a shared "override" fulfillment policy for a handling-time
+ * value that differs from the account default. Cached per-user keyed by the
+ * full shipping config so every listing using the same override shares one
+ * eBay policy object, not one each. Kept as a policy distinct from the default
+ * (never aliased to it) so updating the default in place can never silently
+ * change a listing that was deliberately overridden.
+ */
+async function getOrCreateOverrideFulfillmentPolicy(accessToken, host, shippingType, buyerPaysShipping, handlingTimeDays, existingOverrideIds) {
+  const configKey = `${shippingType}|${buyerPaysShipping}|${handlingTimeDays}`;
+  const cachedId = existingOverrideIds[configKey];
+  if (cachedId) {
+    return { fulfillmentPolicyId: cachedId, configKey, changed: false };
+  }
+
+  const policyName = `Wonni Handling Override - ${handlingTimeDays}d`;
+  const payload = buildFulfillmentPolicyPayload(policyName, shippingType, buyerPaysShipping, handlingTimeDays);
+  const allPolicies = await listFulfillmentPolicies(accessToken, host);
+  const existing = allPolicies.find(p => p.name === policyName);
+  const fulfillmentPolicyId = existing
+    ? existing.fulfillmentPolicyId
+    : await createFulfillmentPolicy(accessToken, host, payload, allPolicies);
+
+  return { fulfillmentPolicyId, configKey, changed: true };
 }
 
 /**
@@ -736,8 +802,12 @@ async function optInToBusinessPolicies(accessToken, host) {
 
 /**
  * Ensures Return, Payment, and Fulfillment Policies exist on the eBay account.
+ * `listingHandlingTimeDays` is an optional per-listing override (from
+ * listing.shippingInfo.handlingTimeDays); when set and different from the
+ * account default, the returned fulfillmentPolicyId points at a shared
+ * override policy instead of the account's default policy.
  */
-async function ensureBusinessPolicies(accessToken, isSandbox, sellingSettings, uid, db) {
+async function ensureBusinessPolicies(accessToken, isSandbox, sellingSettings, uid, db, listingHandlingTimeDays) {
   const host = isSandbox ? "api.sandbox.ebay.com" : "api.ebay.com";
 
   // Step 1: Attempt auto opt-in to Business Policies (idempotent)
@@ -802,15 +872,13 @@ async function ensureBusinessPolicies(accessToken, isSandbox, sellingSettings, u
     updated = true;
   }
   
-  // Re-derive the fulfillment policy whenever the shipping config it's built from
-  // has changed, not just when we've never created one — otherwise editing shipping
-  // type / handling time in Settings would silently keep using the stale eBay policy.
-  const handlingTimeDays = sellingSettings.handlingTimeDays || 1;
-  const fulfillmentConfigKey = `${sellingSettings.shippingType}|${sellingSettings.buyerPaysShipping}|${handlingTimeDays}`;
-  if (!ebayPolicyIds.fulfillmentPolicyId || sellingSettings.ebayFulfillmentConfigKey !== fulfillmentConfigKey) {
-    const fulfillmentPolicyId = await getOrCreateFulfillmentPolicy(accessToken, host, sellingSettings.shippingType, sellingSettings.buyerPaysShipping, handlingTimeDays);
-    ebayPolicyIds.fulfillmentPolicyId = fulfillmentPolicyId;
-    sellingSettings.ebayFulfillmentConfigKey = fulfillmentConfigKey;
+  // Keep the account's default fulfillment policy in sync (updated in place,
+  // same policy ID) whenever shipping type / buyer-pays / default handling
+  // time changes.
+  const defaultResult = await ensureDefaultFulfillmentPolicy(accessToken, host, sellingSettings, ebayPolicyIds);
+  ebayPolicyIds.fulfillmentPolicyId = defaultResult.fulfillmentPolicyId;
+  if (defaultResult.changed) {
+    sellingSettings.ebayFulfillmentConfigKey = defaultResult.configKey;
     updated = true;
   }
 
@@ -818,8 +886,27 @@ async function ensureBusinessPolicies(accessToken, isSandbox, sellingSettings, u
     const settingsRef = db.collection("users").doc(uid).collection("sellingSettings").doc("default");
     await settingsRef.set({ ebayPolicyIds, ebayFulfillmentConfigKey: sellingSettings.ebayFulfillmentConfigKey }, { merge: true });
   }
-  
-  return ebayPolicyIds;
+
+  // If this specific listing overrides the handling time, resolve (or create)
+  // a shared override policy for that value and use it just for this listing —
+  // the account-level ebayPolicyIds/default policy above is left untouched.
+  const accountHandlingTimeDays = sellingSettings.handlingTimeDays || 1;
+  const hasOverride = listingHandlingTimeDays != null && listingHandlingTimeDays !== accountHandlingTimeDays;
+  if (!hasOverride) {
+    return ebayPolicyIds;
+  }
+
+  const overrideIds = sellingSettings.ebayHandlingOverridePolicyIds || {};
+  const overrideResult = await getOrCreateOverrideFulfillmentPolicy(
+    accessToken, host, sellingSettings.shippingType, sellingSettings.buyerPaysShipping, listingHandlingTimeDays, overrideIds
+  );
+  if (overrideResult.changed) {
+    overrideIds[overrideResult.configKey] = overrideResult.fulfillmentPolicyId;
+    const settingsRef = db.collection("users").doc(uid).collection("sellingSettings").doc("default");
+    await settingsRef.set({ ebayHandlingOverridePolicyIds: overrideIds }, { merge: true });
+  }
+
+  return { ...ebayPolicyIds, fulfillmentPolicyId: overrideResult.fulfillmentPolicyId };
 }
 
 /**
@@ -932,7 +1019,7 @@ exports.ebayCreateListing = onCall(
       const host = isSandbox ? "api.sandbox.ebay.com" : "api.ebay.com";
 
       // 3. Ensure business policies exist and retrieve policy IDs
-      const policyIds = await ensureBusinessPolicies(accessToken, isSandbox, sellingSettings, uid, db);
+      const policyIds = await ensureBusinessPolicies(accessToken, isSandbox, sellingSettings, uid, db, listing.shippingInfo?.handlingTimeDays);
 
       // 4. Ensure inventory location exists and retrieve location key
       const locationKey = await ensureInventoryLocation(accessToken, host, sellingSettings.defaultLocation, uid, db);
@@ -1355,6 +1442,18 @@ exports.ebayUpdateListing = onCall(
       const host = isSandbox ? "api.sandbox.ebay.com" : "api.ebay.com";
       const sku = `wonni_${listingId}`;
 
+      // Re-resolve the fulfillment policy from the listing's *current* shipping
+      // config on every update — otherwise a handling-time override edited after
+      // the listing already went live on eBay would silently never take effect,
+      // since the offer would keep whatever policy it was created with.
+      const settingsRef = db.collection("users").doc(uid).collection("sellingSettings").doc("default");
+      const settingsDoc = await settingsRef.get();
+      if (!settingsDoc.exists) {
+        throw new HttpsError("failed-precondition", "Selling settings not configured.");
+      }
+      const sellingSettings = settingsDoc.data();
+      const policyIds = await ensureBusinessPolicies(accessToken, isSandbox, sellingSettings, uid, db, listing.shippingInfo?.handlingTimeDays);
+
       const title = listing.customTitle || "Wonni Listing";
       const description = listing.customDescription || "Listed via Wonni";
       const price = listing.price || 0.0;
@@ -1436,7 +1535,8 @@ exports.ebayUpdateListing = onCall(
       const offerId = offer.offerId;
       console.log(`[ebayUpdateListing] Updating offerId=${offerId} with availableQuantity=${quantity}`);
 
-      // 3. Update the offer (price, description, policies preserved from the existing offer).
+      // 3. Update the offer (price, description; policies re-resolved above from
+      //    the listing's current shipping config, not just copied from the offer).
       const offerUpdateBody = {
         sku: sku,
         marketplaceId: "EBAY_US",
@@ -1444,7 +1544,11 @@ exports.ebayUpdateListing = onCall(
         availableQuantity: quantity,
         categoryId: offer.categoryId,
         listingDescription: description,
-        listingPolicies: offer.listingPolicies,
+        listingPolicies: {
+          fulfillmentPolicyId: policyIds.fulfillmentPolicyId,
+          paymentPolicyId: policyIds.paymentPolicyId,
+          returnPolicyId: policyIds.returnPolicyId
+        },
         merchantLocationKey: offer.merchantLocationKey,
         pricingSummary: {
           price: { value: price.toFixed(2), currency: "USD" }

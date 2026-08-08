@@ -159,6 +159,8 @@ class ListingRepository: ObservableObject {
         weightLbs: Double? = nil,
         packageDimensions: PackageDimensions? = nil,
         buyerPaysShipping: Bool? = nil,
+        handlingTimeDays: Int? = nil,
+        resetHandlingTimeDays: Bool = false,
         photoPaths: [String]? = nil,
         coverPhotoPath: String? = nil
     ) async throws {
@@ -172,21 +174,30 @@ class ListingRepository: ObservableObject {
         if let quantity { data["quantity"] = quantity }
         if let photoPaths { data["photoPaths"] = photoPaths }
         if let coverPhotoPath { data["coverPhotoPath"] = coverPhotoPath }
-        
-        if buyerPaysShipping != nil || weightLbs != nil || packageDimensions != nil {
+
+        if buyerPaysShipping != nil || weightLbs != nil || packageDimensions != nil || handlingTimeDays != nil || resetHandlingTimeDays {
             let doc = try await db.collection(listingsCollection).document(id).getDocument()
             let listing = try? doc.data(as: UserListing.self)
             var shipping = listing?.shippingInfo ?? ShippingInfo(buyerPaysShipping: true, handlingFee: 0, estimatedShippingDays: 3, weightLbs: nil, packageDimensions: nil)
-            
+
             if let bp = buyerPaysShipping { shipping.buyerPaysShipping = bp }
             if let w = weightLbs { shipping.weightLbs = w }
             if let pd = packageDimensions { shipping.packageDimensions = pd }
-            
+            if resetHandlingTimeDays {
+                // Clears the per-listing override so it goes back to inheriting the
+                // account default. Firestore's encoder omits nil optionals, and this
+                // whole shippingInfo map replaces the stored one wholesale below, so
+                // this is enough to drop the field rather than leaving a stale value.
+                shipping.handlingTimeDays = nil
+            } else if let h = handlingTimeDays {
+                shipping.handlingTimeDays = h
+            }
+
             if let encoded = try? Firestore.Encoder().encode(shipping) {
                 data["shippingInfo"] = encoded
             }
         }
-        
+
         try await db.collection(listingsCollection).document(id).updateData(data)
     }
 
@@ -356,7 +367,9 @@ class ListingRepository: ObservableObject {
         condition: ItemCondition? = nil,
         buyerPaysShipping: Bool? = nil,
         setWeightLbs: Double? = nil,
-        setPackageDimensions: (Double, Double, Double)? = nil
+        setPackageDimensions: (Double, Double, Double)? = nil,
+        setHandlingTimeDays: Int? = nil,
+        resetHandlingTimeDays: Bool = false
     ) async throws -> [String] {
         var updates: [String: [String: Any]] = [:]
         var ebayPostedIds: [String] = []
@@ -403,12 +416,17 @@ class ListingRepository: ObservableObject {
                 data["condition"] = newCondition.rawValue
             }
             
-            if buyerPaysShipping != nil || setWeightLbs != nil || setPackageDimensions != nil {
+            if buyerPaysShipping != nil || setWeightLbs != nil || setPackageDimensions != nil || setHandlingTimeDays != nil || resetHandlingTimeDays {
                 var info = listing.shippingInfo ?? ShippingInfo(buyerPaysShipping: true, handlingFee: 0, estimatedShippingDays: 3)
                 if let buyerPays = buyerPaysShipping { info.buyerPaysShipping = buyerPays }
                 if let w = setWeightLbs { info.weightLbs = w }
                 if let (l, w, h) = setPackageDimensions {
                     info.packageDimensions = PackageDimensions(lengthIn: l, widthIn: w, heightIn: h)
+                }
+                if resetHandlingTimeDays {
+                    info.handlingTimeDays = nil
+                } else if let h = setHandlingTimeDays {
+                    info.handlingTimeDays = h
                 }
                 data["shippingInfo"] = try? Firestore.Encoder().encode(info)
             }

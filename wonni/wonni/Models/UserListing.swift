@@ -51,6 +51,21 @@ struct ShippingInfo: Codable {
     var estimatedShippingDays: Int
     var weightLbs: Double?
     var packageDimensions: PackageDimensions?
+    // eBay handling time override for this listing only. nil = inherit the
+    // account's default handling time (SellingSettings.handlingTimeDays);
+    // set = this listing ships on its own schedule regardless of future
+    // changes to the account default.
+    var handlingTimeDays: Int?
+}
+
+/// Shared preset options for handling-time pickers (account default, per-listing
+/// override, bulk edit) so the choices stay identical across every surface.
+enum HandlingTimeOptions {
+    static let days: [Int] = [1, 2, 3, 4, 5, 7, 10, 14, 21, 30]
+
+    static func label(for days: Int) -> String {
+        "\(days) \(days == 1 ? "day" : "days")"
+    }
 }
 
 struct PackageDimensions: Codable {
@@ -77,6 +92,14 @@ struct ListingVariation: Codable, Identifiable {
     var price: Double?     // overrides parent listing price; nil = inherit
     var quantity: Int?     // overrides parent quantity; nil = 1
     var sku: String?       // optional seller-defined SKU for this variant
+
+    // Per-variation cross-post state, mirroring UserListing's own
+    // crossPostStatus/crossPostListingIds — needed for platforms (e.g.
+    // Mercari, which has no variant concept) that post one listing per
+    // variation rather than one per parent listing. Additive: not read by
+    // any UI/cross-poster yet, same as the pre-existing fields above.
+    var crossPostStatus: [String: String]?
+    var crossPostListingIds: [String: String]?
 }
 
 // MARK: - AI quality tracking
