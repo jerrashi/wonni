@@ -14,9 +14,21 @@ import CryptoKit
 class AuthManager: ObservableObject {
     @Published var currentUser: User? = Auth.auth().currentUser
     @Published var isLoading = false
+    // Set when a sign-in hits an account that already exists under a different
+    // provider. SignInView prompts the user to re-authenticate with
+    // `existingProviderLabel`, then calls `finishPendingLink()`.
+    @Published var pendingLink: PendingLink?
 
     private var authStateHandle: AuthStateDidChangeListenerHandle?
     private var currentNonce: String?
+
+    struct PendingLink {
+        let credential: AuthCredential
+        let existingProviderID: String
+        var existingProviderLabel: String {
+            existingProviderID == "apple.com" ? "Apple" : "Google"
+        }
+    }
 
     init() {
         authStateHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
@@ -62,13 +74,72 @@ class AuthManager: ObservableObject {
             fullName: appleIDCredential.fullName
         )
 
-        let authResult = try await Auth.auth().signIn(with: credential)
+        try await signIn(with: credential)
+    }
+
+    // MARK: - Sign in with Google
+
+    /// Uses Firebase's generic web-based OAuthProvider (ASWebAuthenticationSession under the
+    /// hood) rather than the separate GoogleSignIn SDK — no extra SPM dependency to wire up.
+    func signInWithGoogle() async throws {
+        isLoading = true
+        defer { isLoading = false }
+
+        let provider = OAuthProvider(providerID: "google.com")
+        provider.scopes = ["email", "profile"]
+
+        let credential: AuthCredential = try await withCheckedThrowingContinuation { continuation in
+            provider.getCredentialWith(nil) { credential, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if let credential {
+                    continuation.resume(returning: credential)
+                } else {
+                    continuation.resume(throwing: AuthError.invalidCredential)
+                }
+            }
+        }
+
+        try await signIn(with: credential)
+    }
+
+    // MARK: - Shared sign-in + account-linking
+
+    /// Signs in with any OAuth credential. If Firebase reports the email is already tied to a
+    /// different provider, stashes the credential in `pendingLink` instead of failing outright —
+    /// the view re-prompts for the existing provider, then calls `finishPendingLink()`.
+    private func signIn(with credential: AuthCredential) async throws {
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            let authResult = try await Auth.auth().signIn(with: credential)
+            currentUser = authResult.user
+            try? await UserRepository.shared.syncProfile()
+        } catch let error as NSError {
+            guard
+                AuthErrorCode(rawValue: error.code) == .accountExistsWithDifferentCredential,
+                let email = error.userInfo[AuthErrorUserInfoEmailKey] as? String
+            else {
+                throw error
+            }
+            let methods = try await Auth.auth().fetchSignInMethods(forEmail: email)
+            guard let existingProviderID = methods.first else { throw error }
+            pendingLink = PendingLink(credential: credential, existingProviderID: existingProviderID)
+        }
+    }
+
+    /// Second step of linking: call after the user re-authenticates (via `handleAppleCompletion`
+    /// or `signInWithGoogle`, which sets `currentUser` for the pre-existing account) with
+    /// whichever provider their account already used. Links the original credential onto it.
+    func finishPendingLink() async throws {
+        guard let pending = pendingLink, let user = Auth.auth().currentUser else { return }
+        let authResult = try await user.link(with: pending.credential)
         currentUser = authResult.user
-        
-        // Sync profile to Firestore
+        pendingLink = nil
         try? await UserRepository.shared.syncProfile()
     }
-    
+
     // MARK: - Update Profile
     
     func updateDisplayName(_ name: String) async throws {

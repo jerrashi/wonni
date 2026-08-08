@@ -32,20 +32,56 @@ struct SignInView: View {
 
             // Sign-in buttons
             VStack(spacing: 16) {
-                SignInWithAppleButton(.continue) { request in
-                    authManager.prepareAppleRequest(request)
-                } onCompletion: { result in
-                    Task {
-                        do {
-                            try await authManager.handleAppleCompletion(result)
-                        } catch {
-                            self.error = error
+                if let pending = authManager.pendingLink {
+                    Text("You already have an account signed in with \(pending.existingProviderLabel). Sign in with \(pending.existingProviderLabel) to link it.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                if authManager.pendingLink == nil || authManager.pendingLink?.existingProviderID == "apple.com" {
+                    SignInWithAppleButton(.continue) { request in
+                        authManager.prepareAppleRequest(request)
+                    } onCompletion: { result in
+                        Task {
+                            do {
+                                try await authManager.handleAppleCompletion(result)
+                                if authManager.pendingLink != nil {
+                                    try await authManager.finishPendingLink()
+                                }
+                            } catch {
+                                self.error = error
+                            }
                         }
                     }
+                    .signInWithAppleButtonStyle(.black)
+                    .frame(height: 50)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
-                .signInWithAppleButtonStyle(.black)
-                .frame(height: 50)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+
+                if authManager.pendingLink == nil || authManager.pendingLink?.existingProviderID == "google.com" {
+                    Button {
+                        Task {
+                            do {
+                                try await authManager.signInWithGoogle()
+                                if authManager.pendingLink != nil {
+                                    try await authManager.finishPendingLink()
+                                }
+                            } catch {
+                                self.error = error
+                            }
+                        }
+                    } label: {
+                        Text("Continue with Google")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 50)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.white)
+                    .foregroundStyle(.black)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
 
                 if authManager.isLoading {
                     ProgressView()
