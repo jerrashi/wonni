@@ -135,6 +135,12 @@ exports.syncSales = syncSales;
 const { notifySavedSearchMatches } = require("./saved_search_notify");
 exports.notifySavedSearchMatches = notifySavedSearchMatches;
 
+// Account deletion (#62) — soft-delete grace period + scheduled purge
+const { requestAccountDeletion, cancelAccountDeletion, purgeDeletedAccounts } = require("./account_deletion");
+exports.requestAccountDeletion = requestAccountDeletion;
+exports.cancelAccountDeletion = cancelAccountDeletion;
+exports.purgeDeletedAccounts = purgeDeletedAccounts;
+
 // eBay OAuth Redirect Intermediary (legacy — kept for fallback)
 exports.ebayRedirect = onRequest({ cors: true }, (req, res) => {
   const code = req.query.code;

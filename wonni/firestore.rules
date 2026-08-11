@@ -28,9 +28,12 @@ service cloud.firestore {
     // Readable by all authenticated users (buyers need to browse).
     // Only the listing owner can write.
     match /listings/{listingId} {
-      // Readable by all if not a draft, or if the user is the owner
+      // Readable by all if not a draft and the seller isn't mid-account-deletion,
+      // or if the user is the owner (owner keeps read access even while
+      // sellerDeletionPending, e.g. to cancel deletion before purge).
       allow read: if request.auth != null && (
-                    resource.data.status != "draft" || request.auth.uid == resource.data.userId
+                    (resource.data.status != "draft" && resource.data.sellerDeletionPending != true)
+                    || request.auth.uid == resource.data.userId
                   );
       allow update: if request.auth != null
                     && request.auth.uid == resource.data.userId
@@ -65,6 +68,24 @@ service cloud.firestore {
     match /orders/{orderId} {
       allow read, write: if request.auth != null && request.auth.uid == resource.data.userId;
       allow create: if request.auth != null && request.auth.uid == request.resource.data.userId;
+    }
+
+    // ── Marketplace orders (buyer/seller transactions, #69) ─────────────────────
+    // Deliberately distinct from `orders` above (dropship fulfillment tracking) —
+    // this is the future in-app checkout schema. Reserved now for account
+    // deletion (#62) to reference; unpopulated and locked down until #69 ships.
+    match /marketplaceOrders/{orderId} {
+      allow read: if false;
+      allow write: if false;
+    }
+
+    // ── Deletion requests (#62) ──────────────────────────────────────────────
+    // Source of truth for the account-deletion grace period. Doc id == uid.
+    // Owner may read (to see their own pending/deferred deletion status);
+    // all writes are server-side only (Cloud Functions via Admin SDK).
+    match /deletionRequests/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
     }
 
     // ── Conversations ─────────────────────────────────────────────────────────
