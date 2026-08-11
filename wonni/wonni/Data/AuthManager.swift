@@ -165,6 +165,25 @@ class AuthManager: ObservableObject {
         try Auth.auth().signOut()
     }
 
+    // MARK: - Account deletion (#62)
+
+    /// Starts the 30-day soft-delete grace period (server-side: hides the
+    /// user's listings, does not delete anything yet) and immediately signs
+    /// out. Existing `UserDefaults`/`@AppStorage` keys are device UI prefs
+    /// (camera grid, onboarding-seen, shipping defaults) rather than
+    /// per-account content, so there's nothing account-identifying to clear
+    /// locally beyond signing out.
+    func requestAccountDeletion() async throws {
+        try await callCloudFunction("requestAccountDeletion")
+        try signOut()
+    }
+
+    /// Reverses a pending deletion request. Only succeeds server-side while
+    /// the request hasn't been purged yet.
+    func cancelAccountDeletion() async throws {
+        try await callCloudFunction("cancelAccountDeletion")
+    }
+
     // MARK: - Nonce helpers
     // The nonce is SHA-256 hashed before sending to Apple, then verified by Firebase
     // to prevent replay attacks.
@@ -198,6 +217,8 @@ struct UserPublicProfile: Codable {
     var email: String?
     var username: String?
     var photoURL: String?
+    // Set by requestAccountDeletion, cleared by cancelAccountDeletion (#62).
+    var deletionPending: Bool?
 }
 
 class UserRepository {

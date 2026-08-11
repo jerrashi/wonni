@@ -80,6 +80,7 @@
 		A1B2C3D4E5F6A7B82E9D0001 /* ActiveDraftCarouselView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B82E9D0002 /* ActiveDraftCarouselView.swift */; };
 		AA0011223344556677AABBFF /* MercariObservedDataRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0011223344556677AABBEE /* MercariObservedDataRepository.swift */; };
 		AABB00112233445566778802 /* AppTaskQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB00112233445566778801 /* AppTaskQueue.swift */; };
+		AF1271838F6624E84D677BBB /* DeleteAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F42B5F211D314136D6C1E34 /* DeleteAccountView.swift */; };
 		B02F2E0D8C10F3EFEB9588F2 /* BulkImportPillView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 954511D35EA0839747028ADA /* BulkImportPillView.swift */; };
 		BA84B11A8C0F8D5B789AC1DF /* AddSaleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 170EF2F9EA31030386E584A7 /* AddSaleSheet.swift */; };
 		CCDD00112233445566778801 /* ListingTemplate.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00112233445566778800 /* ListingTemplate.swift */; };
@@ -183,6 +184,7 @@
 		954511D35EA0839747028ADA /* BulkImportPillView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BulkImportPillView.swift; sourceTree = "<group>"; };
 		9564BAC1690BD050B5596F07 /* MercariSaleParsing.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MercariSaleParsing.swift; sourceTree = "<group>"; };
 		9A84FC45576E3288EA902060 /* SellingFlowTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SellingFlowTests.swift; sourceTree = "<group>"; };
+		9F42B5F211D314136D6C1E34 /* DeleteAccountView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DeleteAccountView.swift; sourceTree = "<group>"; };
 		9F5B4C13E60AD7282C3F1B45 /* VisionTitlePolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VisionTitlePolicyTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B82E9D0002 /* ActiveDraftCarouselView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveDraftCarouselView.swift; sourceTree = "<group>"; };
 		A9D1D2B4BED80AB257DFE4C7 /* MercariScanJSTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MercariScanJSTests.swift; sourceTree = "<group>"; };
@@ -344,6 +346,7 @@
 				61FAA5822FAF22A0001C28CE /* SignInView.swift */,
 				00EE85F19AD747589FB21EB0 /* UploadPillView.swift */,
 				170EF2F9EA31030386E584A7 /* AddSaleSheet.swift */,
+				9F42B5F211D314136D6C1E34 /* DeleteAccountView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -611,6 +614,7 @@
 				D09C14F1968D71BC4CF4F0E6 /* PendingMercariSaleRepository.swift in Sources */,
 				147096BF7F09296C73526449 /* PendingMercariSale.swift in Sources */,
 				D2FF825E4990E0C83AE448A4 /* MercariScanJS.swift in Sources */,
+				AF1271838F6624E84D677BBB /* DeleteAccountView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

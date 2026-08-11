@@ -2288,6 +2288,7 @@ struct SettingsSheet: View {
     @AppStorage("saveToCameraRoll") private var saveToCameraRoll: Bool = true
     @AppStorage("showCameraGrid") private var showCameraGrid: Bool = false
     @State private var showSignOutConfirm = false
+    @State private var showDeleteAccount = false
     @StateObject private var integrationRepo = IntegrationRepository.shared
     @State private var showLinkAlert = false
     @State private var selectedPlatformToLink = ""
@@ -2538,6 +2539,15 @@ struct SettingsSheet: View {
                 
                 Section(header: Text("Account")) {
                     Button(role: .destructive) {
+                        showDeleteAccount = true
+                    } label: {
+                        HStack {
+                            Text("Delete Account")
+                                .foregroundColor(.red)
+                            Spacer()
+                        }
+                    }
+                    Button(role: .destructive) {
                         showSignOutConfirm = true
                     } label: {
                         HStack {
@@ -2582,6 +2592,10 @@ struct SettingsSheet: View {
                     dismiss()
                 }
                 Button("Cancel", role: .cancel) {}
+            }
+            .sheet(isPresented: $showDeleteAccount) {
+                DeleteAccountView()
+                    .environmentObject(authManager)
             }
             .alert(settingsAlertTitle, isPresented: $showSettingsAlert) {
                 Button("OK", role: .cancel) {}

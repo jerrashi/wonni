@@ -209,7 +209,12 @@ struct UserListing: Identifiable, Codable {
     var updatedAt: Timestamp?
     var publishedAt: Timestamp?
     var soldAt: Timestamp?
-    
+
+    // Denormalized from users/{userId}.deletionPending — set/cleared in a batch by
+    // requestAccountDeletion/cancelAccountDeletion (#62) so listing reads (feed/search,
+    // firestore.rules) don't need a per-doc get() join to check the seller's account.
+    var sellerDeletionPending: Bool?
+
     // ── Engagement ────────────────────────────────────────────────────────────
     var likesCount: Int?
 
