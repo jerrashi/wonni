@@ -22,6 +22,27 @@ const EBAY_SCOPES = [
   "https://api.ebay.com/oauth/api_scope/sell.inventory",
   "https://api.ebay.com/oauth/api_scope/sell.account",
 ].join(" ");
+const ETSY_CLIENT_ID = import.meta.env.VITE_ETSY_CLIENT_ID ?? "REPLACE_ME";
+
+// PKCE helpers for Etsy OAuth
+async function generateCodeChallenge(verifier) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(verifier);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return btoa(String.fromCharCode(...new Uint8Array(hash)))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=/g, "");
+}
+
+function generateCodeVerifier() {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+  let verifier = "";
+  for (let i = 0; i < 128; i++) {
+    verifier += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return verifier;
+}
 
 function ConnectRow({ label, description, connected, username, onConnect, onDisconnect }) {
   return (
@@ -75,7 +96,7 @@ export default function Settings() {
   useEffect(() => {
     const uid = auth.currentUser?.uid;
     if (!uid) return;
-    const platforms = ["aliexpress", "tiktok", "ebay"];
+    const platforms = ["aliexpress", "tiktok", "ebay", "etsy"];
     const unsubs = platforms.map((p) =>
       onSnapshot(doc(db, "users", uid, "integrations", p), (snap) => {
         setIntegrations((prev) => ({ ...prev, [p]: snap.data() }));
@@ -113,8 +134,28 @@ export default function Settings() {
         state,
       }),
     };
-    const url = urls[platform];
 
+    // Handle Etsy separately due to PKCE requirement
+    if (platform === "etsy") {
+      const codeVerifier = generateCodeVerifier();
+      const codeChallenge = await generateCodeChallenge(codeVerifier);
+      sessionStorage.setItem(`etsy_verifier_${state}`, codeVerifier);
+
+      const etsyUrl = "https://www.etsy.com/oauth/connect?" + new URLSearchParams({
+        response_type: "code",
+        client_id: ETSY_CLIENT_ID,
+        redirect_uri: "https://wonni-app.web.app/web/oauth/etsy",
+        scope: "listings_w listings_r shops_r",
+        state,
+        code_challenge: codeChallenge,
+        code_challenge_method: "S256",
+      });
+
+      window.open(etsyUrl, "_blank", "width=600,height=700");
+      return;
+    }
+
+    const url = urls[platform];
     window.open(url, "_blank", "width=600,height=700");
   }
 
@@ -176,6 +217,14 @@ export default function Settings() {
             username={integrations.ebay?.connectedUsername}
             onConnect={() => openOAuth("ebay")}
             onDisconnect={() => disconnect("ebay")}
+          />
+          <ConnectRow
+            label="Etsy"
+            description="Connect to cross-post to your Etsy shop"
+            connected={integrations.etsy?.isConnected}
+            username={integrations.etsy?.connectedUsername}
+            onConnect={() => openOAuth("etsy")}
+            onDisconnect={() => disconnect("etsy")}
           />
         </div>
       </div>
