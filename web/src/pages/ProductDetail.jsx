@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, Component } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, Component, Fragment } from "react";
 import { deleteField, doc, deleteDoc, onSnapshot, serverTimestamp, updateDoc } from "firebase/firestore";
 import { useBlocker, useNavigate, useParams } from "react-router-dom";
 import { auth, db, callFunction, uploadImageBlob } from "../firebase";
 import Layout from "../components/Layout";
 import UnsavedChangesModal from "../components/UnsavedChangesModal";
 import { useDebouncedCallback } from "../hooks/useDebouncedCallback";
+import { normalizeImageAssets, buildImagePayload } from "../lib/media";
+import { useMediaJobQueue } from "../lib/mediaJobQueue";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -21,6 +23,40 @@ function money(value) {
   return `$${num.toFixed(2)}`;
 }
 
+// Text input (not type="number") so the browser's native spin buttons and
+// scroll-to-change-value behavior don't silently alter a price while the
+// user is scrolling the page. `value`/`onChangeText` carry the raw string
+// while typing (so a trailing "." or partial decimal isn't stripped on every
+// keystroke); `onCommit` receives that raw string on blur to parse and save.
+function DollarInput({ value, onChangeText, onCommit, disabled, placeholder = "(not set)", style }) {
+  return (
+    <div style={{ position: "relative", ...style }}>
+      <span
+        style={{
+          position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)",
+          color: "var(--muted)", fontSize: 14, pointerEvents: "none",
+        }}
+      >
+        $
+      </span>
+      <input
+        className="input"
+        type="text"
+        inputMode="decimal"
+        placeholder={placeholder}
+        style={{ paddingLeft: 22 }}
+        value={value}
+        onChange={(e) => {
+          const raw = e.target.value;
+          if (raw === "" || /^\d*\.?\d*$/.test(raw)) onChangeText(raw);
+        }}
+        onBlur={() => onCommit(value)}
+        disabled={disabled}
+      />
+    </div>
+  );
+}
+
 function formatDate(value) {
   if (!value?.toDate) return "Just now";
   return new Intl.DateTimeFormat("en", {
@@ -34,33 +70,6 @@ function badgeLabel(source) {
   if (source === "aliexpress") return "AliExpress";
   if (source === "photo_upload" || source === "photo_upload_split" || source === "manual" || source === "image") return "Photo Upload";
   return source ? source.charAt(0).toUpperCase() + source.slice(1) : "Photo Upload";
-}
-
-export function normalizeImageAssets(product) {
-  if (!product) return [];
-  if (Array.isArray(product.imageAssets) && product.imageAssets.length) {
-    return product.imageAssets
-      .filter(Boolean)
-      .map((image, index) => {
-        const url = typeof image === "string" ? image : image?.url ?? "";
-        return {
-          id: (typeof image === "object" && image?.id) ? image.id : `${url || "img"}-${index}`,
-          url: url || "",
-          sourceUrl: (typeof image === "object" && image?.sourceUrl) ? image.sourceUrl : url || "",
-          width: typeof image === "object" ? image?.width ?? null : null,
-          height: typeof image === "object" ? image?.height ?? null : null,
-          kind: typeof image === "object" ? image?.kind ?? "catalog" : "catalog",
-          variantTags: (typeof image === "object" && Array.isArray(image?.variantTags)) ? image.variantTags : [],
-        };
-      })
-      .filter((img) => img.url);
-  }
-  return (product.images ?? [])
-    .filter((url) => typeof url === "string" && url)
-    .map((url, index) => ({
-      id: `${url}-${index}`, url, sourceUrl: url, width: null, height: null, kind: "catalog",
-      variantTags: [],
-    }));
 }
 
 function moveItem(list, from, to) {
@@ -92,6 +101,17 @@ export function normalizeVariants(product) {
         sourceVariantId: v.sourceVariantId ?? null,
         active: v.active !== false,
         needsReview: Boolean(v.needsReview),
+        // Per-variant Mercari listing state — pass through as-is (not editable
+        // via the variants table itself) so re-normalizing on every snapshot
+        // update, or a variants-table Save, never drops/clobbers it.
+        mercariStatus: v.mercariStatus ?? null,
+        mercariListingId: v.mercariListingId ?? null,
+        mercariUrl: v.mercariUrl ?? null,
+        mercariError: v.mercariError ?? null,
+        mercariSyncedTitle: v.mercariSyncedTitle ?? null,
+        mercariSyncedPrice: typeof v.mercariSyncedPrice === "number" ? v.mercariSyncedPrice : null,
+        mercariSyncedImages: Array.isArray(v.mercariSyncedImages) ? v.mercariSyncedImages : null,
+        mercariPhotoRemovedUrls: Array.isArray(v.mercariPhotoRemovedUrls) ? v.mercariPhotoRemovedUrls : [],
       }))
     : [];
 }
@@ -275,6 +295,58 @@ export function variantPhotos(variant, imageAssets) {
       img.variantTags?.length > 0 &&
       img.variantTags.every((tag) => variant.optionValues[tag.optionName] === tag.value)
   );
+}
+
+// ── Mercari per-variant listing template ────────────────────────────────────
+// Mercari has no variant concept — each active variant becomes its own,
+// independently posted listing. The "master template" (mercariTitleTokens /
+// mercariPhotoTemplate, stored once on the product) describes how to build
+// each variant's title and photo carousel; resolving it per variant is what
+// actually gets sent to the extension.
+
+// Defaults when a product hasn't set up a template yet — one title token per
+// option dimension (in their existing order) followed by the base title, and
+// every shared photo in its current order with one variation-photo slot
+// appended at the end. Lets the feature work immediately without forcing the
+// user through setup first; dragging/deleting in the UI is what persists a
+// real choice to Firestore.
+export function defaultMercariTitleTokens(options) {
+  return [...options.map((opt) => ({ type: "option", optionName: opt.name })), { type: "baseTitle" }];
+}
+
+export function defaultMercariPhotoTemplate(imageAssets) {
+  return [...sharedPhotos(imageAssets).map((a) => ({ type: "shared", url: a.url })), { type: "variationSlot" }];
+}
+
+// Free text lives in `gaps` — one slot before/between/after each draggable
+// chip (tokens.length + 1 of them) — kept separate from the chip order so
+// only option/baseTitle chips are draggable, matching the plain "type
+// directly into the row" UX. Always re-padded/truncated to the current chip
+// count so a stale gaps array (from before a chip was added/removed) can't
+// desync — the extra slot just reads as "".
+export function normalizeMercariTitleGaps(gaps, tokensLength) {
+  const g = Array.isArray(gaps) ? [...gaps] : [];
+  while (g.length < tokensLength + 1) g.push("");
+  return g.slice(0, tokensLength + 1);
+}
+
+export function resolveMercariTitle(tokens, gaps, product, variant) {
+  const normalizedGaps = normalizeMercariTitleGaps(gaps, tokens.length);
+  const parts = [];
+  tokens.forEach((t, i) => {
+    if (normalizedGaps[i]) parts.push(normalizedGaps[i]);
+    const chipValue = t.type === "baseTitle" ? product.title : variant.optionValues?.[t.optionName];
+    if (chipValue) parts.push(chipValue);
+  });
+  if (normalizedGaps[tokens.length]) parts.push(normalizedGaps[tokens.length]);
+  return parts.join(" ").slice(0, 80); // Mercari's title cap, matching eBay's existing 80-char truncation
+}
+
+export function resolveMercariPhotos(photoTemplate, variant, imageAssets) {
+  const own = variantPhotos(variant, imageAssets).map((a) => a.url);
+  const resolved = photoTemplate.flatMap((entry) => (entry.type === "variationSlot" ? own : [entry.url]));
+  const removed = new Set(variant.mercariPhotoRemovedUrls ?? []);
+  return resolved.filter((url) => !removed.has(url));
 }
 
 // Shared drag/resize-box mechanics used by CropEditor and IdentifyEditor.
@@ -2069,6 +2141,327 @@ function SelectPhotoModal({ images, optionName, value, onClose, onSave }) {
   );
 }
 
+// ─── Mercari per-variant listing template ──────────────────────────────────
+// Master template for how each active variant's Mercari listing gets built:
+// a reorderable/deletable set of title tokens (one per option dimension, plus
+// the base title) and a reorderable/deletable photo carousel with one
+// "Variation Photos" slot marking where each variant's own photos land.
+// Drag mechanics mirror ImageStrip's existing pattern (dragIndex/dropTarget +
+// moveItem) rather than a new library.
+
+function MercariVariantTemplate({
+  product, options, images, tokens, gaps, photoTemplate, previewVariant,
+  onTokensChange, onGapsChange, onPhotoTemplateChange, onSettingsChange,
+}) {
+  const [dragTokenIndex, setDragTokenIndex] = useState(null);
+  const [tokenDropTarget, setTokenDropTarget] = useState(null);
+  const [dragTileIndex, setDragTileIndex] = useState(null);
+  const [tileDropTarget, setTileDropTarget] = useState(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+
+  const normalizedGaps = normalizeMercariTitleGaps(gaps, tokens.length);
+
+  function tokenLabel(token) {
+    return token.type === "baseTitle" ? "Base Title" : token.optionName;
+  }
+
+  function moveToken(from, to) {
+    if (from === to) return;
+    onTokensChange(moveItem(tokens, from, to));
+  }
+
+  function removeToken(index) {
+    onTokensChange(tokens.filter((_, i) => i !== index));
+    // Drop the gap that sat right after the removed chip — the one before it
+    // (often the more deliberately-placed piece of text) stays put.
+    onGapsChange(normalizedGaps.filter((_, i) => i !== index + 1));
+  }
+
+  function setGap(index, value) {
+    const next = [...normalizedGaps];
+    next[index] = value;
+    onGapsChange(next);
+  }
+
+  const unusedOptionNames = options
+    .map((o) => o.name)
+    .filter((name) => !tokens.some((t) => t.type === "option" && t.optionName === name));
+
+  function addToken(optionName) {
+    const baseIdx = tokens.findIndex((t) => t.type === "baseTitle");
+    const nextTokens = [...tokens];
+    const insertAt = baseIdx === -1 ? nextTokens.length : baseIdx;
+    nextTokens.splice(insertAt, 0, { type: "option", optionName });
+    // A new gap slot opens up at the same position for the new chip.
+    const nextGaps = [...normalizedGaps];
+    nextGaps.splice(insertAt, 0, "");
+    onTokensChange(nextTokens);
+    onGapsChange(nextGaps);
+  }
+
+  function moveTile(from, to) {
+    if (from === to) return;
+    onPhotoTemplateChange(moveItem(photoTemplate, from, to));
+  }
+
+  function removeTile(index) {
+    onPhotoTemplateChange(photoTemplate.filter((_, i) => i !== index));
+  }
+
+  const preview = previewVariant
+    ? resolveMercariTitle(tokens, normalizedGaps, product, previewVariant)
+    : null;
+
+  // A tiny auto-sizing text input that sits inline between/around the chips —
+  // sized to its own content so typed text reads as part of the row, not a
+  // separate boxed field.
+  function GapInput({ index }) {
+    const value = normalizedGaps[index] ?? "";
+    return (
+      <input
+        value={value}
+        onChange={(e) => setGap(index, e.target.value)}
+        placeholder="type text…"
+        style={{
+          border: "none", outline: "none", background: "transparent", fontSize: 12,
+          color: "var(--text)", width: `${Math.max(8, value.length + 1)}ch`, padding: "5px 2px",
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="card detail-section" style={{ marginBottom: 16 }}>
+      <h2 style={{ fontSize: 14, marginBottom: 4 }}>List on Mercari — per-variant template</h2>
+      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>
+        Drag the chips to reorder, click ✕ to remove. Type directly before,
+        between, or after them to add your own text. Each active variant gets
+        its own Mercari listing built from this template.
+      </div>
+
+      <div style={{ marginBottom: 14 }}>
+        <label style={{ fontSize: 12, fontWeight: 600 }}>Listing Titles</label>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4, marginTop: 6 }}>
+          <GapInput index={0} />
+          {tokens.map((token, index) => {
+            const isOption = token.type === "option";
+            return (
+              <Fragment key={`${token.type}-${token.optionName ?? "base"}`}>
+                <div
+                  draggable
+                  onDragStart={(e) => { setDragTokenIndex(index); e.dataTransfer.effectAllowed = "move"; }}
+                  onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (index !== dragTokenIndex) setTokenDropTarget(index); }}
+                  onDrop={(e) => { e.preventDefault(); if (dragTokenIndex !== null && dragTokenIndex !== index) moveToken(dragTokenIndex, index); setDragTokenIndex(null); setTokenDropTarget(null); }}
+                  onDragEnd={() => { setDragTokenIndex(null); setTokenDropTarget(null); }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 999,
+                    fontSize: 12, cursor: "grab", userSelect: "none",
+                    background: isOption ? "#ff6b35" : "var(--surface-hover)",
+                    color: isOption ? "#fff" : "var(--text)",
+                    border: index === tokenDropTarget ? "2px dashed var(--primary)" : "1px solid transparent",
+                    opacity: index === dragTokenIndex ? 0.5 : 1,
+                  }}
+                >
+                  <span title="Drag to reorder">⠿</span>
+                  <span>{tokenLabel(token)}</span>
+                  {isOption && (
+                    <button
+                      onClick={() => removeToken(index)}
+                      style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", padding: 0, fontWeight: 700 }}
+                      title="Remove from title"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+                <GapInput index={index + 1} />
+              </Fragment>
+            );
+          })}
+          {unusedOptionNames.map((name) => (
+            <button
+              key={name}
+              className="btn btn-ghost"
+              style={{ fontSize: 11, padding: "4px 8px", borderRadius: 999 }}
+              onClick={() => addToken(name)}
+            >
+              + {name}
+            </button>
+          ))}
+        </div>
+        {preview && (
+          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>Preview: {preview}</div>
+        )}
+      </div>
+
+      <div style={{ marginBottom: 8 }}>
+        <label style={{ fontSize: 12, fontWeight: 600 }}>Listing Photos</label>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+          {photoTemplate.map((entry, index) => {
+            const isSlot = entry.type === "variationSlot";
+            return (
+              <div
+                key={isSlot ? "variation-slot" : entry.url}
+                draggable
+                onDragStart={(e) => { setDragTileIndex(index); e.dataTransfer.effectAllowed = "move"; }}
+                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (index !== dragTileIndex) setTileDropTarget(index); }}
+                onDrop={(e) => { e.preventDefault(); if (dragTileIndex !== null && dragTileIndex !== index) moveTile(dragTileIndex, index); setDragTileIndex(null); setTileDropTarget(null); }}
+                onDragEnd={() => { setDragTileIndex(null); setTileDropTarget(null); }}
+                style={{
+                  position: "relative", width: 72, height: 72, borderRadius: 8, cursor: "grab",
+                  display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center",
+                  background: isSlot ? "#22c55e" : "#ff6b35", color: "#fff", fontSize: 11, fontWeight: 600,
+                  border: index === tileDropTarget ? "2px dashed var(--primary)" : "2px solid transparent",
+                  opacity: index === dragTileIndex ? 0.5 : 1, overflow: "hidden",
+                }}
+              >
+                {isSlot ? (
+                  <span>Variation<br />Photos</span>
+                ) : (
+                  <img src={entry.url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                )}
+                {!isSlot && (
+                  <button
+                    onClick={() => removeTile(index)}
+                    style={{ position: "absolute", top: 2, right: 2, background: "rgba(0,0,0,0.6)", color: "#fff", border: "none", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", fontSize: 11, lineHeight: 1 }}
+                    title="Remove from template"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => setMoreOpen((v) => !v)}>
+        More Options {moreOpen ? "▲" : "▼"}
+      </button>
+      {moreOpen && (
+        <div style={{ display: "flex", gap: 16, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
+          <div className="modal-field" style={{ maxWidth: 200 }}>
+            <label style={{ fontSize: 11 }}>Item Condition</label>
+            <select
+              className="input"
+              value={product.mercariCondition ?? "good"}
+              onChange={(e) => onSettingsChange({ mercariCondition: e.target.value })}
+            >
+              <option value="new">New (Unopened / Brand New)</option>
+              <option value="likenew">Like New (Mint / Unused)</option>
+              <option value="good">Good (Minor wear)</option>
+              <option value="fair">Fair (Visible wear)</option>
+              <option value="poor">Poor (For parts / Heavy wear)</option>
+            </select>
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={product.mercariBuyerPaysShipping ?? true}
+              onChange={(e) => onSettingsChange({ mercariBuyerPaysShipping: e.target.checked })}
+            />
+            Buyer pays shipping
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={product.mercariShipOnOwn ?? false}
+              onChange={(e) => onSettingsChange({ mercariShipOnOwn: e.target.checked })}
+            />
+            Ship on your own (SOYO)
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One variant's linked-Mercari-listing tile — thumbnail + label + status +
+// actions. Replaces a plain "Post to Mercari" button with something that
+// actually shows what's linked, once it exists. Expandable to see/edit the
+// resolved photo carousel. Kept as its own component since `expanded` is
+// local state that shouldn't reset when a sibling tile re-renders.
+function VariantMercariTile({
+  variant, label, product, mercariTitleTokens, mercariTitleGaps, mercariPhotoTemplate, images,
+  onPost, onSync, onDelete, onRemovePhoto,
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const status = variant.mercariStatus ?? "draft";
+  const title = resolveMercariTitle(mercariTitleTokens, mercariTitleGaps, product, variant);
+  const photoUrls = resolveMercariPhotos(mercariPhotoTemplate, variant, images);
+  const thumbnail = photoUrls[0];
+
+  return (
+    <div style={{ width: 150, border: "1px solid var(--border)", borderRadius: 8, padding: 8, fontSize: 12 }}>
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        style={{ display: "block", width: "100%", height: 90, border: "none", padding: 0, borderRadius: 6, overflow: "hidden", background: "var(--surface-hover)", cursor: "pointer" }}
+        title="Click to view/edit photos"
+      >
+        {thumbnail ? (
+          <img src={thumbnail} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        ) : (
+          <span style={{ color: "var(--muted)" }}>No photo</span>
+        )}
+      </button>
+      <div style={{ marginTop: 6, fontWeight: 600 }}>{label}</div>
+      <div style={{ color: "var(--muted)", fontSize: 11, marginBottom: 6 }}>{title}</div>
+
+      {status === "active" ? (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+          <a href={variant.mercariUrl || "#"} target="_blank" rel="noreferrer" style={{ color: "#22c55e", fontSize: 11 }}>
+            ✓ Live
+          </a>
+          <button className="btn btn-ghost" style={{ fontSize: 10, padding: "1px 6px" }} onClick={() => onSync(variant)}>
+            🔄 Sync
+          </button>
+          <a
+            href={`https://www.mercari.com/sell/edit/${variant.mercariListingId}/`}
+            target="_blank" rel="noreferrer"
+            className="btn btn-ghost" style={{ fontSize: 10, padding: "1px 6px" }}
+          >
+            ✏️ Edit
+          </a>
+          <button className="btn btn-ghost" style={{ fontSize: 10, padding: "1px 6px" }} onClick={() => onDelete(variant)}>
+            🗑 Delete
+          </button>
+        </div>
+      ) : status === "posting" || status === "updating" ? (
+        <span style={{ color: "var(--muted)" }}>{status === "posting" ? "⏳ Posting…" : "⏳ Syncing…"}</span>
+      ) : (
+        <>
+          <button className="btn btn-primary" style={{ fontSize: 11, padding: "3px 8px", width: "100%" }} onClick={() => onPost(variant)}>
+            Post to Mercari
+          </button>
+          {status === "failed" && variant.mercariError && (
+            <div style={{ color: "var(--danger)", fontSize: 10, marginTop: 4 }}>{variant.mercariError}</div>
+          )}
+        </>
+      )}
+
+      {expanded && (
+        <div style={{ marginTop: 8, borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {photoUrls.map((url) => (
+              <div key={url} style={{ position: "relative", width: 40, height: 40 }}>
+                <img src={url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 4 }} />
+                <button
+                  onClick={() => onRemovePhoto(variant, url)}
+                  style={{ position: "absolute", top: 1, right: 1, background: "rgba(0,0,0,0.6)", color: "#fff", border: "none", borderRadius: "50%", width: 14, height: 14, cursor: "pointer", fontSize: 9, lineHeight: 1 }}
+                  title="Remove from this variant's Mercari listing"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            {photoUrls.length === 0 && <span style={{ color: "var(--muted)" }}>No photos resolved.</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function VariantsEditor({
   options,
   variants,
@@ -2535,19 +2928,61 @@ export function ActionToast({ message, actions, onDismiss, autoDismissMs = 6000 
 
 // ─── Mercari Cross-Post Modal ──────────────────────────────────────────────────
 
-function MercariModal({ product, weightLbs, weightOz, lengthIn, widthIn, heightIn, onClose, onLaunched }) {
+function MercariModal({
+  product, weightLbs, weightOz, lengthIn, widthIn, heightIn, hasPendingMediaJobs, onClose, onLaunched,
+  options, images, variants, mercariTitleTokens, mercariTitleGaps, mercariPhotoTemplate,
+  onTokensChange, onGapsChange, onPhotoTemplateChange, onSettingsChange,
+  onPostVariant, onSyncVariant, onDeleteVariant, onPostAllRemaining, postingAllVariants, onRemoveVariantPhoto,
+}) {
+  // With only one variant actually sellable right now, the whole multi-
+  // listing template/tile UI is overkill — post it through the plain
+  // single-item flow instead, just scoped to that one variant.
+  const inStockVariants = product.hasVariants ? variants.filter((v) => v.active && (v.quantity ?? 0) > 0) : [];
+  const singleVariant = inStockVariants.length === 1 ? inStockVariants[0] : null;
+  const showVariantFlow = product.hasVariants && inStockVariants.length > 1;
+
   const [price, setPrice] = useState(
-    ((product.suggestedSellPrice ?? product.aliexpressPrice * 2.2) || 15).toFixed(2)
+    singleVariant
+      // listingPrice (the deliberate resale price) wins — a variant's own
+      // `price` is the scraped source price at import time, not a real
+      // per-variant override.
+      ? String((typeof product.listingPrice === "number" ? product.listingPrice : singleVariant.price) ?? 15)
+      : (product.listingPrice ?? product.suggestedSellPrice ?? product.aliexpressPrice * 2.2 ?? 15).toFixed(2)
   );
-  const [condition, setCondition] = useState(product.condition ?? "good");
-  const [buyerPaysShipping, setBuyerPaysShipping] = useState(false);
-  const [shipOnOwn, setShipOnOwn] = useState(false);
+  const [condition, setCondition] = useState(product.mercariCondition ?? product.condition ?? "good");
+  const [buyerPaysShipping, setBuyerPaysShipping] = useState(product.mercariBuyerPaysShipping ?? true);
+  const [shipOnOwn, setShipOnOwn] = useState(product.mercariShipOnOwn ?? false);
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState("");
 
   async function handleLaunch() {
+    if (hasPendingMediaJobs) {
+      setError("A photo change is still saving — wait for it to finish before cross-posting.");
+      return;
+    }
     setPosting(true);
     setError("");
+
+    // Single in-stock variant: post it through the same variant-aware path
+    // the multi-listing flow uses (so status/sync tracking stays consistent
+    // if more variants come into stock later), just driven by this simpler form.
+    if (singleVariant) {
+      try {
+        onSettingsChange({
+          mercariCondition: condition,
+          mercariBuyerPaysShipping: buyerPaysShipping,
+          mercariShipOnOwn: shipOnOwn,
+        });
+        await onPostVariant(singleVariant, { priceOverride: parseFloat(price) || undefined });
+        onLaunched?.();
+        onClose();
+      } catch (e) {
+        setError(e.message ?? "Cross-post launch failed.");
+      } finally {
+        setPosting(false);
+      }
+      return;
+    }
 
     const payload = {
       productId: product.id,
@@ -2573,7 +3008,7 @@ function MercariModal({ product, weightLbs, weightOz, lengthIn, widthIn, heightI
       });
 
       let sentToExtension = false;
-      const extensionId = import.meta.env.VITE_CHROME_EXTENSION_ID;
+      const extensionId = import.meta.env.VITE_EXTENSION_ID;
 
       if (window.chrome && chrome.runtime && chrome.runtime.sendMessage) {
         try {
@@ -2614,6 +3049,64 @@ function MercariModal({ product, weightLbs, weightOz, lengthIn, widthIn, heightI
     } finally {
       setPosting(false);
     }
+  }
+
+  if (showVariantFlow) {
+    const activeVariants = variants.filter((v) => v.active);
+    return (
+      <div className="modal-overlay" onClick={onClose}>
+        <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 720 }}>
+          <div className="modal-header">
+            <h2>Mercari Listings</h2>
+            <button className="btn btn-ghost" style={{ padding: "4px 8px" }} onClick={onClose}>✕</button>
+          </div>
+          <div className="modal-body">
+            {mercariTitleTokens && mercariPhotoTemplate && (
+              <MercariVariantTemplate
+                product={product}
+                options={options}
+                images={images}
+                tokens={mercariTitleTokens}
+                gaps={mercariTitleGaps}
+                photoTemplate={mercariPhotoTemplate}
+                previewVariant={activeVariants[0] ?? null}
+                onTokensChange={onTokensChange}
+                onGapsChange={onGapsChange}
+                onPhotoTemplateChange={onPhotoTemplateChange}
+                onSettingsChange={onSettingsChange}
+              />
+            )}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "12px 0 8px" }}>
+              <h3 style={{ fontSize: 13, margin: 0 }}>Variant Listings</h3>
+              <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={onPostAllRemaining} disabled={postingAllVariants}>
+                {postingAllVariants ? "⏳ Posting…" : "Post all remaining"}
+              </button>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+              {mercariTitleTokens && mercariPhotoTemplate && activeVariants.map((v) => (
+                <VariantMercariTile
+                  key={v.id}
+                  variant={v}
+                  label={Object.values(v.optionValues).join(" / ") || v.sku || "Variant"}
+                  product={product}
+                  mercariTitleTokens={mercariTitleTokens}
+                  mercariTitleGaps={mercariTitleGaps}
+                  mercariPhotoTemplate={mercariPhotoTemplate}
+                  images={images}
+                  onPost={onPostVariant}
+                  onSync={onSyncVariant}
+                  onDelete={onDeleteVariant}
+                  onRemovePhoto={onRemoveVariantPhoto}
+                />
+              ))}
+            </div>
+          </div>
+          <div className="modal-footer">
+            <button className="btn btn-ghost" onClick={onClose}>Close</button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -2668,7 +3161,7 @@ function MercariModal({ product, weightLbs, weightOz, lengthIn, widthIn, heightI
                 checked={buyerPaysShipping}
                 onChange={(e) => setBuyerPaysShipping(e.target.checked)}
               />
-              Buyer pays shipping (Default: Seller pays / Free shipping)
+              Buyer pays shipping (Default)
             </label>
             <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
               <input
@@ -2685,8 +3178,8 @@ function MercariModal({ product, weightLbs, weightOz, lengthIn, widthIn, heightI
 
         <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={handleLaunch} disabled={posting}>
-            {posting ? "Launching…" : "🚀 Launch Mercari Cross-Post"}
+          <button className="btn btn-primary" onClick={handleLaunch} disabled={posting || hasPendingMediaJobs}>
+            {posting ? "Launching…" : hasPendingMediaJobs ? "Waiting for photo save…" : "🚀 Launch Mercari Cross-Post"}
           </button>
         </div>
       </div>
@@ -2704,6 +3197,8 @@ function ProductDetail() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [listingPrice, setListingPrice] = useState(null);
+  const [sourcePrice, setSourcePrice] = useState(null);
+  const [sourcePriceInput, setSourcePriceInput] = useState("");
   const [weightLbs, setWeightLbs] = useState("0");
   const [weightOz, setWeightOz] = useState("6");
   const [lengthIn, setLengthIn] = useState("");
@@ -2725,6 +3220,18 @@ function ProductDetail() {
   const pendingMediaSavesRef = useRef(0);
   const [options, setOptions] = useState([]);
   const [variants, setVariants] = useState([]);
+  // Mirrors `variants` for use inside the sequential Mercari-posting loop,
+  // whose closures need to see live updates without re-subscribing.
+  const variantsRef = useRef(variants);
+  useEffect(() => { variantsRef.current = variants; }, [variants]);
+  const [postingAllVariants, setPostingAllVariants] = useState(false);
+  // Mercari per-variant listing template — null until hydrated from the
+  // product doc (or defaulted from options/images on first load), see
+  // defaultMercariTitleTokens/defaultMercariPhotoTemplate.
+  const [mercariTitleTokens, setMercariTitleTokens] = useState(null);
+  const [mercariTitleGaps, setMercariTitleGaps] = useState(null);
+  const [mercariPhotoTemplate, setMercariPhotoTemplate] = useState(null);
+  const [mercariMoreOptionsOpen, setMercariMoreOptionsOpen] = useState(false);
   const [savingVariants, setSavingVariants] = useState(false);
   const [variantsError, setVariantsError] = useState("");
   const [legacyMigrationPending, setLegacyMigrationPending] = useState(false);
@@ -2732,10 +3239,13 @@ function ProductDetail() {
   // primary option or a sub-variation), or null.
   const [photoPickerValue, setPhotoPickerValue] = useState(null);
   const [showMercariModal, setShowMercariModal] = useState(false);
+  const [syncingMercari, setSyncingMercari] = useState(false);
+  const [mercariSyncMessage, setMercariSyncMessage] = useState("");
   const [toast, setToast] = useState(null); // { message, actions } | null
   const [aiDescLoading, setAiDescLoading] = useState(false);
   const [aiDescSuggestion, setAiDescSuggestion] = useState(null); // string | null
   const [aiDescError, setAiDescError] = useState("");
+  const { jobs: mediaJobs, enqueue: enqueueMediaJob } = useMediaJobQueue();
 
   // ── Unsaved-changes staging ──────────────────────────────────────────────
   // { fields: {...changed}, updatedAt } | null — mirrors the doc's own
@@ -2802,19 +3312,44 @@ function ProductDetail() {
         setDescription(effectiveFields.description ?? next.description ?? "");
         const effListingPrice = "listingPrice" in effectiveFields ? effectiveFields.listingPrice : next.listingPrice;
         setListingPrice(typeof effListingPrice === "number" ? effListingPrice : null);
-        setWeightLbs(String(effectiveFields.weightLbs ?? next.weightLbs ?? 0));
-        setWeightOz(String(effectiveFields.weightOz ?? next.weightOz ?? 6));
+        {
+          const effSourcePrice = "sourcePrice" in effectiveFields
+            ? effectiveFields.sourcePrice
+            : (typeof next.sourcePrice === "number" ? next.sourcePrice : next.aliexpressPrice);
+          const sp = typeof effSourcePrice === "number" ? effSourcePrice : null;
+          setSourcePrice(sp);
+          setSourcePriceInput(sp != null ? String(sp) : "");
+        }
+        // Prefill from Gemini's import-time suggestion only until the user actually
+        // saves a weight/dimension of their own (saveShippingInfo persists all five
+        // fields together, so "unset" here means "never saved").
+        if (!("weightLbs" in effectiveFields) && next.weightLbs == null && next.weightOz == null
+          && typeof next.geminiWeightOz === "number") {
+          setWeightLbs(String(Math.floor(next.geminiWeightOz / 16)));
+          setWeightOz(String(next.geminiWeightOz % 16));
+        } else {
+          setWeightLbs(String(effectiveFields.weightLbs ?? next.weightLbs ?? 0));
+          setWeightOz(String(effectiveFields.weightOz ?? next.weightOz ?? 6));
+        }
         const effLengthIn = "lengthIn" in effectiveFields ? effectiveFields.lengthIn : next.lengthIn;
         const effWidthIn = "widthIn" in effectiveFields ? effectiveFields.widthIn : next.widthIn;
         const effHeightIn = "heightIn" in effectiveFields ? effectiveFields.heightIn : next.heightIn;
-        setLengthIn(effLengthIn ? String(effLengthIn) : "");
-        setWidthIn(effWidthIn ? String(effWidthIn) : "");
-        setHeightIn(effHeightIn ? String(effHeightIn) : "");
+        if (effLengthIn == null && effWidthIn == null && effHeightIn == null
+          && typeof next.geminiLengthIn === "number") {
+          setLengthIn(String(next.geminiLengthIn));
+          setWidthIn(String(next.geminiWidthIn));
+          setHeightIn(String(next.geminiHeightIn));
+        } else {
+          setLengthIn(effLengthIn ? String(effLengthIn) : "");
+          setWidthIn(effWidthIn ? String(effWidthIn) : "");
+          setHeightIn(effHeightIn ? String(effHeightIn) : "");
+        }
 
         const mergedForImages = { ...next };
         if ("images" in effectiveFields) mergedForImages.images = effectiveFields.images;
         if ("imageAssets" in effectiveFields) mergedForImages.imageAssets = effectiveFields.imageAssets;
-        setImages(normalizeImageAssets(mergedForImages));
+        const nextImages = normalizeImageAssets(mergedForImages);
+        setImages(nextImages);
 
         const mergedForVariants = { ...next };
         if ("options" in effectiveFields) mergedForVariants.options = effectiveFields.options;
@@ -2825,6 +3360,27 @@ function ProductDetail() {
         setOptions(derived.options);
         setVariants(derived.variants);
         setLegacyMigrationPending(derived.isLegacy);
+
+        const effMercariTitleTokens = "mercariTitleTokens" in effectiveFields
+          ? effectiveFields.mercariTitleTokens
+          : next.mercariTitleTokens;
+        setMercariTitleTokens(
+          Array.isArray(effMercariTitleTokens) && effMercariTitleTokens.length
+            ? effMercariTitleTokens
+            : defaultMercariTitleTokens(derived.options)
+        );
+        const effMercariTitleGaps = "mercariTitleGaps" in effectiveFields
+          ? effectiveFields.mercariTitleGaps
+          : next.mercariTitleGaps;
+        setMercariTitleGaps(Array.isArray(effMercariTitleGaps) ? effMercariTitleGaps : []);
+        const effMercariPhotoTemplate = "mercariPhotoTemplate" in effectiveFields
+          ? effectiveFields.mercariPhotoTemplate
+          : next.mercariPhotoTemplate;
+        setMercariPhotoTemplate(
+          Array.isArray(effMercariPhotoTemplate) && effMercariPhotoTemplate.length
+            ? effMercariPhotoTemplate
+            : defaultMercariPhotoTemplate(nextImages)
+        );
         setPreviewIndex(0);
         setLoading(false);
       },
@@ -2839,23 +3395,30 @@ function ProductDetail() {
   const mercariStatus = product?.listingStatus?.mercari ?? "draft";
   const mercariUrl = product?.listingUrl?.mercari ?? null;
   const mercariItemId = product?.listingId?.mercari ?? null;
+  const mercariError = product?.listingError?.mercari ?? null;
+  // For variant products, the header button reflects aggregate progress
+  // across variants instead of the (unused, for these products) top-level
+  // listingStatus.mercari field — only in-stock variants count toward "done".
+  // With exactly one in-stock variant it reads as a plain single-item listing
+  // (no "1/1" framing) — the x/y progress label only kicks in at 2+.
+  const mercariInStockVariants = variants.filter((v) => v.active && (v.quantity ?? 0) > 0);
+  const mercariPostedVariants = mercariInStockVariants.filter((v) => v.mercariStatus === "active");
+  const mercariAllInStockVariantsPosted = mercariInStockVariants.length > 0
+    && mercariPostedVariants.length === mercariInStockVariants.length;
+  const mercariSingleInStockVariant = mercariInStockVariants.length === 1 ? mercariInStockVariants[0] : null;
   const previewImage = images[safePreviewIndex]?.url ?? "";
   const imageCountLabel = useMemo(() => {
     if (!images.length) return "No images";
     return `${images.length} image${images.length === 1 ? "" : "s"}`;
   }, [images.length]);
-
-  function buildImagePayload(nextImages) {
-    return nextImages.map((image, index) => ({
-      id: image.id ?? `${image.url}-${index}`,
-      url: image.url,
-      sourceUrl: image.sourceUrl ?? image.url,
-      width: image.width ?? null,
-      height: image.height ?? null,
-      kind: image.kind ?? "catalog",
-      variantTags: Array.isArray(image.variantTags) ? image.variantTags : [],
-    }));
-  }
+  const activeMediaJobs = mediaJobs.filter((j) => j.productId === productId && j.status !== "done");
+  const activeSplitUrls = new Set(
+    activeMediaJobs.filter((j) => j.type === "split" && j.status !== "error").map((j) => j.imageUrl)
+  );
+  // A split/upload still in flight means product.images doesn't yet reflect the
+  // final photo set — cross-posting or syncing now would send a stale/incomplete
+  // snapshot (the reported "photos entirely omitted" bug).
+  const hasPendingMediaJobs = activeMediaJobs.some((j) => j.status !== "error");
 
   // Writes straight to the LIVE image fields, bypassing the unsaved-edits
   // buffer entirely. Used only by the background photo-split pipeline
@@ -2983,6 +3546,12 @@ function ProductDetail() {
     }
   }
 
+  function handleSourcePriceChange(rawValue) {
+    const nextPrice = rawValue === "" ? null : Number(rawValue);
+    setSourcePrice(nextPrice);
+    markFieldsDirty({ sourcePrice: nextPrice });
+  }
+
   // Reverts the staged buffer and restores every editable field to the last
   // live (already-saved) values — the Discard action in the unsaved-changes
   // prompt.
@@ -3000,6 +3569,13 @@ function ProductDetail() {
       setLengthIn(product.lengthIn ? String(product.lengthIn) : "");
       setWidthIn(product.widthIn ? String(product.widthIn) : "");
       setHeightIn(product.heightIn ? String(product.heightIn) : "");
+      {
+        const sp = typeof product.sourcePrice === "number"
+          ? product.sourcePrice
+          : (typeof product.aliexpressPrice === "number" ? product.aliexpressPrice : null);
+        setSourcePrice(sp);
+        setSourcePriceInput(sp != null ? String(sp) : "");
+      }
       setImages(normalizeImageAssets(product));
       const derived = deriveOptionsAndVariants(product);
       setOptions(derived.options);
@@ -3092,14 +3668,16 @@ function ProductDetail() {
   // (rather than the `options`/`variants` state closure, which would still
   // be stale immediately after a setOptions/setVariants call) — actual
   // persistence now happens via the unified Save button (handleSave).
-  function persistVariants(nextOptions, nextVariants) {
+  function persistVariants(nextOptions, nextVariants, nextMercariTitleTokens) {
     setOptions(nextOptions);
     setVariants(nextVariants);
     setLegacyMigrationPending(false);
+    if (nextMercariTitleTokens) setMercariTitleTokens(nextMercariTitleTokens);
     markFieldsDirty({
       options: nextOptions,
       variants: nextVariants,
       hasVariants: nextOptions.length > 0,
+      ...(nextMercariTitleTokens ? { mercariTitleTokens: nextMercariTitleTokens } : {}),
     });
     return true;
   }
@@ -3125,6 +3703,11 @@ function ProductDetail() {
   // delete outright (with a confirm only when real data is at stake).
   async function handleOptionsChange(nextOptions, changeInfo) {
     let nextVariants = variants;
+    // Keep the Mercari title template's option tokens matching the option
+    // dimensions that still exist — otherwise a rename leaves a stale token
+    // referencing the old name (rendered as an orphaned chip) alongside a
+    // separately-addable one for the new name.
+    let nextMercariTokens = mercariTitleTokens;
 
     if (changeInfo?.isNewOption) {
       nextVariants = addNewOptionDimension(nextVariants, changeInfo.newOptionName, changeInfo.addedValues, productId);
@@ -3132,10 +3715,22 @@ function ProductDetail() {
       const removed = nextVariants.filter((v) => changeInfo.removeOption in v.optionValues);
       if (!confirmHardDelete(removed)) return false;
       nextVariants = removeOptionEntirely(nextVariants, changeInfo.removeOption);
+      if (nextMercariTokens) {
+        nextMercariTokens = nextMercariTokens.filter(
+          (t) => !(t.type === "option" && t.optionName === changeInfo.removeOption)
+        );
+      }
     } else if (changeInfo?.optionName) {
       // Relabel first so removedValues/addedValues below are keyed by the
       // option's current (possibly just-renamed) name and value text.
       nextVariants = applyOptionRename(nextVariants, changeInfo);
+      if (nextMercariTokens && changeInfo.optionName !== changeInfo.newOptionName) {
+        nextMercariTokens = nextMercariTokens.map((t) =>
+          t.type === "option" && t.optionName === changeInfo.optionName
+            ? { ...t, optionName: changeInfo.newOptionName }
+            : t
+        );
+      }
       if (changeInfo.removedValues?.length) {
         const removedSet = new Set(changeInfo.removedValues);
         const removed = nextVariants.filter((v) => removedSet.has(v.optionValues[changeInfo.newOptionName]));
@@ -3148,7 +3743,7 @@ function ProductDetail() {
       }
     }
 
-    return persistVariants(nextOptions, nextVariants);
+    return persistVariants(nextOptions, nextVariants, nextMercariTokens !== mercariTitleTokens ? nextMercariTokens : undefined);
   }
 
   // Table edits auto-save — there's no separate "Save options & variants"
@@ -3326,211 +3921,342 @@ function ProductDetail() {
     setEditingImageId(null);
   }
 
-  const [bgTasks, setBgTasks] = useState([]);
-  const [splittingUrls, setSplittingUrls] = useState(() => new Set());
+  // Both handlers below just enqueue a background job (see
+  // lib/mediaJobQueue.jsx) and return immediately — the queue lives above
+  // the router, so the split/upload keeps running (and eventually persists
+  // via a Firestore transaction) even if the user navigates away from this
+  // listing before it finishes.
 
-  // Called by SplitEditor: closes modal instantly and executes split in background
-  function handleSaveSplit({ splitMethod, lines, boxes, imgElement, imageUrl }) {
+  // Called by SplitEditor: closes the modal instantly and queues the split.
+  function handleSaveSplit({ splitMethod, lines, boxes, imageUrl }) {
     const index = editingIndex;
     if (index === null || index === -1) return;
     const targetImage = images[index];
-    if (!targetImage?.url || splittingUrls.has(targetImage.url)) return;
+    if (!targetImage?.url) return;
 
-    // Close popover modal immediately
     setEditingImageId(null);
-
-    setSplittingUrls((prev) => new Set(prev).add(targetImage.url));
-    const taskId = `split-${Date.now()}`;
-    setBgTasks((prev) => [...prev, { id: taskId, message: "Splitting image in background…" }]);
-
-    // Execute split pipeline in background promise
-    (async () => {
-      const uid = auth.currentUser?.uid;
-      let results = [];
-      let clientSucceeded = false;
-
-      if (uid) {
-        try {
-          // Always load a fresh crossOrigin image for pixel access.
-          // Reusing imgElement from SplitEditor is unsafe: the canvas there
-          // may have fallen back to a non-CORS image (tainted), which makes
-          // canvas.toBlob() throw a SecurityError.
-          const loadCorsImage = (src) =>
-            new Promise((res, rej) => {
-              const el = new Image();
-              el.crossOrigin = "anonymous";
-              el.onload = () => res(el);
-              el.onerror = rej;
-              el.src = src;
-            });
-
-          let img;
-          try {
-            img = await loadCorsImage(imageUrl);
-          } catch {
-            // Some hosts reject CORS preflight — bust the cache to get a
-            // fresh response that may carry permissive headers.
-            img = await loadCorsImage(
-              imageUrl + (imageUrl.includes("?") ? "&" : "?") + "_cb=" + Date.now()
-            );
-          }
-
-          const W = img.naturalWidth;
-          const H = img.naturalHeight;
-
-          if (splitMethod === "horizontal") {
-            const boundaries = [0, ...(lines ?? []), 100].map((p) => Math.round((p / 100) * H));
-            for (let i = 0; i < boundaries.length - 1; i++) {
-              const y0 = boundaries[i];
-              const y1 = boundaries[i + 1];
-              const sliceH = y1 - y0;
-              if (sliceH < 5) continue;
-
-              const offscreen = document.createElement("canvas");
-              offscreen.width = W;
-              offscreen.height = sliceH;
-              offscreen.getContext("2d").drawImage(img, 0, y0, W, sliceH, 0, 0, W, sliceH);
-
-              const blob = await new Promise((res, rej) => {
-                offscreen.toBlob((b) => (b ? res(b) : rej(new Error("Canvas blob error"))), "image/jpeg", 0.92);
-              });
-              const url = await uploadImageBlob(uid, productId, blob, `-split-${i}`);
-              results.push({ url, width: W, height: sliceH, kind: "split" });
-            }
-          } else {
-            // 2D Bounding Boxes (Custom, Grid, AI)
-            const boxList = Array.isArray(boxes) ? boxes : [];
-            for (let i = 0; i < boxList.length; i++) {
-              const [ymin, xmin, ymax, xmax] = boxList[i].box;
-              const cropX = Math.round((xmin / 1000) * W);
-              const cropY = Math.round((ymin / 1000) * H);
-              const cropW = Math.max(1, Math.round(((xmax - xmin) / 1000) * W));
-              const cropH = Math.max(1, Math.round(((ymax - ymin) / 1000) * H));
-
-              const offscreen = document.createElement("canvas");
-              offscreen.width = cropW;
-              offscreen.height = cropH;
-              const ctx = offscreen.getContext("2d");
-              ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-
-              const blob = await new Promise((res, rej) => {
-                offscreen.toBlob((b) => (b ? res(b) : rej(new Error("Canvas blob error"))), "image/jpeg", 0.92);
-              });
-              const url = await uploadImageBlob(uid, productId, blob, `-crop-${i}`);
-              results.push({ url, width: cropW, height: cropH, kind: "split" });
-            }
-          }
-          clientSucceeded = true;
-        } catch (err) {
-          console.warn("Client background split failed:", err);
-        }
-      }
-
-
-      if (!clientSucceeded || !results.length) {
-        try {
-          const res = await callFunction("splitProductImage")({
-            productId,
-            imageUrl,
-            slicePoints: lines ?? [50],
-          });
-          results = res?.data?.slices ?? [];
-        } catch (err) {
-          console.error("Background split error:", err);
-        }
-      }
-
-      if (results.length > 0) {
-        const newImages = results.map((r, i) => ({
-          id: `${r.url}-split-${i}`,
-          url: r.url,
-          sourceUrl: targetImage?.url ?? r.url,
-          width: r.width ?? null,
-          height: r.height ?? null,
-          kind: "split",
-        }));
-
-        // Compute the next array via the pure updater, then save as a
-        // separate step — a state updater can be invoked more than once
-        // (e.g. React StrictMode), so a network write must not live inside it.
-        let next;
-        setImages((prevImages) => {
-          const currIdx = prevImages.findIndex((img) => img.url === targetImage?.url);
-          const idx = currIdx !== -1 ? currIdx : index;
-          next = [
-            ...prevImages.slice(0, idx),
-            ...newImages,
-            ...prevImages.slice(idx + 1),
-          ];
-          return next;
-        });
-        if (next) {
-          await saveMedia(next);
-          // If the user has *other* image edits staged (not yet Saved), the
-          // buffer's stale snapshot would otherwise clobber this split's
-          // result on the next Save — fold the split into it too, matching
-          // exactly the live array saveMedia just committed.
-          const staged = localPendingFieldsRef.current;
-          const hasPendingImageEdit = !!staged && ("images" in staged || "imageAssets" in staged || "listingImages" in staged);
-          if (hasPendingImageEdit) {
-            const payload = buildImagePayload(next);
-            markFieldsDirty({
-              images: payload.map((image) => image.url),
-              imageAssets: payload,
-              listingImages: payload.map((image) => image.url),
-            });
-          }
-        }
-      } else {
-        setMediaError(`Could not split "${targetImage?.kind ?? "image"}" — please try again.`);
-      }
-
-      setSplittingUrls((prev) => {
-        const next = new Set(prev);
-        next.delete(targetImage.url);
-        return next;
-      });
-      setBgTasks((prev) => prev.filter((t) => t.id !== taskId));
-    })();
+    enqueueMediaJob({
+      type: "split",
+      productId,
+      title: product?.title,
+      imageUrl: targetImage.url,
+      targetImageId: targetImage.id,
+      splitMethod,
+      lines,
+      boxes,
+    });
   }
 
-
-  async function handleAddPhotos(files) {
+  function handleAddPhotos(files) {
     if (!files || !files.length) return;
-    const uid = auth.currentUser?.uid;
-    if (!uid) {
-      setMediaError("You're signed out — please refresh and try again.");
+    enqueueMediaJob({ type: "upload", productId, title: product?.title, files });
+  }
+
+  // Diffs the current Wonni Drop state against the last-successfully-pushed
+  // Mercari snapshot (mercariSynced*, written by the extension after every
+  // successful create/edit) — a sync only needs to touch fields that actually
+  // changed since. Compares against product.images (the raw URL array actually
+  // sent to Mercari), not the transformed gallery `images` state.
+  function computeMercariDiff(prod) {
+    const diff = {};
+    const currentTitle = prod.title ?? "";
+    const currentDescription = prod.description ?? "";
+    const currentPrice = typeof prod.listingPrice === "number" ? prod.listingPrice : null;
+    const currentImages = prod.images ?? [];
+    const syncedImages = prod.mercariSyncedImages ?? [];
+
+    if (currentTitle !== (prod.mercariSyncedTitle ?? "")) diff.title = currentTitle;
+    if (currentDescription !== (prod.mercariSyncedDescription ?? "")) diff.description = currentDescription;
+    if (currentPrice != null && currentPrice !== prod.mercariSyncedPrice) diff.price = currentPrice;
+    const imagesChanged = currentImages.length !== syncedImages.length
+      || currentImages.some((url, i) => url !== syncedImages[i]);
+    if (imagesChanged) diff.images = currentImages;
+
+    return diff;
+  }
+
+  async function handleSyncToMercari() {
+    if (!product || !mercariItemId) return;
+    if (hasPendingMediaJobs) {
+      setMercariSyncMessage("A photo change is still saving — wait for it to finish before syncing.");
+      return;
+    }
+    const diff = computeMercariDiff(product);
+    if (Object.keys(diff).length === 0) {
+      setMercariSyncMessage("Already up to date.");
       return;
     }
 
-    const taskId = `upload-${Date.now()}`;
-    setBgTasks((prev) => [...prev, { id: taskId, message: `Uploading ${files.length} photo(s)…` }]);
-
+    setSyncingMercari(true);
+    setMercariSyncMessage("");
     try {
-      const uploadedImages = [];
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const url = await uploadImageBlob(uid, productId, file, `-added-${Date.now()}-${i}`);
-        uploadedImages.push({
-          id: `${url}-added-${i}`,
-          url,
-          sourceUrl: url,
-          kind: "added",
-        });
-      }
-
-      let next;
-      setImages((prevImages) => {
-        next = [...prevImages, ...uploadedImages];
-        return next;
+      await updateDoc(doc(db, "products", product.id), {
+        "listingStatus.mercari": "updating",
+        updatedAt: serverTimestamp(),
       });
-      if (next) stageMediaEdit(next);
-    } catch (err) {
-      console.error("Failed to add photos:", err);
-      setMediaError("Failed to upload photo(s) — please try again.");
+
+      const payload = {
+        productId: product.id,
+        mercariItemId,
+        title: product.title ?? "",
+        description: product.description ?? "",
+        price: typeof product.listingPrice === "number" ? product.listingPrice : null,
+        images: product.images ?? [],
+        diff,
+      };
+
+      const extensionId = import.meta.env.VITE_EXTENSION_ID;
+      if (!(window.chrome && chrome.runtime && chrome.runtime.sendMessage && extensionId)) {
+        throw new Error("Wonni Drop extension not connected.");
+      }
+      await new Promise((res, rej) => {
+        chrome.runtime.sendMessage(extensionId, { type: "START_MERCARI_EDIT", payload }, (resp) => {
+          if (chrome.runtime.lastError || resp?.error) {
+            rej(new Error(resp?.error || chrome.runtime.lastError?.message || "Extension message failed"));
+          } else {
+            res(resp);
+          }
+        });
+      });
+    } catch (e) {
+      setMercariSyncMessage(e.message ?? "Sync failed to start.");
     } finally {
-      setBgTasks((prev) => prev.filter((t) => t.id !== taskId));
+      setSyncingMercari(false);
     }
+  }
+
+  // Manual escape hatch, mirroring the wonni iOS app's MercariListingEditSheet:
+  // if the listing was deleted on Mercari (or a sync attempt just froze because
+  // its edit page no longer exists), there's otherwise no way back to a fresh
+  // "Cross-post to Mercari" button — this clears the stale Mercari fields so a
+  // brand-new listing can be posted.
+  async function handleResetMercariListing() {
+    if (!product) return;
+    if (!window.confirm("Delete this Mercari listing link? This only unlinks it in Wonni Drop — to remove the listing on Mercari itself, use Edit first and delete it there.")) {
+      return;
+    }
+    await updateDoc(doc(db, "products", product.id), {
+      "listingStatus.mercari": "draft",
+      "listingId.mercari": deleteField(),
+      "listingUrl.mercari": deleteField(),
+      "listingError.mercari": deleteField(),
+      mercariSyncedTitle: deleteField(),
+      mercariSyncedDescription: deleteField(),
+      mercariSyncedPrice: deleteField(),
+      mercariSyncedImages: deleteField(),
+      updatedAt: serverTimestamp(),
+    });
+    setMercariSyncMessage("");
+  }
+
+  // Mercari per-variant master template — persisted immediately on every
+  // drag/delete, same "no separate Save step" convention as the rest of this
+  // page's Mercari settings.
+  async function persistMercariTitleTokens(nextTokens) {
+    setMercariTitleTokens(nextTokens);
+    if (!product) return;
+    await updateDoc(doc(db, "products", product.id), {
+      mercariTitleTokens: nextTokens,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  async function persistMercariTitleGaps(nextGaps) {
+    setMercariTitleGaps(nextGaps);
+    if (!product) return;
+    await updateDoc(doc(db, "products", product.id), {
+      mercariTitleGaps: nextGaps,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  async function persistMercariPhotoTemplate(nextTemplate) {
+    setMercariPhotoTemplate(nextTemplate);
+    if (!product) return;
+    await updateDoc(doc(db, "products", product.id), {
+      mercariPhotoTemplate: nextTemplate,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  async function persistMercariModalSettings(fields) {
+    if (!product) return;
+    await updateDoc(doc(db, "products", product.id), { ...fields, updatedAt: serverTimestamp() });
+  }
+
+  // Builds and dispatches one variant's Mercari cross-post from the master
+  // template. Doesn't wait for it to finish — callers that need to serialize
+  // multiple variants use waitForVariantMercariStatus below.
+  async function postVariantToMercari(variant, { priceOverride } = {}) {
+    if (!product) throw new Error("Product not loaded.");
+    const title = resolveMercariTitle(mercariTitleTokens, mercariTitleGaps, product, variant);
+    // listingPrice (the deliberate resale price) wins — variant.price is
+    // populated at import time from the scraped *source* price, not a real
+    // per-variant sell-price override, so it can't be trusted as authoritative.
+    const price = priceOverride ?? (typeof product.listingPrice === "number" ? product.listingPrice
+      : (typeof variant.price === "number" ? variant.price : null));
+    const photoUrls = resolveMercariPhotos(mercariPhotoTemplate, variant, images);
+
+    await updateDoc(doc(db, "products", product.id), {
+      variants: variants.map((v) => (v.id === variant.id ? { ...v, mercariStatus: "posting" } : v)),
+      updatedAt: serverTimestamp(),
+    });
+
+    const payload = {
+      productId: product.id,
+      variantId: variant.id,
+      title,
+      description: product.description ?? "",
+      price,
+      condition: product.mercariCondition ?? "good",
+      brand: product.brand || product.artistName || "",
+      suggestedCategory: product.category || product.artistName || product.title,
+      images: photoUrls,
+      weightLbs: (parseInt(weightLbs, 10) || 0) + (parseInt(weightOz, 10) || 0) / 16,
+      lengthIn: parseFloat(lengthIn) || null,
+      widthIn: parseFloat(widthIn) || null,
+      heightIn: parseFloat(heightIn) || null,
+      buyerPaysShipping: product.mercariBuyerPaysShipping ?? true,
+      shipOnOwn: product.mercariShipOnOwn ?? false,
+    };
+
+    const extensionId = import.meta.env.VITE_EXTENSION_ID;
+    if (!(window.chrome && chrome.runtime && chrome.runtime.sendMessage && extensionId)) {
+      throw new Error("Wonni Drop extension not connected.");
+    }
+    await new Promise((res, rej) => {
+      chrome.runtime.sendMessage(extensionId, { type: "START_MERCARI_CROSS_POST", payload }, (resp) => {
+        if (chrome.runtime.lastError || resp?.error) {
+          rej(new Error(resp?.error || chrome.runtime.lastError?.message || "Extension message failed"));
+        } else {
+          res(resp);
+        }
+      });
+    });
+  }
+
+  // Resolves once this variant's live mercariStatus leaves "posting" — used to
+  // serialize the "post all remaining" batch, since the extension can only
+  // safely track one in-flight Mercari tab at a time.
+  function waitForVariantMercariStatus(variantId, timeoutMs = 200000) {
+    return new Promise((resolve) => {
+      const start = Date.now();
+      const check = () => {
+        const v = variantsRef.current.find((x) => x.id === variantId);
+        if (!v || v.mercariStatus !== "posting" || Date.now() - start > timeoutMs) {
+          resolve(v);
+          return;
+        }
+        setTimeout(check, 1000);
+      };
+      check();
+    });
+  }
+
+  async function postAllRemainingVariants() {
+    setPostingAllVariants(true);
+    try {
+      const remaining = variants.filter(
+        (v) => v.active && v.mercariStatus !== "active" && v.mercariStatus !== "posting" && v.mercariStatus !== "updating"
+      );
+      for (const variant of remaining) {
+        try {
+          await postVariantToMercari(variant);
+        } catch (e) {
+          console.error(`Failed to start posting variant ${variant.id}:`, e);
+          continue;
+        }
+        await waitForVariantMercariStatus(variant.id);
+      }
+    } finally {
+      setPostingAllVariants(false);
+    }
+  }
+
+  // Pushes only what changed since the last successful post/sync for this
+  // variant — same diff-against-last-synced-snapshot approach as the
+  // product-level sync-to-Mercari feature, scoped per variant.
+  async function syncVariantToMercari(variant) {
+    if (!product || !variant.mercariListingId) return;
+    const title = resolveMercariTitle(mercariTitleTokens, mercariTitleGaps, product, variant);
+    const price = typeof product.listingPrice === "number" ? product.listingPrice
+      : (typeof variant.price === "number" ? variant.price : null);
+    const photoUrls = resolveMercariPhotos(mercariPhotoTemplate, variant, images);
+
+    const diff = {};
+    if (title !== (variant.mercariSyncedTitle ?? "")) diff.title = title;
+    if (price != null && price !== variant.mercariSyncedPrice) diff.price = price;
+    const syncedImages = variant.mercariSyncedImages ?? [];
+    const imagesChanged = photoUrls.length !== syncedImages.length
+      || photoUrls.some((url, i) => url !== syncedImages[i]);
+    if (imagesChanged) diff.images = photoUrls;
+    if (Object.keys(diff).length === 0) return;
+
+    await updateDoc(doc(db, "products", product.id), {
+      variants: variants.map((v) => (v.id === variant.id ? { ...v, mercariStatus: "updating" } : v)),
+      updatedAt: serverTimestamp(),
+    });
+
+    const payload = {
+      productId: product.id,
+      variantId: variant.id,
+      mercariItemId: variant.mercariListingId,
+      title,
+      description: product.description ?? "",
+      price,
+      images: photoUrls,
+      diff,
+    };
+
+    const extensionId = import.meta.env.VITE_EXTENSION_ID;
+    if (!(window.chrome && chrome.runtime && chrome.runtime.sendMessage && extensionId)) {
+      throw new Error("Wonni Drop extension not connected.");
+    }
+    await new Promise((res, rej) => {
+      chrome.runtime.sendMessage(extensionId, { type: "START_MERCARI_EDIT", payload }, (resp) => {
+        if (chrome.runtime.lastError || resp?.error) {
+          rej(new Error(resp?.error || chrome.runtime.lastError?.message || "Extension message failed"));
+        } else {
+          res(resp);
+        }
+      });
+    });
+  }
+
+  // Same manual escape hatch as handleResetMercariListing, scoped to one
+  // variant — clears just that variant's Mercari fields, does not touch
+  // Mercari itself.
+  async function resetVariantMercariListing(variant) {
+    if (!product) return;
+    if (!window.confirm("Delete this variant's Mercari listing link? This only unlinks it in Wonni Drop — to remove the listing on Mercari itself, use Edit first and delete it there.")) {
+      return;
+    }
+    await updateDoc(doc(db, "products", product.id), {
+      variants: variants.map((v) => (v.id === variant.id ? {
+        ...v,
+        mercariStatus: "draft",
+        mercariListingId: null,
+        mercariUrl: null,
+        mercariError: null,
+        mercariSyncedTitle: null,
+        mercariSyncedPrice: null,
+        mercariSyncedImages: null,
+      } : v)),
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  // Removes one resolved photo from a single variant's Mercari listing only —
+  // survives template edits (mercariPhotoRemovedUrls is subtracted from the
+  // template-resolved list after regenerating it).
+  async function removeVariantMercariPhoto(variant, url) {
+    if (!product) return;
+    await updateDoc(doc(db, "products", product.id), {
+      variants: variants.map((v) => (v.id === variant.id
+        ? { ...v, mercariPhotoRemovedUrls: [...(v.mercariPhotoRemovedUrls ?? []), url] }
+        : v)),
+      updatedAt: serverTimestamp(),
+    });
   }
 
   async function handleDeleteProduct() {
@@ -3575,10 +4301,50 @@ function ProductDetail() {
               {saving ? "Saving…" : "Save"}
             </button>
           )}
-          {mercariStatus === "active" ? (
-            <a href={mercariUrl || "#"} target="_blank" rel="noreferrer" className="btn btn-ghost" style={{ color: "#22c55e" }}>
-              ✓ Live on Mercari ({mercariItemId || "view"})
-            </a>
+          {product?.hasVariants && mercariInStockVariants.length > 1 ? (
+            <button className="btn btn-primary" onClick={() => setShowMercariModal(true)}>
+              {mercariAllInStockVariantsPosted
+                ? "✓ Live on Mercari"
+                : `${mercariPostedVariants.length}/${mercariInStockVariants.length} variations posted to Mercari`}
+            </button>
+          ) : product?.hasVariants && mercariSingleInStockVariant ? (
+            <button className="btn btn-primary" onClick={() => setShowMercariModal(true)}>
+              {mercariSingleInStockVariant.mercariStatus === "active"
+                ? "✓ Live on Mercari"
+                : mercariSingleInStockVariant.mercariStatus === "posting" || mercariSingleInStockVariant.mercariStatus === "updating"
+                  ? "⏳ Cross-posting to Mercari…"
+                  : "Cross-post to Mercari"}
+            </button>
+          ) : product?.hasVariants ? (
+            <button className="btn btn-primary" onClick={() => setShowMercariModal(true)}>
+              Cross-post to Mercari
+            </button>
+          ) : mercariStatus === "active" || mercariStatus === "updating" ? (
+            <>
+              <a href={mercariUrl || "#"} target="_blank" rel="noreferrer" className="btn btn-ghost" style={{ color: "#22c55e" }}>
+                ✓ Live
+              </a>
+              <button
+                className="btn btn-ghost"
+                onClick={handleSyncToMercari}
+                disabled={syncingMercari || mercariStatus === "updating" || hasPendingMediaJobs}
+              >
+                {mercariStatus === "updating" ? "⏳ Syncing…" : "🔄 Sync"}
+              </button>
+              {mercariItemId && (
+                <a
+                  href={`https://www.mercari.com/sell/edit/${mercariItemId}/`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn-ghost"
+                >
+                  ✏️ Edit
+                </a>
+              )}
+              <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={handleResetMercariListing}>
+                🗑 Delete
+              </button>
+            </>
           ) : (
             <button className="btn btn-primary" onClick={() => setShowMercariModal(true)}>
               {mercariStatus === "posting" ? "⏳ Cross-posting to Mercari…" : "Cross-post to Mercari"}
@@ -3596,6 +4362,18 @@ function ProductDetail() {
           )}
         </div>
       </div>
+
+      {mercariStatus === "failed" && mercariError && (
+        <div style={{ marginBottom: 12, fontSize: 12, color: "var(--danger)", textAlign: "right" }}>
+          Mercari cross-post failed: {mercariError}
+        </div>
+      )}
+
+      {mercariSyncMessage && (
+        <div style={{ marginBottom: 12, fontSize: 12, color: "var(--muted)", textAlign: "right" }}>
+          {mercariSyncMessage}
+        </div>
+      )}
 
       {error && <div className="card" style={{ marginBottom: 20, color: "var(--danger)" }}>{error}</div>}
 
@@ -3645,10 +4423,14 @@ function ProductDetail() {
 
               {mediaError && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 4 }}>{mediaError}</div>}
               {savingMedia && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Saving…</div>}
-              {bgTasks.length > 0 && (
+              {activeMediaJobs.length > 0 && (
                 <div style={{ fontSize: 12, color: "#ff6b35", marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ display: "inline-block", animation: "spin 1s linear infinite" }}>⏳</span>
-                  {bgTasks[bgTasks.length - 1].message}
+                  {activeMediaJobs.some((j) => j.status === "error")
+                    ? "A photo change failed to save — see the background tasks tray."
+                    : activeMediaJobs.some((j) => j.type === "split")
+                      ? "Splitting image in background…"
+                      : "Uploading photo(s)…"}
                 </div>
               )}
             </div>
@@ -3660,13 +4442,11 @@ function ProductDetail() {
                 <span className={`chip ${product.tiktokStatus === "active" ? "chip-active" : "chip-draft"}`}>
                   TikTok: {product.tiktokStatus ?? "draft"}
                 </span>
-                <span className={`chip ${mercariStatus === "active" ? "chip-active" : mercariStatus === "posting" ? "chip-pending" : "chip-draft"}`}>
+                <span className={`chip ${mercariStatus === "active" ? "chip-active" : (mercariStatus === "posting" || mercariStatus === "updating") ? "chip-pending" : "chip-draft"}`}>
                   Mercari: {mercariStatus}
                 </span>
                 {product.saleStatus && <span className="chip chip-pending">{product.saleStatus}</span>}
               </div>
-
-              <div className="product-detail-price">{money(product.aliexpressPrice)}</div>
 
               <div className="modal-field" style={{ marginTop: 8, marginBottom: 8, maxWidth: 200 }}>
                 <label>Listing price</label>
@@ -3684,13 +4464,28 @@ function ProductDetail() {
                 </span>
               </div>
 
+              <div style={{ marginBottom: 8 }}>
+                <label style={{ fontSize: 11, color: "var(--muted)" }}>Source price (cost)</label>
+                <DollarInput
+                  style={{ maxWidth: 120, marginTop: 2 }}
+                  value={sourcePriceInput}
+                  onChangeText={setSourcePriceInput}
+                  onCommit={(raw) => {
+                    const trimmed = raw.trim();
+                    const parsed = trimmed === "" ? null : Number(trimmed);
+                    const normalized = parsed != null && Number.isNaN(parsed) ? null : parsed;
+                    setSourcePriceInput(normalized != null ? String(normalized) : "");
+                    handleSourcePriceChange(normalized === null ? "" : String(normalized));
+                  }}
+                />
+              </div>
+
               <div className="detail-section">
                 <h2>Scraped summary</h2>
                 <div className="detail-grid">
                   <div><span>Imported</span><strong>{formatDate(product.importedAt)}</strong></div>
                   <div><span>Images</span><strong>{imageCountLabel}</strong></div>
                   <div><span>Variants</span><strong>{variants.filter((v) => v.active).length}</strong></div>
-                  <div><span>Source price</span><strong>{money(product.sourcePrice ?? product.aliexpressPrice)}</strong></div>
                 </div>
               </div>
 
@@ -3865,13 +4660,6 @@ function ProductDetail() {
             error={variantsError}
           />
 
-          <div className="card detail-section">
-            <h2>Mercari</h2>
-            <button className="btn btn-primary" onClick={() => setShowMercariModal(true)}>
-              List on Mercari
-            </button>
-          </div>
-
           {product.sourceUrl && (
             <div className="card detail-section">
               <h2>Source</h2>
@@ -3890,6 +4678,23 @@ function ProductDetail() {
           lengthIn={lengthIn}
           widthIn={widthIn}
           heightIn={heightIn}
+          hasPendingMediaJobs={hasPendingMediaJobs}
+          options={options}
+          images={images}
+          variants={variants}
+          mercariTitleTokens={mercariTitleTokens}
+          mercariTitleGaps={mercariTitleGaps}
+          mercariPhotoTemplate={mercariPhotoTemplate}
+          onTokensChange={persistMercariTitleTokens}
+          onGapsChange={persistMercariTitleGaps}
+          onPhotoTemplateChange={persistMercariPhotoTemplate}
+          onSettingsChange={persistMercariModalSettings}
+          onPostVariant={postVariantToMercari}
+          onSyncVariant={syncVariantToMercari}
+          onDeleteVariant={resetVariantMercariListing}
+          onPostAllRemaining={postAllRemainingVariants}
+          postingAllVariants={postingAllVariants}
+          onRemoveVariantPhoto={removeVariantMercariPhoto}
           onClose={() => setShowMercariModal(false)}
           onLaunched={() => setShowMercariModal(false)}
         />
@@ -3909,7 +4714,7 @@ function ProductDetail() {
           onSaveIdentify={handleSaveIdentify}
           onSaveSplit={handleSaveSplit}
           saving={savingMedia}
-          splitInProgress={splittingUrls.has(images[editingIndex]?.url)}
+          splitInProgress={activeSplitUrls.has(images[editingIndex]?.url)}
         />
       )}
 

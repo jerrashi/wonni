@@ -237,10 +237,18 @@ function ImportBar({ onImported }) {
 function ProductCard({ product }) {
   const navigate = useNavigate();
   const [showModal, setShowModal] = useState(false);
-  const [showMercariModal, setShowMercariModal] = useState(false);
   const [ebayState, setEbayState] = useState({ listing: false, error: "" });
+  const [ebaySyncState, setEbaySyncState] = useState({ syncing: false, error: "" });
+  const [wonniState, setWonniState] = useState({ posting: false, error: "" });
   const [deleting, setDeleting] = useState(false);
   const primaryImage = product.images?.[0] ?? "";
+  // Every variant carries the source site's own sold-out signal (Weverse's
+  // isSoldOut flips a variant's `active` off at import) — if a variant
+  // product has none left active, the whole source listing is sold out.
+  const isSourceSoldOut = product.hasVariants
+    && Array.isArray(product.variants)
+    && product.variants.length > 0
+    && product.variants.every((v) => v.active === false);
   const sourceLabel =
     product.source === "weverse"
       ? "Weverse"
@@ -279,13 +287,36 @@ function ProductCard({ product }) {
     if (input === null) return;
     setEbayState({ listing: true, error: "" });
     try {
-      await callFunction("ebayCreateListing")({
+      await callFunction("dropshipEbayCreateListing")({
         productId: product.id,
         sellPrice: parseFloat(input) || undefined,
       });
       setEbayState({ listing: false, error: "" });
     } catch (e) {
       setEbayState({ listing: false, error: e.message ?? "eBay listing failed." });
+    }
+  }
+
+  // eBay's inventory_item/offer PUTs are idempotent — always safe to just
+  // re-push current Wonni Drop state, no diffing needed unlike Mercari's
+  // DOM-automation path.
+  async function syncToEbay() {
+    setEbaySyncState({ syncing: true, error: "" });
+    try {
+      await callFunction("dropshipEbayUpdateListing")({ productId: product.id });
+      setEbaySyncState({ syncing: false, error: "" });
+    } catch (e) {
+      setEbaySyncState({ syncing: false, error: e.message ?? "eBay sync failed." });
+    }
+  }
+
+  async function postToWonni() {
+    setWonniState({ posting: true, error: "" });
+    try {
+      await callFunction("postToWonni")({ productId: product.id });
+      setWonniState({ posting: false, error: "" });
+    } catch (e) {
+      setWonniState({ posting: false, error: e.message ?? "Post to Wonni failed." });
     }
   }
 
@@ -298,11 +329,21 @@ function ProductCard({ product }) {
   return (
     <>
       <div className="product-card">
-        <button className="product-card-image" onClick={() => navigate(`/products/${product.id}`)}>
+        <button className="product-card-image" style={{ position: "relative" }} onClick={() => navigate(`/products/${product.id}`)}>
           {primaryImage ? (
             <img src={primaryImage} alt={product.title} />
           ) : (
             <div className="product-card-placeholder">No image</div>
+          )}
+          {isSourceSoldOut && (
+            <span
+              style={{
+                position: "absolute", bottom: 6, right: 6, background: "rgba(0,0,0,0.75)", color: "#fff",
+                fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 999,
+              }}
+            >
+              Sold Out
+            </span>
           )}
         </button>
         <div className="product-card-body">
@@ -312,9 +353,12 @@ function ProductCard({ product }) {
           <div className="product-card-subtitle">
             <span>{sourceLabel}</span>
             {product.artistName && <span>{product.artistName}</span>}
+            {product.hasVariants && Array.isArray(product.variants) && (
+              <span>{product.variants.filter((v) => v.active).length} variations</span>
+            )}
           </div>
           <div className="product-card-meta">
-            <span>${product.aliexpressPrice?.toFixed(2) ?? "—"}</span>
+            <span>{typeof product.listingPrice === "number" ? `$${product.listingPrice.toFixed(2)}` : "—"}</span>
             <span className={`chip ${statusMap[product.tiktokStatus ?? "draft"]}`}>
               {product.tiktokStatus ?? "draft"}
             </span>
@@ -340,7 +384,36 @@ function ProductCard({ product }) {
             {product.tiktokStatus === "active" && (
               <span style={{ fontSize: 12, color: "var(--success)" }}>Live on TikTok Shop</span>
             )}
-            {product.listingStatus?.mercari === "active" ? (
+            {product.hasVariants && Array.isArray(product.variants) ? (
+              (() => {
+                const inStock = product.variants.filter((v) => v.active && (v.quantity ?? 0) > 0);
+                // Exactly one in-stock variant reads as a plain single-item
+                // listing — the x/y progress framing only kicks in at 2+.
+                if (inStock.length === 1) {
+                  const v = inStock[0];
+                  return v.mercariStatus === "active" ? (
+                    <span style={{ fontSize: 12, color: "var(--success)" }}>Live on Mercari</span>
+                  ) : (
+                    <button className="btn btn-ghost" style={{ width: "100%" }} onClick={() => navigate(`/products/${product.id}`)}>
+                      {v.mercariStatus === "posting" || v.mercariStatus === "updating" ? "⏳ Mercari Posting…" : "Cross-post to Mercari"}
+                    </button>
+                  );
+                }
+                const posted = inStock.filter((v) => v.mercariStatus === "active");
+                const allPosted = inStock.length > 0 && posted.length === inStock.length;
+                return allPosted ? (
+                  <span style={{ fontSize: 12, color: "var(--success)" }}>Live on Mercari</span>
+                ) : (
+                  <button
+                    className="btn btn-ghost"
+                    style={{ width: "100%" }}
+                    onClick={() => navigate(`/products/${product.id}`)}
+                  >
+                    {inStock.length > 0 ? `${posted.length}/${inStock.length} variations posted` : "Cross-post to Mercari"}
+                  </button>
+                );
+              })()
+            ) : product.listingStatus?.mercari === "active" ? (
               <span style={{ fontSize: 12, color: "var(--success)" }}>Live on Mercari</span>
             ) : (
               <button
@@ -352,7 +425,17 @@ function ProductCard({ product }) {
               </button>
             )}
             {product.ebayStatus === "active" ? (
-              <span style={{ fontSize: 12, color: "var(--success)" }}>Live on eBay</span>
+              <>
+                <span style={{ fontSize: 12, color: "var(--success)" }}>Live on eBay</span>
+                <button
+                  className="btn btn-ghost"
+                  style={{ width: "100%" }}
+                  onClick={syncToEbay}
+                  disabled={ebaySyncState.syncing}
+                >
+                  {ebaySyncState.syncing ? "⏳ Syncing…" : "🔄 Sync to eBay"}
+                </button>
+              </>
             ) : (
               <button
                 className="btn btn-ghost"
@@ -366,13 +449,24 @@ function ProductCard({ product }) {
             {ebayState.error && (
               <span style={{ fontSize: 11, color: "var(--danger)" }}>{ebayState.error}</span>
             )}
-            <button
-              className="btn btn-ghost"
-              style={{ width: "100%" }}
-              onClick={() => setShowMercariModal(true)}
-            >
-              List on Mercari
-            </button>
+            {ebaySyncState.error && (
+              <span style={{ fontSize: 11, color: "var(--danger)" }}>{ebaySyncState.error}</span>
+            )}
+            {product.crossPostStatus?.wonni === "active" ? (
+              <span style={{ fontSize: 12, color: "var(--success)" }}>Live on Wonni</span>
+            ) : (
+              <button
+                className="btn btn-ghost"
+                style={{ width: "100%" }}
+                onClick={postToWonni}
+                disabled={wonniState.posting}
+              >
+                {wonniState.posting ? "Posting to Wonni…" : "Post to Wonni"}
+              </button>
+            )}
+            {wonniState.error && (
+              <span style={{ fontSize: 11, color: "var(--danger)" }}>{wonniState.error}</span>
+            )}
             <button
               className="btn btn-danger"
               style={{ width: "100%" }}

@@ -14,7 +14,8 @@
     "https://us.aliexpress.com/*",
     "https://shop.weverse.io/*",
     "https://www.mercari.com/*",
-    "https://mercari.com/*"
+    "https://mercari.com/*",
+    "https://storage.googleapis.com/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -43,8 +44,11 @@
   ],
   "externally_connectable": {
     "matches": [
-      "https://wonni-dropship.web.app/*",
-      "http://localhost:5173/*"
+      "https://wonni-app.web.app/*",
+      "http://localhost:5173/*",
+      "http://localhost:5174/*",
+      "http://localhost:5175/*",
+      "http://localhost:5176/*"
     ]
   },
   "web_accessible_resources": [
