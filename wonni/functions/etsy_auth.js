@@ -8,16 +8,46 @@
  */
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const https = require("https");
+const { SecretManagerServiceClient } = require("@google-cloud/secret-manager");
 
 if (admin.apps.length === 0) {
   admin.initializeApp();
 }
 
-const etsyClientId = defineSecret("ETSY_CLIENT_ID");
-const etsySharedSecret = defineSecret("ETSY_SHARED_SECRET");
+const PROJECT_ID = process.env.GCP_PROJECT || "wonni-app";
+const secretManager = new SecretManagerServiceClient();
+
+async function getEtsyCredentials(credentialSet) {
+  const mapping = {
+    ios: { clientId: "ETSY_CLIENT_ID", sharedSecret: "ETSY_SHARED_SECRET" },
+    web: { clientId: "DROPSHIP_ETSY_CLIENT_ID", sharedSecret: "DROPSHIP_ETSY_SHARED_SECRET" },
+  };
+  if (!mapping[credentialSet]) {
+    throw new HttpsError("invalid-argument", `Unknown credential set: ${credentialSet}`);
+  }
+  const { clientId: clientIdSecret, sharedSecret: sharedSecretSecret } = mapping[credentialSet];
+
+  try {
+    const [clientIdResp] = await secretManager.accessSecretVersion({
+      name: `projects/${PROJECT_ID}/secrets/${clientIdSecret}/versions/latest`,
+    });
+    const [sharedSecretResp] = await secretManager.accessSecretVersion({
+      name: `projects/${PROJECT_ID}/secrets/${sharedSecretSecret}/versions/latest`,
+    });
+
+    return {
+      clientId: clientIdResp.payload.data.toString(),
+      sharedSecret: sharedSecretResp.payload.data.toString(),
+    };
+  } catch (err) {
+    throw new HttpsError(
+      "internal",
+      `Failed to retrieve Etsy credentials for ${credentialSet}: ${err.message}`
+    );
+  }
+}
 
 /**
  * Promise wrapper for https.request.
@@ -169,10 +199,10 @@ async function refreshEtsyToken(clientId, clientSecret, refreshToken) {
  * Callable function: etsyExchangeToken
  *
  * Expected request.data:
- *   { code: string, codeVerifier: string, redirectUri: string }
+ *   { code: string, codeVerifier: string, redirectUri: string, credentialSet: "ios" | "web" }
  */
 exports.etsyExchangeToken = onCall(
-  { secrets: [etsyClientId, etsySharedSecret] },
+  { timeoutSeconds: 60 },
   async (request) => {
     // Auth guard
     if (!request.auth) {
@@ -180,25 +210,25 @@ exports.etsyExchangeToken = onCall(
     }
     const uid = request.auth.uid;
 
-    const { code, codeVerifier, redirectUri } = request.data;
+    const { code, codeVerifier, redirectUri, credentialSet = "ios" } = request.data;
     if (!code || !codeVerifier || !redirectUri) {
       throw new HttpsError("invalid-argument", "code, codeVerifier, and redirectUri are required.");
     }
 
-    console.log(`[etsyExchangeToken] Exchanging code for uid=${uid}`);
+    console.log(`[etsyExchangeToken] Exchanging code for uid=${uid}, credentialSet=${credentialSet}`);
 
     try {
-      const clientId = etsyClientId.value();
-      const clientSecret = etsySharedSecret.value();
+      const credentials = await getEtsyCredentials(credentialSet);
+      const { clientId, sharedSecret } = credentials;
 
-      const res = await exchangeCodeForToken(clientId, clientSecret, code, codeVerifier, redirectUri);
+      const res = await exchangeCodeForToken(clientId, sharedSecret, code, codeVerifier, redirectUri);
       if (res.statusCode !== 200) {
         throw new Error(`Etsy token exchange failed (${res.statusCode}): ${res.body}`);
       }
 
       const tokenData = JSON.parse(res.body);
       const accessToken = tokenData.access_token;
-      
+
       // Etsy access tokens are prefixed with the user's numeric ID (e.g. 12345678.xxxx)
       const userId = accessToken.split(".")[0];
       if (!userId) {
@@ -206,7 +236,7 @@ exports.etsyExchangeToken = onCall(
       }
 
       // Fetch shop details to display correct shop name in settings
-      const shopDetails = await fetchEtsyShopDetails(accessToken, clientId, userId, clientSecret);
+      const shopDetails = await fetchEtsyShopDetails(accessToken, clientId, userId, sharedSecret);
 
       // Persist to Firestore
       const db = admin.firestore();
@@ -240,6 +270,7 @@ exports.etsyExchangeToken = onCall(
       return { success: true, shopName: shopDetails.shopName, shopId: shopDetails.shopId };
     } catch (err) {
       console.error("[etsyExchangeToken] Token exchange failed:", err.message);
+      if (err instanceof HttpsError) throw err;
       throw new HttpsError("internal", `Etsy token exchange failed: ${err.message}`);
     }
   }
@@ -247,3 +278,4 @@ exports.etsyExchangeToken = onCall(
 
 // Export helper for refreshing token
 exports.refreshEtsyToken = refreshEtsyToken;
+exports.getEtsyCredentials = getEtsyCredentials;
