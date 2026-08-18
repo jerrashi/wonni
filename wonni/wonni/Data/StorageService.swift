@@ -66,6 +66,27 @@ class StorageService: ObservableObject {
         return path
     }
 
+    /// Converts a bare Storage path (e.g. "users/UID/LISTING_ID/0.jpg") into a full,
+    /// directly-fetchable public URL. Listing-photo paths are `allow read: if true` in
+    /// storage.rules, so this needs no auth/token — unlike `StorageImage`'s per-render
+    /// `getDownloadURL()` call, this is safe to compute once and store. Used for the
+    /// shared `products/{id}.images` field, whose canonical format (matching
+    /// wonni_dropship's own convention) is a full public URL rather than a bare path.
+    func publicURL(forPath path: String) -> String {
+        "https://storage.googleapis.com/\(storage.bucket)/\(path)"
+    }
+
+    /// Inverse of `publicURL(forPath:)` — only resolves URLs pointing at *this app's own*
+    /// bucket. Returns nil for anything else (e.g. wonni_dropship's pre-merge photos,
+    /// still hosted on the old `wonni-dropship` bucket) — those aren't downloadable via
+    /// the Storage SDK's bucket-scoped reference and are just skipped by callers rather
+    /// than mishandled.
+    func path(fromPublicURL url: String) -> String? {
+        let prefix = "https://storage.googleapis.com/\(storage.bucket)/"
+        guard url.hasPrefix(prefix) else { return nil }
+        return String(url.dropFirst(prefix.count)).removingPercentEncoding
+    }
+
     func downloadImageData(path: String) async throws -> Data {
         return try await storage.child(path).data(maxSize: 10 * 1024 * 1024)
     }

@@ -130,14 +130,6 @@ exports.tiktokCreateListing = onCall(
       tiktokStatus: "active",
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-    // Mirror into the shared `listings` doc (see aliexpress_product.js's
-    // dual-write comment for why both collections exist during migration).
-    await db.collection("listings").doc(productId).set({
-      crossPostStatus: { tiktok: "active" },
-      crossPostListingIds: { tiktok: tiktokProductId ?? null },
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-
     return { tiktokProductId };
   }
 );
@@ -184,10 +176,6 @@ exports.tiktokDeleteListing = onCall(
     }
 
     await ref.update({ tiktokStatus: "inactive", updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-    await admin.firestore().collection("listings").doc(productId).set({
-      crossPostStatus: { tiktok: "inactive" },
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
     return { success: true };
   }
 );

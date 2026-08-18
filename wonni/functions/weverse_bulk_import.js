@@ -4,7 +4,6 @@ const admin = require("firebase-admin");
 const { downloadBuffer, savePublicBuffer } = require("./product_media");
 const { fetchWeverseSale, validateSaleForImport, mapSaleToProduct, parseWeverseUrl } = require("./weverse_product");
 const { importTimeGeminiFields, geminiApiKey } = require("./gemini_identify");
-const { toListingFields } = require("./listing_shape");
 
 const BATCH_SIZE_LIMIT = 25;
 const CONCURRENCY_CHUNK_SIZE = 4;
@@ -120,6 +119,7 @@ exports.weverseBulkImportProducts = onCall(
             const docRef = db.collection("products").doc();
             await docRef.set({
               userId: uid,
+              isDraft: true,
               source: "weverse",
               weverseSaleId: saleId,
               title: product.title,
@@ -140,24 +140,11 @@ exports.weverseBulkImportProducts = onCall(
               orderSheetNumber: item.orderSheetNumber ?? null,
               orderSheetGroupNumber: item.orderSheetGroupNumber ?? null,
               tiktokStatus: "draft",
+              buyerPaysShipping: true,
+              handlingFee: 0,
+              estimatedShippingDays: 3,
               ...geminiFields,
               importedAt: admin.firestore.FieldValue.serverTimestamp(),
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            });
-
-            // Dual-write into the shared `listings` collection — see
-            // aliexpress_product.js's identical dual-write for why.
-            await db.collection("listings").doc(docRef.id).set({
-              userId: uid,
-              ...toListingFields({
-                title: product.title,
-                description: product.description,
-                images: finalImages,
-                options: product.options,
-                variants: product.variants,
-              }),
-              importedAt: admin.firestore.FieldValue.serverTimestamp(),
-              createdAt: admin.firestore.FieldValue.serverTimestamp(),
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             });
 

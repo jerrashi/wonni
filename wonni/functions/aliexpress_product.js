@@ -3,7 +3,6 @@ const admin = require("firebase-admin");
 const https = require("https");
 const { callAliexpressApi } = require("./aliexpress_auth");
 const { importTimeGeminiFields, geminiApiKey } = require("./gemini_identify");
-const { toListingFields } = require("./listing_shape");
 
 const ALLOWED_IMAGE_HOSTS = [".alicdn.com", ".aliexpress-media.com"];
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -185,6 +184,10 @@ exports.aliexpressImportProduct = onCall(
     });
     await docRef.set({
       userId: uid,
+      // Newly-imported products are always an unpublished working record —
+      // see wonni_listing.js's postToWonni, which flips this to false on
+      // the user's explicit "Post to Wonni" action.
+      isDraft: true,
       aliexpressProductId: product.productId,
       aliexpressProductUrl: product.productUrl ?? productUrl ?? "",
       title: product.title,
@@ -196,22 +199,14 @@ exports.aliexpressImportProduct = onCall(
       variants,
       hasVariants: options.length > 0,
       tiktokStatus: "draft",
+      // Shared shipping-config defaults, matching iOS's own Item init
+      // defaults exactly (Models/Listing.swift) so a product looks the same
+      // regardless of which client created it.
+      buyerPaysShipping: true,
+      handlingFee: 0,
+      estimatedShippingDays: 3,
       ...geminiFields,
       importedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    // Dual-write into the shared `listings` collection (same doc id) using
-    // the unified UserListing shape both products now read/write. `products`
-    // stays the source of truth for ProductDetail.jsx until that file's own
-    // migration pass (deferred — see integration plan); this write exists so
-    // new imports are visible cross-product from day one instead of only
-    // after that later pass ships.
-    await db.collection("listings").doc(docRef.id).set({
-      userId: uid,
-      ...toListingFields({ title: product.title, description: product.description ?? "", images: finalImages, options, variants }),
-      importedAt: admin.firestore.FieldValue.serverTimestamp(),
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 

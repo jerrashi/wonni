@@ -155,15 +155,6 @@ exports.dropshipEbayCreateListing = onCall(
       ebayCategoryId: categoryId,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-    // Mirror into the shared `listings` doc (see aliexpress_product.js's
-    // dual-write comment for why both collections exist during migration).
-    await db.collection("listings").doc(productId).set({
-      crossPostStatus: { ebay: "active" },
-      crossPostListingIds: { ebay: listingId ?? null },
-      ebayCategory: Number.isFinite(Number(categoryId)) ? Number(categoryId) : null,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-
     return { listingId, offerId, price, categoryId };
   }
 );

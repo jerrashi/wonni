@@ -1587,7 +1587,13 @@ struct DraftEditSheet: View {
                 DraftPhotoEditModal(item: item)
             }
             .onAppear { loadFromDraft() }
-            .task { await SellingSettingsRepository.shared.loadSettings() }
+            .task {
+                // Pull first (in case this draft was edited on web since last opened
+                // here), then reload the form fields so they reflect whatever's newest.
+                await UploadManager.shared.pullProductIfNewer(item, modelContext: modelContext)
+                loadFromDraft()
+                await SellingSettingsRepository.shared.loadSettings()
+            }
         }
     }
 
@@ -1671,8 +1677,9 @@ struct DraftEditSheet: View {
         item.lengthIn = Double(lengthText.filter { $0.isNumber || $0 == "." })
         item.widthIn = Double(widthText.filter { $0.isNumber || $0 == "." })
         item.heightIn = Double(heightText.filter { $0.isNumber || $0 == "." })
-        
+
         try? modelContext.save()
+        UploadManager.shared.syncProductData(item)
     }
     }
 
@@ -1726,6 +1733,7 @@ struct BulkListingOverviewView: View {
     @State private var isSelectMode = false
     @State private var selectedItemIDs: Set<UUID> = []
     @State private var showDraftBulkEdit = false
+    @State private var showDesktopDrafts = false
     /// Direction of the last arrow-key move, so continuing past a description slot (see
     /// DraftRow.onDescriptionAutoAdvance) keeps going the same way the user was already moving.
     @State private var lastFocusMoveDelta = 1
@@ -1859,6 +1867,18 @@ struct BulkListingOverviewView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 if !isSelectMode { processButton }
             }
+            if !isSelectMode {
+                // The iOS half of cross-platform draft continuity — see
+                // DesktopDraftsView. Mirrors wonni_dropship's own "Mobile Drafts"
+                // folder on its web Dashboard, opposite direction.
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        showDesktopDrafts = true
+                    } label: {
+                        Image(systemName: "desktopcomputer")
+                    }
+                }
+            }
             ToolbarItemGroup(placement: .keyboard) {
                 Button { moveFocus(by: -1) } label: { Image(systemName: "chevron.up") }
                     .disabled(focusedIndex == nil || focusedIndex == 0)
@@ -1890,6 +1910,11 @@ struct BulkListingOverviewView: View {
                 selectedItemIDs.removeAll()
             }
             .environmentObject(uploadManager)
+        }
+        .sheet(isPresented: $showDesktopDrafts) {
+            NavigationStack {
+                DesktopDraftsView()
+            }
         }
     }
 
@@ -2927,7 +2952,7 @@ struct ResultDraftRow: View, Equatable {
         }
 
         try? modelContext.save()
-        uploadManager.syncDraftData(item)
+        uploadManager.syncProductData(item)
     }
 
     private func undoAITitle() {
@@ -2973,12 +2998,12 @@ struct ResultDraftRow: View, Equatable {
 
     /// Save + Firestore sync a beat after the current frame — keeps undo/redo taps
     /// responsive (the synchronous save was part of the visible lag). Fires on the
-    /// main actor; the deleted-item guard lives in syncDraftData.
+    /// main actor; the deleted-item guard lives in syncProductData.
     private func deferredPersist() {
         Task { @MainActor in
             guard !Item.deletedIDs.contains(item.id) else { return }
             try? modelContext.save()
-            uploadManager.syncDraftData(item)
+            uploadManager.syncProductData(item)
         }
     }
 
