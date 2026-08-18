@@ -20,21 +20,17 @@ const PROJECT_ID = process.env.GCP_PROJECT || "wonni-app";
 const secretManager = new SecretManagerServiceClient();
 
 async function getEtsyCredentials(credentialSet) {
-  const mapping = {
-    ios: { clientId: "ETSY_CLIENT_ID", sharedSecret: "ETSY_SHARED_SECRET" },
-    web: { clientId: "DROPSHIP_ETSY_CLIENT_ID", sharedSecret: "DROPSHIP_ETSY_SHARED_SECRET" },
-  };
-  if (!mapping[credentialSet]) {
+  // Both iOS and web use the same Etsy credentials (same app)
+  if (!["ios", "web"].includes(credentialSet)) {
     throw new HttpsError("invalid-argument", `Unknown credential set: ${credentialSet}`);
   }
-  const { clientId: clientIdSecret, sharedSecret: sharedSecretSecret } = mapping[credentialSet];
 
   try {
     const [clientIdResp] = await secretManager.accessSecretVersion({
-      name: `projects/${PROJECT_ID}/secrets/${clientIdSecret}/versions/latest`,
+      name: `projects/${PROJECT_ID}/secrets/ETSY_CLIENT_ID/versions/latest`,
     });
     const [sharedSecretResp] = await secretManager.accessSecretVersion({
-      name: `projects/${PROJECT_ID}/secrets/${sharedSecretSecret}/versions/latest`,
+      name: `projects/${PROJECT_ID}/secrets/ETSY_SHARED_SECRET/versions/latest`,
     });
 
     return {
@@ -44,7 +40,7 @@ async function getEtsyCredentials(credentialSet) {
   } catch (err) {
     throw new HttpsError(
       "internal",
-      `Failed to retrieve Etsy credentials for ${credentialSet}: ${err.message}`
+      `Failed to retrieve Etsy credentials: ${err.message}`
     );
   }
 }
