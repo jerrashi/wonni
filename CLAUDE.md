@@ -202,6 +202,45 @@ implementations — this is the direction Phase 3 (`~/.claude/plans/sales-dashbo
 was already written toward; nothing new to build yet, just confirms that
 spec is still the target once Phase B's backend merge is further along.
 
+## As of 2026-08-18 — Phase B sanity check & remaining issues
+
+**Sanity check complete (2026-08-18):** commits `18a3eca` (backend merge) and
+`c6f0b40` (mobile drafts + AI suggestions) verified for code correctness.
+
+✓ **Code merge looks good:** Firebase config correctly repointed to `wonni-app`,
+all OAuth pages updated to call renamed `dropshipEbay*` functions, Vite/React
+Router paths aligned to `/web` subpath, extension manifest updated,
+mediaJobQueue properly extracted to avoid component-unmount data loss, Settings
+account-linking UI wired correctly.
+
+**Identified issues (blockers for cutover, not code bugs):**
+
+1. **Missing eBay env vars** — `web/.env.local` has TikTok/AliExpress keys but
+   no `VITE_EBAY_CLIENT_ID`, `VITE_EBAY_RU_NAME`, `VITE_EBAY_ENV`. Settings.jsx
+   will fall back to "REPLACE_ME" if missing, breaking eBay OAuth. Either
+   intentional (config-only at runtime) or oversight — needs clarification.
+
+2. **Cloud Functions not in this repo** — functions/ directory removed; all
+   imports (`aliexpressExchangeToken`, `tiktokExchangeToken`,
+   `dropshipEbayExchangeToken`, etc.) assume Cloud Functions deployed to
+   `wonni-app` project. If not yet live there, all OAuth flows 404.
+
+3. **Rules not locally validated** — CLAUDE.md notes no Java for emulator;
+   merged Firestore/Storage rules should be validated via Firebase Console's
+   Rules Playground or test deploy before prod cutover.
+
+4. **Data migration pending** — users in wonni-dropship project can't sign in
+   to new backend until auth:import + Firestore/Storage copy runs.
+
+5. **OAuth redirect URIs need manual setup** — AliExpress & TikTok console
+   registrations still point to old paths; need manual update to
+   `https://wonni-app.web.app/web/oauth/{aliexpress,tiktok}` in their
+   developer dashboards.
+
+None of these are code defects — all are expected external-config or
+deployment-sequencing issues per the Phase B plan. Once resolved, app should
+work correctly.
+
 ## Phase 1 notes (variations)
 - `MAX_VARIATION_DIMENSIONS` in `ProductDetail.jsx` caps variation structure
   at 2 dimensions (primary + sub), matching Etsy's UI. Not generalized to N
