@@ -4,6 +4,7 @@ import { useBlocker, useNavigate, useParams } from "react-router-dom";
 import { auth, db, callFunction, uploadImageBlob } from "../firebase";
 import Layout from "../components/Layout";
 import UnsavedChangesModal from "../components/UnsavedChangesModal";
+import PostModal from "../components/PostModal";
 import { useDebouncedCallback } from "../hooks/useDebouncedCallback";
 import { normalizeImageAssets, buildImagePayload } from "../lib/media";
 import { useMediaJobQueue } from "../lib/mediaJobQueue";
@@ -3247,6 +3248,7 @@ function ProductDetail() {
   // primary option or a sub-variation), or null.
   const [photoPickerValue, setPhotoPickerValue] = useState(null);
   const [showMercariModal, setShowMercariModal] = useState(false);
+  const [showPostModal, setShowPostModal] = useState(false);
   const [syncingMercari, setSyncingMercari] = useState(false);
   const [mercariSyncMessage, setMercariSyncMessage] = useState("");
   const [toast, setToast] = useState(null); // { message, actions } | null
@@ -4382,6 +4384,11 @@ function ProductDetail() {
               {saving ? "Saving…" : "Save"}
             </button>
           )}
+          {product && (
+            <button className="btn btn-primary" onClick={() => setShowPostModal(true)}>
+              📤 Post
+            </button>
+          )}
           {product?.hasVariants && mercariInStockVariants.length > 1 ? (
             <button className="btn btn-primary" onClick={() => setShowMercariModal(true)}>
               {mercariAllInStockVariantsPosted
@@ -4869,6 +4876,14 @@ function ProductDetail() {
           onRemoveVariantPhoto={removeVariantMercariPhoto}
           onClose={() => setShowMercariModal(false)}
           onLaunched={() => setShowMercariModal(false)}
+        />
+      )}
+
+      {/* Post to Platforms Modal (Phase 3) */}
+      {showPostModal && product && (
+        <PostModal
+          product={product}
+          onClose={() => setShowPostModal(false)}
         />
       )}
 
