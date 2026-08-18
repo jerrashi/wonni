@@ -202,49 +202,42 @@ implementations — this is the direction Phase 3 (`~/.claude/plans/sales-dashbo
 was already written toward; nothing new to build yet, just confirms that
 spec is still the target once Phase B's backend merge is further along.
 
-## As of 2026-08-18 — Phase B sanity check & remaining issues
+## As of 2026-08-18 — eBay setup for web/iOS parity & Cloud Function deployment
 
-**Sanity check complete (2026-08-18):** commits `18a3eca` (backend merge) and
-`c6f0b40` (mobile drafts + AI suggestions) verified for code correctness.
+**eBay env vars configured (2026-08-18)** — Added to `web/.env.local` and Google
+Cloud Secrets:
+- `VITE_EBAY_CLIENT_ID=JerryShi-Listify-PRD-ee56a6601-f3a9f5df` ✓
+- `VITE_EBAY_RU_NAME=Jerry_Shi-JerryShi-Listif-gmmxbsbd` ✓
+- `VITE_EBAY_ENV=production` ✓
 
-✓ **Code merge looks good:** Firebase config correctly repointed to `wonni-app`,
-all OAuth pages updated to call renamed `dropshipEbay*` functions, Vite/React
-Router paths aligned to `/web` subpath, extension manifest updated,
-mediaJobQueue properly extracted to avoid component-unmount data loss, Settings
-account-linking UI wired correctly.
+Web and iOS app now share the same eBay Developer App (wonni-app project) and
+can both sign in and cross-post to eBay. The RuName is pre-configured in eBay
+Partner Center to map to `https://wonni-app.web.app/web/oauth/ebay`.
 
-**Identified issues (blockers for cutover, not code bugs):**
+**Dropship functions prepared for deployment (2026-08-18):**
+- Uncommented dropship auth/listing/order functions in wonni-app's `functions/index.js`
+- Functions renamed with `dropshipEbay*` prefix to avoid collisions with wonni-app's own eBay integration
+- All Google Cloud Secrets updated with correct eBay and dropship credentials
 
-1. ✓ **eBay env vars now set (2026-08-18)** — Added to `web/.env.local`:
-   - `VITE_EBAY_CLIENT_ID=JerryShi-Listify-PRD-ee56a6601-f3a9f5df`
-   - `VITE_EBAY_RU_NAME=Jerry_Shi-JerryShi-Listif-gmmxbsbd`
-   - `VITE_EBAY_ENV=production`
-   
-   Web and iOS app now share the same eBay Developer App credentials (wonni-app
-   project). Both can now sign in and cross-post to eBay once Cloud Functions
-   are deployed. The RuName is pre-configured in eBay Partner Center to map
-   to `https://wonni-app.web.app/web/oauth/ebay`.
+**BLOCKER: Firebase Cloud Function deployment issue** — The dropship functions
+use `defineSecret()` which requires secrets from Google Cloud, but Firebase CLI
+also requires env vars in .env during deployment. This creates a "secret
+environment variable overlaps non secret environment variable" conflict that
+Cloud Run rejects during deployment. Affects all 35+ dropship functions
+(OAuth exchange tokens, listing creation, TikTok/AliExpress/Mercari
+automation, etc.). Some functions deployed successfully (ebayRedirect,
+postToWonni, onProductDeleted, etc.) but the ones we need for web/iOS parity
+(dropshipEbayExchangeToken, dropshipEbayCreateListing, tiktokExchangeToken,
+etc.) all failed with this overlap error. Needs Firebase CLI fix or refactor
+of function secret definitions.
 
-2. **Cloud Functions not in this repo** — functions/ directory removed; all
-   imports (`aliexpressExchangeToken`, `tiktokExchangeToken`,
-   `dropshipEbayExchangeToken`, etc.) assume Cloud Functions deployed to
-   `wonni-app` project. If not yet live there, all OAuth flows 404.
+**Remaining blockers (unchanged):**
 
-3. **Rules not locally validated** — CLAUDE.md notes no Java for emulator;
-   merged Firestore/Storage rules should be validated via Firebase Console's
-   Rules Playground or test deploy before prod cutover.
+1. **Firestore/Storage rules** — not locally validated; need Firebase Console or test deploy before prod cutover.
 
-4. **Data migration pending** — users in wonni-dropship project can't sign in
-   to new backend until auth:import + Firestore/Storage copy runs.
+2. **Data migration** — users from wonni-dropship project can't sign in to wonni-app backend until auth:import + copy runs.
 
-5. **OAuth redirect URIs need manual setup** — AliExpress & TikTok console
-   registrations still point to old paths; need manual update to
-   `https://wonni-app.web.app/web/oauth/{aliexpress,tiktok}` in their
-   developer dashboards.
-
-None of these are code defects — all are expected external-config or
-deployment-sequencing issues per the Phase B plan. Once resolved, app should
-work correctly.
+3. **OAuth redirect URIs** — AliExpress & TikTok console registrations still need manual update to `/web/oauth/*` paths.
 
 ## Phase 1 notes (variations)
 - `MAX_VARIATION_DIMENSIONS` in `ProductDetail.jsx` caps variation structure
