@@ -19,18 +19,14 @@ exports.updateMercariListingStatus = onCall(
 
     const db = admin.firestore();
     const ref = db.collection("products").doc(productId);
-    // Mirrored into the shared `listings` doc (see aliexpress_product.js's
-    // dual-write comment for why both collections exist during migration).
-    const listingRef = db.collection("listings").doc(productId);
 
     if (variantId) {
       // One Mercari listing per variant — update just that variant's entry in
-      // the `variants` array (and the mirrored `variations` array). Runs in a
-      // transaction (read-modify-write the whole array) so a concurrent edit
-      // elsewhere (e.g. the user changing a price) can't get clobbered by
-      // this write racing it.
+      // the `variants` array. Runs in a transaction (read-modify-write the
+      // whole array) so a concurrent edit elsewhere (e.g. the user changing a
+      // price) can't get clobbered by this write racing it.
       await db.runTransaction(async (tx) => {
-        const [snap, listingSnap] = await Promise.all([tx.get(ref), tx.get(listingRef)]);
+        const snap = await tx.get(ref);
         if (!snap.exists) throw new HttpsError("not-found", "Product not found.");
         const product = snap.data();
         if (product?.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
@@ -52,23 +48,6 @@ exports.updateMercariListingStatus = onCall(
         variants[idx] = variant;
 
         tx.update(ref, { variants, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-
-        if (listingSnap.exists) {
-          const variations = Array.isArray(listingSnap.data().variations)
-            ? [...listingSnap.data().variations]
-            : [];
-          const vIdx = variations.findIndex((v) => v?.id === variantId);
-          if (vIdx !== -1) {
-            const variation = { ...variations[vIdx] };
-            variation.crossPostStatus = { ...variation.crossPostStatus, mercari: status };
-            const listingIds = { ...variation.crossPostListingIds };
-            if (listingId) listingIds.mercari = listingId;
-            if (url) listingIds.mercariUrl = url;
-            variation.crossPostListingIds = listingIds;
-            variations[vIdx] = variation;
-            tx.update(listingRef, { variations, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-          }
-        }
       });
 
       return { ok: true };
@@ -99,11 +78,6 @@ exports.updateMercariListingStatus = onCall(
     }
 
     await ref.update(update);
-    await listingRef.set({
-      crossPostStatus: { mercari: status },
-      ...(listingId || url ? { crossPostListingIds: { ...(listingId ? { mercari: listingId } : {}), ...(url ? { mercariUrl: url } : {}) } } : {}),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
     return { ok: true };
   }
 );

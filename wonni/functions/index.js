@@ -141,6 +141,16 @@ exports.requestAccountDeletion = requestAccountDeletion;
 exports.cancelAccountDeletion = cancelAccountDeletion;
 exports.purgeDeletedAccounts = purgeDeletedAccounts;
 
+// Post to Wonni — explicit action from wonni_dropship's web UI that creates/
+// updates a `listings/{productId}` doc from a dropship `products` draft
+// (status: "active" from the moment it's posted — this app has no
+// in-collection "draft" listings state, see firestore.rules' comment on
+// `listings`). The only dropship-merge piece live here so far; the rest of
+// the pipeline (AliExpress/TikTok/Weverse import, cross-posting) stays
+// commented out below until it's actually wired up.
+const { postToWonni } = require("./wonni_listing");
+exports.postToWonni = postToWonni;
+
 // eBay OAuth Redirect Intermediary (legacy — kept for fallback)
 exports.ebayRedirect = onRequest({ cors: true }, (req, res) => {
   const code = req.query.code;
@@ -154,71 +164,79 @@ exports.ebayRedirect = onRequest({ cors: true }, (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// Merged from wonni_dropship (Phase B backend merge). `dropship_ebay_auth.js`
-// / `dropship_ebay_listing.js` are renamed copies of dropship's own
-// `ebay_auth.js`/`ebay_listing.js` — this project already has its own eBay
-// integration under `ebayExchangeToken`/`ebayCreateListing`/etc. above with
-// different eBay app credentials, so the dropship functions keep their own
-// `dropshipEbay*` names to avoid colliding with them.
+// Merged from wonni_dropship (Phase B backend merge), commented out for now:
+// TikTok/AliExpress/Weverse/dropship-eBay are not actually integrated —
+// nothing in the real app calls these (verified: `updateMercariListingStatus`
+// is the dropship Chrome-extension pipeline against a separate `products`
+// collection, not the app's own Mercari WebView automation; Swift's
+// `disconnectPlatform`/eBay OAuth are fully local and never call these
+// functions by name). Deploying them was prompting for TIKTOK_APP_KEY/etc.
+// secrets we don't have yet for a pipeline nobody uses. Uncomment (and
+// re-add to module.exports below) once this pipeline is actually wired up.
+// `dropship_ebay_auth.js`/`dropship_ebay_listing.js` are renamed copies of
+// dropship's own `ebay_auth.js`/`ebay_listing.js` — this project already has
+// its own eBay integration under `ebayExchangeToken`/`ebayCreateListing`/etc.
+// above with different eBay app credentials, so the dropship functions keep
+// their own `dropshipEbay*` names to avoid colliding with them.
 // ─────────────────────────────────────────────────────────────────────────
 
-const { aliexpressExchangeToken } = require("./aliexpress_auth");
-const { aliexpressImportProduct } = require("./aliexpress_product");
-const { weverseImportProduct } = require("./weverse_product");
-const { weverseBulkImportProducts } = require("./weverse_bulk_import");
-const { splitProductImage } = require("./split_image");
-const { identifyProductsInImage } = require("./identify_products");
-const { placeAliexpressOrder, confirmTiktokShipment, pollAliexpressTracking } = require("./aliexpress_order");
-const { tiktokExchangeToken } = require("./tiktok_auth");
-const { dropshipEbayExchangeToken } = require("./dropship_ebay_auth");
-const { dropshipEbayCreateListing, dropshipEbayUpdateListing } = require("./dropship_ebay_listing");
-const { getTiktokCategories, tiktokCreateListing, tiktokUpdateListing, tiktokDeleteListing } = require("./tiktok_listing");
-const { updateMercariListingStatus } = require("./mercari_listing");
-const { syncTiktokOrders, syncTiktokOrdersScheduled } = require("./tiktok_orders");
-const { disconnectPlatform, updateSettings, generateOAuthState } = require("./user_settings");
-const { onProductDeleted } = require("./product_cleanup");
-const { generateProductDescription } = require("./generate_description");
-const { publishStorageObject } = require("./publish_storage_object");
+// const { aliexpressExchangeToken } = require("./aliexpress_auth");
+// const { aliexpressImportProduct } = require("./aliexpress_product");
+// const { weverseImportProduct } = require("./weverse_product");
+// const { weverseBulkImportProducts } = require("./weverse_bulk_import");
+// const { splitProductImage } = require("./split_image");
+// const { identifyProductsInImage } = require("./identify_products");
+// const { placeAliexpressOrder, confirmTiktokShipment, pollAliexpressTracking } = require("./aliexpress_order");
+// const { tiktokExchangeToken } = require("./tiktok_auth");
+// const { dropshipEbayExchangeToken } = require("./dropship_ebay_auth");
+// const { dropshipEbayCreateListing, dropshipEbayUpdateListing } = require("./dropship_ebay_listing");
+// const { getTiktokCategories, tiktokCreateListing, tiktokUpdateListing, tiktokDeleteListing } = require("./tiktok_listing");
+// const { updateMercariListingStatus } = require("./mercari_listing");
+// const { syncTiktokOrders, syncTiktokOrdersScheduled } = require("./tiktok_orders");
+// const { disconnectPlatform, updateSettings, generateOAuthState } = require("./user_settings");
+// const { onProductDeleted } = require("./product_cleanup");
+// const { generateProductDescription } = require("./generate_description");
+// const { publishStorageObject } = require("./publish_storage_object");
 
-module.exports = {
-  ...module.exports,
-  // dropship: auth
-  aliexpressExchangeToken,
-  tiktokExchangeToken,
-  dropshipEbayExchangeToken,
-
-  // dropship: products/listings
-  aliexpressImportProduct,
-  weverseImportProduct,
-  weverseBulkImportProducts,
-  splitProductImage,
-  identifyProductsInImage,
-  generateProductDescription,
-  onProductDeleted,
-  publishStorageObject,
-
-  // dropship: TikTok Shop listings
-  getTiktokCategories,
-  tiktokCreateListing,
-  tiktokUpdateListing,
-  tiktokDeleteListing,
-
-  // dropship: eBay listings
-  dropshipEbayCreateListing,
-  dropshipEbayUpdateListing,
-
-  // dropship: Mercari listings
-  updateMercariListingStatus,
-
-  // dropship: user settings
-  generateOAuthState,
-  disconnectPlatform,
-  updateSettings,
-
-  // dropship: orders + fulfillment
-  syncTiktokOrders,
-  syncTiktokOrdersScheduled,
-  placeAliexpressOrder,
-  confirmTiktokShipment,
-  pollAliexpressTracking,
-};
+// module.exports = {
+//   ...module.exports,
+//   // dropship: auth
+//   aliexpressExchangeToken,
+//   tiktokExchangeToken,
+//   dropshipEbayExchangeToken,
+//
+//   // dropship: products/listings
+//   aliexpressImportProduct,
+//   weverseImportProduct,
+//   weverseBulkImportProducts,
+//   splitProductImage,
+//   identifyProductsInImage,
+//   generateProductDescription,
+//   onProductDeleted,
+//   publishStorageObject,
+//
+//   // dropship: TikTok Shop listings
+//   getTiktokCategories,
+//   tiktokCreateListing,
+//   tiktokUpdateListing,
+//   tiktokDeleteListing,
+//
+//   // dropship: eBay listings
+//   dropshipEbayCreateListing,
+//   dropshipEbayUpdateListing,
+//
+//   // dropship: Mercari listings
+//   updateMercariListingStatus,
+//
+//   // dropship: user settings
+//   generateOAuthState,
+//   disconnectPlatform,
+//   updateSettings,
+//
+//   // dropship: orders + fulfillment
+//   syncTiktokOrders,
+//   syncTiktokOrdersScheduled,
+//   placeAliexpressOrder,
+//   confirmTiktokShipment,
+//   pollAliexpressTracking,
+// };

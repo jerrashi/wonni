@@ -8,6 +8,7 @@ import SwiftUI
 import SwiftData
 import FirebaseAuth
 import FirebaseFirestore
+import FirebaseFunctions
 import UIKit
 import Vision
 
@@ -429,6 +430,12 @@ class UploadManager: ObservableObject {
         runLocalRecognition(draft: draft, modelContext: modelContext)
         activeDraftID = nil
         try? modelContext.save()
+        // Creates the shared products/{id} doc the moment a real draft exists (first
+        // photo committed) rather than waiting for the user to type a title — so it's
+        // visible cross-platform as early as possible. images/isDraft/userId land here;
+        // startBackgroundUpload's own completion re-syncs once photo paths finish
+        // uploading, since they aren't known yet at this exact point.
+        syncProductData(draft)
     }
 
     // MARK: – Phase 1: Background Photo Upload
@@ -524,6 +531,7 @@ class UploadManager: ObservableObject {
                 draft.firebasePhotoPathsByAsset = photoPathsByAsset
                 try? modelContext.save()
                 print("[UploadManager] Upload complete for \(draftID): \(photoPathsByAsset.count) paths saved")
+                syncProductData(draft)
             } else {
                 print("[UploadManager] Draft \(draftID) deleted mid-upload — discarding \(photoPathsByAsset.count) uploaded paths")
             }
@@ -736,41 +744,172 @@ class UploadManager: ObservableObject {
         }
     }
 
-    /// Syncs metadata to Firestore if the listing document already exists.
-    /// Fire-and-forget — failures are logged but not surfaced.
-    func syncDraftData(_ draft: Item) {
-        guard let listingId = draft.firestoreListingId,
-              !Item.deletedIDs.contains(draft.id) else { return }
+    /// Syncs a draft's fields into the shared `products/{id}` doc — see
+    /// `ProductRepository` for why this is a distinct collection from `listings`.
+    /// Fire-and-forget — failures are logged but not surfaced. Safe to call the moment
+    /// a draft exists (first photo committed); creates the doc if it doesn't exist yet.
+    func syncProductData(_ draft: Item) {
+        guard !Item.deletedIDs.contains(draft.id) else { return }
+        Task { await syncProductDataAwaiting(draft) }
+    }
 
-        // Snapshot every attribute NOW, before the Task body runs. The Task executes a
-        // beat later on the main actor, and the draft can be deleted in that gap
-        // (publish cleanup, swipe delete, undo-toast delete) — reading any attribute on
-        // a detached SwiftData object then traps with "backing data was detached from a
-        // context without resolving attribute faults" (seen in the wild on \Item.tags).
+    /// Core of `syncProductData`, awaitable — `publishDrafts` calls this directly
+    /// (rather than the fire-and-forget wrapper) so `postToWonni` is guaranteed to see
+    /// fresh data instead of racing an in-flight fire-and-forget write.
+    @discardableResult
+    func syncProductDataAwaiting(_ draft: Item, isDraftOverride: Bool? = nil) async -> Bool {
+        guard let productId = draft.firestoreListingId,
+              let userId = Auth.auth().currentUser?.uid,
+              !Item.deletedIDs.contains(draft.id) else { return false }
+
+        // Snapshot every attribute NOW, before any suspension point. The draft can be
+        // deleted mid-await (publish cleanup, swipe delete, undo-toast delete) — reading
+        // any attribute on a detached SwiftData object then traps with "backing data was
+        // detached from a context without resolving attribute faults" (seen in the wild
+        // on \Item.tags).
+        let now = Date()
+        draft.updatedAt = now
+
         var data: [String: Any] = [:]
-        data["customTitle"] = draft.userEditedTitle ?? draft.aiSuggestedTitle
-        data["customDescription"] = draft.userEditedDescription ?? draft.aiSuggestedDescription
-        data["price"] = draft.userEditedPrice ?? draft.aiSuggestedPrice
+        data["userId"] = userId
+        data["source"] = "ios"
+        data["isDraft"] = isDraftOverride ?? draft.isDraft
+        data["title"] = draft.userEditedTitle ?? draft.aiSuggestedTitle
+        data["description"] = draft.userEditedDescription ?? draft.aiSuggestedDescription
+        data["listingPrice"] = draft.userEditedPrice ?? draft.aiSuggestedPrice
+        data["condition"] = draft.condition
+        data["category"] = draft.aiSuggestedCategory
+        data["brand"] = draft.aiSuggestedBrand
         data["tags"] = draft.tags
         data["personalNote"] = draft.personalNote
-        data["updatedAt"] = Timestamp(date: Date())
+        data["weightLbs"] = draft.weightLbs
+        data["lengthIn"] = draft.lengthIn
+        data["widthIn"] = draft.widthIn
+        data["heightIn"] = draft.heightIn
+        // Raw AI suggestions, kept separate from the final title/description/
+        // listingPrice above — this is what lets postToWonni (and web's own
+        // "AI suggested" chip) show "AI suggested X, you kept Y" regardless of
+        // which client the suggestion came from.
+        data["aiSuggestedTitle"] = draft.aiSuggestedTitle
+        data["aiSuggestedDescription"] = draft.aiSuggestedDescription
+        data["aiSuggestedPrice"] = draft.aiSuggestedPrice
+        data["aiModel"] = draft.aiModel
+        data["aiPromptVersion"] = draft.aiPromptVersion
+        // Shared shipping-config fields — postToWonni builds the nested
+        // ShippingInfo struct from these directly at graduation time.
+        data["buyerPaysShipping"] = draft.buyerPaysShipping
+        data["handlingFee"] = draft.handlingFee
+        data["estimatedShippingDays"] = draft.estimatedShippingDays
+        data["handlingTimeDays"] = draft.handlingTimeDays
+        data["images"] = draft.orderedFirebasePhotoPaths.map { StorageService.shared.publicURL(forPath: $0) }
+        data["updatedAt"] = Timestamp(date: now)
 
-        if let l = draft.lengthIn, let w = draft.widthIn, let h = draft.heightIn {
-            let dimensions = PackageDimensions(lengthIn: l, widthIn: w, heightIn: h)
-            let shippingInfo = ShippingInfo(
-                buyerPaysShipping: draft.buyerPaysShipping,
-                handlingFee: draft.handlingFee,
-                estimatedShippingDays: draft.estimatedShippingDays,
-                weightLbs: draft.weightLbs,
-                packageDimensions: dimensions,
-                handlingTimeDays: draft.handlingTimeDays
-            )
-            data["shippingInfo"] = (try? Firestore.Encoder().encode(shippingInfo)) ?? [:]
+        do {
+            try await ProductRepository.shared.syncProduct(productId: productId, data: data)
+            return true
+        } catch {
+            print("[UploadManager] syncProductDataAwaiting failed for \(productId): \(error)")
+            return false
         }
+    }
 
-        Task {
-            // Expected to fail when no Firestore draft exists yet — suppress noise
-            try? await ListingRepository.shared.updateListingData(listingId: listingId, data: data)
+    /// Compares the shared `products/{id}` doc's `updatedAt` against this draft's own
+    /// local `updatedAt` and pulls remote fields down if Firestore is newer — the other
+    /// half of last-write-wins (the push half is `syncProductData`). Call before a draft
+    /// is opened for editing so a web-made change isn't silently clobbered by the next
+    /// local edit's push. Best-effort: network failures leave the local draft untouched.
+    func pullProductIfNewer(_ draft: Item, modelContext: ModelContext) async {
+        guard let productId = draft.firestoreListingId,
+              !Item.deletedIDs.contains(draft.id) else { return }
+
+        guard let data = try? await ProductRepository.shared.fetchProduct(productId: productId) else { return }
+        guard let remoteUpdatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() else { return }
+        guard remoteUpdatedAt > draft.updatedAt else { return }
+
+        guard !Item.deletedIDs.contains(draft.id) else { return }
+        await applyRemoteProductFields(data, to: draft)
+        draft.updatedAt = remoteUpdatedAt
+        try? modelContext.save()
+    }
+
+    /// Field-by-field hydration from a `products/{id}` raw dict onto a local `Item` —
+    /// shared by `pullProductIfNewer` (only when remote is newer) and `adoptProduct`
+    /// (unconditional, since the local `Item` there is brand new and has nothing to
+    /// compare against). Does not touch `draft.updatedAt` or persist — callers decide
+    /// that, since the two callers want different values there (the remote timestamp
+    /// vs. "now", respectively... see adoptProduct's own comment).
+    private func applyRemoteProductFields(_ data: [String: Any], to draft: Item) async {
+        if let title = data["title"] as? String { draft.userEditedTitle = title.isEmpty ? nil : title }
+        if let description = data["description"] as? String { draft.userEditedDescription = description.isEmpty ? nil : description }
+        if let price = data["listingPrice"] as? Double { draft.userEditedPrice = price }
+        if let condition = data["condition"] as? String { draft.condition = condition }
+        if let category = data["category"] as? String { draft.aiSuggestedCategory = category }
+        if let brand = data["brand"] as? String { draft.aiSuggestedBrand = brand }
+        if let tags = data["tags"] as? [String] { draft.tags = tags }
+        if let personalNote = data["personalNote"] as? String { draft.personalNote = personalNote.isEmpty ? nil : personalNote }
+        // Raw AI suggestions (distinct from the final values above) — e.g. a
+        // dropship-originated product's gemini_identify.js suggestion, so it
+        // shows up as a real "AI suggested" chip if this draft is later opened
+        // on iOS too, not just on web.
+        if let aiSuggestedTitle = data["aiSuggestedTitle"] as? String { draft.aiSuggestedTitle = aiSuggestedTitle }
+        if let aiSuggestedDescription = data["aiSuggestedDescription"] as? String { draft.aiSuggestedDescription = aiSuggestedDescription }
+        if let aiSuggestedPrice = data["aiSuggestedPrice"] as? Double { draft.aiSuggestedPrice = aiSuggestedPrice }
+        if let aiModel = data["aiModel"] as? String { draft.aiModel = aiModel }
+        if let aiPromptVersion = data["aiPromptVersion"] as? String { draft.aiPromptVersion = aiPromptVersion }
+        if let buyerPaysShipping = data["buyerPaysShipping"] as? Bool { draft.buyerPaysShipping = buyerPaysShipping }
+        if let handlingFee = data["handlingFee"] as? Double { draft.handlingFee = handlingFee }
+        if let estimatedShippingDays = data["estimatedShippingDays"] as? Int { draft.estimatedShippingDays = estimatedShippingDays }
+        if let handlingTimeDays = data["handlingTimeDays"] as? Int { draft.handlingTimeDays = handlingTimeDays }
+        if let weightLbs = data["weightLbs"] as? Double { draft.weightLbs = weightLbs }
+        if let lengthIn = data["lengthIn"] as? Double { draft.lengthIn = lengthIn }
+        if let widthIn = data["widthIn"] as? Double { draft.widthIn = widthIn }
+        if let heightIn = data["heightIn"] as? Double { draft.heightIn = heightIn }
+        await pullNewPhotos(draft, remoteImages: data["images"] as? [String] ?? [])
+    }
+
+    /// "Adopts" a dropship-originated `products/{id}` doc (a web-started draft) as a new
+    /// local `Item`, so the user can continue editing it on iOS the same way as any
+    /// locally-created draft — the iOS half of "Desktop Drafts" (see `DesktopDraftsView`).
+    /// Unlike `pullProductIfNewer`, there's no "is remote newer" question here: the local
+    /// `Item` is brand new and has nothing to compare against, so hydration is
+    /// unconditional. Returns nil (and does nothing) if the product can't be fetched.
+    func adoptProduct(productId: String, modelContext: ModelContext) async -> Item? {
+        guard let data = try? await ProductRepository.shared.fetchProduct(productId: productId) else { return nil }
+
+        let draft = Item(firestoreListingId: productId)
+        modelContext.insert(draft)
+        await applyRemoteProductFields(data, to: draft)
+        // Remote's own updatedAt if present, else "now" — either way this becomes the
+        // baseline pullProductIfNewer/syncProductData compare against from this point on.
+        draft.updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
+        try? modelContext.save()
+        return draft
+    }
+
+    /// Downloads any remote `images` URL not already represented locally and appends it
+    /// as a new local photo. Deliberately additive-only, never removes a local photo
+    /// absent from `remoteImages` — photo upload is progressive/async, so a photo can be
+    /// local-only for a real stretch of time before its upload finishes and it lands in
+    /// the next pushed `images` array; a destructive full-mirror here could delete a
+    /// photo that's simply mid-upload. Skips any URL outside this app's own bucket (see
+    /// `StorageService.path(fromPublicURL:)`) — e.g. wonni_dropship's pre-merge photos,
+    /// still hosted on the old `wonni-dropship` bucket.
+    private func pullNewPhotos(_ draft: Item, remoteImages: [String]) async {
+        guard !remoteImages.isEmpty else { return }
+        let localURLs = Set((draft.firebasePhotoPathsByAsset ?? [:]).values.map { StorageService.shared.publicURL(forPath: $0) })
+        let newURLs = remoteImages.filter { !localURLs.contains($0) }
+        guard !newURLs.isEmpty else { return }
+
+        for url in newURLs {
+            guard !Item.deletedIDs.contains(draft.id) else { return }
+            guard let path = StorageService.shared.path(fromPublicURL: url) else { continue }
+            guard let bytes = try? await StorageService.shared.downloadImageData(path: path) else { continue }
+            let assetId = UUID().uuidString
+            draft.sourceAssetIdentifiers.append(assetId)
+            draft.photosData.append(bytes)
+            draft.isLocalPhotoOnly = true
+            if draft.firebasePhotoPathsByAsset == nil { draft.firebasePhotoPathsByAsset = [:] }
+            draft.firebasePhotoPathsByAsset?[assetId] = path
         }
     }
 
@@ -923,75 +1062,35 @@ class UploadManager: ObservableObject {
                     photoUploadWarning = photoUploadWarning.map { "\($0)\n\n\(msg)" } ?? msg
                 }
 
-                // Build the active listing using the pre-generated listing ID
-                var listing = UserListing.newDraft(
-                    userId: userId,
-                    sourceAssetIdentifiers: []
-                )
-                listing.id = draft.firestoreListingId  // use pre-generated UUID
-                listing.status = .active
-                listing.createdAt = Timestamp(date: Date())
-                listing.publishedAt = Timestamp(date: Date())
-                listing.photoPaths = photoPaths
-                listing.coverPhotoPath = photoPaths.first
-                listing.tags = draft.tags
-                listing.personalNote = draft.personalNote
-                listing.customTitle = draft.userEditedTitle ?? draft.aiSuggestedTitle
-                listing.customDescription = draft.userEditedDescription ?? draft.aiSuggestedDescription
-                listing.price = draft.userEditedPrice ?? draft.aiSuggestedPrice
-                listing.geminiIdentificationConfirmed = draft.processedAt != nil
-                // Publish-time snapshot of AI output vs. what actually shipped (spec T1) —
-                // the substrate for "% similar to final by model" and vision-chip metrics.
-                listing.aiTracking = AIQualityTracking.from(
-                    aiSuggestedTitle: draft.aiSuggestedTitle,
-                    aiSuggestedDescription: draft.aiSuggestedDescription,
-                    aiSuggestedPrice: draft.aiSuggestedPrice,
-                    userEditedTitle: draft.userEditedTitle,
-                    userEditedDescription: draft.userEditedDescription,
-                    userEditedPrice: draft.userEditedPrice,
-                    visionTitle: draft.visionTitle,
-                    visionTitleAccepted: draft.visionTitleAccepted,
-                    aiModel: draft.aiModel,
-                    promptVersion: draft.aiPromptVersion,
-                    undoCount: draft.aiUndoCount
-                )
-                listing.category = draft.aiSuggestedCategory
-                // eBay category is resolved server-side from eBay's own taxonomy suggestions
-                // (using the title + this Gemini category string). The old static client-side map
-                // produced wrong leaf categories — e.g. mapping items into "Music > CDs", whose
-                // required "Artist"/"Release Title" item specifics then failed the eBay publish.
-                listing.ebayCategory = nil
-                listing.brand = draft.aiSuggestedBrand
-                listing.condition = ItemCondition(rawValue: draft.condition ?? "") ?? .good
-                listing.sourceAssetIdentifiers = []
+                // Ensure the shared products/{id} doc reflects the final draft state —
+                // awaited (not the fire-and-forget syncProductData) so postToWonni below
+                // is guaranteed to read this write, not a stale or still-in-flight one.
+                // isDraftOverride: false here, ahead of the graduation call itself, since
+                // postToWonni's own Firestore write only flips it after everything else
+                // succeeds — this keeps the two in sync regardless of ordering.
+                _ = await syncProductDataAwaiting(draft, isDraftOverride: false)
 
-                var packageDimensions: PackageDimensions? = nil
-                if let l = draft.lengthIn, let w = draft.widthIn, let h = draft.heightIn {
-                    packageDimensions = PackageDimensions(lengthIn: l, widthIn: w, heightIn: h)
-                }
-                listing.shippingInfo = ShippingInfo(
-                    buyerPaysShipping: draft.buyerPaysShipping,
-                    handlingFee: draft.handlingFee,
-                    estimatedShippingDays: draft.estimatedShippingDays,
-                    weightLbs: draft.weightLbs,
-                    packageDimensions: packageDimensions,
-                    handlingTimeDays: draft.handlingTimeDays
-                )
-
-                print("[UploadManager] Writing listing to Firestore: \(listing.id ?? "nil"), \(photoPaths.count) photos")
+                print("[UploadManager] Calling postToWonni for \(draft.firestoreListingId ?? "nil"), \(photoPaths.count) photos")
                 publishStatuses[draft.id] = .uploading(0.75)
 
-                // Auto-retry once on Firestore write failure before surfacing an error.
+                // Graduates the product into a real Wonni listing — the same explicit
+                // "Post to Wonni" path a dropship-originated product uses
+                // (wonni_dropship/functions/wonni_listing.js's postToWonni), rather than
+                // iOS writing a `listings` doc directly. Handles userId/customTitle/
+                // customDescription/photoPaths/variations/condition/category/brand/
+                // status="active"/crossPostStatus.wonni.
                 var firestoreError: Error? = nil
                 var docID: String? = nil
                 for attempt in 1...2 {
                     do {
-                        docID = try await ListingRepository.shared.saveDraft(listing)
+                        _ = try await Functions.functions().httpsCallable("postToWonni")
+                            .call(["productId": draft.firestoreListingId as Any])
+                        docID = draft.firestoreListingId
                         firestoreError = nil
                         break
                     } catch {
                         firestoreError = error
-                        print("[UploadManager] Firestore write failed for \(draft.id) (attempt \(attempt)): \(error)")
+                        print("[UploadManager] postToWonni failed for \(draft.id) (attempt \(attempt)): \(error)")
                         if attempt == 1 {
                             // Brief pause before the auto-retry
                             try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -1000,11 +1099,29 @@ class UploadManager: ObservableObject {
                 }
 
                 if let firestoreError {
-                    print("[UploadManager] Firestore write failed after retry for \(draft.id): \(firestoreError)")
+                    print("[UploadManager] postToWonni failed after retry for \(draft.id): \(firestoreError)")
                     publishStatuses[draft.id] = .failed
                     failedCount += 1
                     // pendingPublish stays true — item is recoverable on next launch
                     continue
+                }
+
+                // postToWonni now builds shippingInfo/tags/personalNote/aiTracking's
+                // aiSuggested*/titleEdited-etc. fields server-side directly from the
+                // shared products/{id} doc (see functions/listing_shape.js in the wonni
+                // repo) — syncProductDataAwaiting above already pushed all of those. Only
+                // these three remain genuinely iOS-only, with no dropship equivalent to
+                // source them from: on-device Vision-framework output, the "Undo AI edit"
+                // button's tap count, and eBay's server-resolved category (never
+                // client-set, on either platform).
+                let supplementalData: [String: Any] = [
+                    "aiTracking.visionTitle": draft.visionTitle ?? NSNull(),
+                    "aiTracking.visionTitleAccepted": draft.visionTitleAccepted,
+                    "aiTracking.undoCount": draft.aiUndoCount,
+                    "ebayCategory": NSNull(),
+                ]
+                if let docID {
+                    try? await ListingRepository.shared.updateListingData(listingId: docID, data: supplementalData)
                 }
 
                 print("[UploadManager] Published listing \(docID ?? "nil")")

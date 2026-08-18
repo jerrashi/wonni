@@ -856,7 +856,7 @@ struct DraftBulkEditSheet: View {
             case .unchanged: break
             }
 
-            uploadManager.syncDraftData(item)
+            uploadManager.syncProductData(item)
         }
         try? modelContext.save()
         onComplete()

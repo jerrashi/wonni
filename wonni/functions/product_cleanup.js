@@ -43,10 +43,6 @@ exports.onProductDeleted = onDocumentDeleted(
       // Non-fatal
     }
 
-    // Also delete the mirrored `listings` doc (see aliexpress_product.js's
-    // dual-write comment for why both collections exist during migration).
-    await admin.firestore().collection("listings").doc(productId).delete().catch(() => {});
-
     await Promise.all(deletions);
   }
 );

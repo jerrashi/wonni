@@ -9,6 +9,11 @@ const geminiApiKey = "GEMINI_API_KEY";
 exports.geminiApiKey = geminiApiKey;
 
 const GEMINI_MODEL = "gemini-2.5-flash-lite";
+// Bump on any prompt-text change below — rides onto the product doc as
+// `aiPromptVersion` so quality can be compared across prompt revisions,
+// mirroring the same idea as the iOS app's own PROMPT_VERSION constant
+// (functions/index.js in this repo, identifyItem).
+const PROMPT_VERSION = "2026-08-19.1";
 
 // Called once per product at import time. Returns a best-effort set of
 // Gemini-enriched fields to merge into the Firestore product document.
@@ -28,7 +33,9 @@ exports.importTimeGeminiFields = async function importTimeGeminiFields({
       model: GEMINI_MODEL,
       systemInstruction: `You are an expert e-commerce copywriter specialising in K-pop merchandise and pop-culture collectibles.
 Given a product title, an optional raw description, and optionally a product image, return a JSON object with these fields:
+- "suggestedTitle": a concise, buyer-friendly listing title (max 140 characters) if the provided title could be improved; omit this field entirely if the given title is already good.
 - "suggestedDescription": a concise 2-4 sentence buyer-friendly listing description. Lead with what the item is; end with a brief condition note if inferable. No markdown, no bullets.
+- "suggestedPrice": your best estimate of a fair resale price in USD (numeric, no currency symbol) for this item in typical used/collectible condition.
 - "suggestedCategory": one of ["Photocard", "Keychain/Accessory", "Apparel", "Plushie", "Poster/Print", "Album/CD", "Light Stick", "Stationery", "Mirror/Beauty", "Collectible Figure", "Other"].
 - "suggestedTags": up to 5 short keyword tags relevant for search (e.g. ["BTS", "official", "photocard"]).
 Based on this listing data, what do you think the shipping dimensions and weight will be? Include:
@@ -68,11 +75,26 @@ Return ONLY valid JSON — no markdown, no explanation.`,
     const parsed = JSON.parse(clean);
 
     return {
-      ...(typeof parsed.suggestedDescription === "string" && parsed.suggestedDescription
-        ? { geminiDescription: parsed.suggestedDescription }
+      // Shared with iOS's own `aiSuggested*`/`aiModel`/`aiPromptVersion` fields on
+      // `products` (see UploadManager.syncProductDataAwaiting in the wonni repo) —
+      // same field names regardless of which client produced the suggestion, so
+      // web's "AI suggested" chip UI (ProductDetail.jsx) and postToWonni's
+      // server-side aiTracking mapping both work the same way for either origin.
+      ...(typeof parsed.suggestedTitle === "string" && parsed.suggestedTitle
+        ? { aiSuggestedTitle: parsed.suggestedTitle.slice(0, 140) }
         : {}),
+      ...(typeof parsed.suggestedDescription === "string" && parsed.suggestedDescription
+        ? { aiSuggestedDescription: parsed.suggestedDescription }
+        : {}),
+      ...(typeof parsed.suggestedPrice === "number" && parsed.suggestedPrice > 0
+        ? { aiSuggestedPrice: parsed.suggestedPrice }
+        : {}),
+      // dropship has no separate user-override UI for category — the AI
+      // suggestion just becomes the product's own `category` field directly,
+      // unlike title/description/price which do have a distinct "kept as
+      // suggested vs. edited by the user" state worth preserving.
       ...(typeof parsed.suggestedCategory === "string" && parsed.suggestedCategory
-        ? { geminiCategory: parsed.suggestedCategory }
+        ? { category: parsed.suggestedCategory }
         : {}),
       ...(Array.isArray(parsed.suggestedTags) && parsed.suggestedTags.length
         ? { geminiTags: parsed.suggestedTags.slice(0, 5) }
@@ -89,6 +111,8 @@ Return ONLY valid JSON — no markdown, no explanation.`,
           geminiHeightIn: Math.round(parsed.suggestedHeightIn),
         }
         : {}),
+      aiModel: GEMINI_MODEL,
+      aiPromptVersion: PROMPT_VERSION,
     };
   } catch {
     // Never block an import on a Gemini failure

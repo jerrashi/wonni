@@ -33,6 +33,13 @@ class Item {
     /// (SellingSettings.handlingTimeDays). See ShippingInfo.handlingTimeDays.
     var handlingTimeDays: Int?
     var isDraft: Bool
+    /// Local last-modified time, bumped alongside every `UploadManager.syncProductData`
+    /// call. Compared against the shared `products/{id}` doc's own `updatedAt` to decide
+    /// sync direction (last-write-wins) when a draft may have been edited on another
+    /// client — see `UploadManager.pullProductIfNewer`. Property-level default (not just
+    /// the init parameter) so SwiftData's lightweight migration can add this column to
+    /// existing local databases without a custom migration plan.
+    var updatedAt: Date = Date()
     var sourceAssetIdentifiers: [String]
     var tags: [String]
     var personalNote: String?
@@ -87,7 +94,7 @@ class Item {
     var aiSuggestedBrand: String?
     var condition: String? // Maps to ItemCondition rawValue
 
-    init(id: UUID = UUID(), createdAt: Date = Date(), photosData: [Data] = [], blurb: String = "", buyerPaysShipping: Bool = true, handlingFee: Double = 0.0, estimatedShippingDays: Int = 3, weightLbs: Double? = nil, lengthIn: Double? = nil, widthIn: Double? = nil, heightIn: Double? = nil, handlingTimeDays: Int? = nil, isDraft: Bool = true, sourceAssetIdentifiers: [String] = [], tags: [String] = [], personalNote: String? = nil, firebasePhotoPathsByAsset: [String: String]? = nil, firestoreListingId: String? = nil, processedAt: Date? = nil, visionTitle: String? = nil, isLocalPhotoOnly: Bool = false, originalUserTitleBeforeAI: String? = nil, originalUserDescriptionBeforeAI: String? = nil, aiSuggestedCategory: String? = nil, aiSuggestedBrand: String? = nil, condition: String? = nil) {
+    init(id: UUID = UUID(), createdAt: Date = Date(), photosData: [Data] = [], blurb: String = "", buyerPaysShipping: Bool = true, handlingFee: Double = 0.0, estimatedShippingDays: Int = 3, weightLbs: Double? = nil, lengthIn: Double? = nil, widthIn: Double? = nil, heightIn: Double? = nil, handlingTimeDays: Int? = nil, isDraft: Bool = true, updatedAt: Date = Date(), sourceAssetIdentifiers: [String] = [], tags: [String] = [], personalNote: String? = nil, firebasePhotoPathsByAsset: [String: String]? = nil, firestoreListingId: String? = nil, processedAt: Date? = nil, visionTitle: String? = nil, isLocalPhotoOnly: Bool = false, originalUserTitleBeforeAI: String? = nil, originalUserDescriptionBeforeAI: String? = nil, aiSuggestedCategory: String? = nil, aiSuggestedBrand: String? = nil, condition: String? = nil) {
         self.id = id
         self.createdAt = createdAt
         self.photosData = photosData
@@ -101,6 +108,7 @@ class Item {
         self.heightIn = heightIn
         self.handlingTimeDays = handlingTimeDays
         self.isDraft = isDraft
+        self.updatedAt = updatedAt
         self.sourceAssetIdentifiers = sourceAssetIdentifiers
         self.tags = tags
         self.personalNote = personalNote
