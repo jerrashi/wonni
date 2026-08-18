@@ -104,11 +104,24 @@ const { etsyExchangeToken } = require("./etsy_auth");
 exports.etsyExchangeToken = etsyExchangeToken;
 
 // Etsy Listing Management
-const { etsyCreateListing, etsyUpdateListing, etsyDeleteListing, etsyCheckShopSetup } = require("./etsy_listing");
+const {
+  etsyCreateListing,
+  etsyUpdateListing,
+  etsyDeleteListing,
+  etsyCheckShopSetup,
+  getEtsyCategories,
+  suggestEtsyCategory,
+  getEtsyShippingProfiles,
+  getEtsyReturnPolicies,
+} = require("./etsy_listing");
 exports.etsyCreateListing = etsyCreateListing;
 exports.etsyUpdateListing = etsyUpdateListing;
 exports.etsyDeleteListing = etsyDeleteListing;
 exports.etsyCheckShopSetup = etsyCheckShopSetup;
+exports.getEtsyCategories = getEtsyCategories;
+exports.suggestEtsyCategory = suggestEtsyCategory;
+exports.getEtsyShippingProfiles = getEtsyShippingProfiles;
+exports.getEtsyReturnPolicies = getEtsyReturnPolicies;
 
 // eBay Listing Management
 const { ebayCreateListing, ebayUpdateListing, ebayDeleteListing } = require("./ebay_listing");

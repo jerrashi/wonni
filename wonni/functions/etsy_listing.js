@@ -6,15 +6,12 @@
  */
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const https = require("https");
 const http = require("http");
-const { refreshEtsyToken } = require("./etsy_auth");
+const { refreshEtsyToken, getEtsyCredentials } = require("./etsy_auth");
 
 if (admin.apps.length === 0) admin.initializeApp();
-
-const etsyClientId = defineSecret("ETSY_CLIENT_ID");
 
 // Module-level taxonomy cache (lives for the function instance lifetime ~15 min)
 let taxonomyCache = null;
@@ -66,7 +63,7 @@ function downloadBuffer(url) {
 // Token management
 // ─────────────────────────────────────────────────────────────
 
-async function getActiveEtsyToken(uid, clientId, db) {
+async function getActiveEtsyToken(uid, clientId, sharedSecret, db) {
   const ref = db.collection("users").doc(uid).collection("integrations").doc("etsy");
   const doc = await ref.get();
   if (!doc.exists || !doc.data().isConnected) {
@@ -79,7 +76,7 @@ async function getActiveEtsyToken(uid, clientId, db) {
   const expiresAt = data.tokenExpiresAt?.toMillis() ?? 0;
 
   if (Date.now() > expiresAt - 5 * 60 * 1000) {
-    const refreshed = await refreshEtsyToken(clientId, null, data.refreshToken);
+    const refreshed = await refreshEtsyToken(clientId, sharedSecret, data.refreshToken);
     const newExpiry = admin.firestore.Timestamp.fromMillis(
       Date.now() + refreshed.expires_in * 1000
     );
@@ -318,19 +315,20 @@ async function uploadListingImages(shopId, listingId, photoPaths, accessToken, c
  * Returns whether the shop has at least one shipping profile and return policy.
  */
 exports.etsyCheckShopSetup = onCall(
-  { secrets: [etsyClientId] },
+  { timeoutSeconds: 60 },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Sign in required.");
     const uid = request.auth.uid;
     const db = admin.firestore();
-    const clientId = etsyClientId.value();
+    const { credentialSet = "ios" } = request.data || {};
 
-    const { accessToken, shopId } = await getActiveEtsyToken(uid, clientId, db);
+    const credentials = await getEtsyCredentials(credentialSet);
+    const { accessToken, shopId } = await getActiveEtsyToken(uid, credentials.clientId, credentials.sharedSecret, db);
     if (!shopId) throw new HttpsError("failed-precondition", "Shop ID not found. Reconnect your Etsy account.");
 
     const [shippingId, returnId] = await Promise.all([
-      fetchFirstShippingProfileId(shopId, accessToken, clientId),
-      fetchFirstReturnPolicyId(shopId, accessToken, clientId),
+      fetchFirstShippingProfileId(shopId, accessToken, credentials.clientId),
+      fetchFirstReturnPolicyId(shopId, accessToken, credentials.clientId),
     ]);
 
     return {
@@ -344,15 +342,16 @@ exports.etsyCheckShopSetup = onCall(
  * etsyCreateListing — creates a new Etsy listing from a Wonni listing document.
  */
 exports.etsyCreateListing = onCall(
-  { secrets: [etsyClientId], timeoutSeconds: 120, memory: "512MiB" },
+  { timeoutSeconds: 120, memory: "512MiB" },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Sign in required.");
     const uid = request.auth.uid;
-    const { listingId } = request.data;
+    const { listingId, credentialSet = "ios", taxonomyId, shippingProfileId, returnPolicyId } = request.data;
     if (!listingId) throw new HttpsError("invalid-argument", "listingId is required.");
 
     const db = admin.firestore();
-    const clientId = etsyClientId.value();
+    const credentials = await getEtsyCredentials(credentialSet);
+    const { clientId, sharedSecret } = credentials;
 
     // Load listing
     const listingRef = db.collection("listings").doc(listingId);
@@ -369,21 +368,27 @@ exports.etsyCreateListing = onCall(
     await listingRef.set({ crossPostStatus: { etsy: "pending" } }, { merge: true });
 
     try {
-      const { accessToken, shopId } = await getActiveEtsyToken(uid, clientId, db);
+      const { accessToken, shopId } = await getActiveEtsyToken(uid, clientId, sharedSecret, db);
       if (!shopId) throw new HttpsError("failed-precondition", "Shop ID missing. Reconnect your Etsy account.");
 
-      // Require shipping profile and return policy
-      const [shippingProfileId, returnPolicyId] = await Promise.all([
-        fetchFirstShippingProfileId(shopId, accessToken, clientId),
-        fetchFirstReturnPolicyId(shopId, accessToken, clientId),
-      ]);
-      if (!shippingProfileId) {
+      // Use provided IDs or fetch defaults
+      let finalShippingProfileId = shippingProfileId;
+      let finalReturnPolicyId = returnPolicyId;
+
+      if (!finalShippingProfileId) {
+        finalShippingProfileId = await fetchFirstShippingProfileId(shopId, accessToken, clientId);
+      }
+      if (!finalReturnPolicyId) {
+        finalReturnPolicyId = await fetchFirstReturnPolicyId(shopId, accessToken, clientId);
+      }
+
+      if (!finalShippingProfileId) {
         throw new HttpsError(
           "failed-precondition",
           "etsy_missing_shipping_profile: Add a shipping profile in your Etsy shop settings before listing."
         );
       }
-      if (!returnPolicyId) {
+      if (!finalReturnPolicyId) {
         throw new HttpsError(
           "failed-precondition",
           "etsy_missing_return_policy: Add a return policy in your Etsy shop settings before listing."
@@ -395,9 +400,17 @@ exports.etsyCreateListing = onCall(
 
       // Resolve taxonomy_id from the listing's existing category (no second Gemini call);
       // when_made / who_made default for resale.
-      const { taxonomy_id, when_made, who_made } = await resolveEtsyFields(
-        clientId, title, listing.category
-      );
+      let taxonomy_id = taxonomyId;
+      let when_made, who_made;
+      if (!taxonomy_id) {
+        const resolved = await resolveEtsyFields(clientId, title, listing.category);
+        taxonomy_id = resolved.taxonomy_id;
+        when_made = resolved.when_made;
+        who_made = resolved.who_made;
+      } else {
+        when_made = "2020_2024";
+        who_made = "someone_else";
+      }
 
       const priceAmount = Math.max(0.20, Math.round((listing.price ?? 0) * 100) / 100);
 
@@ -410,8 +423,8 @@ exports.etsyCreateListing = onCall(
         when_made,
         taxonomy_id,
         state: "active",
-        shipping_profile_id: shippingProfileId,
-        return_policy_id: returnPolicyId,
+        shipping_profile_id: finalShippingProfileId,
+        return_policy_id: finalReturnPolicyId,
       };
 
       const { statusCode, data: created } = await etsyPost(
@@ -455,15 +468,16 @@ exports.etsyCreateListing = onCall(
  * etsyUpdateListing — syncs title, description, and price to an existing Etsy listing.
  */
 exports.etsyUpdateListing = onCall(
-  { secrets: [etsyClientId], timeoutSeconds: 60 },
+  { timeoutSeconds: 60 },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Sign in required.");
     const uid = request.auth.uid;
-    const { listingId } = request.data;
+    const { listingId, credentialSet = "ios" } = request.data;
     if (!listingId) throw new HttpsError("invalid-argument", "listingId is required.");
 
     const db = admin.firestore();
-    const clientId = etsyClientId.value();
+    const credentials = await getEtsyCredentials(credentialSet);
+    const { clientId, sharedSecret } = credentials;
 
     const listingDoc = await db.collection("listings").doc(listingId).get();
     if (!listingDoc.exists) throw new HttpsError("not-found", "Listing not found.");
@@ -473,7 +487,7 @@ exports.etsyUpdateListing = onCall(
     const etsyId = listing.crossPostListingIds?.etsy;
     if (!etsyId) throw new HttpsError("failed-precondition", "No Etsy listing ID on record.");
 
-    const { accessToken, shopId } = await getActiveEtsyToken(uid, clientId, db);
+    const { accessToken, shopId } = await getActiveEtsyToken(uid, clientId, sharedSecret, db);
 
     const { statusCode, data } = await etsyPatch(
       `/v3/application/shops/${shopId}/listings/${etsyId}`,
@@ -504,15 +518,16 @@ exports.etsyUpdateListing = onCall(
  * etsyDeleteListing — deactivates (drafts) the Etsy listing.
  */
 exports.etsyDeleteListing = onCall(
-  { secrets: [etsyClientId], timeoutSeconds: 30 },
+  { timeoutSeconds: 30 },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Sign in required.");
     const uid = request.auth.uid;
-    const { listingId } = request.data;
+    const { listingId, credentialSet = "ios" } = request.data;
     if (!listingId) throw new HttpsError("invalid-argument", "listingId is required.");
 
     const db = admin.firestore();
-    const clientId = etsyClientId.value();
+    const credentials = await getEtsyCredentials(credentialSet);
+    const { clientId, sharedSecret } = credentials;
 
     const listingDoc = await db.collection("listings").doc(listingId).get();
     if (!listingDoc.exists) throw new HttpsError("not-found", "Listing not found.");
@@ -522,7 +537,7 @@ exports.etsyDeleteListing = onCall(
     const etsyId = listing.crossPostListingIds?.etsy;
     if (!etsyId) return { success: true };
 
-    const { accessToken, shopId } = await getActiveEtsyToken(uid, clientId, db);
+    const { accessToken, shopId } = await getActiveEtsyToken(uid, clientId, sharedSecret, db);
 
     // Etsy doesn't have a delete endpoint for active listings — set to inactive (draft)
     await etsyPatch(
@@ -537,5 +552,143 @@ exports.etsyDeleteListing = onCall(
     );
 
     return { success: true };
+  }
+);
+
+// Export helpers for UI preview callables
+exports.matchEtsyTaxonomyId = matchEtsyTaxonomyId;
+exports.getTaxonomyLeafNodes = getTaxonomyLeafNodes;
+
+// ─────────────────────────────────────────────────────────────
+// Shop setup helper callables (for UI)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * getEtsyCategories — returns all Etsy taxonomy leaf categories for a searchable dropdown.
+ */
+exports.getEtsyCategories = onCall(
+  { timeoutSeconds: 60 },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Sign in required.");
+    const { credentialSet = "ios" } = request.data || {};
+
+    try {
+      const credentials = await getEtsyCredentials(credentialSet);
+      const categories = await getTaxonomyLeafNodes(credentials.clientId);
+      return { categories };
+    } catch (err) {
+      console.error("[getEtsyCategories] Error:", err.message);
+      if (err instanceof HttpsError) throw err;
+      throw new HttpsError("internal", `Failed to fetch Etsy categories: ${err.message}`);
+    }
+  }
+);
+
+/**
+ * suggestEtsyCategory — matches a product title + category against Etsy taxonomy
+ * and returns the best matching taxonomy node (preview only, no writes).
+ */
+exports.suggestEtsyCategory = onCall(
+  { timeoutSeconds: 60 },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Sign in required.");
+    const { title, category, credentialSet = "ios" } = request.data || {};
+
+    try {
+      const credentials = await getEtsyCredentials(credentialSet);
+      const nodes = await getTaxonomyLeafNodes(credentials.clientId);
+      const taxonomyId = matchEtsyTaxonomyId(nodes, title, category);
+      const taxonomyNode = nodes.find((n) => n.id === taxonomyId);
+      return {
+        taxonomyId,
+        taxonomyName: taxonomyNode?.name || "Other",
+      };
+    } catch (err) {
+      console.error("[suggestEtsyCategory] Error:", err.message);
+      if (err instanceof HttpsError) throw err;
+      throw new HttpsError("internal", `Failed to suggest Etsy category: ${err.message}`);
+    }
+  }
+);
+
+/**
+ * getEtsyShippingProfiles — lists the user's existing Etsy shipping profiles.
+ */
+exports.getEtsyShippingProfiles = onCall(
+  { timeoutSeconds: 60 },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Sign in required.");
+    const uid = request.auth.uid;
+    const { credentialSet = "ios" } = request.data || {};
+
+    try {
+      const credentials = await getEtsyCredentials(credentialSet);
+      const db = admin.firestore();
+      const { accessToken, shopId } = await getActiveEtsyToken(uid, credentials.clientId, credentials.sharedSecret, db);
+
+      if (!shopId) throw new HttpsError("failed-precondition", "Shop ID not found.");
+
+      const { statusCode, data } = await etsyGet(
+        `/v3/application/shops/${shopId}/shipping-profiles`,
+        accessToken,
+        credentials.clientId
+      );
+
+      if (statusCode !== 200) {
+        throw new Error(`Failed to fetch shipping profiles (${statusCode})`);
+      }
+
+      const profiles = (data.results || []).map((p) => ({
+        id: p.shipping_profile_id,
+        title: p.title,
+      }));
+
+      return { profiles };
+    } catch (err) {
+      console.error("[getEtsyShippingProfiles] Error:", err.message);
+      if (err instanceof HttpsError) throw err;
+      throw new HttpsError("internal", `Failed to fetch shipping profiles: ${err.message}`);
+    }
+  }
+);
+
+/**
+ * getEtsyReturnPolicies — lists the user's existing Etsy return policies.
+ */
+exports.getEtsyReturnPolicies = onCall(
+  { timeoutSeconds: 60 },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Sign in required.");
+    const uid = request.auth.uid;
+    const { credentialSet = "ios" } = request.data || {};
+
+    try {
+      const credentials = await getEtsyCredentials(credentialSet);
+      const db = admin.firestore();
+      const { accessToken, shopId } = await getActiveEtsyToken(uid, credentials.clientId, credentials.sharedSecret, db);
+
+      if (!shopId) throw new HttpsError("failed-precondition", "Shop ID not found.");
+
+      const { statusCode, data } = await etsyGet(
+        `/v3/application/shops/${shopId}/return-policies`,
+        accessToken,
+        credentials.clientId
+      );
+
+      if (statusCode !== 200) {
+        throw new Error(`Failed to fetch return policies (${statusCode})`);
+      }
+
+      const policies = (data.results || []).map((p) => ({
+        id: p.return_policy_id,
+        name: `${p.accepts_returns ? "Accepts" : "No"} returns / ${p.accepts_exchanges ? "Accepts" : "No"} exchanges`,
+      }));
+
+      return { policies };
+    } catch (err) {
+      console.error("[getEtsyReturnPolicies] Error:", err.message);
+      if (err instanceof HttpsError) throw err;
+      throw new HttpsError("internal", `Failed to fetch return policies: ${err.message}`);
+    }
   }
 );
