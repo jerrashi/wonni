@@ -215,10 +215,15 @@ account-linking UI wired correctly.
 
 **Identified issues (blockers for cutover, not code bugs):**
 
-1. **Missing eBay env vars** — `web/.env.local` has TikTok/AliExpress keys but
-   no `VITE_EBAY_CLIENT_ID`, `VITE_EBAY_RU_NAME`, `VITE_EBAY_ENV`. Settings.jsx
-   will fall back to "REPLACE_ME" if missing, breaking eBay OAuth. Either
-   intentional (config-only at runtime) or oversight — needs clarification.
+1. ✓ **eBay env vars now set (2026-08-18)** — Added to `web/.env.local`:
+   - `VITE_EBAY_CLIENT_ID=JerryShi-Listify-PRD-ee56a6601-f3a9f5df`
+   - `VITE_EBAY_RU_NAME=Jerry_Shi-JerryShi-Listif-gmmxbsbd`
+   - `VITE_EBAY_ENV=production`
+   
+   Web and iOS app now share the same eBay Developer App credentials (wonni-app
+   project). Both can now sign in and cross-post to eBay once Cloud Functions
+   are deployed. The RuName is pre-configured in eBay Partner Center to map
+   to `https://wonni-app.web.app/web/oauth/ebay`.
 
 2. **Cloud Functions not in this repo** — functions/ directory removed; all
    imports (`aliexpressExchangeToken`, `tiktokExchangeToken`,
