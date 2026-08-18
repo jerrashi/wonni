@@ -3,14 +3,10 @@
     "public": "public",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [
-      { "source": "/oauth/aliexpress", "destination": "/oauth/aliexpress/index.html" },
-      { "source": "/oauth/tiktok", "destination": "/oauth/tiktok/index.html" },
-      { "source": "**", "destination": "/index.html" }
+      { "source": "/web/oauth/aliexpress", "destination": "/oauth/aliexpress/index.html" },
+      { "source": "/web/oauth/tiktok", "destination": "/oauth/tiktok/index.html" },
+      { "source": "/web/**", "destination": "/index.html" }
     ]
-  },
-  "functions": {
-    "source": "functions",
-    "runtime": "nodejs22"
   },
   "firestore": {
     "rules": "firestore.rules",
@@ -21,7 +17,6 @@
   },
   "emulators": {
     "auth": { "port": 9099 },
-    "functions": { "port": 5001 },
     "firestore": { "port": 8080 },
     "storage": { "port": 9199 },
     "ui": { "enabled": true, "port": 4000 },

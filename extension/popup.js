@@ -1,8 +1,11 @@
-const DEFAULT_DASHBOARD_URL = "https://wonni-dropship.web.app";
+const DEFAULT_DASHBOARD_URL = "https://wonni-app.web.app/web";
 
+// The dashboard SPA is always served at <origin>/web (Phase B merge, sharing
+// wonni-app's Hosting site) — normalize to that regardless of what path the
+// caller happened to be on when it sent its origin.
 function normalizeDashboardUrl(rawUrl) {
   try {
-    return new URL(rawUrl).origin;
+    return new URL(rawUrl).origin + "/web";
   } catch {
     return DEFAULT_DASHBOARD_URL;
   }

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { doc, onSnapshot } from "firebase/firestore";
-import { db, auth, callFunction } from "../firebase";
+import { linkWithPopup } from "firebase/auth";
+import { db, auth, googleProvider, appleProvider, callFunction } from "../firebase";
 import Layout from "../components/Layout";
 
 const EXT_ID = import.meta.env.VITE_EXTENSION_ID;
@@ -38,9 +39,28 @@ function ConnectRow({ label, description, connected, username, onConnect, onDisc
   );
 }
 
+const SIGN_IN_METHODS = [
+  { id: "google.com", label: "Google", provider: googleProvider },
+  { id: "apple.com", label: "Apple", provider: appleProvider },
+];
+
 export default function Settings() {
   const [integrations, setIntegrations] = useState({});
   const [feeRate, setFeeRate] = useState("7.5");
+  const [linkedProviderIds, setLinkedProviderIds] = useState(
+    () => auth.currentUser?.providerData.map((p) => p.providerId) ?? []
+  );
+  const [linkError, setLinkError] = useState("");
+
+  async function linkProvider(provider) {
+    setLinkError("");
+    try {
+      await linkWithPopup(auth.currentUser, provider);
+      setLinkedProviderIds(auth.currentUser.providerData.map((p) => p.providerId));
+    } catch (e) {
+      setLinkError(e.message ?? "Could not link account.");
+    }
+  }
 
   useEffect(() => {
     const uid = auth.currentUser?.uid;
@@ -69,15 +89,19 @@ export default function Settings() {
     const state = data.state;
 
     const urls = {
+      // redirect_uri must exactly match what's registered in each platform's
+      // own developer console (AliExpress Open Platform / TikTok Shop
+      // Partner Center) — updating this string alone does nothing until
+      // that registration is also updated to the new /web/oauth/* path.
       aliexpress: "https://oauth.aliexpress.com/authorize?" + new URLSearchParams({
         response_type: "code",
         client_id: ALIEXPRESS_APP_KEY,
-        redirect_uri: "https://wonni-dropship.web.app/oauth/aliexpress",
+        redirect_uri: "https://wonni-app.web.app/web/oauth/aliexpress",
         state,
       }),
       tiktok: "https://auth.tiktok-shops.com/oauth/authorize?" + new URLSearchParams({
         app_key: TIKTOK_APP_KEY,
-        redirect_uri: "https://wonni-dropship.web.app/oauth/tiktok",
+        redirect_uri: "https://wonni-app.web.app/web/oauth/tiktok",
         state,
       }),
       // eBay's redirect_uri is the RuName; the RuName config points at /oauth/ebay
@@ -102,6 +126,28 @@ export default function Settings() {
     <Layout>
       <div className="page-header">
         <h1>Settings</h1>
+      </div>
+
+      <div className="settings-section">
+        <h2>Linked Sign-in Methods</h2>
+        {linkError && <div style={{ fontSize: 12, color: "var(--danger)", marginBottom: 8 }}>{linkError}</div>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          {SIGN_IN_METHODS.map(({ id, label, provider }) => {
+            const linked = linkedProviderIds.includes(id);
+            const email = auth.currentUser?.providerData.find((p) => p.providerId === id)?.email;
+            return (
+              <div className="connect-row" key={id}>
+                <div className="connect-info">
+                  <span>{label}</span>
+                  <span>{linked ? `Linked${email ? ` as ${email}` : ""}` : `Not linked — sign in with ${label} on this account`}</span>
+                </div>
+                {!linked && (
+                  <button className="btn btn-primary" onClick={() => linkProvider(provider)}>Link</button>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <div className="settings-section">

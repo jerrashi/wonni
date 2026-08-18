@@ -1,17 +1,19 @@
 // Manifest V3 service worker
 // Relays IMPORT_PRODUCT messages from content.js to the Cloud Function using a stored Firebase ID token.
 
-const DEFAULT_DASHBOARD_URL = "https://wonni-dropship.web.app";
-const FUNCTIONS_BASE = "https://us-central1-wonni-dropship.cloudfunctions.net";
+const DEFAULT_DASHBOARD_URL = "https://wonni-app.web.app/web";
+const FUNCTIONS_BASE = "https://us-central1-wonni-app.cloudfunctions.net";
 const IMPORT_FUNCTIONS = {
   aliexpress: `${FUNCTIONS_BASE}/aliexpressImportProduct`,
   weverse: `${FUNCTIONS_BASE}/weverseImportProduct`,
 };
-const MERCARI_SELL_URL = "https://www.mercari.com/sell/";
 
+// The dashboard SPA is always served at <origin>/web (Phase B merge, sharing
+// wonni-app's Hosting site) — normalize to that regardless of what path the
+// caller happened to be on when it sent its origin.
 function normalizeDashboardUrl(rawUrl) {
   try {
-    return new URL(rawUrl).origin;
+    return new URL(rawUrl).origin + "/web";
   } catch {
     return DEFAULT_DASHBOARD_URL;
   }
@@ -42,11 +44,11 @@ chrome.runtime.onMessageExternal.addListener((message, _sender, sendResponse) =>
       .catch((e) => sendResponse({ error: e.message }));
     return true;
   }
-  if (message.type === "MERCARI_POST_QUEUE") {
-    handleMercariPostQueue(message.listings ?? [])
+  if (message.type === "START_MERCARI_EDIT") {
+    handleStartMercariEdit(message.payload)
       .then(sendResponse)
       .catch((e) => sendResponse({ error: e.message }));
-    return true; // async
+    return true;
   }
   return true;
 });
@@ -76,12 +78,88 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   }
+  if (message.type === "GET_MERCARI_EDIT_PAYLOAD") {
+    chrome.storage.local.get(["pendingMercariEditPayload"], (res) => {
+      sendResponse({ payload: res.pendingMercariEditPayload ?? null });
+    });
+    return true;
+  }
   if (message.type === "MERCARI_CROSS_POST_RESULT") {
-    chrome.storage.local.remove(["pendingMercariPayload"]);
-    sendResponse({ ok: true });
+    handleMercariCrossPostResult(message, sender.tab?.id)
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: true })); // best-effort; content script doesn't retry on this response
+    return true;
+  }
+  if (message.type === "MERCARI_EDIT_RESULT") {
+    handleMercariEditResult(message, sender.tab?.id)
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (message.type === "FETCH_MERCARI_IMAGE") {
+    fetchImageAsBase64(message.url)
+      .then((base64) => sendResponse({ base64 }))
+      .catch((e) => sendResponse({ error: e.message }));
     return true;
   }
 });
+
+// Content scripts' own fetch()/XHR calls are still subject to the PAGE's CORS policy
+// in Manifest V3 — host_permissions only exempts requests made from a non-page
+// context like this service worker. Mercari's page can't fetch our Storage-hosted
+// product images directly (no Access-Control-Allow-Origin), so the background
+// script fetches them here and hands the content script base64 bytes instead.
+async function fetchImageAsBase64(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Image fetch failed (${res.status})`);
+  const buffer = await res.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+// The content script reports its final outcome (success or timeout) here after
+// driving the sell form. This is the only place that advances Firestore's
+// listingStatus.mercari past "posting" — without it a cross-post looks stuck
+// forever regardless of whether it actually succeeded.
+async function handleMercariCrossPostResult(message, tabId) {
+  const { idToken, pendingMercariPayload } = await chrome.storage.local.get(["idToken", "pendingMercariPayload"]);
+  // Only clear the pending payload if it's still the one THIS report is about — a
+  // stale/leftover tab from an earlier attempt (e.g. one that sat polling for its
+  // full 3-minute timeout) can report long after a newer cross-post has already
+  // stored its own payload; clearing unconditionally would wipe that newer attempt
+  // out from under it before its content script ever reads it. Checking variantId
+  // too matters now that multiple variants of the same product post sequentially.
+  if (pendingMercariPayload?.productId === message.productId
+    && pendingMercariPayload?.variantId === message.variantId) {
+    await chrome.storage.local.remove(["pendingMercariPayload"]);
+  }
+
+  // Close the tab once the listing is confirmed live — speeds up bulk listing by
+  // not leaving a trail of "done" tabs open. Only on success; leave failed/timed-out
+  // tabs open so the form is there to finish or debug by hand.
+  if (message.success && tabId != null) {
+    chrome.tabs.remove(tabId).catch(() => {});
+  }
+
+  if (!idToken || !message.productId) return;
+
+  await reportMercariStatus(idToken, message.productId, {
+    variantId: message.variantId,
+    status: message.success ? "active" : "failed",
+    listingId: message.mercariItemId ?? null,
+    url: message.mercariUrl ?? null,
+    error: message.success ? null : (message.error ?? "Cross-post did not complete."),
+    syncedTitle: message.syncedTitle,
+    syncedDescription: message.syncedDescription,
+    syncedPrice: message.syncedPrice,
+    syncedImages: message.syncedImages,
+  });
+}
 
 async function handleStartMercariCrossPost(payload) {
   if (!payload || !payload.title) {
@@ -90,6 +168,50 @@ async function handleStartMercariCrossPost(payload) {
   await chrome.storage.local.set({ pendingMercariPayload: payload });
   const tab = await chrome.tabs.create({ url: "https://www.mercari.com/sell/", active: true });
   return { ok: true, tabId: tab.id };
+}
+
+// Pushes an edit payload (full desired state + diff of what changed) to an
+// already-live Mercari listing by opening its edit page and letting
+// mercari_content.js's runMercariEditFlow pick it up.
+async function handleStartMercariEdit(payload) {
+  if (!payload || !payload.productId || !payload.mercariItemId) {
+    throw new Error("Invalid edit payload — missing productId or mercariItemId.");
+  }
+  await chrome.storage.local.set({ pendingMercariEditPayload: payload });
+  const tab = await chrome.tabs.create({
+    url: `https://www.mercari.com/sell/edit/${payload.mercariItemId}/`,
+    active: true,
+  });
+  return { ok: true, tabId: tab.id };
+}
+
+// Mirrors handleMercariCrossPostResult, but for a sync-to-Mercari push: doesn't
+// touch listingId/listingUrl (those don't change on an edit) and reports the
+// new mercariSynced* baseline on success so the next push diffs against it.
+async function handleMercariEditResult(message, tabId) {
+  const { idToken, pendingMercariEditPayload } = await chrome.storage.local.get([
+    "idToken", "pendingMercariEditPayload",
+  ]);
+  if (pendingMercariEditPayload?.productId === message.productId
+    && pendingMercariEditPayload?.variantId === message.variantId) {
+    await chrome.storage.local.remove(["pendingMercariEditPayload"]);
+  }
+
+  if (message.success && tabId != null) {
+    chrome.tabs.remove(tabId).catch(() => {});
+  }
+
+  if (!idToken || !message.productId) return;
+
+  await reportMercariStatus(idToken, message.productId, {
+    variantId: message.variantId,
+    status: message.success ? "active" : "failed",
+    error: message.success ? null : (message.error ?? "Sync to Mercari did not complete."),
+    syncedTitle: message.syncedTitle,
+    syncedDescription: message.syncedDescription,
+    syncedPrice: message.syncedPrice,
+    syncedImages: message.syncedImages,
+  });
 }
 
 async function handleImport(productData, source) {
@@ -153,79 +275,26 @@ async function handleBulkImport(items, source) {
   return json?.result ?? { importedCount: 0 };
 }
 
-// Posts a queue of Mercari listings one at a time — unlike import, this
-// can't be handed off to a Cloud Function chunk-runner: each listing needs
-// its own real browser tab to actually drive Mercari's sell form. Reports
-// each outcome (success or failure) individually via updateMercariListingStatus
-// so the web app's live Firestore listener reflects progress without any
-// separate messaging channel back to it.
-async function handleMercariPostQueue(listings) {
-  const { idToken } = await chrome.storage.local.get(["idToken"]);
-  if (!idToken) throw new Error("Sign in to Wonni Drop first.");
-  if (!listings.length) return { ok: true, postedCount: 0 };
-
-  let postedCount = 0;
-  for (const listing of listings) {
-    try {
-      const result = await postOneMercariListing(listing);
-      await reportMercariStatus(idToken, listing, { status: "active", ...result });
-      postedCount += 1;
-    } catch (err) {
-      await reportMercariStatus(idToken, listing, { status: "failed", error: err.message ?? "Unknown error." });
-    }
-  }
-  return { ok: true, postedCount };
-}
-
-async function reportMercariStatus(idToken, listing, outcome) {
-  // Best-effort — a failed status write shouldn't stop the rest of the
-  // queue from being attempted.
+// Reports a Mercari cross-post outcome to Firestore via updateMercariListingStatus.
+// Best-effort — a failed status write shouldn't throw back into the content script.
+async function reportMercariStatus(idToken, productId, outcome) {
   await fetch(`${FUNCTIONS_BASE}/updateMercariListingStatus`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
     body: JSON.stringify({
       data: {
-        productId: listing.productId,
-        variantId: listing.variantId ?? null,
+        productId,
+        variantId: outcome.variantId ?? null,
         status: outcome.status,
         listingId: outcome.listingId ?? null,
         url: outcome.url ?? null,
         category: outcome.category ?? null,
         error: outcome.error ?? null,
+        syncedTitle: outcome.syncedTitle ?? null,
+        syncedDescription: outcome.syncedDescription ?? null,
+        syncedPrice: outcome.syncedPrice ?? null,
+        syncedImages: outcome.syncedImages ?? null,
       },
     }),
   }).catch(() => {});
-}
-
-function waitForTabComplete(tabId) {
-  return new Promise((resolve) => {
-    function listener(id, info) {
-      if (id === tabId && info.status === "complete") {
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
-      }
-    }
-    chrome.tabs.onUpdated.addListener(listener);
-  });
-}
-
-// Opens a real tab on Mercari's sell page (active, not backgrounded — some
-// sites throttle/behave differently in inactive tabs, and this needs to
-// reliably drive a live form) and hands the listing payload to
-// mercari_content.js to fill in and submit. Leaves the tab open on failure
-// so the user (or a debugging pass) can see exactly what went wrong; only
-// closes it on success.
-async function postOneMercariListing(listing) {
-  const tab = await chrome.tabs.create({ url: MERCARI_SELL_URL, active: true });
-  await waitForTabComplete(tab.id);
-  // The sell page is a client-rendered SPA — "complete" fires once the HTML
-  // shell loads, not once the form has actually hydrated and is ready for
-  // scripted input, so give it a moment before messaging the content script.
-  await new Promise((resolve) => setTimeout(resolve, 1500));
-
-  const response = await chrome.tabs.sendMessage(tab.id, { type: "FILL_AND_SUBMIT_LISTING", listing });
-  if (!response?.ok) throw new Error(response?.error ?? "Mercari posting failed.");
-
-  await chrome.tabs.remove(tab.id).catch(() => {});
-  return { listingId: response.listingId, url: response.url, category: response.category };
 }
