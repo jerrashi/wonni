@@ -36,12 +36,14 @@ async function generateCodeChallenge(verifier) {
 }
 
 function generateCodeVerifier() {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
-  let verifier = "";
-  for (let i = 0; i < 128; i++) {
-    verifier += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return verifier;
+  // Use Web Crypto CSPRNG for cryptographically secure randomness (RFC 7636 S4.1)
+  const bytes = new Uint8Array(96);
+  crypto.getRandomValues(bytes);
+  // Base64url-encode without padding
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=/g, "");
 }
 
 function ConnectRow({ label, description, connected, username, onConnect, onDisconnect }) {
