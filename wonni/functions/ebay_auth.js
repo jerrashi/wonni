@@ -2,26 +2,58 @@
  * ebay_auth.js
  *
  * Firebase Cloud Function: ebayExchangeToken
- * Called by the iOS app after the user completes eBay OAuth.
- * Exchanges the short-lived authorization code for access + refresh tokens
- * using the eBay token endpoint, then persists them to Firestore.
+ * Unified OAuth token exchange for both iOS and web app.
+ * Supports multiple eBay credential sets (ios, web) to enable true backend consolidation.
  */
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const https = require("https");
+const { SecretManagerServiceClient } = require("@google-cloud/secret-manager");
 
 // Destination registered with eBay Commerce Notifications (set in .env).
 // All per-user ORDER_CONFIRMATION subscriptions share this one destination.
 const NOTIFICATION_DESTINATION_ID = process.env.EBAY_NOTIFICATION_DESTINATION_ID ?? "";
+const PROJECT_ID = process.env.GCP_PROJECT || "wonni-app";
 
 if (admin.apps.length === 0) {
   admin.initializeApp();
 }
 
-const ebayClientId  = defineSecret("EBAY_CLIENT_ID");
-const ebayCertId    = defineSecret("EBAY_CERT_ID");
+const secretManager = new SecretManagerServiceClient();
+
+/**
+ * Fetch eBay credentials from Google Cloud Secret Manager.
+ * credentialSet: "ios" (wonni-app's own eBay) or "web" (dropship's eBay)
+ */
+async function getEbayCredentials(credentialSet) {
+  const mapping = {
+    ios: { clientId: "EBAY_CLIENT_ID", certId: "EBAY_CERT_ID" },
+    web: { clientId: "DROPSHIP_EBAY_CLIENT_ID", certId: "DROPSHIP_EBAY_CLIENT_SECRET" }
+  };
+
+  if (!mapping[credentialSet]) {
+    throw new Error(`Unknown credential set: ${credentialSet}`);
+  }
+
+  const { clientId: clientIdSecret, certId: certIdSecret } = mapping[credentialSet];
+
+  try {
+    const [clientIdResp] = await secretManager.accessSecretVersion({
+      name: `projects/${PROJECT_ID}/secrets/${clientIdSecret}/versions/latest`,
+    });
+    const [certIdResp] = await secretManager.accessSecretVersion({
+      name: `projects/${PROJECT_ID}/secrets/${certIdSecret}/versions/latest`,
+    });
+
+    return {
+      clientId: clientIdResp.payload.data.toString(),
+      certId: certIdResp.payload.data.toString(),
+    };
+  } catch (err) {
+    throw new Error(`Failed to fetch eBay credentials (${credentialSet}): ${err.message}`);
+  }
+}
 
 /**
  * Performs the eBay token exchange via the REST API.
@@ -75,12 +107,13 @@ function exchangeCodeForToken(clientId, certId, ruName, code, isSandbox) {
  * Callable function: ebayExchangeToken
  *
  * Expected request.data:
- *   { code: string, ruName: string, isSandbox: boolean }
+ *   { code: string, ruName: string, isSandbox: boolean, credentialSet: "ios" | "web" }
+ *   credentialSet defaults to "ios" for backwards compatibility.
  *
  * The caller must be authenticated (Firebase Auth UID is used to scope the write).
  */
 exports.ebayExchangeToken = onCall(
-  { secrets: [ebayClientId, ebayCertId] },
+  { memory: "512MB", timeoutSeconds: 60 },
   async (request) => {
     // ── Auth guard ──────────────────────────────────────────────────────
     if (!request.auth) {
@@ -88,19 +121,28 @@ exports.ebayExchangeToken = onCall(
     }
     const uid = request.auth.uid;
 
-    const { code, ruName, isSandbox = false } = request.data;
+    const { code, ruName, isSandbox = false, credentialSet = "ios" } = request.data;
     if (!code || !ruName) {
       throw new HttpsError("invalid-argument", "code and ruName are required.");
     }
 
-    console.log(`[ebayExchangeToken] Exchanging code for uid=${uid}, sandbox=${isSandbox}`);
+    console.log(`[ebayExchangeToken] Exchanging code for uid=${uid}, credentialSet=${credentialSet}, sandbox=${isSandbox}`);
+
+    // ── Fetch credentials from Secret Manager ────────────────────────────
+    let credentials;
+    try {
+      credentials = await getEbayCredentials(credentialSet);
+    } catch (err) {
+      console.error("[ebayExchangeToken] Credential fetch failed:", err.message);
+      throw new HttpsError("internal", err.message);
+    }
 
     // ── Token exchange ──────────────────────────────────────────────────
     let tokenData;
     try {
       tokenData = await exchangeCodeForToken(
-        ebayClientId.value(),
-        ebayCertId.value(),
+        credentials.clientId,
+        credentials.certId,
         ruName,
         code,
         isSandbox

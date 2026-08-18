@@ -1,6 +1,6 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
-const { ebayRequest, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME } = require("./dropship_ebay_auth");
+const { ebayRequest, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME } = require("./ebay_auth");
 const { toEbayInventoryProduct, canonicalDescription, listingImagesFor } = require("./platform_adapters");
 
 const MARKETPLACE_ID = "EBAY_US";
@@ -67,8 +67,6 @@ async function suggestCategoryId(uid, title) {
 }
 
 // One-click list a product draft on eBay: inventory item → offer → publish
-// Named dropshipEbayCreateListing to avoid colliding with wonni-app's own
-// eBay function of the same name once both live in the same Firebase project.
 exports.dropshipEbayCreateListing = onCall(
   { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME], timeoutSeconds: 120, memory: "512MiB" },
   async (request) => {
@@ -155,77 +153,7 @@ exports.dropshipEbayCreateListing = onCall(
       ebayCategoryId: categoryId,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
+
     return { listingId, offerId, price, categoryId };
-  }
-);
-
-// Push the current Wonni Drop product state (title/description/photos/price)
-// to an already-published eBay listing. Unlike Mercari, eBay's inventory_item
-// PUT is idempotent by SKU and offer PUT + republish is a safe, ordinary API
-// call — no need to diff first, always safe to re-send current state.
-// Named dropshipEbayUpdateListing (see dropshipEbayCreateListing above).
-exports.dropshipEbayUpdateListing = onCall(
-  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME], timeoutSeconds: 120, memory: "512MiB" },
-  async (request) => {
-    const uid = request.auth?.uid;
-    if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
-
-    const { productId, sellPrice } = request.data;
-    if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
-
-    const db = admin.firestore();
-    const docRef = db.collection("products").doc(productId);
-    const snap = await docRef.get();
-    if (!snap.exists) throw new HttpsError("not-found", "Product not found.");
-
-    const product = snap.data();
-    if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
-    if (!product.ebayOfferId) {
-      throw new HttpsError("failed-precondition", "Not listed on eBay yet.");
-    }
-
-    const sku = productId;
-    const title = (product.title ?? "").slice(0, 80);
-    const description = canonicalDescription(product);
-    const price = typeof sellPrice === "number" && sellPrice > 0
-      ? sellPrice
-      : computeEbaySellPrice(product);
-    const categoryId = product.ebayCategoryId;
-    if (!categoryId) throw new HttpsError("failed-precondition", "No eBay category on record for this listing.");
-
-    const [merchantLocationKey, listingPolicies] = await Promise.all([
-      getMerchantLocationKey(uid),
-      getListingPolicies(uid),
-    ]);
-
-    // 1. Inventory item — idempotent PUT keyed by SKU, picks up new title/description/photos.
-    await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
-      product: toEbayInventoryProduct(product, { imageLimit: 12, title }),
-      condition: "NEW",
-      availability: { shipToLocationAvailability: { quantity: 1 } },
-    });
-
-    // 2. Offer — update price/policies on the existing offer.
-    await ebayRequest(uid, "PUT", `/sell/inventory/v1/offer/${product.ebayOfferId}`, {
-      sku,
-      marketplaceId: MARKETPLACE_ID,
-      format: "FIXED_PRICE",
-      availableQuantity: 1,
-      categoryId,
-      listingDescription: description,
-      listingPolicies,
-      pricingSummary: { price: { value: price.toFixed(2), currency: "USD" } },
-      merchantLocationKey,
-    });
-
-    // 3. Republish — pushes the updated inventory item + offer live.
-    await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${product.ebayOfferId}/publish`);
-
-    await docRef.update({
-      ebaySellPrice: price,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    return { success: true, price };
   }
 );
