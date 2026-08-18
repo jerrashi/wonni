@@ -219,32 +219,26 @@ Partner Center to map to `https://wonni-app.web.app/web/oauth/ebay`.
 - Functions renamed with `dropshipEbay*` prefix to avoid collisions with wonni-app's own eBay integration
 - All Google Cloud Secrets updated with correct eBay and dropship credentials
 
-**BLOCKER: Consolidate eBay functions (proper fix for defineSecret conflict)**
+✓ **eBay functions consolidated (2026-08-18)**
 
-The web/iOS parity goal requires ONE unified backend, not two separate function
-sets. Current state: wonni-app has `ebayExchangeToken`/`ebayCreateListing`
-(iOS), dropship has `dropshipEbayExchangeToken`/`dropshipEbayCreateListing`
-(web). Deploying both causes Cloud Run's "secret env var overlaps non-secret
-env var" conflict because `defineSecret()` (Cloud Secrets) + .env (regular env
-vars) cannot coexist.
+Unified `ebayExchangeToken` and `ebayCreateListing` to eliminate the
+`defineSecret()` conflict and achieve true backend consolidation:
 
-**Proper fix (2026-08-18 direction):**
-1. Refactor `wonni-app/functions/ebay_auth.js:ebayExchangeToken` to accept
-   `credentialSet: "ios" | "web"` parameter
-2. Use Google Cloud Secret Manager API directly at runtime (replace all
-   `defineSecret()` calls with `secretmanager.accessSecret()`) — eliminates
-   deployment-time secret validation that causes the overlap
-3. For web calls, fetch `DROPSHIP_EBAY_CLIENT_ID` and `DROPSHIP_EBAY_CLIENT_SECRET`
-   from Secret Manager; for iOS, use existing `EBAY_CLIENT_ID`/`EBAY_CERT_ID`
-4. Delete `dropship_ebay_auth.js`, `dropship_ebay_listing.js`, and all
-   `dropship*` exports from `index.js`
-5. Update `web/src/pages/Settings.jsx` OAuth pages to call unified
-   `ebayExchangeToken` (not `dropshipEbayExchangeToken`) with
-   `credentialSet: "web"`
+**Changes:**
+1. ✓ Refactored `ebay_auth.js` and `ebay_listing.js` to use Google Cloud Secret
+  Manager API directly at runtime (removed all `defineSecret()` calls)
+2. ✓ Added `credentialSet: "ios" | "web"` parameter to both functions
+3. ✓ Routes to correct eBay credentials based on caller:
+   - `credentialSet: "ios"` → `EBAY_CLIENT_ID` + `EBAY_CERT_ID` (wonni-app)
+   - `credentialSet: "web"` → `DROPSHIP_EBAY_CLIENT_ID` + `DROPSHIP_EBAY_CLIENT_SECRET` (dropship)
+4. ✓ Deleted duplicate `dropship_ebay_auth.js` and `dropship_ebay_listing.js`
+5. ✓ Removed `dropship*` exports from `wonni-app/functions/index.js`
+6. ✓ Updated web OAuth pages to call `ebayExchangeToken` with `credentialSet: "web"`
+7. ✓ Added `@google-cloud/secret-manager` to `functions/package.json`
 
-This achieves true backend consolidation, eliminates the defineSecret conflict
-entirely, and makes the codebase maintainable long-term. Estimated scope: 2-3
-hours for a careful refactor + testing.
+**Result:** One unified backend, no `defineSecret()` conflicts, both iOS and
+web apps call the same functions with credential routing via parameter. Ready
+for deployment.
 
 **Remaining blockers (unchanged):**
 
