@@ -497,6 +497,11 @@ export default function Dashboard() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  // Collapsed by default — a draft still in progress on the phone shouldn't
+  // clutter the main grid of "real" dropship work. Once posted (isDraft ===
+  // false via postToWonni), it graduates into the normal grid like anything
+  // else; source stays "ios" forever but that's no longer what gates this.
+  const [mobileDraftsExpanded, setMobileDraftsExpanded] = useState(false);
 
   useEffect(() => {
     const uid = auth.currentUser?.uid;
@@ -528,12 +533,20 @@ export default function Dashboard() {
     );
   }, []);
 
+  // "Mobile Drafts" folder — products started on iOS (source === "ios",
+  // stamped by UploadManager.syncProductDataAwaiting in the wonni repo)
+  // still in progress there (isDraft !== false). Kept out of the main grid
+  // until expanded so a half-finished phone draft doesn't sit next to
+  // finished dropship work.
+  const mobileDrafts = products.filter((p) => p.source === "ios" && p.isDraft !== false);
+  const regularProducts = products.filter((p) => !(p.source === "ios" && p.isDraft !== false));
+
   return (
     <Layout>
       <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <h1 style={{ margin: 0 }}>Products</h1>
-          <span style={{ fontSize: 13, color: "var(--muted)" }}>{products.length} imported / drafts</span>
+          <span style={{ fontSize: 13, color: "var(--muted)" }}>{regularProducts.length} imported / drafts</span>
         </div>
         <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
           📷 Create Draft from Photo
@@ -544,12 +557,34 @@ export default function Dashboard() {
 
       {error && <div className="card" style={{ marginBottom: 20, color: "var(--danger)" }}>{error}</div>}
 
+      {mobileDrafts.length > 0 && (
+        <div className="card" style={{ marginBottom: 20 }}>
+          <button
+            onClick={() => setMobileDraftsExpanded((v) => !v)}
+            style={{
+              width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+              background: "none", border: "none", cursor: "pointer", padding: 0, font: "inherit", color: "inherit",
+            }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600 }}>
+              📱 Mobile Drafts <span className="chip chip-draft">{mobileDrafts.length}</span>
+            </span>
+            <span style={{ fontSize: 12, color: "var(--muted)" }}>{mobileDraftsExpanded ? "▲ Collapse" : "▼ Expand"}</span>
+          </button>
+          {mobileDraftsExpanded && (
+            <div className="product-grid" style={{ marginTop: 16 }}>
+              {mobileDrafts.map((p) => <ProductCard key={p.id} product={p} />)}
+            </div>
+          )}
+        </div>
+      )}
+
       {loading ? (
         <div className="empty-state">
           <div style={{ fontSize: 32 }}>⏳</div>
           <p>Loading your products…</p>
         </div>
-      ) : products.length === 0 ? (
+      ) : regularProducts.length === 0 ? (
         <div className="empty-state">
           <div style={{ fontSize: 32 }}>📦</div>
           <p>No products yet. Import from Weverse, AliExpress, or create a draft from a photo.</p>
@@ -559,7 +594,7 @@ export default function Dashboard() {
         </div>
       ) : (
         <div className="product-grid">
-          {products.map((p) => <ProductCard key={p.id} product={p} />)}
+          {regularProducts.map((p) => <ProductCard key={p.id} product={p} />)}
         </div>
       )}
 
