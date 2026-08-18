@@ -1454,15 +1454,23 @@ exports.ebayCreateListing = onCall(
  * Expects: { listingId: string }
  */
 exports.ebayUpdateListing = onCall(
-  { secrets: [ebayClientId, ebayCertId] },
+  { memory: "512MB", timeoutSeconds: 60 },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError("unauthenticated", "You must be signed in.");
     }
     const uid = request.auth.uid;
-    const { listingId } = request.data;
+    const { listingId, credentialSet = "ios" } = request.data;
     if (!listingId) {
       throw new HttpsError("invalid-argument", "listingId is required.");
+    }
+
+    // Fetch credentials from Secret Manager
+    let credentials;
+    try {
+      credentials = await getEbayCredentials(credentialSet);
+    } catch (err) {
+      throw new HttpsError("internal", err.message);
     }
 
     const db = admin.firestore();
