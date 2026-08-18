@@ -219,26 +219,32 @@ Partner Center to map to `https://wonni-app.web.app/web/oauth/ebay`.
 - Functions renamed with `dropshipEbay*` prefix to avoid collisions with wonni-app's own eBay integration
 - All Google Cloud Secrets updated with correct eBay and dropship credentials
 
-✓ **eBay functions consolidated (2026-08-18)**
+✓ **eBay functions consolidated & deployed (2026-08-18)**
 
-Unified `ebayExchangeToken` and `ebayCreateListing` to eliminate the
-`defineSecret()` conflict and achieve true backend consolidation:
+Unified all eBay OAuth and listing functions to achieve true backend consolidation
+and eliminate the `defineSecret()` conflict:
 
-**Changes:**
-1. ✓ Refactored `ebay_auth.js` and `ebay_listing.js` to use Google Cloud Secret
-  Manager API directly at runtime (removed all `defineSecret()` calls)
-2. ✓ Added `credentialSet: "ios" | "web"` parameter to both functions
-3. ✓ Routes to correct eBay credentials based on caller:
-   - `credentialSet: "ios"` → `EBAY_CLIENT_ID` + `EBAY_CERT_ID` (wonni-app)
-   - `credentialSet: "web"` → `DROPSHIP_EBAY_CLIENT_ID` + `DROPSHIP_EBAY_CLIENT_SECRET` (dropship)
+**Implementation:**
+1. ✓ Refactored `ebay_auth.js`, `ebay_listing.js` to use Google Cloud Secret Manager
+  API directly at runtime (removed all `defineSecret()` calls)
+2. ✓ Added `credentialSet: "ios" | "web"` parameter to:
+   - `ebayExchangeToken` — unified OAuth token exchange
+   - `ebayCreateListing` — unified listing creation
+   - `ebayUpdateListing` — unified listing updates
+   - `ebayDeleteListing` — unified listing deletion
+3. ✓ Credential routing:
+   - `credentialSet: "ios"` → `EBAY_CLIENT_ID` + `EBAY_CERT_ID`
+   - `credentialSet: "web"` → `DROPSHIP_EBAY_CLIENT_ID` + `DROPSHIP_EBAY_CLIENT_SECRET`
 4. ✓ Deleted duplicate `dropship_ebay_auth.js` and `dropship_ebay_listing.js`
 5. ✓ Removed `dropship*` exports from `wonni-app/functions/index.js`
-6. ✓ Updated web OAuth pages to call `ebayExchangeToken` with `credentialSet: "web"`
+6. ✓ Updated web OAuth pages to call unified `ebayExchangeToken` with `credentialSet: "web"`
 7. ✓ Added `@google-cloud/secret-manager` to `functions/package.json`
 
-**Result:** One unified backend, no `defineSecret()` conflicts, both iOS and
-web apps call the same functions with credential routing via parameter. Ready
-for deployment.
+**Deployment status:** ✅ ALL FUNCTIONS DEPLOYED SUCCESSFULLY (2026-08-18)
+- eBay OAuth and listing functions now live on wonni-app backend
+- Web and iOS apps share one unified backend with credential-based routing
+- No defineSecret() conflicts, no .env requirements
+- Ready for web/iOS eBay sign-in and cross-posting
 
 **Remaining blockers (unchanged):**
 
