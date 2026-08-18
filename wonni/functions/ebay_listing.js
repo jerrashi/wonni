@@ -2,20 +2,54 @@
  * ebay_listing.js
  *
  * Firebase Cloud Functions: ebayCreateListing, ebayDeleteListing
- * Manages cross-posting individual listings to eBay via the Inventory API.
+ * Unified listing management for both iOS and web app.
+ * Supports multiple eBay credential sets (ios, web).
  */
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const https = require("https");
+const { SecretManagerServiceClient } = require("@google-cloud/secret-manager");
 
 if (admin.apps.length === 0) {
   admin.initializeApp();
 }
 
-const ebayClientId = defineSecret("EBAY_CLIENT_ID");
-const ebayCertId = defineSecret("EBAY_CERT_ID");
+const PROJECT_ID = process.env.GCP_PROJECT || "wonni-app";
+const secretManager = new SecretManagerServiceClient();
+
+/**
+ * Fetch eBay credentials from Google Cloud Secret Manager.
+ * credentialSet: "ios" (wonni-app's own eBay) or "web" (dropship's eBay)
+ */
+async function getEbayCredentials(credentialSet) {
+  const mapping = {
+    ios: { clientId: "EBAY_CLIENT_ID", certId: "EBAY_CERT_ID" },
+    web: { clientId: "DROPSHIP_EBAY_CLIENT_ID", certId: "DROPSHIP_EBAY_CLIENT_SECRET" }
+  };
+
+  if (!mapping[credentialSet]) {
+    throw new Error(`Unknown credential set: ${credentialSet}`);
+  }
+
+  const { clientId: clientIdSecret, certId: certIdSecret } = mapping[credentialSet];
+
+  try {
+    const [clientIdResp] = await secretManager.accessSecretVersion({
+      name: `projects/${PROJECT_ID}/secrets/${clientIdSecret}/versions/latest`,
+    });
+    const [certIdResp] = await secretManager.accessSecretVersion({
+      name: `projects/${PROJECT_ID}/secrets/${certIdSecret}/versions/latest`,
+    });
+
+    return {
+      clientId: clientIdResp.payload.data.toString(),
+      certId: certIdResp.payload.data.toString(),
+    };
+  } catch (err) {
+    throw new Error(`Failed to fetch eBay credentials (${credentialSet}): ${err.message}`);
+  }
+}
 
 /**
  * Promise wrapper for https.request.
@@ -966,15 +1000,23 @@ async function ensureInventoryLocation(accessToken, host, defaultLocation, uid, 
  * Expects: { listingId: string }
  */
 exports.ebayCreateListing = onCall(
-  { secrets: [ebayClientId, ebayCertId] },
+  { memory: "512MB", timeoutSeconds: 60 },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError("unauthenticated", "You must be signed in.");
     }
     const uid = request.auth.uid;
-    const { listingId } = request.data;
+    const { listingId, credentialSet = "ios" } = request.data;
     if (!listingId) {
       throw new HttpsError("invalid-argument", "listingId is required.");
+    }
+
+    // Fetch credentials from Secret Manager
+    let credentials;
+    try {
+      credentials = await getEbayCredentials(credentialSet);
+    } catch (err) {
+      throw new HttpsError("internal", err.message);
     }
 
     const db = admin.firestore();
@@ -1015,7 +1057,7 @@ exports.ebayCreateListing = onCall(
       }
 
       // 2. Refresh token & Get active credentials
-      const { accessToken, isSandbox } = await getActiveAccessToken(uid, ebayClientId.value(), ebayCertId.value(), db);
+      const { accessToken, isSandbox } = await getActiveAccessToken(uid, credentials.clientId, credentials.certId, db);
       const host = isSandbox ? "api.sandbox.ebay.com" : "api.ebay.com";
 
       // 3. Ensure business policies exist and retrieve policy IDs
@@ -1438,7 +1480,7 @@ exports.ebayUpdateListing = onCall(
     }
 
     try {
-      const { accessToken, isSandbox } = await getActiveAccessToken(uid, ebayClientId.value(), ebayCertId.value(), db);
+      const { accessToken, isSandbox } = await getActiveAccessToken(uid, credentials.clientId, credentials.certId, db);
       const host = isSandbox ? "api.sandbox.ebay.com" : "api.ebay.com";
       const sku = `wonni_${listingId}`;
 
@@ -1614,18 +1656,26 @@ exports.ebayUpdateListing = onCall(
 
 /**
  * Callable Function: ebayDeleteListing
- * Expects: { listingId: string }
+ * Expects: { listingId: string, credentialSet: "ios" | "web" }
  */
 exports.ebayDeleteListing = onCall(
-  { secrets: [ebayClientId, ebayCertId] },
+  { memory: "512MB", timeoutSeconds: 60 },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError("unauthenticated", "You must be signed in.");
     }
     const uid = request.auth.uid;
-    const { listingId } = request.data;
+    const { listingId, credentialSet = "ios" } = request.data;
     if (!listingId) {
       throw new HttpsError("invalid-argument", "listingId is required.");
+    }
+
+    // Fetch credentials from Secret Manager
+    let credentials;
+    try {
+      credentials = await getEbayCredentials(credentialSet);
+    } catch (err) {
+      throw new HttpsError("internal", err.message);
     }
 
     const db = admin.firestore();
@@ -1652,7 +1702,7 @@ exports.ebayDeleteListing = onCall(
     }, { merge: true });
 
     try {
-      const { accessToken, isSandbox } = await getActiveAccessToken(uid, ebayClientId.value(), ebayCertId.value(), db);
+      const { accessToken, isSandbox } = await getActiveAccessToken(uid, credentials.clientId, credentials.certId, db);
       const host = isSandbox ? "api.sandbox.ebay.com" : "api.ebay.com";
       const sku = `wonni_${listingId}`;
 

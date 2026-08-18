@@ -33,6 +33,13 @@ public class IntegrationRepository: ObservableObject {
     private let db = Firestore.firestore()
     private let usersCollection = "users"
     private let integrationsSubcollection = "integrations"
+
+    // Etsy/Facebook Marketplace aren't functional yet (Etsy's backend is real
+    // but currently broken; Facebook has no automation, just a manual-entry
+    // webview — see #66). Hidden from the UI until they work; not removed
+    // from the backend since Mercari/eBay's own sale cascade code shares
+    // files with Etsy's (sale_sync.js/sale_poller.js).
+    public static let supportedPlatforms = ["ebay", "mercari"]
     
     @Published public var integrations: [PlatformIntegration] = []
     @Published public var isLoading = false
@@ -47,7 +54,7 @@ public class IntegrationRepository: ObservableObject {
     /// If documents don't exist, returns default disconnected states.
     public func loadIntegrations() async {
         guard let uid = userId else {
-            let platforms = ["ebay", "etsy", "mercari", "facebook"]
+            let platforms = IntegrationRepository.supportedPlatforms
             self.integrations = platforms.map { PlatformIntegration(platform: $0, isConnected: false) }
             return
         }
@@ -79,7 +86,7 @@ public class IntegrationRepository: ObservableObject {
             }
             
             // Build full list with defaults for missing integrations
-            let platforms = ["ebay", "etsy", "mercari", "facebook"]
+            let platforms = IntegrationRepository.supportedPlatforms
             let finalIntegrations = platforms.map { p in
                 loaded[p] ?? PlatformIntegration(platform: p, isConnected: false)
             }
@@ -88,7 +95,7 @@ public class IntegrationRepository: ObservableObject {
             self.isLoading = false
         } catch {
             print("[IntegrationRepository] Error loading integrations: \(error)")
-            let platforms = ["ebay", "etsy", "mercari", "facebook"]
+            let platforms = IntegrationRepository.supportedPlatforms
             self.integrations = platforms.map { PlatformIntegration(platform: $0, isConnected: false) }
             self.isLoading = false
         }

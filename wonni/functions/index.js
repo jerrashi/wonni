@@ -164,15 +164,11 @@ exports.ebayRedirect = onRequest({ cors: true }, (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// Merged from wonni_dropship (Phase B backend merge), commented out for now:
-// TikTok/AliExpress/Weverse/dropship-eBay are not actually integrated —
-// nothing in the real app calls these (verified: `updateMercariListingStatus`
-// is the dropship Chrome-extension pipeline against a separate `products`
-// collection, not the app's own Mercari WebView automation; Swift's
-// `disconnectPlatform`/eBay OAuth are fully local and never call these
-// functions by name). Deploying them was prompting for TIKTOK_APP_KEY/etc.
-// secrets we don't have yet for a pipeline nobody uses. Uncomment (and
-// re-add to module.exports below) once this pipeline is actually wired up.
+// Merged from wonni_dropship (Phase B backend merge), now enabling for web app:
+// The dropship web client (wonni_dropship) calls these OAuth and listing functions.
+// iOS doesn't use them (it has its own eBay/marketplace integrations), so they
+// were originally commented out. Uncommented 2026-08-18 when setting up web/iOS
+// parity for eBay cross-posting and sign-in.
 // `dropship_ebay_auth.js`/`dropship_ebay_listing.js` are renamed copies of
 // dropship's own `ebay_auth.js`/`ebay_listing.js` — this project already has
 // its own eBay integration under `ebayExchangeToken`/`ebayCreateListing`/etc.
@@ -180,63 +176,56 @@ exports.ebayRedirect = onRequest({ cors: true }, (req, res) => {
 // their own `dropshipEbay*` names to avoid colliding with them.
 // ─────────────────────────────────────────────────────────────────────────
 
-// const { aliexpressExchangeToken } = require("./aliexpress_auth");
-// const { aliexpressImportProduct } = require("./aliexpress_product");
-// const { weverseImportProduct } = require("./weverse_product");
-// const { weverseBulkImportProducts } = require("./weverse_bulk_import");
-// const { splitProductImage } = require("./split_image");
-// const { identifyProductsInImage } = require("./identify_products");
-// const { placeAliexpressOrder, confirmTiktokShipment, pollAliexpressTracking } = require("./aliexpress_order");
-// const { tiktokExchangeToken } = require("./tiktok_auth");
-// const { dropshipEbayExchangeToken } = require("./dropship_ebay_auth");
-// const { dropshipEbayCreateListing, dropshipEbayUpdateListing } = require("./dropship_ebay_listing");
-// const { getTiktokCategories, tiktokCreateListing, tiktokUpdateListing, tiktokDeleteListing } = require("./tiktok_listing");
-// const { updateMercariListingStatus } = require("./mercari_listing");
-// const { syncTiktokOrders, syncTiktokOrdersScheduled } = require("./tiktok_orders");
-// const { disconnectPlatform, updateSettings, generateOAuthState } = require("./user_settings");
-// const { onProductDeleted } = require("./product_cleanup");
-// const { generateProductDescription } = require("./generate_description");
-// const { publishStorageObject } = require("./publish_storage_object");
+const { aliexpressExchangeToken } = require("./aliexpress_auth");
+const { aliexpressImportProduct } = require("./aliexpress_product");
+const { weverseImportProduct } = require("./weverse_product");
+const { weverseBulkImportProducts } = require("./weverse_bulk_import");
+const { splitProductImage } = require("./split_image");
+const { identifyProductsInImage } = require("./identify_products");
+const { placeAliexpressOrder, confirmTiktokShipment, pollAliexpressTracking } = require("./aliexpress_order");
+const { tiktokExchangeToken } = require("./tiktok_auth");
+const { getTiktokCategories, tiktokCreateListing, tiktokUpdateListing, tiktokDeleteListing } = require("./tiktok_listing");
+const { updateMercariListingStatus } = require("./mercari_listing");
+const { syncTiktokOrders, syncTiktokOrdersScheduled } = require("./tiktok_orders");
+const { disconnectPlatform, updateSettings, generateOAuthState } = require("./user_settings");
+const { onProductDeleted } = require("./product_cleanup");
+const { generateProductDescription: dropshipGenerateProductDescription } = require("./generate_description");
+const { publishStorageObject } = require("./publish_storage_object");
 
-// module.exports = {
-//   ...module.exports,
-//   // dropship: auth
-//   aliexpressExchangeToken,
-//   tiktokExchangeToken,
-//   dropshipEbayExchangeToken,
-//
-//   // dropship: products/listings
-//   aliexpressImportProduct,
-//   weverseImportProduct,
-//   weverseBulkImportProducts,
-//   splitProductImage,
-//   identifyProductsInImage,
-//   generateProductDescription,
-//   onProductDeleted,
-//   publishStorageObject,
-//
-//   // dropship: TikTok Shop listings
-//   getTiktokCategories,
-//   tiktokCreateListing,
-//   tiktokUpdateListing,
-//   tiktokDeleteListing,
-//
-//   // dropship: eBay listings
-//   dropshipEbayCreateListing,
-//   dropshipEbayUpdateListing,
-//
-//   // dropship: Mercari listings
-//   updateMercariListingStatus,
-//
-//   // dropship: user settings
-//   generateOAuthState,
-//   disconnectPlatform,
-//   updateSettings,
-//
-//   // dropship: orders + fulfillment
-//   syncTiktokOrders,
-//   syncTiktokOrdersScheduled,
-//   placeAliexpressOrder,
-//   confirmTiktokShipment,
-//   pollAliexpressTracking,
-// };
+module.exports = {
+  ...module.exports,
+  // dropship: auth
+  aliexpressExchangeToken,
+  tiktokExchangeToken,
+
+  // dropship: products/listings
+  aliexpressImportProduct,
+  weverseImportProduct,
+  weverseBulkImportProducts,
+  splitProductImage,
+  identifyProductsInImage,
+  generateProductDescription: dropshipGenerateProductDescription,
+  onProductDeleted,
+  publishStorageObject,
+
+  // dropship: TikTok Shop listings
+  getTiktokCategories,
+  tiktokCreateListing,
+  tiktokUpdateListing,
+  tiktokDeleteListing,
+
+  // dropship: Mercari listings
+  updateMercariListingStatus,
+
+  // dropship: user settings
+  generateOAuthState,
+  disconnectPlatform,
+  updateSettings,
+
+  // dropship: orders + fulfillment
+  syncTiktokOrders,
+  syncTiktokOrdersScheduled,
+  placeAliexpressOrder,
+  confirmTiktokShipment,
+  pollAliexpressTracking,
+};

@@ -38,9 +38,6 @@ async function tokenRequest(bodyParams) {
 }
 
 // Exchange authorization code for access + refresh tokens
-// Named dropshipEbayExchangeToken (not ebayExchangeToken) to avoid colliding
-// with wonni-app's own eBay function of the same name once both live in the
-// same Firebase project.
 exports.dropshipEbayExchangeToken = onCall(
   { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME] },
   async (request) => {
