@@ -3204,6 +3204,14 @@ function ProductDetail() {
   const [lengthIn, setLengthIn] = useState("");
   const [widthIn, setWidthIn] = useState("");
   const [heightIn, setHeightIn] = useState("");
+  // Shared with iOS's own Item fields (shipping config beyond weight/dims,
+  // which was already shared) — see wonni repo's UploadManager.swift.
+  // Distinct from mercariBuyerPaysShipping below, which is a Mercari-
+  // cross-post-specific override, not this general product-level default.
+  const [buyerPaysShipping, setBuyerPaysShipping] = useState(true);
+  const [handlingFee, setHandlingFee] = useState("0");
+  const [estimatedShippingDays, setEstimatedShippingDays] = useState("3");
+  const [handlingTimeDays, setHandlingTimeDays] = useState("");
   const [images, setImages] = useState([]);
   const [previewIndex, setPreviewIndex] = useState(0);
   // Tracked by stable image id, not array position — a background split of a
@@ -3245,6 +3253,26 @@ function ProductDetail() {
   const [aiDescLoading, setAiDescLoading] = useState(false);
   const [aiDescSuggestion, setAiDescSuggestion] = useState(null); // string | null
   const [aiDescError, setAiDescError] = useState("");
+  // Import-time AI suggestions for title/price — the description one reuses
+  // aiDescSuggestion above instead of a separate state (hydrated from
+  // product.aiSuggestedDescription on load, see the main onSnapshot below),
+  // so there's one chip per field regardless of whether the suggestion came
+  // from import time or the on-demand "✨ AI Suggest" regenerate button.
+  // These come from whatever produced the product (dropship's
+  // gemini_identify.js at import, or iOS's own on-device Gemini call — same
+  // field names either way, see UploadManager.syncProductDataAwaiting in the
+  // wonni repo). Dismissed (Discard) per-suggestion, not deleted from
+  // Firestore — reappears if the product doc is reloaded.
+  const [aiSuggestedTitle, setAiSuggestedTitle] = useState(null);
+  const [aiSuggestedPrice, setAiSuggestedPrice] = useState(null);
+  // Refs, not state — read inside the onSnapshot closure below, whose effect
+  // only depends on [productId] (see that useEffect's deps array). A state
+  // value would be captured stale at subscription time, so clicking Discard
+  // wouldn't actually stick past the next unrelated Firestore update; a ref
+  // is always read fresh regardless of when the closure was created.
+  const dismissedAiTitleRef = useRef(false);
+  const dismissedAiPriceRef = useRef(false);
+  const dismissedAiDescriptionRef = useRef(false);
   const { jobs: mediaJobs, enqueue: enqueueMediaJob } = useMediaJobQueue();
 
   // ── Unsaved-changes staging ──────────────────────────────────────────────
@@ -3308,10 +3336,35 @@ function ProductDetail() {
         localPendingFieldsRef.current = Object.keys(effectiveFields).length ? effectiveFields : null;
         setPendingEdits(localPendingFieldsRef.current ? { fields: effectiveFields, updatedAt: next.pendingEdits?.updatedAt ?? null } : null);
 
-        setTitle(effectiveFields.title ?? next.title ?? "");
-        setDescription(effectiveFields.description ?? next.description ?? "");
+        const nextTitle = effectiveFields.title ?? next.title ?? "";
+        const nextDescription = effectiveFields.description ?? next.description ?? "";
+        setTitle(nextTitle);
+        setDescription(nextDescription);
         const effListingPrice = "listingPrice" in effectiveFields ? effectiveFields.listingPrice : next.listingPrice;
-        setListingPrice(typeof effListingPrice === "number" ? effListingPrice : null);
+        const nextListingPrice = typeof effListingPrice === "number" ? effListingPrice : null;
+        setListingPrice(nextListingPrice);
+
+        // AI-suggested title/description/price — only surface a chip when the
+        // suggestion actually differs from the current value and the user
+        // hasn't already dismissed it this session (re-dismissing on every
+        // snapshot re-render would make Discard feel broken).
+        setAiSuggestedTitle(
+          !dismissedAiTitleRef.current
+            && typeof next.aiSuggestedTitle === "string" && next.aiSuggestedTitle && next.aiSuggestedTitle !== nextTitle
+            ? next.aiSuggestedTitle
+            : null
+        );
+        setAiSuggestedPrice(
+          !dismissedAiPriceRef.current
+            && typeof next.aiSuggestedPrice === "number" && next.aiSuggestedPrice !== nextListingPrice
+            ? next.aiSuggestedPrice
+            : null
+        );
+        if (!dismissedAiDescriptionRef.current
+          && typeof next.aiSuggestedDescription === "string" && next.aiSuggestedDescription
+          && next.aiSuggestedDescription !== nextDescription) {
+          setAiDescSuggestion(next.aiSuggestedDescription);
+        }
         {
           const effSourcePrice = "sourcePrice" in effectiveFields
             ? effectiveFields.sourcePrice
@@ -3344,6 +3397,14 @@ function ProductDetail() {
           setWidthIn(effWidthIn ? String(effWidthIn) : "");
           setHeightIn(effHeightIn ? String(effHeightIn) : "");
         }
+        // Shared with iOS's Item fields — see the plan doc's Phase 3.5.
+        setBuyerPaysShipping(
+          "buyerPaysShipping" in effectiveFields ? effectiveFields.buyerPaysShipping : (next.buyerPaysShipping ?? true)
+        );
+        setHandlingFee(String(effectiveFields.handlingFee ?? next.handlingFee ?? 0));
+        setEstimatedShippingDays(String(effectiveFields.estimatedShippingDays ?? next.estimatedShippingDays ?? 3));
+        const effHandlingTimeDays = "handlingTimeDays" in effectiveFields ? effectiveFields.handlingTimeDays : next.handlingTimeDays;
+        setHandlingTimeDays(effHandlingTimeDays != null ? String(effHandlingTimeDays) : "");
 
         const mergedForImages = { ...next };
         if ("images" in effectiveFields) mergedForImages.images = effectiveFields.images;
@@ -3519,6 +3580,26 @@ function ProductDetail() {
   function handleHeightInChange(raw) {
     setHeightIn(raw);
     markFieldsDirty({ heightIn: parseFloat(raw) || null });
+  }
+
+  function handleBuyerPaysShippingChange(checked) {
+    setBuyerPaysShipping(checked);
+    markFieldsDirty({ buyerPaysShipping: checked });
+  }
+
+  function handleHandlingFeeChange(raw) {
+    setHandlingFee(raw);
+    markFieldsDirty({ handlingFee: parseFloat(raw) || 0 });
+  }
+
+  function handleEstimatedShippingDaysChange(raw) {
+    setEstimatedShippingDays(raw);
+    markFieldsDirty({ estimatedShippingDays: parseInt(raw, 10) || 3 });
+  }
+
+  function handleHandlingTimeDaysChange(raw) {
+    setHandlingTimeDays(raw);
+    markFieldsDirty({ handlingTimeDays: raw === "" ? null : parseInt(raw, 10) || null });
   }
 
   // Commits the staged buffer into the live fields and clears it — the
@@ -4450,6 +4531,35 @@ function ProductDetail() {
 
               <div className="modal-field" style={{ marginTop: 8, marginBottom: 8, maxWidth: 200 }}>
                 <label>Listing price</label>
+                {aiSuggestedPrice !== null && (
+                  <div style={{
+                    marginBottom: 6,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    fontSize: 11,
+                    color: "var(--accent, #6366f1)",
+                  }}>
+                    <span>✨ AI suggests ${aiSuggestedPrice.toFixed(2)}</span>
+                    <button
+                      className="btn btn-ghost"
+                      style={{ fontSize: 11, padding: "1px 6px" }}
+                      onClick={() => {
+                        handleListingPriceChange(String(aiSuggestedPrice));
+                        setAiSuggestedPrice(null);
+                      }}
+                    >
+                      Use
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      style={{ fontSize: 11, padding: "1px 6px" }}
+                      onClick={() => { dismissedAiPriceRef.current = true; setAiSuggestedPrice(null); }}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
                 <input
                   className="input"
                   type="number"
@@ -4493,6 +4603,39 @@ function ProductDetail() {
                 <h2>Edit catalog text</h2>
                 <div className="modal-field" style={{ marginBottom: 12 }}>
                   <label>Title</label>
+                  {aiSuggestedTitle !== null && (
+                    <div style={{
+                      marginBottom: 8,
+                      background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(168,85,247,0.08) 100%)",
+                      border: "1px solid rgba(99,102,241,0.3)",
+                      borderRadius: 8,
+                      padding: "10px 12px",
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent, #6366f1)", letterSpacing: "0.04em" }}>✨ AI SUGGESTED</span>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button
+                            className="btn btn-primary"
+                            style={{ fontSize: 11, padding: "2px 10px" }}
+                            onClick={() => {
+                              handleTitleChange(aiSuggestedTitle);
+                              setAiSuggestedTitle(null);
+                            }}
+                          >
+                            Accept
+                          </button>
+                          <button
+                            className="btn btn-ghost"
+                            style={{ fontSize: 11, padding: "2px 8px" }}
+                            onClick={() => { dismissedAiTitleRef.current = true; setAiSuggestedTitle(null); }}
+                          >
+                            Discard
+                          </button>
+                        </div>
+                      </div>
+                      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary, var(--muted))" }}>{aiSuggestedTitle}</p>
+                    </div>
+                  )}
                   <input className="input" value={title} onChange={(e) => handleTitleChange(e.target.value)} />
                 </div>
                 <div className="modal-field">
@@ -4538,7 +4681,7 @@ function ProductDetail() {
                           <button
                             className="btn btn-ghost"
                             style={{ fontSize: 11, padding: "2px 8px" }}
-                            onClick={() => setAiDescSuggestion(null)}
+                            onClick={() => { dismissedAiDescriptionRef.current = true; setAiDescSuggestion(null); }}
                           >
                             Discard
                           </button>
@@ -4594,10 +4737,39 @@ function ProductDetail() {
                     <input className="input" type="number" min="0" placeholder="4" value={heightIn} onChange={(e) => handleHeightInChange(e.target.value)} />
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12 }}>
                   <span style={{ fontSize: 11, color: "var(--muted)" }}>
                     Used for Mercari prepaid labels & weight calculations.
                   </span>
+                </div>
+
+                {/* Shared with iOS's own shipping-config fields (buyerPaysShipping/
+                    handlingFee/estimatedShippingDays/handlingTimeDays) — distinct from
+                    the Mercari cross-post modal's own mercariBuyerPaysShipping, which
+                    is a per-platform override of this general default. */}
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginBottom: 10 }}>
+                  <input
+                    type="checkbox"
+                    checked={buyerPaysShipping}
+                    onChange={(e) => handleBuyerPaysShippingChange(e.target.checked)}
+                  />
+                  Buyer pays shipping
+                </label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                  {!buyerPaysShipping && (
+                    <div className="modal-field">
+                      <label style={{ fontSize: 11 }}>Handling fee ($)</label>
+                      <input className="input" type="number" min="0" step="0.01" value={handlingFee} onChange={(e) => handleHandlingFeeChange(e.target.value)} />
+                    </div>
+                  )}
+                  <div className="modal-field">
+                    <label style={{ fontSize: 11 }}>Est. shipping days</label>
+                    <input className="input" type="number" min="1" value={estimatedShippingDays} onChange={(e) => handleEstimatedShippingDaysChange(e.target.value)} />
+                  </div>
+                  <div className="modal-field">
+                    <label style={{ fontSize: 11 }}>Handling time (days)</label>
+                    <input className="input" type="number" min="0" placeholder="account default" value={handlingTimeDays} onChange={(e) => handleHandlingTimeDaysChange(e.target.value)} />
+                  </div>
                 </div>
               </div>
 
