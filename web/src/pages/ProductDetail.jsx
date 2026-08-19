@@ -5,6 +5,7 @@ import { auth, db, callFunction, uploadImageBlob } from "../firebase";
 import Layout from "../components/Layout";
 import UnsavedChangesModal from "../components/UnsavedChangesModal";
 import PostModal from "../components/PostModal";
+import OverflowMenu from "../components/OverflowMenu";
 import { useDebouncedCallback } from "../hooks/useDebouncedCallback";
 import { normalizeImageAssets, buildImagePayload } from "../lib/media";
 import { useMediaJobQueue } from "../lib/mediaJobQueue";
@@ -4598,77 +4599,39 @@ function ProductDetail() {
               📤 Post
             </button>
           )}
-          {product?.hasVariants && mercariInStockVariants.length > 1 ? (
-            <button className="btn btn-primary" onClick={() => setShowMercariModal(true)}>
-              {mercariAllInStockVariantsPosted
-                ? "✓ Live on Mercari"
-                : `${mercariPostedVariants.length}/${mercariInStockVariants.length} variations posted to Mercari`}
-            </button>
-          ) : product?.hasVariants && mercariSingleInStockVariant ? (
-            <button className="btn btn-primary" onClick={() => setShowMercariModal(true)}>
-              {mercariSingleInStockVariant.mercariStatus === "active"
-                ? "✓ Live on Mercari"
-                : mercariSingleInStockVariant.mercariStatus === "posting" || mercariSingleInStockVariant.mercariStatus === "updating"
-                  ? "⏳ Cross-posting to Mercari…"
-                  : "Cross-post to Mercari"}
-            </button>
-          ) : product?.hasVariants ? (
-            <button className="btn btn-primary" onClick={() => setShowMercariModal(true)}>
-              Cross-post to Mercari
-            </button>
-          ) : mercariStatus === "active" || mercariStatus === "updating" ? (
-            <>
-              <a href={mercariUrl || "#"} target="_blank" rel="noreferrer" className="btn btn-ghost" style={{ color: "#22c55e" }}>
-                ✓ Live
-              </a>
-              <button
-                className="btn btn-ghost"
-                onClick={handleSyncToMercari}
-                disabled={syncingMercari || mercariStatus === "updating" || hasPendingMediaJobs}
-              >
-                {mercariStatus === "updating" ? "⏳ Syncing…" : "🔄 Sync"}
-              </button>
-              {mercariItemId && (
-                <a
-                  href={`https://www.mercari.com/sell/edit/${mercariItemId}/`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="btn btn-ghost"
-                >
-                  ✏️ Edit
-                </a>
-              )}
-              <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={handleResetMercariListing}>
-                🗑 Delete
-              </button>
-            </>
-          ) : (
-            <div style={{ display: "flex", gap: 4, flexDirection: "column" }}>
-              <button className="btn btn-primary" onClick={() => setShowMercariModal(true)}>
-                {mercariStatus === "posting" ? "⏳ Cross-posting to Mercari…" : "Cross-post to Mercari"}
-              </button>
-              <button className="btn btn-ghost" onClick={() => setShowLegacyMercariLinkModal(true)}>
-                🔗 Link existing
-              </button>
-            </div>
-          )}
-          {mercariStatus === "active" && (
-            <button className="btn btn-ghost" onClick={() => setShowLegacyMercariLinkModal(true)}>
-              🔗 Change link
+          {/* Mercari viewing/sync button - shown only when live on Mercari */}
+          {!product?.hasVariants && (mercariStatus === "active" || mercariStatus === "updating") && (
+            <button
+              className="btn btn-ghost"
+              onClick={handleSyncToMercari}
+              disabled={syncingMercari || mercariStatus === "updating" || hasPendingMediaJobs}
+              title="Sync title, description, price, and photos to Mercari listing"
+            >
+              {mercariStatus === "updating" ? "⏳ Syncing…" : "🔄 Sync"}
             </button>
           )}
-          {product?.sourceUrl && (
-            <a href={product.sourceUrl} target="_blank" rel="noreferrer" className="btn btn-ghost">
-              Open source listing
-            </a>
-          )}
-          {product && (
-            <button className="btn btn-danger" onClick={handleDeleteProduct} disabled={deletingProduct}>
-              {deletingProduct ? "Deleting…" : "Delete listing"}
+          {/* Mercari modal link - shown when product has variants */}
+          {product?.hasVariants && (
+            <button className="btn btn-ghost" onClick={() => setShowMercariModal(true)}>
+              Mercari listings ({mercariPostedVariants.length}/{mercariInStockVariants.length})
             </button>
           )}
-          {product && (
-            <button className="btn btn-ghost" onClick={checkMercariSoldItems} disabled={checkingMercariSold}>
+          {/* Overflow menu with Delete and Check Mercari for sold items */}
+          <OverflowMenu
+            items={[
+              {
+                label: checkingMercariSold ? "⏳ Checking…" : "🔍 Check Mercari for sold items",
+                onClick: checkMercariSoldItems,
+                disabled: checkingMercariSold
+              },
+              {
+                label: deletingProduct ? "Deleting…" : "Delete listing",
+                onClick: handleDeleteProduct,
+                disabled: deletingProduct,
+                danger: true
+              }
+            ]}
+          />
               {checkingMercariSold ? "🔍 Checking…" : "🔍 Check Mercari for sold items"}
             </button>
           )}
