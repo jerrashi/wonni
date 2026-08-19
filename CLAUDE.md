@@ -57,6 +57,12 @@ Deferred code work (not started, no blocker but real scope):
       connections/credentials into one, so a user connects eBay once and
       either client posts through it — the real reason `dropshipEbay*` was
       kept as a deliberately temporary name rather than renamed by platform.
+- [ ] `refreshSourceData` Cloud Function (Phase 4 UI redesign, 2026-08-19):
+      refetch source images and variants from original product source
+      (AliExpress/Weverse/etc) on-demand from ProductDetail.jsx. Called from
+      expandable Images/Variants sections with 24-hour cooldown per section.
+      Returns fresh image URLs and variant list. Stores last refresh timestamp
+      in `products` doc under `sourceRefresh.{section}.lastRefreshedAt`.
 - [ ] Phase 3, unified sales/orders dashboard — spec written
       (`~/.claude/plans/sales-dashboard-spec.md`), untouched so far; today's
       `orders` rule merge is a step toward it, not the implementation.
