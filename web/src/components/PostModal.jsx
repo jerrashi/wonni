@@ -3,15 +3,16 @@ import { doc, getDoc } from "firebase/firestore";
 import { db, auth, callFunction } from "../firebase";
 
 const PLATFORMS = [
-  { id: "tiktok", name: "TikTok Shop", requiresConnected: true },
+  { id: "wonni", name: "Wonni", requiresConnected: false, locked: true },
   { id: "ebay", name: "eBay", requiresConnected: true },
   { id: "etsy", name: "Etsy", requiresConnected: true },
   { id: "mercari", name: "Mercari", requiresConnected: false },
+  { id: "tiktok", name: "TikTok Shop", requiresConnected: true },
 ];
 
 export default function PostModal({ product, onClose }) {
   const [integrations, setIntegrations] = useState({});
-  const [selected, setSelected] = useState(new Set());
+  const [selected, setSelected] = useState(new Set(["wonni"])); // Wonni always selected
   const [etsyCategory, setEtsyCategory] = useState(null);
   const [etsyCategories, setEtsyCategories] = useState([]);
   const [etsyCategorySearch, setEtsyCategorySearch] = useState("");
@@ -103,6 +104,7 @@ export default function PostModal({ product, onClose }) {
   }, [selected.has("etsy"), etsyCategory, product?.title, product?.category]);
 
   const togglePlatform = (platformId) => {
+    if (platformId === "wonni") return; // Can't deselect Wonni
     const newSelected = new Set(selected);
     if (newSelected.has(platformId)) {
       newSelected.delete(platformId);
@@ -119,8 +121,8 @@ export default function PostModal({ product, onClose }) {
     : [];
 
   const handleSubmit = async () => {
-    if (selected.size === 0) {
-      setError("Select at least one platform.");
+    if (selected.size === 0 || (selected.size === 1 && selected.has("wonni"))) {
+      setError("Select at least one platform besides Wonni.");
       return;
     }
 
@@ -155,19 +157,26 @@ export default function PostModal({ product, onClose }) {
       });
       const listingId = wonniRes.data.listingId;
 
+      setResults((prev) => ({
+        ...prev,
+        wonni: { status: "success" },
+      }));
+
       // Step 2: Post to each selected platform
       for (const platformId of Array.from(selected)) {
+        if (platformId === "wonni") continue; // Already done
+
         try {
           if (platformId === "tiktok") {
             await callFunction("tiktokCreateListing")({
               productId: product.id,
               title: product.title.slice(0, 255),
               sellPrice: parseFloat(product.listingPrice || product.aliexpressPrice * 2.5 || 0),
-              categoryId: null, // Would need to fetch first
+              categoryId: null,
             });
           } else if (platformId === "ebay") {
             await callFunction("ebayCreateListing")({
-              listingId,
+              productId: product.id,
               credentialSet: "web",
             });
           } else if (platformId === "etsy") {
@@ -179,39 +188,84 @@ export default function PostModal({ product, onClose }) {
               returnPolicyId: etsyReturnId,
             });
           } else if (platformId === "mercari") {
-            // Mercari uses extension messaging
-            const payload = {
-              productId: product.id,
-              title: product.title,
-              description: product.description,
-              price: parseFloat(product.listingPrice || product.aliexpressPrice * 2.2 || 15),
-              condition: product.condition || "good",
-              brand: product.brand || "",
-              suggestedCategory: product.category || "",
-              images: product.images || [],
-              weightLbs: product.weightLbs,
-              lengthIn: product.lengthIn,
-              widthIn: product.widthIn,
-              heightIn: product.heightIn,
-            };
+            const variants = Array.isArray(product.variants) ? product.variants : [];
+            const inStockVariants = product.hasVariants
+              ? variants.filter((v) => v.active && (v.quantity ?? 0) > 0)
+              : [];
 
-            if (window.chrome?.runtime?.sendMessage) {
-              await new Promise((resolve, reject) => {
-                chrome.runtime.sendMessage(
-                  import.meta.env.VITE_EXTENSION_ID,
-                  { type: "START_MERCARI_CROSS_POST", payload },
-                  (response) => {
-                    if (chrome.runtime.lastError) {
-                      reject(new Error(chrome.runtime.lastError.message));
-                    } else {
-                      resolve(response);
-                    }
-                  }
-                );
-              });
+            if (product.hasVariants && inStockVariants.length > 0) {
+              // Post each in-stock variant separately
+              for (const variant of inStockVariants) {
+                const payload = {
+                  productId: product.id,
+                  variantId: variant.id,
+                  title: product.title,
+                  description: product.description,
+                  price: parseFloat(product.listingPrice || variant.price || product.aliexpressPrice * 2.2 || 15),
+                  condition: product.condition || "good",
+                  brand: product.brand || "",
+                  suggestedCategory: product.category || "",
+                  images: product.images || [],
+                  weightLbs: product.weightLbs,
+                  lengthIn: product.lengthIn,
+                  widthIn: product.widthIn,
+                  heightIn: product.heightIn,
+                };
+
+                if (window.chrome?.runtime?.sendMessage) {
+                  await new Promise((resolve, reject) => {
+                    chrome.runtime.sendMessage(
+                      import.meta.env.VITE_EXTENSION_ID,
+                      { type: "START_MERCARI_CROSS_POST", payload },
+                      (response) => {
+                        if (chrome.runtime.lastError) {
+                          reject(new Error(chrome.runtime.lastError.message));
+                        } else {
+                          resolve(response);
+                        }
+                      }
+                    );
+                  });
+                } else {
+                  localStorage.setItem("pendingMercariPayload", JSON.stringify(payload));
+                  window.open("https://www.mercari.com/sell/", "_blank");
+                }
+              }
             } else {
-              localStorage.setItem("pendingMercariPayload", JSON.stringify(payload));
-              window.open("https://www.mercari.com/sell/", "_blank");
+              // Legacy single-product posting
+              const payload = {
+                productId: product.id,
+                title: product.title,
+                description: product.description,
+                price: parseFloat(product.listingPrice || product.aliexpressPrice * 2.2 || 15),
+                condition: product.condition || "good",
+                brand: product.brand || "",
+                suggestedCategory: product.category || "",
+                images: product.images || [],
+                weightLbs: product.weightLbs,
+                lengthIn: product.lengthIn,
+                widthIn: product.widthIn,
+                heightIn: product.heightIn,
+              };
+
+              if (window.chrome?.runtime?.sendMessage) {
+                await new Promise((resolve, reject) => {
+                  chrome.runtime.sendMessage(
+                    import.meta.env.VITE_EXTENSION_ID,
+                    { type: "START_MERCARI_CROSS_POST", payload },
+                    (response) => {
+                      if (chrome.runtime.lastError) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                      } else {
+                        resolve(response);
+                      }
+                    }
+                  );
+                });
+              } else {
+                localStorage.setItem("pendingMercariPayload", JSON.stringify(payload));
+                window.open("https://www.mercari.com/sell/", "_blank");
+              }
             }
           }
 
@@ -245,7 +299,7 @@ export default function PostModal({ product, onClose }) {
 
         <div className="modal-body" style={{ maxHeight: "60vh", overflowY: "auto" }}>
           <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 16 }}>
-            Posting will also list this item on Wonni.
+            Select platforms to post this item to. Wonni is always included.
           </div>
 
           {error && (
@@ -258,7 +312,7 @@ export default function PostModal({ product, onClose }) {
           {PLATFORMS.map((p) => {
             const isConnected = integrations[p.id]?.isConnected;
             const isSelected = selected.has(p.id);
-            const isDisabled = p.requiresConnected && !isConnected;
+            const isDisabled = (p.requiresConnected && !isConnected) || p.locked;
 
             return (
               <div key={p.id} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}>
@@ -269,8 +323,11 @@ export default function PostModal({ product, onClose }) {
                     onChange={() => !isDisabled && togglePlatform(p.id)}
                     disabled={isDisabled}
                   />
-                  <span style={{ fontWeight: 500 }}>{p.name}</span>
-                  {isConnected && <span style={{ fontSize: 11, color: "var(--success)" }}>✓ Connected</span>}
+                  <span style={{ fontWeight: p.locked ? 600 : 500 }}>
+                    {p.name}
+                    {p.locked && " (always included)"}
+                  </span>
+                  {isConnected && !p.locked && <span style={{ fontSize: 11, color: "var(--success)" }}>✓ Connected</span>}
                   {!isConnected && p.requiresConnected && (
                     <span style={{ fontSize: 11, color: "var(--muted)" }}>Not connected</span>
                   )}
@@ -412,7 +469,7 @@ export default function PostModal({ product, onClose }) {
           <button
             className="btn btn-primary"
             onClick={handleSubmit}
-            disabled={posting || selected.size === 0}
+            disabled={posting || selected.size <= 1}
           >
             {posting ? "Posting…" : "Post"}
           </button>
