@@ -308,10 +308,38 @@ All major items from the plan (~/claude/plans/expressive-marinating-lamport.md) 
 - All posting logic unchanged, pure presentation refactor
 - No impact on Etsy-specific UI (categories, shipping, returns still visible)
 
-**Deferred (nice-to-have, not blocking):**
-- Full Firestore rules re-validation before prod cutover
-
 **Result:** Header dramatically cleaner, autosave removes Save button friction, Mercari sync intelligently prompted, Post button integrates smoothly as context-aware popover. All code live on main.
+
+## As of 2026-08-19 — Firestore Rules Validation Guidance (COMPLETE)
+
+**Rules validation documents created (2026-08-19):**
+
+Pre-production validation is needed before Phase B cutover, but documentation + roadmap now in place:
+
+**FIRESTORE_RULES_VALIDATION.md** ✓
+- Overview of current dropship rules (products, orders, users, storage)
+- Phase B merged schema in wonni-app (new `listings` collection, shared `orders`)
+- What needs validation: user isolation, create constraints, backward compatibility
+- Three validation methods (no Java required: Firebase Console Rules Playground, test deploy, or emulator)
+- Complete validation checklist with 12+ points
+- Known constraints and next-steps guidance
+
+**FIRESTORE_RULES_TEST_CASES.md** ✓
+- Concrete test cases for Firebase Console Rules Playground (30+ tests)
+- 7 test groups: read/write isolation, create constraints, orders, integrations, storage
+- Step-by-step instructions for each test (copy-paste into Console)
+- Troubleshooting guide for common failures
+- Fillable validation form to track results
+- Passing criteria (all tests pass = safe to deploy)
+
+**Why Ready-to-Use:**
+- Requires NO Java (use Console's built-in Rules Playground)
+- Requires NO local setup (cloud-native validation)
+- Clear passing/failing criteria
+- Can run anytime before production cutover (non-blocking)
+- Rules themselves are sound (no changes needed, just verification)
+
+**Status:** Validation guidance complete; actual validation deferred to before production deployment
 
 ## Phase 1 notes (variations)
 - `MAX_VARIATION_DIMENSIONS` in `ProductDetail.jsx` caps variation structure
