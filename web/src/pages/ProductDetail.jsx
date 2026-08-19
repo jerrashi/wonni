@@ -3701,11 +3701,61 @@ function ProductDetail() {
   }
 
   // Detect Mercari drift (unapplied changes to live Mercari listings)
-  function hasMercariDrift() {
+  function computeHasMercariDrift() {
     if (!product || !mercariStatus || mercariStatus === "draft") return false;
-    const diff = computeMercariDiff(product);
-    return Object.keys(diff).length > 0;
+
+    // Check product-level drift
+    if (!product.hasVariants && mercariStatus === "active") {
+      const diff = computeMercariDiff(product);
+      if (Object.keys(diff).length > 0) return true;
+    }
+
+    // Check per-variant drift
+    if (product.hasVariants && variants) {
+      for (const variant of variants) {
+        if (variant.mercariStatus === "active") {
+          const diff = computeVariantMercariDiff(variant);
+          if (Object.keys(diff).length > 0) return true;
+        }
+      }
+    }
+
+    return false;
   }
+
+  // Extract variant diff logic into reusable function
+  function computeVariantMercariDiff(variant) {
+    const diff = {};
+    const title = resolveMercariTitle(mercariTitleTokens, mercariTitleGaps, product, variant);
+    if (title !== (variant.mercariSyncedTitle ?? "")) diff.title = title;
+
+    const price = typeof product.listingPrice === "number" ? product.listingPrice
+      : (typeof variant.price === "number" ? variant.price : null);
+    if (price != null && price !== variant.mercariSyncedPrice) diff.price = price;
+
+    const photoUrls = resolveMercariPhotos(mercariPhotoTemplate, variant, images);
+    const syncedImages = variant.mercariSyncedImages ?? [];
+    const imagesChanged = photoUrls.length !== syncedImages.length
+      || photoUrls.some((url, i) => url !== syncedImages[i]);
+    if (imagesChanged) diff.images = photoUrls;
+
+    return diff;
+  }
+
+  const mercariDrift = computeHasMercariDrift();
+
+  // Navigation guard: prompt if Mercari listing has unapplied changes
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      mercariDrift && currentLocation.pathname !== nextLocation.pathname
+  );
+
+  useEffect(() => {
+    if (blocker.state === "blocked") {
+      setPendingNavigation(blocker.location.pathname);
+      setShowApplyMercariEditsModal(true);
+    }
+  }, [blocker.state, blocker.location]);
 
   async function handleApplyMercariEdits() {
     setApplyingMercariEdits(true);
@@ -3721,10 +3771,7 @@ function ProductDetail() {
         }
       }
       setShowApplyMercariEditsModal(false);
-      if (pendingNavigation) {
-        navigate(pendingNavigation);
-        setPendingNavigation(null);
-      }
+      blocker.proceed?.();
     } catch (err) {
       console.error("Error applying Mercari edits:", err);
     } finally {
@@ -3734,15 +3781,8 @@ function ProductDetail() {
 
   function handleDontChangeMercari() {
     setShowApplyMercariEditsModal(false);
-    if (pendingNavigation) {
-      navigate(pendingNavigation);
-      setPendingNavigation(null);
-    }
+    blocker.proceed?.();
   }
-
-  // Navigation guard: prompt if Mercari listing has unapplied changes.
-  // TODO: Full blocker integration with useBlocker once modal is ready.
-  // For now, this is a placeholder for manual navigation handling.
 
   function applyAIShipping() {
     const titleLower = (title || "").toLowerCase();
