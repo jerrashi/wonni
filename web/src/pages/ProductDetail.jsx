@@ -2384,13 +2384,31 @@ function MercariVariantTemplate({
 // local state that shouldn't reset when a sibling tile re-renders.
 function VariantMercariTile({
   variant, label, product, mercariTitleTokens, mercariTitleGaps, mercariPhotoTemplate, images,
-  onPost, onSync, onDelete, onRemovePhoto,
+  onPost, onSync, onDelete, onRemovePhoto, onLink,
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [showLinkModal, setShowLinkModal] = useState(false);
+  const [linkInput, setLinkInput] = useState("");
+  const [linkError, setLinkError] = useState("");
+  const [linkLoading, setLinkLoading] = useState(false);
   const status = variant.mercariStatus ?? "draft";
   const title = resolveMercariTitle(mercariTitleTokens, mercariTitleGaps, product, variant);
   const photoUrls = resolveMercariPhotos(mercariPhotoTemplate, variant, images);
   const thumbnail = photoUrls[0];
+
+  async function handleLink() {
+    setLinkError("");
+    setLinkLoading(true);
+    try {
+      await onLink(variant, linkInput);
+      setShowLinkModal(false);
+      setLinkInput("");
+    } catch (err) {
+      setLinkError(err.message ?? "Failed to link listing.");
+    } finally {
+      setLinkLoading(false);
+    }
+  }
 
   return (
     <div style={{ width: 150, border: "1px solid var(--border)", borderRadius: 8, padding: 8, fontSize: 12 }}>
@@ -2431,13 +2449,53 @@ function VariantMercariTile({
         <span style={{ color: "var(--muted)" }}>{status === "posting" ? "⏳ Posting…" : "⏳ Syncing…"}</span>
       ) : (
         <>
-          <button className="btn btn-primary" style={{ fontSize: 11, padding: "3px 8px", width: "100%" }} onClick={() => onPost(variant)}>
-            Post to Mercari
-          </button>
+          <div style={{ display: "flex", gap: 4, flexDirection: "column" }}>
+            <button className="btn btn-primary" style={{ fontSize: 11, padding: "3px 8px" }} onClick={() => onPost(variant)}>
+              Post to Mercari
+            </button>
+            <button className="btn btn-ghost" style={{ fontSize: 11, padding: "3px 8px" }} onClick={() => setShowLinkModal(true)}>
+              🔗 Link existing
+            </button>
+          </div>
           {status === "failed" && variant.mercariError && (
             <div style={{ color: "var(--danger)", fontSize: 10, marginTop: 4 }}>{variant.mercariError}</div>
           )}
         </>
+      )}
+
+      {status === "active" && (
+        <button className="btn btn-ghost" style={{ fontSize: 10, padding: "1px 6px", marginTop: 4, width: "100%" }} onClick={() => setShowLinkModal(true)}>
+          🔗 Change link
+        </button>
+      )}
+
+      {showLinkModal && (
+        <div style={{ marginTop: 8, borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+          <div style={{ fontSize: 11, marginBottom: 6 }}>
+            <input
+              type="text"
+              className="input"
+              placeholder="Paste URL or item ID (e.g., m123abc...)"
+              value={linkInput}
+              onChange={(e) => {
+                setLinkInput(e.target.value);
+                setLinkError("");
+              }}
+              style={{ fontSize: 11, marginBottom: 4 }}
+            />
+            {linkError && (
+              <div style={{ color: "var(--danger)", fontSize: 10, marginBottom: 4 }}>{linkError}</div>
+            )}
+            <div style={{ display: "flex", gap: 4 }}>
+              <button className="btn btn-primary" style={{ fontSize: 10, padding: "2px 6px", flex: 1 }} onClick={handleLink} disabled={linkLoading || !linkInput.trim()}>
+                {linkLoading ? "Linking…" : "Link"}
+              </button>
+              <button className="btn btn-ghost" style={{ fontSize: 10, padding: "2px 6px", flex: 1 }} onClick={() => { setShowLinkModal(false); setLinkInput(""); setLinkError(""); }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {expanded && (
@@ -3098,6 +3156,7 @@ function MercariModal({
                   onSync={onSyncVariant}
                   onDelete={onDeleteVariant}
                   onRemovePhoto={onRemoveVariantPhoto}
+                  onLink={linkVariantMercariListing}
                 />
               ))}
             </div>
@@ -3249,6 +3308,10 @@ function ProductDetail() {
   const [photoPickerValue, setPhotoPickerValue] = useState(null);
   const [showMercariModal, setShowMercariModal] = useState(false);
   const [showPostModal, setShowPostModal] = useState(false);
+  const [showLegacyMercariLinkModal, setShowLegacyMercariLinkModal] = useState(false);
+  const [legacyMercariLinkInput, setLegacyMercariLinkInput] = useState("");
+  const [legacyMercariLinkError, setLegacyMercariLinkError] = useState("");
+  const [legacyMercariLinkLoading, setLegacyMercariLinkLoading] = useState(false);
   const [syncingMercari, setSyncingMercari] = useState(false);
   const [mercariSyncMessage, setMercariSyncMessage] = useState("");
   const [toast, setToast] = useState(null); // { message, actions } | null
@@ -4362,6 +4425,68 @@ function ProductDetail() {
     });
   }
 
+  function parseMercariId(input) {
+    const trimmed = (input ?? "").trim();
+    if (!trimmed) return null;
+    const itemMatch = trimmed.match(/\/item\/(m[A-Za-z0-9]+)/);
+    if (itemMatch) return itemMatch[1];
+    const bareMatch = trimmed.match(/^m[A-Za-z0-9]+$/);
+    if (bareMatch) return bareMatch[0];
+    return null;
+  }
+
+  async function linkVariantMercariListing(variant, input) {
+    if (!product) return;
+    const mercariId = parseMercariId(input);
+    if (!mercariId) throw new Error("Invalid Mercari URL or item ID.");
+    const duplicate = variants.find(
+      (v) => v.id !== variant.id && v.mercariListingId === mercariId
+    );
+    if (duplicate) {
+      throw new Error(
+        `This Mercari listing is already linked to variant "${Object.values(duplicate.optionValues).join(" / ") || duplicate.sku || "Variant"}".`
+      );
+    }
+    const url = `https://www.mercari.com/us/item/${mercariId}/`;
+    await updateDoc(doc(db, "products", product.id), {
+      variants: variants.map((v) => (v.id === variant.id
+        ? {
+          ...v,
+          mercariStatus: "active",
+          mercariListingId: mercariId,
+          mercariUrl: url,
+          mercariSyncedTitle: null,
+          mercariSyncedDescription: null,
+          mercariSyncedPrice: null,
+          mercariSyncedImages: null,
+          mercariError: null,
+        }
+        : v)),
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  async function linkLegacyMercariListing(input) {
+    if (!product) return;
+    const mercariId = parseMercariId(input);
+    if (!mercariId) throw new Error("Invalid Mercari URL or item ID.");
+    const variantDuplicate = variants.find(
+      (v) => v.mercariListingId === mercariId
+    );
+    if (variantDuplicate) {
+      throw new Error(
+        `This Mercari listing is already linked to variant "${Object.values(variantDuplicate.optionValues).join(" / ") || variantDuplicate.sku || "Variant"}".`
+      );
+    }
+    const url = `https://www.mercari.com/us/item/${mercariId}/`;
+    await updateDoc(doc(db, "products", product.id), {
+      "listingStatus.mercari": "active",
+      "listingId.mercari": mercariId,
+      "listingUrl.mercari": url,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
   async function refreshSourceData(section) {
     // Check cooldown: only refresh if 24 hours have passed since last refresh
     if (lastSourceRefresh && Date.now() - lastSourceRefresh < 24 * 60 * 60 * 1000) {
@@ -4486,8 +4611,18 @@ function ProductDetail() {
               </button>
             </>
           ) : (
-            <button className="btn btn-primary" onClick={() => setShowMercariModal(true)}>
-              {mercariStatus === "posting" ? "⏳ Cross-posting to Mercari…" : "Cross-post to Mercari"}
+            <div style={{ display: "flex", gap: 4, flexDirection: "column" }}>
+              <button className="btn btn-primary" onClick={() => setShowMercariModal(true)}>
+                {mercariStatus === "posting" ? "⏳ Cross-posting to Mercari…" : "Cross-post to Mercari"}
+              </button>
+              <button className="btn btn-ghost" onClick={() => setShowLegacyMercariLinkModal(true)}>
+                🔗 Link existing
+              </button>
+            </div>
+          )}
+          {mercariStatus === "active" && (
+            <button className="btn btn-ghost" onClick={() => setShowLegacyMercariLinkModal(true)}>
+              🔗 Change link
             </button>
           )}
           {product?.sourceUrl && (
@@ -5090,6 +5225,58 @@ function ProductDetail() {
           </div>
         </div>
       ) : null}
+
+      {/* Legacy Mercari Link Modal */}
+      {showLegacyMercariLinkModal && (
+        <div className="modal-overlay" onClick={() => setShowLegacyMercariLinkModal(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Link Mercari Listing</h2>
+              <button className="btn btn-ghost" style={{ padding: "4px 8px" }} onClick={() => setShowLegacyMercariLinkModal(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="modal-field">
+                <label>Mercari URL or Item ID</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="Paste URL (e.g., mercari.com/us/item/m123...) or item ID (e.g., m123abc...)"
+                  value={legacyMercariLinkInput}
+                  onChange={(e) => {
+                    setLegacyMercariLinkInput(e.target.value);
+                    setLegacyMercariLinkError("");
+                  }}
+                />
+                {legacyMercariLinkError && (
+                  <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 4 }}>{legacyMercariLinkError}</div>
+                )}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-ghost" onClick={() => setShowLegacyMercariLinkModal(false)}>Cancel</button>
+              <button
+                className="btn btn-primary"
+                onClick={async () => {
+                  setLegacyMercariLinkError("");
+                  setLegacyMercariLinkLoading(true);
+                  try {
+                    await linkLegacyMercariListing(legacyMercariLinkInput);
+                    setShowLegacyMercariLinkModal(false);
+                    setLegacyMercariLinkInput("");
+                  } catch (err) {
+                    setLegacyMercariLinkError(err.message ?? "Failed to link listing.");
+                  } finally {
+                    setLegacyMercariLinkLoading(false);
+                  }
+                }}
+                disabled={legacyMercariLinkLoading || !legacyMercariLinkInput.trim()}
+              >
+                {legacyMercariLinkLoading ? "Linking…" : "Link"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Mercari Cross-Post Modal */}
       {showMercariModal && product && (

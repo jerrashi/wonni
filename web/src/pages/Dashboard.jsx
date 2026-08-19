@@ -5,6 +5,8 @@ import { db, callFunction } from "../firebase";
 import { auth } from "../firebase";
 import Layout from "../components/Layout";
 import CreateDraftModal from "../components/CreateDraftModal";
+import PostModal from "../components/PostModal";
+import BulkPostModal from "../components/BulkPostModal";
 
 // ── List Modal ────────────────────────────────────────────────────────────────
 
@@ -232,45 +234,95 @@ function ImportBar({ onImported }) {
 }
 
 
+// ── Posted Platforms Display ──────────────────────────────────────────────────
+
+function PostedPlatforms({ product }) {
+  const platforms = [];
+
+  if (product.crossPostStatus?.wonni === "active") {
+    platforms.push({ id: "wonni", name: "Wonni", logo: "W", status: "active" });
+  }
+  if (product.tiktokStatus === "active") {
+    platforms.push({ id: "tiktok", name: "TikTok Shop", logo: "TT", status: "active" });
+  }
+  if (product.ebayStatus === "active") {
+    platforms.push({ id: "ebay", name: "eBay", logo: "EB", status: "active" });
+  }
+  if (product.crossPostStatus?.etsy === "active") {
+    platforms.push({ id: "etsy", name: "Etsy", logo: "ET", status: "active" });
+  }
+
+  // Mercari: variant-aware logic
+  const variants = Array.isArray(product.variants) ? product.variants : [];
+  const inStockVariants = product.hasVariants
+    ? variants.filter((v) => v.active && (v.quantity ?? 0) > 0)
+    : [];
+
+  if (product.hasVariants && inStockVariants.length > 0) {
+    const postedCount = inStockVariants.filter((v) => v.mercariUrl).length;
+    if (postedCount === inStockVariants.length) {
+      platforms.push({ id: "mercari", name: "Mercari", logo: "MR", status: "active" });
+    } else if (postedCount > 0) {
+      platforms.push({ id: "mercari", name: "Mercari", logo: "MR", status: "incomplete" });
+    }
+  } else if (product.listingStatus?.mercari === "active") {
+    platforms.push({ id: "mercari", name: "Mercari", logo: "MR", status: "active" });
+  }
+
+  if (platforms.length === 0) return null;
+
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      {platforms.map((p) => (
+        <div
+          key={p.id}
+          title={p.name + (p.status === "incomplete" ? " (incomplete)" : "")}
+          style={{
+            width: 32,
+            height: 32,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: p.status === "incomplete" ? "var(--surface-high)" : "var(--surface-high)",
+            border: p.status === "incomplete" ? "1px solid var(--warning)" : "var(--border-thin) solid var(--primary)",
+            borderRadius: "var(--radius)",
+            fontSize: 11,
+            fontWeight: 700,
+            color: p.status === "incomplete" ? "var(--warning)" : "var(--primary)",
+            cursor: "pointer",
+            fontFamily: "'Space Mono', monospace",
+            textTransform: "uppercase",
+            letterSpacing: "0.05em"
+          }}
+        >
+          {p.logo}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── Product card ──────────────────────────────────────────────────────────────
 
-function ProductCard({ product }) {
+function ProductCard({ product, selected = false, onSelect = null, selectMode = false }) {
   const navigate = useNavigate();
-  const [showModal, setShowModal] = useState(false);
-  const [ebayState, setEbayState] = useState({ listing: false, error: "" });
-  const [ebaySyncState, setEbaySyncState] = useState({ syncing: false, error: "" });
-  const [wonniState, setWonniState] = useState({ posting: false, error: "" });
+  const [showPostModal, setShowPostModal] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
   const primaryImage = product.images?.[0] ?? "";
-  // Every variant carries the source site's own sold-out signal (Weverse's
-  // isSoldOut flips a variant's `active` off at import) — if a variant
-  // product has none left active, the whole source listing is sold out.
   const isSourceSoldOut = product.hasVariants
     && Array.isArray(product.variants)
     && product.variants.length > 0
     && product.variants.every((v) => v.active === false);
-  const sourceLabel =
-    product.source === "weverse"
-      ? "Weverse"
-      : product.source === "photo_upload" || product.source === "photo_upload_split" || product.source === "manual" || product.source === "image"
-      ? "Photo Upload"
-      : product.source === "aliexpress"
-      ? "AliExpress"
-      : product.source
-      ? product.source.charAt(0).toUpperCase() + product.source.slice(1)
-      : "Photo Upload";
+
+  const isLive =
+    product.crossPostStatus?.wonni === "active" ||
+    product.tiktokStatus === "active" ||
+    product.ebayStatus === "active" ||
+    product.crossPostStatus?.etsy === "active" ||
+    product.listingStatus?.mercari === "active";
 
   async function handleDelete() {
-    const liveOn = [
-      product.tiktokStatus === "active" ? "TikTok Shop" : null,
-      product.ebayStatus === "active" ? "eBay" : null,
-    ].filter(Boolean);
-    if (liveOn.length) {
-      window.alert(
-        `Can't delete "${product.title}" — it's still active on ${liveOn.join(" and ")}. Take it down there first, then delete it here.`
-      );
-      return;
-    }
     if (!window.confirm(`Delete "${product.title}"? This can't be undone.`)) return;
     setDeleting(true);
     try {
@@ -281,209 +333,148 @@ function ProductCard({ product }) {
     }
   }
 
-  async function listOnEbay() {
-    const suggested = (product.listingPrice ?? Math.ceil((product.aliexpressPrice * 1.35 + 8) * 100) / 100).toFixed(2);
-    const input = window.prompt("eBay sell price (USD):", suggested);
-    if (input === null) return;
-    setEbayState({ listing: true, error: "" });
-    try {
-      await callFunction("dropshipEbayCreateListing")({
-        productId: product.id,
-        sellPrice: parseFloat(input) || undefined,
-      });
-      setEbayState({ listing: false, error: "" });
-    } catch (e) {
-      setEbayState({ listing: false, error: e.message ?? "eBay listing failed." });
-    }
-  }
-
-  // eBay's inventory_item/offer PUTs are idempotent — always safe to just
-  // re-push current Wonni Drop state, no diffing needed unlike Mercari's
-  // DOM-automation path.
-  async function syncToEbay() {
-    setEbaySyncState({ syncing: true, error: "" });
-    try {
-      await callFunction("dropshipEbayUpdateListing")({ productId: product.id });
-      setEbaySyncState({ syncing: false, error: "" });
-    } catch (e) {
-      setEbaySyncState({ syncing: false, error: e.message ?? "eBay sync failed." });
-    }
-  }
-
-  async function postToWonni() {
-    setWonniState({ posting: true, error: "" });
-    try {
-      await callFunction("postToWonni")({ productId: product.id });
-      setWonniState({ posting: false, error: "" });
-    } catch (e) {
-      setWonniState({ posting: false, error: e.message ?? "Post to Wonni failed." });
-    }
-  }
-
-  const statusMap = {
-    draft: "chip-draft",
-    active: "chip-active",
-    inactive: "chip-draft",
-  };
-
   return (
     <>
-      <div className="product-card">
-        <button className="product-card-image" style={{ position: "relative" }} onClick={() => navigate(`/products/${product.id}`)}>
+      <div className="product-card" style={{ position: "relative" }}>
+        {/* Image with badges */}
+        <button
+          className="product-card-image"
+          style={{ position: "relative" }}
+          onClick={() => navigate(`/products/${product.id}`)}
+        >
           {primaryImage ? (
             <img src={primaryImage} alt={product.title} />
           ) : (
             <div className="product-card-placeholder">No image</div>
           )}
+
+          {/* Sold Out badge - lower left */}
           {isSourceSoldOut && (
             <span
               style={{
-                position: "absolute", bottom: 6, right: 6, background: "rgba(0,0,0,0.75)", color: "#fff",
-                fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 999,
+                position: "absolute",
+                bottom: 8,
+                left: 8,
+                background: "var(--danger)",
+                color: "white",
+                fontSize: 11,
+                fontWeight: 700,
+                padding: "6px 10px",
+                borderRadius: "var(--radius)",
+                fontFamily: "'Space Mono', monospace",
+                textTransform: "uppercase",
+                letterSpacing: "0.05em"
               }}
             >
               Sold Out
             </span>
           )}
+
+          {/* Live/Draft badge - lower right */}
+          <span
+            style={{
+              position: "absolute",
+              bottom: 8,
+              right: 8,
+              background: isLive ? "var(--primary)" : "var(--surface-high)",
+              color: isLive ? "var(--on-primary)" : "var(--text)",
+              border: isLive ? "none" : `var(--border-thin) solid var(--border)`,
+              fontSize: 11,
+              fontWeight: 700,
+              padding: "6px 10px",
+              borderRadius: "var(--radius)",
+              fontFamily: "'Space Mono', monospace",
+              textTransform: "uppercase",
+              letterSpacing: "0.05em"
+            }}
+          >
+            {isLive ? "Live" : "Draft"}
+          </span>
+
+          {/* Select checkbox - only in select mode */}
+          {selectMode && (
+            <div style={{ position: "absolute", top: 8, left: 8, zIndex: 10 }}>
+              <input
+                type="checkbox"
+                checked={selected}
+                onChange={() => onSelect(!selected)}
+                style={{
+                  width: 20,
+                  height: 20,
+                  cursor: "pointer",
+                  accentColor: "var(--primary)"
+                }}
+              />
+            </div>
+          )}
         </button>
+
         <div className="product-card-body">
+          {/* Title */}
           <button className="product-card-title-button" onClick={() => navigate(`/products/${product.id}`)}>
             <div className="product-card-title">{product.title}</div>
           </button>
-          <div className="product-card-subtitle">
-            <span>{sourceLabel}</span>
-            {product.artistName && <span>{product.artistName}</span>}
-            {product.hasVariants && Array.isArray(product.variants) && (
-              <span>{product.variants.filter((v) => v.active).length} variations</span>
-            )}
-          </div>
+
+          {/* Metadata */}
           <div className="product-card-meta">
             <span>{typeof product.listingPrice === "number" ? `$${product.listingPrice.toFixed(2)}` : "—"}</span>
-            <span className={`chip ${statusMap[product.tiktokStatus ?? "draft"]}`}>
-              {product.tiktokStatus ?? "draft"}
-            </span>
           </div>
+
+          {/* Description preview */}
           <div className="product-card-preview">
             {product.description?.trim()
-              ? product.description.trim().slice(0, 110)
-              : `Scraped ${product.images?.length ?? 0} images${product.variants?.length ? ` · ${product.variants.length} variants` : ""}`}
+              ? product.description.trim().slice(0, 85)
+              : `${product.images?.length ?? 0} images${product.variants?.length ? ` · ${product.variants.length} variants` : ""}`}
           </div>
-          <div className="product-card-actions">
-            <button className="btn btn-ghost" style={{ width: "100%" }} onClick={() => navigate(`/products/${product.id}`)}>
-              View details
-            </button>
-            {(!product.tiktokStatus || product.tiktokStatus === "draft") && (
-              <button
-                className="btn btn-primary"
-                style={{ width: "100%" }}
-                onClick={() => setShowModal(true)}
-              >
-                List on TikTok Shop
-              </button>
-            )}
-            {product.tiktokStatus === "active" && (
-              <span style={{ fontSize: 12, color: "var(--success)" }}>Live on TikTok Shop</span>
-            )}
-            {product.hasVariants && Array.isArray(product.variants) ? (
-              (() => {
-                const inStock = product.variants.filter((v) => v.active && (v.quantity ?? 0) > 0);
-                // Exactly one in-stock variant reads as a plain single-item
-                // listing — the x/y progress framing only kicks in at 2+.
-                if (inStock.length === 1) {
-                  const v = inStock[0];
-                  return v.mercariStatus === "active" ? (
-                    <span style={{ fontSize: 12, color: "var(--success)" }}>Live on Mercari</span>
-                  ) : (
-                    <button className="btn btn-ghost" style={{ width: "100%" }} onClick={() => navigate(`/products/${product.id}`)}>
-                      {v.mercariStatus === "posting" || v.mercariStatus === "updating" ? "⏳ Mercari Posting…" : "Cross-post to Mercari"}
-                    </button>
-                  );
-                }
-                const posted = inStock.filter((v) => v.mercariStatus === "active");
-                const allPosted = inStock.length > 0 && posted.length === inStock.length;
-                return allPosted ? (
-                  <span style={{ fontSize: 12, color: "var(--success)" }}>Live on Mercari</span>
-                ) : (
-                  <button
-                    className="btn btn-ghost"
-                    style={{ width: "100%" }}
-                    onClick={() => navigate(`/products/${product.id}`)}
-                  >
-                    {inStock.length > 0 ? `${posted.length}/${inStock.length} variations posted` : "Cross-post to Mercari"}
-                  </button>
-                );
-              })()
-            ) : product.listingStatus?.mercari === "active" ? (
-              <span style={{ fontSize: 12, color: "var(--success)" }}>Live on Mercari</span>
-            ) : (
-              <button
-                className="btn btn-ghost"
-                style={{ width: "100%" }}
-                onClick={() => navigate(`/products/${product.id}`)}
-              >
-                {product.listingStatus?.mercari === "posting" ? "⏳ Mercari Posting…" : "Cross-post to Mercari"}
-              </button>
-            )}
-            {product.ebayStatus === "active" ? (
-              <>
-                <span style={{ fontSize: 12, color: "var(--success)" }}>Live on eBay</span>
-                <button
-                  className="btn btn-ghost"
-                  style={{ width: "100%" }}
-                  onClick={syncToEbay}
-                  disabled={ebaySyncState.syncing}
-                >
-                  {ebaySyncState.syncing ? "⏳ Syncing…" : "🔄 Sync to eBay"}
-                </button>
-              </>
-            ) : (
-              <button
-                className="btn btn-ghost"
-                style={{ width: "100%" }}
-                onClick={listOnEbay}
-                disabled={ebayState.listing}
-              >
-                {ebayState.listing ? "Listing on eBay…" : "List on eBay"}
-              </button>
-            )}
-            {ebayState.error && (
-              <span style={{ fontSize: 11, color: "var(--danger)" }}>{ebayState.error}</span>
-            )}
-            {ebaySyncState.error && (
-              <span style={{ fontSize: 11, color: "var(--danger)" }}>{ebaySyncState.error}</span>
-            )}
-            {product.crossPostStatus?.wonni === "active" ? (
-              <span style={{ fontSize: 12, color: "var(--success)" }}>Live on Wonni</span>
-            ) : (
-              <button
-                className="btn btn-ghost"
-                style={{ width: "100%" }}
-                onClick={postToWonni}
-                disabled={wonniState.posting}
-              >
-                {wonniState.posting ? "Posting to Wonni…" : "Post to Wonni"}
-              </button>
-            )}
-            {wonniState.error && (
-              <span style={{ fontSize: 11, color: "var(--danger)" }}>{wonniState.error}</span>
-            )}
+
+          {/* Bottom section: Platforms + Delete button + Post button */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: "auto", paddingTop: 12 }}>
+            {/* Platform logos */}
+            <PostedPlatforms product={product} />
+
+            {/* Spacer */}
+            <div style={{ flex: 1 }} />
+
+            {/* Delete icon button */}
             <button
-              className="btn btn-danger"
-              style={{ width: "100%" }}
               onClick={handleDelete}
               disabled={deleting}
+              style={{
+                width: 28,
+                height: 28,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "transparent",
+                border: `var(--border-thin) solid var(--danger)`,
+                color: "var(--danger)",
+                cursor: "pointer",
+                fontSize: 14,
+                borderRadius: "var(--radius)",
+                transition: "all 0.15s",
+                opacity: deleting ? 0.5 : 1,
+              }}
+              title="Delete"
             >
-              {deleting ? "Deleting…" : "Delete"}
+              ✕
+            </button>
+
+            {/* Post button */}
+            <button
+              className="btn btn-primary"
+              style={{ padding: "10px 16px", whiteSpace: "nowrap" }}
+              onClick={() => setShowPostModal(true)}
+            >
+              Post
             </button>
           </div>
         </div>
       </div>
 
-      {showModal && (
-        <ListModal
+      {showPostModal && (
+        <PostModal
           product={product}
-          onClose={() => setShowModal(false)}
-          onListed={() => setShowModal(false)}
+          onClose={() => setShowPostModal(false)}
         />
       )}
     </>
@@ -497,11 +488,11 @@ export default function Dashboard() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  // Collapsed by default — a draft still in progress on the phone shouldn't
-  // clutter the main grid of "real" dropship work. Once posted (isDraft ===
-  // false via postToWonni), it graduates into the normal grid like anything
-  // else; source stays "ios" forever but that's no longer what gates this.
   const [mobileDraftsExpanded, setMobileDraftsExpanded] = useState(false);
+  const [filter, setFilter] = useState("all"); // "all", "draft", "live"
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [showBulkPostModal, setShowBulkPostModal] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
 
   useEffect(() => {
     const uid = auth.currentUser?.uid;
@@ -533,27 +524,69 @@ export default function Dashboard() {
     );
   }, []);
 
-  // "Mobile Drafts" folder — products started on iOS (source === "ios",
-  // stamped by UploadManager.syncProductDataAwaiting in the wonni repo)
-  // still in progress there (isDraft !== false). Kept out of the main grid
-  // until expanded so a half-finished phone draft doesn't sit next to
-  // finished dropship work.
   const mobileDrafts = products.filter((p) => p.source === "ios" && p.isDraft !== false);
   const regularProducts = products.filter((p) => !(p.source === "ios" && p.isDraft !== false));
+
+  const isLive = (p) =>
+    p.crossPostStatus?.wonni === "active" ||
+    p.tiktokStatus === "active" ||
+    p.ebayStatus === "active" ||
+    p.crossPostStatus?.etsy === "active" ||
+    p.listingStatus?.mercari === "active";
+
+  const filteredProducts =
+    filter === "live"
+      ? regularProducts.filter(isLive)
+      : filter === "draft"
+      ? regularProducts.filter((p) => !isLive(p))
+      : regularProducts;
+
+  const allSelected = filteredProducts.length > 0 && filteredProducts.every((p) => selectedIds.has(p.id));
+  const someSelected = filteredProducts.some((p) => selectedIds.has(p.id));
+
+  const toggleSelectAll = () => {
+    const newSelected = new Set(selectedIds);
+    if (allSelected) {
+      filteredProducts.forEach((p) => newSelected.delete(p.id));
+    } else {
+      filteredProducts.forEach((p) => newSelected.add(p.id));
+    }
+    setSelectedIds(newSelected);
+  };
+
+  const toggleSelect = (productId) => {
+    const newSelected = new Set(selectedIds);
+    if (newSelected.has(productId)) {
+      newSelected.delete(productId);
+    } else {
+      newSelected.add(productId);
+    }
+    setSelectedIds(newSelected);
+  };
 
   return (
     <Layout>
       <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <h1 style={{ margin: 0 }}>Products</h1>
-          <span style={{ fontSize: 13, color: "var(--muted)" }}>{regularProducts.length} imported / drafts</span>
+          <span style={{ fontSize: 13, color: "var(--muted)" }}>
+            {regularProducts.length} total · {regularProducts.filter(isLive).length} live
+          </span>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
-          📷 Create Draft from Photo
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            className={`btn ${selectMode ? "btn-primary" : "btn-ghost"}`}
+            onClick={() => { setSelectMode(!selectMode); setSelectedIds(new Set()); }}
+          >
+            {selectMode ? "✓ Select Mode" : "Select"}
+          </button>
+          <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
+            📷 Create Draft from Photo
+          </button>
+        </div>
       </div>
 
-      <ImportBar />
+      <ImportBar onImported={() => setFilter("all")} />
 
       {error && <div className="card" style={{ marginBottom: 20, color: "var(--danger)" }}>{error}</div>}
 
@@ -593,15 +626,82 @@ export default function Dashboard() {
           </button>
         </div>
       ) : (
-        <div className="product-grid">
-          {regularProducts.map((p) => <ProductCard key={p.id} product={p} />)}
-        </div>
+        <>
+          <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 500 }}>Filter:</span>
+              {["all", "draft", "live"].map((f) => (
+                <button
+                  key={f}
+                  className={`btn ${filter === f ? "btn-primary" : "btn-ghost"}`}
+                  style={{ fontSize: 12, padding: "6px 12px" }}
+                  onClick={() => { setFilter(f); setSelectedIds(new Set()); }}
+                >
+                  {f.charAt(0).toUpperCase() + f.slice(1)}
+                </button>
+              ))}
+            </div>
+
+            {selectMode && someSelected && (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: "auto" }}>
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                  {selectedIds.size} selected
+                </span>
+                <button
+                  className="btn btn-primary"
+                  style={{ fontSize: 12, padding: "8px 12px" }}
+                  onClick={() => setShowBulkPostModal(true)}
+                >
+                  Post to Platforms
+                </button>
+              </div>
+            )}
+          </div>
+
+          {selectMode && (
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={toggleSelectAll}
+                style={{ width: 20, height: 20, cursor: "pointer", accentColor: "var(--primary)" }}
+                title={allSelected ? "Deselect all" : "Select all"}
+              />
+              <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                Select All ({filteredProducts.length})
+              </span>
+            </div>
+          )}
+
+          <div className="product-grid">
+            {filteredProducts.map((p) => (
+              <ProductCard
+                key={p.id}
+                product={p}
+                selectMode={selectMode}
+                selected={selectMode && selectedIds.has(p.id)}
+                onSelect={selectMode ? () => toggleSelect(p.id) : null}
+              />
+            ))}
+          </div>
+        </>
       )}
 
       {showCreateModal && (
         <CreateDraftModal
           onClose={() => setShowCreateModal(false)}
           onCreated={() => setShowCreateModal(false)}
+        />
+      )}
+
+      {showBulkPostModal && selectedIds.size > 0 && (
+        <BulkPostModal
+          productIds={Array.from(selectedIds)}
+          products={regularProducts.filter((p) => selectedIds.has(p.id))}
+          onClose={() => {
+            setShowBulkPostModal(false);
+            setSelectedIds(new Set());
+          }}
         />
       )}
     </Layout>
