@@ -5056,6 +5056,38 @@ function ProductDetail() {
                 {product.saleStatus && <span className="chip chip-pending">{product.saleStatus}</span>}
               </div>
 
+              {/* Mercari URL field for non-variant products */}
+              {!product?.hasVariants && mercariStatus && (
+                <div className="modal-field" style={{ marginTop: 12, marginBottom: 8, maxWidth: 300 }}>
+                  <label style={{ fontSize: 12 }}>Mercari listing URL</label>
+                  <input
+                    className="input"
+                    type="text"
+                    placeholder="https://www.mercari.com/sell/item/m..."
+                    value={mercariUrl || ""}
+                    onChange={(e) => {
+                      const url = e.target.value;
+                      markFieldsDirty({ "listingUrl.mercari": url || null });
+                    }}
+                    onBlur={(e) => {
+                      const url = e.target.value.trim();
+                      if (url) {
+                        const id = url.match(/item\/([a-z0-9]+)/i)?.[1];
+                        if (id) {
+                          markFieldsDirty({ "listingId.mercari": id });
+                        }
+                      } else {
+                        markFieldsDirty({ "listingUrl.mercari": null, "listingId.mercari": null });
+                      }
+                    }}
+                    style={{ fontSize: 12 }}
+                  />
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+                    Paste the Mercari listing URL. Leave empty to unlink. Mercari ID is auto-extracted.
+                  </div>
+                </div>
+              )}
+
               <div className="modal-field" style={{ marginTop: 8, marginBottom: 8, maxWidth: 200 }}>
                 <label>Listing price</label>
                 {aiSuggestedPrice !== null && (
