@@ -4852,9 +4852,9 @@ function ProductDetail() {
         <div className="product-detail">
           {/* ── Photo Tile (Full Width) ── */}
           <div className="card" style={{ marginBottom: 20 }}>
-            <div style={{ display: "flex", gap: 0, height: "100%", minHeight: 500 }}>
+            <div className="photo-tile-container">
               {/* Large Preview (Left 50%) */}
-              <div style={{ flex: 1, display: "flex", flexDirection: "column", borderRight: "1px solid var(--border)", padding: 16 }}>
+              <div className="photo-tile-preview">
                 <div
                   style={{
                     position: "relative",
@@ -4907,13 +4907,11 @@ function ProductDetail() {
                   )}
                   {/* Edit Button in Upper Right */}
                   <button
-                    className="btn btn-primary"
+                    className="btn btn-primary photo-tile-edit-btn"
                     style={{
                       position: "absolute",
                       top: 12,
                       right: 12,
-                      fontSize: 12,
-                      padding: "6px 12px",
                       display: "flex",
                       alignItems: "center",
                       gap: 4,
@@ -4944,7 +4942,7 @@ function ProductDetail() {
               </div>
 
               {/* Thumbnail Grid (Right 50%) */}
-              <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: 16, minWidth: 0 }}>
+              <div className="photo-tile-grid">
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, flex: 1, width: "100%", overflowY: "auto", alignContent: "start" }}>
                   {(showAllPhotos ? images : images.slice(0, product.tiktokStatus === "active" ? 9 : 12)).map((image, index) => {
                     const actualIndex = showAllPhotos ? images.indexOf(image) : index;
