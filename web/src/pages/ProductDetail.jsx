@@ -2468,37 +2468,40 @@ function VariantMercariTile({
         </>
       )}
 
-      {status === "active" && (
-        <button className="btn btn-ghost" style={{ fontSize: 10, padding: "1px 6px", marginTop: 4, width: "100%" }} onClick={() => setShowLinkModal(true)}>
-          🔗 Change link
-        </button>
-      )}
-
-      {showLinkModal && (
+      {/* Mercari URL field - shown when active or when link modal is open */}
+      {(status === "active" || showLinkModal) && (
         <div style={{ marginTop: 8, borderTop: "1px solid var(--border)", paddingTop: 6 }}>
-          <div style={{ fontSize: 11, marginBottom: 6 }}>
+          <div style={{ fontSize: 11 }}>
+            <label style={{ fontSize: 10, color: "var(--muted)" }}>Mercari URL</label>
             <input
               type="text"
               className="input"
               placeholder="Paste URL or item ID (e.g., m123abc...)"
-              value={linkInput}
+              value={linkInput || variant.mercariUrl || ""}
               onChange={(e) => {
                 setLinkInput(e.target.value);
                 setLinkError("");
+              }}
+              onBlur={() => {
+                if (linkInput && linkInput !== (variant.mercariUrl || "")) {
+                  handleLink();
+                }
               }}
               style={{ fontSize: 11, marginBottom: 4 }}
             />
             {linkError && (
               <div style={{ color: "var(--danger)", fontSize: 10, marginBottom: 4 }}>{linkError}</div>
             )}
-            <div style={{ display: "flex", gap: 4 }}>
-              <button className="btn btn-primary" style={{ fontSize: 10, padding: "2px 6px", flex: 1 }} onClick={handleLink} disabled={linkLoading || !linkInput.trim()}>
-                {linkLoading ? "Linking…" : "Link"}
-              </button>
-              <button className="btn btn-ghost" style={{ fontSize: 10, padding: "2px 6px", flex: 1 }} onClick={() => { setShowLinkModal(false); setLinkInput(""); setLinkError(""); }}>
-                Cancel
-              </button>
-            </div>
+            {showLinkModal && (
+              <div style={{ display: "flex", gap: 4 }}>
+                <button className="btn btn-primary" style={{ fontSize: 10, padding: "2px 6px", flex: 1 }} onClick={handleLink} disabled={linkLoading || !linkInput.trim()}>
+                  {linkLoading ? "Linking…" : "Link"}
+                </button>
+                <button className="btn btn-ghost" style={{ fontSize: 10, padding: "2px 6px", flex: 1 }} onClick={() => { setShowLinkModal(false); setLinkInput(""); setLinkError(""); }}>
+                  Cancel
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
