@@ -56,6 +56,12 @@ chrome.runtime.onMessageExternal.addListener((message, _sender, sendResponse) =>
       .catch((e) => sendResponse({ error: e.message }));
     return true;
   }
+  if (message.type === "CHECK_MERCARI_PULL_SYNC") {
+    handleCheckMercariPullSync(message.mercariItemId)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ error: e.message }));
+    return true;
+  }
   return true;
 });
 
@@ -322,8 +328,49 @@ async function handleCheckMercariSold() {
   return { ok: true, tabId: tab.id };
 }
 
-// Processes sold items detected by mercari_sold_content.js — matches them to
-// products/variants and calls recordMercariSale for each via the Cloud Function.
+// Opens a live Mercari item page and scrapes its current title/description/photos
+// for pull-sync (importing changes made directly on Mercari).
+async function handleCheckMercariPullSync(mercariItemId) {
+  if (!mercariItemId) {
+    throw new Error("Missing mercariItemId");
+  }
+
+  const itemUrl = `https://www.mercari.com/us/item/${mercariItemId}/`;
+
+  // Open item page in background tab
+  const tab = await chrome.tabs.create({ url: itemUrl, active: false });
+
+  // Wait a moment for page to load, then send PULL_SYNC_CHECK to content script
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      chrome.tabs.remove(tab.id).catch(() => {});
+      reject(new Error("Pull sync scrape timeout"));
+    }, 15000); // 15 second timeout
+
+    const checkContent = setInterval(async () => {
+      try {
+        chrome.tabs.sendMessage(tab.id, { type: "PULL_SYNC_CHECK" }, (response) => {
+          if (chrome.runtime.lastError) {
+            // Page not ready yet, wait a bit more
+            return;
+          }
+
+          if (response?.success) {
+            clearInterval(checkContent);
+            clearTimeout(timeout);
+            chrome.tabs.remove(tab.id).catch(() => {});
+            resolve({ ok: true, data: response.data });
+          }
+        });
+      } catch (err) {
+        // Tab might have closed or message failed
+      }
+    }, 1000); // check every second
+  });
+}
+
+// Processes sold items detected by mercari_sold_content.js — calls Cloud Function
+// to match items to listings and record sales.
 async function handleMercariSoldCheckResult(soldItems) {
   if (!Array.isArray(soldItems) || soldItems.length === 0) {
     console.log("[Wonni Drop] No sold items found");
@@ -332,45 +379,31 @@ async function handleMercariSoldCheckResult(soldItems) {
 
   const { idToken } = await chrome.storage.local.get(["idToken"]);
   if (!idToken) {
-    throw new Error("Not signed in");
+    console.error("[Wonni Drop] Not signed in, cannot record sales");
+    return;
   }
 
-  console.log(`[Wonni Drop] Processing ${soldItems.length} sold items...`);
+  console.log(`[Wonni Drop] Found ${soldItems.length} sold items, recording via Cloud Function...`);
 
-  for (const item of soldItems) {
-    try {
-      const payload = {
-        mercariItemId: item.mercariItemId,
-        mercariOrderId: item.mercariItemId, // Use item ID as order ID for deduping
-        listingTitle: item.title,
-        priceSoldFor: item.priceSoldFor,
-        takeHome: item.takeHome,
-        soldAt: item.soldDate ? new Date(item.soldDate).toISOString() : new Date().toISOString(),
-        // Note: listingId must be populated by the extension/web app — it comes from
-        // matching the Mercari item ID to a product variant's mercariListingId.
-        // For now, this is a placeholder that will be filled by the web app.
-        listingId: null,
-      };
+  try {
+    const response = await fetch(`${FUNCTIONS_BASE}/recordMercariSalesBatch`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({ data: { items: soldItems } }),
+    });
 
-      // Send to recordMercariSale Cloud Function for processing
-      const response = await fetch(`${FUNCTIONS_BASE}/recordMercariSale`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({ data: payload }),
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        console.log(`[Wonni Drop] Recorded sale for ${item.mercariItemId}:`, result);
-      } else {
-        const error = await response.text();
-        console.error(`[Wonni Drop] recordMercariSale failed for ${item.mercariItemId}:`, error);
-      }
-    } catch (err) {
-      console.error(`[Wonni Drop] Error processing ${item.mercariItemId}:`, err);
+    if (response.ok) {
+      const result = await response.json();
+      const successCount = result.result?.results?.filter((r) => r.success).length ?? 0;
+      console.log(`[Wonni Drop] Recorded ${successCount} sale(s)`);
+    } else {
+      const error = await response.text();
+      console.error("[Wonni Drop] recordMercariSalesBatch failed:", error);
     }
+  } catch (err) {
+    console.error("[Wonni Drop] Error calling recordMercariSalesBatch:", err);
   }
 }
