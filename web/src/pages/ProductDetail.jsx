@@ -6,6 +6,7 @@ import Layout from "../components/Layout";
 import UnsavedChangesModal from "../components/UnsavedChangesModal";
 import PostModal from "../components/PostModal";
 import OverflowMenu from "../components/OverflowMenu";
+import ApplyMercariEditsModal from "../components/ApplyMercariEditsModal";
 import { useDebouncedCallback } from "../hooks/useDebouncedCallback";
 import { normalizeImageAssets, buildImagePayload } from "../lib/media";
 import { useMediaJobQueue } from "../lib/mediaJobQueue";
@@ -3332,6 +3333,9 @@ function ProductDetail() {
   const [checkingMercariPullSync, setCheckingMercariPullSync] = useState(false);
   const [mercariPullSyncDiff, setMercariPullSyncDiff] = useState(null);
   const [importingMercariChanges, setImportingMercariChanges] = useState(false);
+  const [showApplyMercariEditsModal, setShowApplyMercariEditsModal] = useState(false);
+  const [applyingMercariEdits, setApplyingMercariEdits] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState(null);
   const [aiDescLoading, setAiDescLoading] = useState(false);
   const [aiDescSuggestion, setAiDescSuggestion] = useState(null); // string | null
   const [aiDescError, setAiDescError] = useState("");
@@ -3696,14 +3700,49 @@ function ProductDetail() {
     markFieldsDirty({ sourceUrl: newUrl });
   }
 
-  // Navigation guard: prompt if Mercari listing has unapplied changes (drift
-  // between live fields and mercariSynced* baselines). In-app nav only;
-  // tab-close triggers browser's native "leave site?" dialog instead.
-  // TODO: Implement Mercari drift detection and ApplyMercariEditsModal here.
-  // For now, blocker is disabled to avoid "Cannot read property of undefined" errors.
-  // const blocker = useBlocker(
-  //   ({ currentLocation, nextLocation }) => hasMercariDrift && currentLocation.pathname !== nextLocation.pathname
-  // );
+  // Detect Mercari drift (unapplied changes to live Mercari listings)
+  function hasMercariDrift() {
+    if (!product || !mercariStatus || mercariStatus === "draft") return false;
+    const diff = computeMercariDiff(product);
+    return Object.keys(diff).length > 0;
+  }
+
+  async function handleApplyMercariEdits() {
+    setApplyingMercariEdits(true);
+    try {
+      if (!product?.hasVariants && mercariStatus === "active") {
+        await handleSyncToMercari();
+      }
+      if (product?.hasVariants && variants) {
+        for (const variant of variants) {
+          if (variant.mercariStatus === "active") {
+            await syncVariantToMercari(variant);
+          }
+        }
+      }
+      setShowApplyMercariEditsModal(false);
+      if (pendingNavigation) {
+        navigate(pendingNavigation);
+        setPendingNavigation(null);
+      }
+    } catch (err) {
+      console.error("Error applying Mercari edits:", err);
+    } finally {
+      setApplyingMercariEdits(false);
+    }
+  }
+
+  function handleDontChangeMercari() {
+    setShowApplyMercariEditsModal(false);
+    if (pendingNavigation) {
+      navigate(pendingNavigation);
+      setPendingNavigation(null);
+    }
+  }
+
+  // Navigation guard: prompt if Mercari listing has unapplied changes.
+  // TODO: Full blocker integration with useBlocker once modal is ready.
+  // For now, this is a placeholder for manual navigation handling.
 
   function applyAIShipping() {
     const titleLower = (title || "").toLowerCase();
@@ -5451,16 +5490,13 @@ function ProductDetail() {
 
       {toast && <ActionToast message={toast.message} actions={toast.actions} onDismiss={() => setToast(null)} />}
 
-      {/* TODO: ApplyMercariEditsModal will replace this once Mercari drift detection is implemented */}
-      {/* {blocker.state === "blocked" && (
-        <UnsavedChangesModal
-          saving={saving}
-          error={saveError}
-          onSave={handleBlockerSave}
-          onDiscard={handleBlockerDiscard}
-          onCancel={handleBlockerCancel}
-        />
-      )} */}
+      {/* Apply Mercari edits prompt */}
+      <ApplyMercariEditsModal
+        hasDrift={showApplyMercariEditsModal}
+        onApplyEdits={handleApplyMercariEdits}
+        onDontChange={handleDontChangeMercari}
+        applying={applyingMercariEdits}
+      />
     </Layout>
   );
 }
