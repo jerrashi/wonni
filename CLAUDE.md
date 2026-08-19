@@ -301,11 +301,17 @@ All major items from the plan (~/claude/plans/expressive-marinating-lamport.md) 
 - Automatically triggers modal when navigating with unapplied changes
 - Users choose "Apply Edits" or "Don't Change"
 
+**Post Button as Anchored Popover** ✓ (2026-08-19)
+- Converted from centered modal overlay to fixed-position popover
+- Popover anchors directly below Post button, tracks button position
+- Lightweight transparent backdrop for click-outside close
+- All posting logic unchanged, pure presentation refactor
+- No impact on Etsy-specific UI (categories, shipping, returns still visible)
+
 **Deferred (nice-to-have, not blocking):**
-- Post button as anchored popover (currently centered modal, works fine)
 - Full Firestore rules re-validation before prod cutover
 
-**Result:** Header dramatically cleaner, autosave removes Save button friction, Mercari sync intelligently prompted. All code live on main.
+**Result:** Header dramatically cleaner, autosave removes Save button friction, Mercari sync intelligently prompted, Post button integrates smoothly as context-aware popover. All code live on main.
 
 ## Phase 1 notes (variations)
 - `MAX_VARIATION_DIMENSIONS` in `ProductDetail.jsx` caps variation structure
