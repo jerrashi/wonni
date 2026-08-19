@@ -3685,29 +3685,6 @@ function ProductDetail() {
 
   // Commits the staged buffer into the live fields and clears it — the
   // unified Save button's click handler.
-  async function handleSave() {
-    if (!productId || !isDirty) return true;
-    scheduleWritePendingEdits.flush();
-    setSaving(true);
-    setSaveError("");
-    try {
-      const fields = localPendingFieldsRef.current || {};
-      await updateDoc(doc(db, "products", productId), {
-        ...fields,
-        pendingEdits: deleteField(),
-        updatedAt: serverTimestamp(),
-      });
-      localPendingFieldsRef.current = null;
-      setPendingEdits(null);
-      return true;
-    } catch (err) {
-      setSaveError(err?.message ?? "Could not save changes.");
-      return false;
-    } finally {
-      setSaving(false);
-    }
-  }
-
   function handleSourcePriceChange(rawValue) {
     const nextPrice = rawValue === "" ? null : Number(rawValue);
     setSourcePrice(nextPrice);
@@ -3718,78 +3695,14 @@ function ProductDetail() {
     markFieldsDirty({ sourceUrl: newUrl });
   }
 
-  // Reverts the staged buffer and restores every editable field to the last
-  // live (already-saved) values — the Discard action in the unsaved-changes
-  // prompt.
-  async function handleDiscard() {
-    if (!productId) return;
-    scheduleWritePendingEdits.cancel();
-    localPendingFieldsRef.current = null;
-    setPendingEdits(null);
-    if (product) {
-      setTitle(product.title ?? "");
-      setDescription(product.description ?? "");
-      setListingPrice(typeof product.listingPrice === "number" ? product.listingPrice : null);
-      setWeightLbs(String(product.weightLbs ?? 0));
-      setWeightOz(String(product.weightOz ?? 6));
-      setLengthIn(product.lengthIn ? String(product.lengthIn) : "");
-      setWidthIn(product.widthIn ? String(product.widthIn) : "");
-      setHeightIn(product.heightIn ? String(product.heightIn) : "");
-      {
-        const sp = typeof product.sourcePrice === "number"
-          ? product.sourcePrice
-          : (typeof product.aliexpressPrice === "number" ? product.aliexpressPrice : null);
-        setSourcePrice(sp);
-        setSourcePriceInput(sp != null ? String(sp) : "");
-      }
-      setImages(normalizeImageAssets(product));
-      const derived = deriveOptionsAndVariants(product);
-      setOptions(derived.options);
-      setVariants(derived.variants);
-      setLegacyMigrationPending(derived.isLegacy);
-    }
-    try {
-      await updateDoc(doc(db, "products", productId), { pendingEdits: deleteField() });
-    } catch (err) {
-      console.warn("Could not clear pending edits:", err);
-    }
-  }
-
-  // In-app navigation guard (Back button, sidebar links, browser back/
-  // forward) — only fires for a real page change, not e.g. re-rendering on
-  // the same route. Requires the data-router (createBrowserRouter) set up
-  // in main.jsx; useBlocker is a no-op under plain BrowserRouter.
-  const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) => isDirty && currentLocation.pathname !== nextLocation.pathname
-  );
-
-  async function handleBlockerSave() {
-    const ok = await handleSave();
-    if (ok) blocker.proceed?.();
-  }
-
-  async function handleBlockerDiscard() {
-    await handleDiscard();
-    blocker.proceed?.();
-  }
-
-  function handleBlockerCancel() {
-    blocker.reset?.();
-  }
-
-  // Tab close/refresh — no in-app prompt is possible here, so this only
-  // triggers the browser's native "leave site?" dialog. Recovery relies on
-  // the debounced pendingEdits write having already landed moments earlier
-  // (see markFieldsDirty/scheduleWritePendingEdits) rather than a save here.
-  useEffect(() => {
-    if (!isDirty) return;
-    function handleBeforeUnload(e) {
-      e.preventDefault();
-      e.returnValue = "";
-    }
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [isDirty]);
+  // Navigation guard: prompt if Mercari listing has unapplied changes (drift
+  // between live fields and mercariSynced* baselines). In-app nav only;
+  // tab-close triggers browser's native "leave site?" dialog instead.
+  // TODO: Implement Mercari drift detection and ApplyMercariEditsModal here.
+  // For now, blocker is disabled to avoid "Cannot read property of undefined" errors.
+  // const blocker = useBlocker(
+  //   ({ currentLocation, nextLocation }) => hasMercariDrift && currentLocation.pathname !== nextLocation.pathname
+  // );
 
   function applyAIShipping() {
     const titleLower = (title || "").toLowerCase();
@@ -5543,7 +5456,8 @@ function ProductDetail() {
 
       {toast && <ActionToast message={toast.message} actions={toast.actions} onDismiss={() => setToast(null)} />}
 
-      {blocker.state === "blocked" && (
+      {/* TODO: ApplyMercariEditsModal will replace this once Mercari drift detection is implemented */}
+      {/* {blocker.state === "blocked" && (
         <UnsavedChangesModal
           saving={saving}
           error={saveError}
@@ -5551,7 +5465,7 @@ function ProductDetail() {
           onDiscard={handleBlockerDiscard}
           onCancel={handleBlockerCancel}
         />
-      )}
+      )} */}
     </Layout>
   );
 }
