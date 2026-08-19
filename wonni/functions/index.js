@@ -199,6 +199,7 @@ const { placeAliexpressOrder, confirmTiktokShipment, pollAliexpressTracking } = 
 const { tiktokExchangeToken } = require("./tiktok_auth");
 const { getTiktokCategories, tiktokCreateListing, tiktokUpdateListing, tiktokDeleteListing } = require("./tiktok_listing");
 const { updateMercariListingStatus } = require("./mercari_listing");
+const { recordMercariSale } = require("./mercari_sale");
 const { syncTiktokOrders, syncTiktokOrdersScheduled } = require("./tiktok_orders");
 const { disconnectPlatform, updateSettings, generateOAuthState } = require("./user_settings");
 const { onProductDeleted } = require("./product_cleanup");
@@ -229,6 +230,7 @@ module.exports = {
 
   // dropship: Mercari listings
   updateMercariListingStatus,
+  recordMercariSale,
 
   // dropship: user settings
   generateOAuthState,
