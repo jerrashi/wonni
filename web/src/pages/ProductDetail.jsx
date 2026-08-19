@@ -4858,8 +4858,8 @@ function ProductDetail() {
                 <div
                   style={{
                     position: "relative",
-                    flex: 1,
-                    background: "var(--surface-hover)",
+                    aspectRatio: "1 / 1",
+                    background: "#000",
                     borderRadius: 8,
                     cursor: "pointer",
                     display: "flex",
@@ -4870,9 +4870,38 @@ function ProductDetail() {
                   onClick={() => setShowFullscreenPhoto(true)}
                 >
                   {previewImage ? (
-                    <img src={previewImage} alt={product.title} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                    <>
+                      {/* Blurred glow layer behind */}
+                      <img
+                        src={previewImage}
+                        alt=""
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover",
+                          filter: "blur(40px)",
+                          opacity: 0.6,
+                          zIndex: 0,
+                        }}
+                        aria-hidden="true"
+                      />
+                      {/* Sharp image on top */}
+                      <img
+                        src={previewImage}
+                        alt={product.title}
+                        style={{
+                          maxWidth: "100%",
+                          maxHeight: "100%",
+                          objectFit: "contain",
+                          position: "relative",
+                          zIndex: 1,
+                        }}
+                      />
+                    </>
                   ) : (
-                    <div style={{ fontSize: 13, color: "var(--muted)" }}>No image</div>
+                    <div style={{ fontSize: 13, color: "var(--muted)", zIndex: 1 }}>No image</div>
                   )}
                   {/* Edit Button in Upper Right */}
                   <button
