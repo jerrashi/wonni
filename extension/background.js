@@ -50,6 +50,12 @@ chrome.runtime.onMessageExternal.addListener((message, _sender, sendResponse) =>
       .catch((e) => sendResponse({ error: e.message }));
     return true;
   }
+  if (message.type === "CHECK_MERCARI_SOLD") {
+    handleCheckMercariSold()
+      .then(sendResponse)
+      .catch((e) => sendResponse({ error: e.message }));
+    return true;
+  }
   return true;
 });
 
@@ -99,6 +105,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "FETCH_MERCARI_IMAGE") {
     fetchImageAsBase64(message.url)
       .then((base64) => sendResponse({ base64 }))
+      .catch((e) => sendResponse({ error: e.message }));
+    return true;
+  }
+  if (message.type === "MERCARI_SOLD_CHECK_RESULT") {
+    handleMercariSoldCheckResult(message.sold)
+      .then(() => sendResponse({ ok: true }))
       .catch((e) => sendResponse({ error: e.message }));
     return true;
   }
@@ -297,4 +309,68 @@ async function reportMercariStatus(idToken, productId, outcome) {
       },
     }),
   }).catch(() => {});
+}
+
+// Opens Mercari's "in progress" listings page in a background tab so the
+// content script can scrape sold items, record sales, and return the results.
+async function handleCheckMercariSold() {
+  const tab = await chrome.tabs.create({
+    url: "https://www.mercari.com/mypage/listings/in_progress/?sortBy=7",
+    active: false, // background tab
+  });
+
+  return { ok: true, tabId: tab.id };
+}
+
+// Processes sold items detected by mercari_sold_content.js — matches them to
+// products/variants and calls recordMercariSale for each via the Cloud Function.
+async function handleMercariSoldCheckResult(soldItems) {
+  if (!Array.isArray(soldItems) || soldItems.length === 0) {
+    console.log("[Wonni Drop] No sold items found");
+    return;
+  }
+
+  const { idToken } = await chrome.storage.local.get(["idToken"]);
+  if (!idToken) {
+    throw new Error("Not signed in");
+  }
+
+  console.log(`[Wonni Drop] Processing ${soldItems.length} sold items...`);
+
+  for (const item of soldItems) {
+    try {
+      const payload = {
+        mercariItemId: item.mercariItemId,
+        mercariOrderId: item.mercariItemId, // Use item ID as order ID for deduping
+        listingTitle: item.title,
+        priceSoldFor: item.priceSoldFor,
+        takeHome: item.takeHome,
+        soldAt: item.soldDate ? new Date(item.soldDate).toISOString() : new Date().toISOString(),
+        // Note: listingId must be populated by the extension/web app — it comes from
+        // matching the Mercari item ID to a product variant's mercariListingId.
+        // For now, this is a placeholder that will be filled by the web app.
+        listingId: null,
+      };
+
+      // Send to recordMercariSale Cloud Function for processing
+      const response = await fetch(`${FUNCTIONS_BASE}/recordMercariSale`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ data: payload }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log(`[Wonni Drop] Recorded sale for ${item.mercariItemId}:`, result);
+      } else {
+        const error = await response.text();
+        console.error(`[Wonni Drop] recordMercariSale failed for ${item.mercariItemId}:`, error);
+      }
+    } catch (err) {
+      console.error(`[Wonni Drop] Error processing ${item.mercariItemId}:`, err);
+    }
+  }
 }
