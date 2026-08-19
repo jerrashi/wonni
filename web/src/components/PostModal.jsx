@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import { db, auth, callFunction } from "../firebase";
 
@@ -10,7 +10,7 @@ const PLATFORMS = [
   { id: "tiktok", name: "TikTok Shop", requiresConnected: true },
 ];
 
-export default function PostModal({ product, onClose }) {
+export default function PostModal({ product, onClose, mode = "modal", buttonRef }) {
   const [integrations, setIntegrations] = useState({});
   const [selected, setSelected] = useState(new Set(["wonni"])); // Wonni always selected
   const [etsyCategory, setEtsyCategory] = useState(null);
@@ -25,8 +25,42 @@ export default function PostModal({ product, onClose }) {
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState("");
   const [results, setResults] = useState({});
+  const [buttonRect, setButtonRect] = useState(null);
+  const popoverRef = useRef(null);
 
   const uid = auth.currentUser?.uid;
+
+  // Track button position for popover mode
+  useEffect(() => {
+    if (mode !== "popover" || !buttonRef?.current) return;
+
+    const updatePosition = () => {
+      const rect = buttonRef.current.getBoundingClientRect();
+      setButtonRect(rect);
+    };
+
+    updatePosition();
+    window.addEventListener("scroll", updatePosition);
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      window.removeEventListener("scroll", updatePosition);
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [mode, buttonRef]);
+
+  // Close popover on outside click
+  useEffect(() => {
+    if (mode !== "popover") return;
+
+    const handleClickOutside = (e) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target) && !buttonRef?.current?.contains(e.target)) {
+        onClose();
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [mode, onClose, buttonRef]);
 
   // Load integrations
   useEffect(() => {
@@ -286,6 +320,233 @@ export default function PostModal({ product, onClose }) {
       setPosting(false);
     }
   };
+
+  if (mode === "popover") {
+    if (!buttonRect) return null;
+
+    const popoverTop = buttonRect.bottom + 8;
+    const popoverLeft = buttonRect.right - 380; // Approximate modal width, align right
+    const popoverMaxHeight = window.innerHeight - popoverTop - 20;
+
+    return (
+      <>
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            zIndex: 99,
+          }}
+          onClick={onClose}
+        />
+        <div
+          ref={popoverRef}
+          style={{
+            position: "fixed",
+            top: popoverTop,
+            left: popoverLeft,
+            width: 380,
+            maxHeight: popoverMaxHeight,
+            background: "var(--surface)",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.15)",
+            zIndex: 100,
+            display: "flex",
+            flexDirection: "column",
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>Post to Platforms</h3>
+            <button className="btn btn-ghost" style={{ padding: "4px 8px" }} onClick={onClose}>
+              ✕
+            </button>
+          </div>
+
+          <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px" }}>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 16 }}>
+              Select platforms to post this item to. Wonni is always included.
+            </div>
+
+            {error && (
+              <div style={{ fontSize: 13, color: "var(--danger)", marginBottom: 12 }}>
+                {error}
+              </div>
+            )}
+
+            {/* Platform checkboxes */}
+            {PLATFORMS.map((p) => {
+              const isConnected = integrations[p.id]?.isConnected;
+              const isSelected = selected.has(p.id);
+              const isDisabled = (p.requiresConnected && !isConnected) || p.locked;
+
+              return (
+                <div key={p.id} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: isDisabled ? "not-allowed" : "pointer", opacity: isDisabled ? 0.6 : 1 }}>
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => !isDisabled && togglePlatform(p.id)}
+                      disabled={isDisabled}
+                    />
+                    <span style={{ fontWeight: p.locked ? 600 : 500 }}>
+                      {p.name}
+                      {p.locked && " (always included)"}
+                    </span>
+                    {isConnected && !p.locked && <span style={{ fontSize: 11, color: "var(--success)" }}>✓ Connected</span>}
+                    {!isConnected && p.requiresConnected && (
+                      <span style={{ fontSize: 11, color: "var(--muted)" }}>Not connected</span>
+                    )}
+                  </label>
+
+                  {/* Etsy-specific options */}
+                  {isSelected && p.id === "etsy" && (
+                    <div style={{ marginTop: 12, paddingLeft: 24 }}>
+                      {etsyError && (
+                        <div style={{ fontSize: 12, color: "var(--danger)", marginBottom: 8 }}>
+                          {etsyError}
+                        </div>
+                      )}
+
+                      {loadingEtsyData && <div style={{ fontSize: 12, color: "var(--muted)" }}>Loading Etsy data…</div>}
+
+                      {!loadingEtsyData && (
+                        <>
+                          {/* Category selector */}
+                          <div style={{ marginBottom: 12 }}>
+                            <label style={{ fontSize: 12, fontWeight: 500, display: "block", marginBottom: 4 }}>
+                              Category
+                            </label>
+                            <input
+                              className="input"
+                              style={{ fontSize: 12, marginBottom: 4 }}
+                              placeholder="Search categories…"
+                              value={etsyCategorySearch}
+                              onChange={(e) => setEtsyCategorySearch(e.target.value)}
+                            />
+                            {etsyCategorySearch && etsyFilteredCategories.length > 0 && (
+                              <div style={{ border: "1px solid var(--border)", borderRadius: 4, maxHeight: 150, overflowY: "auto" }}>
+                                {etsyFilteredCategories.slice(0, 20).map((c) => (
+                                  <div
+                                    key={c.id}
+                                    style={{
+                                      padding: 8,
+                                      cursor: "pointer",
+                                      backgroundColor: etsyCategory?.id === c.id ? "var(--primary)" : "transparent",
+                                      color: etsyCategory?.id === c.id ? "white" : "inherit",
+                                    }}
+                                    onClick={() => {
+                                      setEtsyCategory(c);
+                                      setEtsyCategorySearch("");
+                                    }}
+                                  >
+                                    {c.name}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {etsyCategory && (
+                              <div style={{ fontSize: 11, color: "var(--success)", marginTop: 4 }}>
+                                ✓ {etsyCategory.name}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Shipping profile selector */}
+                          {etsyShippingProfiles.length > 0 ? (
+                            <div style={{ marginBottom: 12 }}>
+                              <label style={{ fontSize: 12, fontWeight: 500, display: "block", marginBottom: 4 }}>
+                                Shipping Profile
+                              </label>
+                              <select
+                                className="input"
+                                style={{ fontSize: 12 }}
+                                value={etsyShippingId || ""}
+                                onChange={(e) => setEtsyShippingId(e.target.value)}
+                              >
+                                <option value="">Select a profile…</option>
+                                {etsyShippingProfiles.map((p) => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.title}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: 11, color: "var(--danger)", marginBottom: 12 }}>
+                              No shipping profiles found. Please create one in your Etsy shop settings.
+                            </div>
+                          )}
+
+                          {/* Return policy selector */}
+                          {etsyReturnPolicies.length > 0 ? (
+                            <div style={{ marginBottom: 12 }}>
+                              <label style={{ fontSize: 12, fontWeight: 500, display: "block", marginBottom: 4 }}>
+                                Return Policy
+                              </label>
+                              <select
+                                className="input"
+                                style={{ fontSize: 12 }}
+                                value={etsyReturnId || ""}
+                                onChange={(e) => setEtsyReturnId(e.target.value)}
+                              >
+                                <option value="">Select a policy…</option>
+                                {etsyReturnPolicies.map((p) => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: 11, color: "var(--danger)", marginBottom: 12 }}>
+                              No return policies found. Please create one in your Etsy shop settings.
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Post result for this platform */}
+                  {results[p.id] && (
+                    <div style={{ marginTop: 8, paddingLeft: 24 }}>
+                      {results[p.id].status === "success" && (
+                        <div style={{ fontSize: 11, color: "var(--success)" }}>
+                          ✓ Posted to {p.name}
+                        </div>
+                      )}
+                      {results[p.id].status === "error" && (
+                        <div style={{ fontSize: 11, color: "var(--danger)" }}>
+                          ✕ {results[p.id].message}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)", display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button className="btn btn-ghost" onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={handleSubmit}
+              disabled={posting || selected.size <= 1}
+            >
+              {posting ? "Posting…" : "Post"}
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
