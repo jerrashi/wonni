@@ -87,6 +87,11 @@ a:hover { color: var(--accent-hover); }
   display: grid;
   grid-template-columns: 220px 1fr;
   min-height: 100vh;
+  transition: grid-template-columns 0.2s ease;
+}
+
+.app-layout.sidebar-collapsed {
+  grid-template-columns: 48px 1fr;
 }
 
 .sidebar {
@@ -108,6 +113,11 @@ a:hover { color: var(--accent-hover); }
   border-right: var(--border-thick) solid var(--primary);
   margin-bottom: 8px;
   text-transform: uppercase;
+  transition: opacity 0.2s ease;
+}
+
+.app-layout.sidebar-collapsed .sidebar-logo {
+  display: none;
 }
 
 .sidebar a {
@@ -116,7 +126,7 @@ a:hover { color: var(--accent-hover); }
   color: var(--muted);
   margin: 0 8px;
   font-size: 14px;
-  transition: background 0.15s, color 0.15s, border 0.15s;
+  transition: background 0.15s, color 0.15s, border 0.15s, opacity 0.2s ease;
   border-left: var(--border-thin) solid transparent;
 }
 
@@ -124,6 +134,15 @@ a:hover { color: var(--accent-hover); }
   background: var(--surface-high);
   color: var(--primary);
   border-left: var(--border-thick) solid var(--primary);
+}
+
+.app-layout.sidebar-collapsed .sidebar a {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.app-layout.sidebar-collapsed .sidebar-signout {
+  display: none;
 }
 
 .main-content {

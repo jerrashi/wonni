@@ -63,6 +63,13 @@ Deferred code work (not started, no blocker but real scope):
       expandable Images/Variants sections with 24-hour cooldown per section.
       Returns fresh image URLs and variant list. Stores last refresh timestamp
       in `products` doc under `sourceRefresh.{section}.lastRefreshedAt`.
+- [ ] **eBay/TikTok update-listing Cloud Functions** (Phase 4 UI, 2026-08-19):
+      Build backend functions to push edits (title/description/price/photos)
+      to already-live eBay and TikTok Shop listings — `ebayUpdateListing` and
+      `tiktokUpdateListing` (latter stub exists but unused). Triggered from
+      ProductDetail.jsx via the unified "Apply Edits" prompt when user has
+      Mercari-only right now, but the backend prep work must happen first
+      before wiring the UI to use them. Sits in wonni-app repo (not here).
 - [ ] Phase 3, unified sales/orders dashboard — spec written
       (`~/.claude/plans/sales-dashboard-spec.md`), untouched so far; today's
       `orders` rule merge is a step toward it, not the implementation.
