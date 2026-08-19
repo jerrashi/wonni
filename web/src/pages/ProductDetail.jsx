@@ -3295,6 +3295,7 @@ function ProductDetail() {
   // each other out of order — see saveMedia for the failure mode this avoids.
   const mediaSaveChainRef = useRef(Promise.resolve());
   const pendingMediaSavesRef = useRef(0);
+  const postButtonRef = useRef(null);
   const [options, setOptions] = useState([]);
   const [variants, setVariants] = useState([]);
   // Mirrors `variants` for use inside the sequential Mercari-posting loop,
@@ -4677,7 +4678,7 @@ function ProductDetail() {
           {saving && <span style={{ fontSize: 12, color: "var(--muted)" }}>Saving…</span>}
           {!saving && lastSaveTime && <span style={{ fontSize: 12, color: "var(--muted)" }}>Saved</span>}
           {product && (
-            <button className="btn btn-primary" onClick={() => setShowPostModal(true)}>
+            <button ref={postButtonRef} className="btn btn-primary" onClick={() => setShowPostModal(true)}>
               📤 Post
             </button>
           )}
@@ -4714,9 +4715,6 @@ function ProductDetail() {
               }
             ]}
           />
-              {checkingMercariSold ? "🔍 Checking…" : "🔍 Check Mercari for sold items"}
-            </button>
-          )}
         </div>
       </div>
 
@@ -5505,11 +5503,13 @@ function ProductDetail() {
         />
       )}
 
-      {/* Post to Platforms Modal (Phase 3) */}
+      {/* Post to Platforms Popover (Phase 4) */}
       {showPostModal && product && (
         <PostModal
           product={product}
           onClose={() => setShowPostModal(false)}
+          mode="popover"
+          buttonRef={postButtonRef}
         />
       )}
 
