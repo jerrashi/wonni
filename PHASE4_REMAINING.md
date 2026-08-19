@@ -9,28 +9,19 @@
 - ✅ Mercari URL fields (single products + variants)
 - ✅ Apply Mercari Edits modal with full blocker integration
 
-**Deferred (nice-to-have, not blocking):**
+**Completed:**
 
-### 1. Post Button as Anchored Popover
+### ✅ Post Button as Anchored Popover (2026-08-19)
 
-**Current state:** PostModal renders as a centered modal overlay
-**Desired state:** PostModal renders as a popover anchored to the Post button
+**Implementation (commit b62000d):**
+- Added `mode` prop to PostModal ("modal" | "popover")
+- PostModal tracks button position with `getBoundingClientRect()`
+- When `mode="popover"`: renders as fixed-position element below button
+- Lightweight transparent backdrop for click-outside close
+- ProductDetail passes `mode="popover"` and `postButtonRef` to PostModal
+- No impact on posting logic — pure presentation refactor
 
-**Implementation approach:**
-1. Add `mode: "modal" | "popover"` prop to PostModal
-2. When `mode: "popover"`:
-   - Use `position: fixed` instead of `position: absolute` with center calculations
-   - Position relative to Post button coordinates (passed via props)
-   - Use a transparent backdrop for click-outside close
-   - Add arrow pointing to button (optional polish)
-3. Update ProductDetail header to:
-   - Get Post button ref with `useRef`
-   - Track button position with `useEffect` + `getBoundingClientRect()`
-   - Pass position and mode to PostModal
-
-**Why deferred:** Current centered modal UX is excellent and doesn't block functionality. Popover is a style refinement, not a UX necessity.
-
-**Estimated effort:** 30-45 minutes
+**Status:** Live on main. Post button now anchors popover below itself for better context and space efficiency.
 
 ---
 
@@ -78,9 +69,9 @@ Rules are correctly scoped.
 
 ## Notes
 
-- Post popover can be attempted anytime as a follow-up refinement
 - Rules validation is lower urgency since Phase B merge was completed separately
-- Both items are "nice-to-have" and don't block the core Phase 4 redesign completion
-- Current PostModal centered version works perfectly fine for the UX
+- Firestore/Storage rule changes have already been made in wonni-app repo but not locally emulator-tested
+- Can be validated anytime before production cutover
+- No impact on current development or testing
 
-**Final Status:** Phase 4 UI redesign complete and shipped. These are purely optional enhancements.
+**Final Status:** Phase 4 UI redesign **COMPLETE**. Only remaining task is rules validation (optional before prod cutover).
