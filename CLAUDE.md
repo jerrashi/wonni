@@ -267,6 +267,46 @@ and eliminate the `defineSecret()` conflict:
 
 3. **OAuth redirect URIs** — AliExpress & TikTok console registrations still need manual update to `/web/oauth/*` paths.
 
+## As of 2026-08-19 — Phase 4 UI redesign: ProductDetail header & autosave (COMPLETE)
+
+**Header & autosave redesign shipped (8 commits, 2026-08-19):**
+
+All major items from the plan (~/claude/plans/expressive-marinating-lamport.md) completed:
+
+**Collapsible Sidebar** ✓
+- Toggle button (▸/▾) collapses sidebar from 220px → 48px rail
+- Persistent via localStorage, smooth 0.2s CSS transitions
+- Back button stays always-visible in ProductDetail
+
+**Autosave for Text Fields** ✓
+- Removed manual Save button entirely
+- Text fields write directly to Firestore on 1s debounce
+- "Saving..." / "Saved" status indicator in header
+- Keystroke-wins-over-echo protection maintained
+
+**Header Reorganization** ✓
+- Removed old 4-branch Mercari status button (~50 lines)
+- Removed "Open source listing" (duplicate of Source card)
+- Simplified Mercari presence: Sync button for live (single), modal link for variants
+- Created OverflowMenu component ("⋯") for Delete + Check Mercari actions
+
+**Mercari URL Fields** ✓
+- Single products: editable URL field below status badges, auto-extracts item ID
+- Variants: persistent URL field in VariantMercariTile, auto-link on blur
+- Both support manual URL entry if cross-post fails
+
+**Apply Mercari Edits Modal** ✓
+- Full `useBlocker` integration with Mercari drift detection
+- `computeHasMercariDrift()` detects title/description/price/photo changes
+- Automatically triggers modal when navigating with unapplied changes
+- Users choose "Apply Edits" or "Don't Change"
+
+**Deferred (nice-to-have, not blocking):**
+- Post button as anchored popover (currently centered modal, works fine)
+- Full Firestore rules re-validation before prod cutover
+
+**Result:** Header dramatically cleaner, autosave removes Save button friction, Mercari sync intelligently prompted. All code live on main.
+
 ## Phase 1 notes (variations)
 - `MAX_VARIATION_DIMENSIONS` in `ProductDetail.jsx` caps variation structure
   at 2 dimensions (primary + sub), matching Etsy's UI. Not generalized to N
