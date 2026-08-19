@@ -45,6 +45,11 @@
       "matches": ["https://www.mercari.com/mypage/listings/in_progress*", "https://mercari.com/mypage/listings/in_progress*"],
       "js": ["mercari_sold_content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.mercari.com/us/item/m*", "https://mercari.com/us/item/m*"],
+      "js": ["mercari_pull_sync_content.js"],
+      "run_at": "document_idle"
     }
   ],
   "externally_connectable": {

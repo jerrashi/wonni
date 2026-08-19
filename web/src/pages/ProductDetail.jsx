@@ -2384,7 +2384,7 @@ function MercariVariantTemplate({
 // local state that shouldn't reset when a sibling tile re-renders.
 function VariantMercariTile({
   variant, label, product, mercariTitleTokens, mercariTitleGaps, mercariPhotoTemplate, images,
-  onPost, onSync, onDelete, onRemovePhoto, onLink,
+  onPost, onSync, onDelete, onRemovePhoto, onLink, onCheckPullSync,
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showLinkModal, setShowLinkModal] = useState(false);
@@ -2441,6 +2441,9 @@ function VariantMercariTile({
           >
             ✏️ Edit
           </a>
+          <button className="btn btn-ghost" style={{ fontSize: 10, padding: "1px 6px" }} onClick={() => onCheckPullSync(variant)}>
+            ⬇️ Pull
+          </button>
           <button className="btn btn-ghost" style={{ fontSize: 10, padding: "1px 6px" }} onClick={() => onDelete(variant)}>
             🗑 Delete
           </button>
@@ -3157,6 +3160,7 @@ function MercariModal({
                   onDelete={onDeleteVariant}
                   onRemovePhoto={onRemoveVariantPhoto}
                   onLink={linkVariantMercariListing}
+                  onCheckPullSync={checkMercariPullSyncChanges}
                 />
               ))}
             </div>
@@ -3322,6 +3326,11 @@ function ProductDetail() {
   const [sourceVariants, setSourceVariants] = useState([]);
   const [lastSourceRefresh, setLastSourceRefresh] = useState(null); // timestamp
   const [sourceRefreshLoading, setSourceRefreshLoading] = useState(false);
+  const [checkingMercariSold, setCheckingMercariSold] = useState(false);
+  const [mercariCheckMessage, setMercariCheckMessage] = useState("");
+  const [checkingMercariPullSync, setCheckingMercariPullSync] = useState(false);
+  const [mercariPullSyncDiff, setMercariPullSyncDiff] = useState(null);
+  const [importingMercariChanges, setImportingMercariChanges] = useState(false);
   const [aiDescLoading, setAiDescLoading] = useState(false);
   const [aiDescSuggestion, setAiDescSuggestion] = useState(null); // string | null
   const [aiDescError, setAiDescError] = useState("");
@@ -4487,6 +4496,129 @@ function ProductDetail() {
     });
   }
 
+  async function checkMercariSoldItems() {
+    if (!product) return;
+    setCheckingMercariSold(true);
+    setMercariCheckMessage("Opening Mercari in background... this may take a minute");
+
+    try {
+      const extensionId = import.meta.env.VITE_EXTENSION_ID;
+      if (!extensionId || !window.chrome?.runtime?.sendMessage) {
+        throw new Error("Extension not available");
+      }
+
+      // Tell extension to check for sold items (it will scrape and call recordMercariSalesBatch)
+      const result = await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(extensionId, { type: "CHECK_MERCARI_SOLD" }, (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            resolve(response);
+          }
+        });
+      });
+
+      if (!result || result.error) {
+        throw new Error(result?.error ?? "Failed to check Mercari");
+      }
+
+      setMercariCheckMessage(
+        "✓ Mercari check complete. Any sold items have been recorded and flagged for relisting. Refresh to see updates."
+      );
+    } catch (err) {
+      setMercariCheckMessage(`Error: ${err.message}`);
+    } finally {
+      setCheckingMercariSold(false);
+    }
+  }
+
+  async function checkMercariPullSyncChanges(variant) {
+    if (!product || !variant?.mercariListingId) return;
+    setCheckingMercariPullSync(true);
+    setMercariPullSyncDiff(null);
+
+    try {
+      const extensionId = import.meta.env.VITE_EXTENSION_ID;
+      if (!extensionId || !window.chrome?.runtime?.sendMessage) {
+        throw new Error("Extension not available");
+      }
+
+      // Tell extension to scrape the live Mercari item page
+      const scrapedData = await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(
+          extensionId,
+          { type: "CHECK_MERCARI_PULL_SYNC", mercariItemId: variant.mercariListingId },
+          (response) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+            } else {
+              resolve(response);
+            }
+          }
+        );
+      });
+
+      if (!scrapedData || scrapedData.error) {
+        throw new Error(scrapedData?.error ?? "Failed to scrape Mercari listing");
+      }
+
+      // Call backend to detect diff and re-host images
+      const syncedData = {
+        title: variant.mercariSyncedTitle,
+        description: variant.mercariSyncedDescription,
+        images: variant.mercariSyncedImages || [],
+      };
+
+      const diffResult = await callFunction("detectMercariPullSyncDiff")({
+        listingId: product.id,
+        variantId: variant.id,
+        liveData: scrapedData.data,
+        syncedData,
+      });
+
+      if (diffResult.hasChanges) {
+        setMercariPullSyncDiff({
+          variant,
+          diff: diffResult.diff,
+          rehostedPhotos: diffResult.rehostedPhotos,
+        });
+      } else {
+        setMercariPullSyncDiff({ variant, diff: diffResult.diff, noChanges: true });
+      }
+    } catch (err) {
+      alert(`Error checking for changes: ${err.message}`);
+    } finally {
+      setCheckingMercariPullSync(false);
+    }
+  }
+
+  async function importMercariPullSyncChanges() {
+    if (!mercariPullSyncDiff) return;
+    const { variant, diff, rehostedPhotos } = mercariPullSyncDiff;
+
+    setImportingMercariChanges(true);
+    try {
+      const importPhotos = rehostedPhotos
+        ?.filter((p) => p.rehosted)
+        .map((p) => ({ original: p.original, rehosted: p.rehosted })) || [];
+
+      await callFunction("importMercariPullSync")({
+        listingId: product.id,
+        variantId: variant.id,
+        importTitle: diff.titleChanged ? variant.title : null,
+        importDescription: diff.descriptionChanged ? variant.description : null,
+        importPhotos,
+      });
+
+      setMercariPullSyncDiff(null);
+      alert("✓ Changes imported successfully!");
+    } catch (err) {
+      alert(`Error importing changes: ${err.message}`);
+    } finally {
+      setImportingMercariChanges(false);
+    }
+  }
+
   async function refreshSourceData(section) {
     // Check cooldown: only refresh if 24 hours have passed since last refresh
     if (lastSourceRefresh && Date.now() - lastSourceRefresh < 24 * 60 * 60 * 1000) {
@@ -4635,6 +4767,11 @@ function ProductDetail() {
               {deletingProduct ? "Deleting…" : "Delete listing"}
             </button>
           )}
+          {product && (
+            <button className="btn btn-ghost" onClick={checkMercariSoldItems} disabled={checkingMercariSold}>
+              {checkingMercariSold ? "🔍 Checking…" : "🔍 Check Mercari for sold items"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -4647,6 +4784,60 @@ function ProductDetail() {
       {mercariSyncMessage && (
         <div style={{ marginBottom: 12, fontSize: 12, color: "var(--muted)", textAlign: "right" }}>
           {mercariSyncMessage}
+        </div>
+      )}
+
+      {mercariCheckMessage && (
+        <div style={{ marginBottom: 12, fontSize: 12, color: "var(--info)", textAlign: "right" }}>
+          {mercariCheckMessage}
+        </div>
+      )}
+
+      {mercariPullSyncDiff && (
+        <div className="card" style={{ marginBottom: 12, padding: 12, border: "1px solid var(--warning)" }}>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>
+            Mercari listing changes detected for "{Object.values(mercariPullSyncDiff.variant.optionValues).join(" / ") || mercariPullSyncDiff.variant.sku || "Variant"}"
+          </div>
+          {mercariPullSyncDiff.noChanges ? (
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>No changes found.</div>
+          ) : (
+            <>
+              {mercariPullSyncDiff.diff.titleChanged && (
+                <div style={{ fontSize: 12, marginBottom: 4 }}>📝 Title changed on Mercari</div>
+              )}
+              {mercariPullSyncDiff.diff.descriptionChanged && (
+                <div style={{ fontSize: 12, marginBottom: 4 }}>📝 Description changed on Mercari</div>
+              )}
+              {mercariPullSyncDiff.diff.photosAdded.length > 0 && (
+                <div style={{ fontSize: 12, marginBottom: 4 }}>
+                  🖼️ {mercariPullSyncDiff.diff.photosAdded.length} new photo(s) on Mercari
+                </div>
+              )}
+              {mercariPullSyncDiff.diff.photosRemoved.length > 0 && (
+                <div style={{ fontSize: 12, marginBottom: 4 }}>
+                  🗑️ {mercariPullSyncDiff.diff.photosRemoved.length} photo(s) removed on Mercari
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <button
+                  className="btn btn-primary"
+                  onClick={importMercariPullSyncChanges}
+                  disabled={importingMercariChanges}
+                  style={{ fontSize: 11 }}
+                >
+                  {importingMercariChanges ? "⏳ Importing…" : "✓ Import changes"}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => setMercariPullSyncDiff(null)}
+                  disabled={importingMercariChanges}
+                  style={{ fontSize: 11 }}
+                >
+                  ✕ Dismiss
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 
