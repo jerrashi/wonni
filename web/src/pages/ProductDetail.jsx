@@ -3252,6 +3252,13 @@ function ProductDetail() {
   const [syncingMercari, setSyncingMercari] = useState(false);
   const [mercariSyncMessage, setMercariSyncMessage] = useState("");
   const [toast, setToast] = useState(null); // { message, actions } | null
+  const [showFullscreenPhoto, setShowFullscreenPhoto] = useState(false);
+  const [showAllPhotos, setShowAllPhotos] = useState(false);
+  const [expandedSourceSection, setExpandedSourceSection] = useState(null); // "images" | "variants" | null
+  const [sourceImages, setSourceImages] = useState([]);
+  const [sourceVariants, setSourceVariants] = useState([]);
+  const [lastSourceRefresh, setLastSourceRefresh] = useState(null); // timestamp
+  const [sourceRefreshLoading, setSourceRefreshLoading] = useState(false);
   const [aiDescLoading, setAiDescLoading] = useState(false);
   const [aiDescSuggestion, setAiDescSuggestion] = useState(null); // string | null
   const [aiDescError, setAiDescError] = useState("");
@@ -3452,7 +3459,16 @@ function ProductDetail() {
   }, [productId]);
 
   const preorder = product?.preOrder;
-  const infoTable = product?.weverseInfoTable ?? [];
+  const infoTable = useMemo(() => {
+    const sourceInfo = product?.sourceInfo;
+    if (!sourceInfo || typeof sourceInfo !== "object") return [];
+
+    return Object.entries(sourceInfo).map(([key, value]) => {
+      const formattedLabel = key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, " $1");
+      const formattedValue = Array.isArray(value) ? value.join(", ") : String(value);
+      return { label: formattedLabel, value: formattedValue };
+    });
+  }, [product?.sourceInfo]);
   const safePreviewIndex = Math.min(previewIndex, Math.max(0, images.length - 1));
 
   const mercariStatus = product?.listingStatus?.mercari ?? "draft";
@@ -3633,6 +3649,10 @@ function ProductDetail() {
     const nextPrice = rawValue === "" ? null : Number(rawValue);
     setSourcePrice(nextPrice);
     markFieldsDirty({ sourcePrice: nextPrice });
+  }
+
+  function handleSourceUrlChange(newUrl) {
+    markFieldsDirty({ sourceUrl: newUrl });
   }
 
   // Reverts the staged buffer and restores every editable field to the last
@@ -4342,6 +4362,38 @@ function ProductDetail() {
     });
   }
 
+  async function refreshSourceData(section) {
+    // Check cooldown: only refresh if 24 hours have passed since last refresh
+    if (lastSourceRefresh && Date.now() - lastSourceRefresh < 24 * 60 * 60 * 1000) {
+      return; // Cooldown active, don't refresh
+    }
+
+    if (!product || !product.sourceUrl || !product.source) return;
+
+    setSourceRefreshLoading(true);
+    try {
+      const result = await callFunction("refreshSourceData")({
+        productId: product.id,
+        source: product.source,
+        sourceUrl: product.sourceUrl,
+        section: section, // "images" or "variants"
+      });
+
+      if (section === "images") {
+        setSourceImages(result.data.images || []);
+      } else if (section === "variants") {
+        setSourceVariants(result.data.variants || []);
+      }
+
+      setLastSourceRefresh(Date.now());
+      setExpandedSourceSection(section);
+    } catch (err) {
+      console.error("Failed to refresh source data:", err);
+    } finally {
+      setSourceRefreshLoading(false);
+    }
+  }
+
   async function handleDeleteProduct() {
     const liveOn = [
       product?.tiktokStatus === "active" ? "TikTok Shop" : null,
@@ -4472,59 +4524,310 @@ function ProductDetail() {
         </div>
       ) : product ? (
         <div className="product-detail">
-          <div className="card product-detail-hero">
-            {/* ── Left: image viewer ── */}
-            <div className="product-detail-gallery">
-              <div className="product-detail-main-image">
-                {previewImage ? (
-                  <img src={previewImage} alt={product.title} />
-                ) : (
-                  <div className="product-detail-placeholder">No image</div>
-                )}
-                {images.length > 0 && (
-                  <div className="img-preview-badge">{safePreviewIndex + 1} / {images.length}</div>
-                )}
+          {/* ── Photo Tile (Full Width) ── */}
+          <div className="card" style={{ marginBottom: 20, minHeight: 500 }}>
+            <div style={{ display: "flex", gap: 0, height: "100%", minHeight: 500 }}>
+              {/* Large Preview (Left 50%) */}
+              <div style={{ flex: "0 0 50%", display: "flex", flexDirection: "column", borderRight: "1px solid var(--border)", padding: 16 }}>
+                <div
+                  style={{
+                    position: "relative",
+                    flex: 1,
+                    background: "var(--surface-hover)",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    overflow: "hidden",
+                  }}
+                  onClick={() => setShowFullscreenPhoto(true)}
+                >
+                  {previewImage ? (
+                    <img src={previewImage} alt={product.title} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                  ) : (
+                    <div style={{ fontSize: 13, color: "var(--muted)" }}>No image</div>
+                  )}
+                  {/* Edit Button in Upper Right */}
+                  <button
+                    className="btn btn-primary"
+                    style={{
+                      position: "absolute",
+                      top: 12,
+                      right: 12,
+                      fontSize: 12,
+                      padding: "6px 12px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 4,
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditingImageId(images[safePreviewIndex]?.id ?? null);
+                    }}
+                  >
+                    ✏ Edit
+                  </button>
+                  {/* Counter Badge */}
+                  {images.length > 0 && (
+                    <div style={{
+                      position: "absolute",
+                      bottom: 12,
+                      left: 12,
+                      background: "rgba(0,0,0,0.5)",
+                      color: "white",
+                      padding: "4px 8px",
+                      borderRadius: 4,
+                      fontSize: 11,
+                    }}>
+                      {safePreviewIndex + 1} / {images.length}
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <ImageStrip
-                images={images}
-                activeIndex={safePreviewIndex}
-                onHover={setPreviewIndex}
-                onDrop={handleDropReorder}
-                onEdit={(idx) => setEditingImageId(images[idx]?.id ?? null)}
-                savingMedia={savingMedia}
-                onAddPhotos={handleAddPhotos}
-              />
+              {/* Thumbnail Grid (Right 50%) */}
+              <div style={{ flex: "0 0 50%", display: "flex", flexDirection: "column", padding: 16, minWidth: 0, overflowY: "auto" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, alignContent: "start", width: "100%" }}>
+                  {(showAllPhotos ? images : images.slice(0, product.tiktokStatus === "active" ? 9 : 12)).map((image, index) => {
+                    const actualIndex = showAllPhotos ? images.indexOf(image) : index;
+                    const isActive = actualIndex === safePreviewIndex;
+                    const tagLabels = (image.variantTags ?? []).map((t) => `${t.optionName}: ${t.value}`);
+                    const overLimit = Object.entries(PLATFORM_IMAGE_LIMITS)
+                      .filter(([, limit]) => actualIndex >= limit)
+                      .map(([name]) => name);
 
-              {photoPickerValue !== null && (
-                <SelectPhotoModal
-                  images={images}
-                  optionName={photoPickerValue.optionName}
-                  value={photoPickerValue.value}
-                  onClose={() => setPhotoPickerValue(null)}
-                  onSave={(ids) => {
-                    linkPhotosToValue(photoPickerValue.optionName, photoPickerValue.value, ids);
-                    setPhotoPickerValue(null);
-                  }}
-                />
-              )}
+                    return (
+                      <div
+                        key={image.id}
+                        style={{
+                          position: "relative",
+                          width: "100%",
+                          paddingBottom: "100%",
+                          borderRadius: 8,
+                          overflow: "hidden",
+                          cursor: "pointer",
+                          border: isActive ? "3px solid var(--primary)" : "1px solid var(--border)",
+                          opacity: overLimit.length ? 0.6 : 1,
+                          backgroundColor: "var(--surface-hover)",
+                        }}
+                        onMouseEnter={() => setPreviewIndex(actualIndex)}
+                        onDragStart={(e) => {
+                          e.dataTransfer.effectAllowed = "move";
+                          setPreviewIndex(actualIndex);
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = "move";
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          if (safePreviewIndex !== actualIndex) {
+                            handleDropReorder(safePreviewIndex, actualIndex);
+                          }
+                        }}
+                        title={overLimit.length ? `Photo #${actualIndex + 1} won't be posted to ${overLimit.join(" or ")}.` : undefined}
+                        draggable={!savingMedia}
+                      >
+                        <img src={image.url} alt={`Photo ${actualIndex + 1}`} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+                        {/* Handle Icon - top left */}
+                        <div style={{
+                          position: "absolute",
+                          top: 4,
+                          left: 4,
+                          color: "white",
+                          fontSize: 12,
+                          opacity: 0.7,
+                          cursor: "grab",
+                          zIndex: 2,
+                        }} title="Drag to reorder">
+                          ⠿
+                        </div>
+                        {/* Tags - bottom */}
+                        {tagLabels.length > 0 && (
+                          <div style={{
+                            position: "absolute",
+                            bottom: 0,
+                            left: 0,
+                            right: 0,
+                            background: "rgba(0,0,0,0.7)",
+                            color: "white",
+                            fontSize: 9,
+                            padding: "2px 4px",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            zIndex: 2,
+                          }} title={tagLabels.join(", ")}>
+                            {tagLabels[0]}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
 
-              {mediaError && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 4 }}>{mediaError}</div>}
-              {savingMedia && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Saving…</div>}
-              {activeMediaJobs.length > 0 && (
-                <div style={{ fontSize: 12, color: "#ff6b35", marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ display: "inline-block", animation: "spin 1s linear infinite" }}>⏳</span>
-                  {activeMediaJobs.some((j) => j.status === "error")
-                    ? "A photo change failed to save — see the background tasks tray."
-                    : activeMediaJobs.some((j) => j.type === "split")
-                      ? "Splitting image in background…"
-                      : "Uploading photo(s)…"}
+                  {/* Upload Button */}
+                  <label style={{
+                    position: "relative",
+                    width: "100%",
+                    paddingBottom: "100%",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 8,
+                    border: "2px dashed var(--border)",
+                    background: "rgba(255, 255, 255, 0.03)",
+                    cursor: savingMedia ? "not-allowed" : "pointer",
+                    transition: "all 0.15s ease",
+                  }} title="Add photos to listing">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      disabled={savingMedia}
+                      style={{ display: "none" }}
+                      onChange={(e) => {
+                        const files = Array.from(e.target.files ?? []);
+                        if (files.length > 0) handleAddPhotos(files);
+                        e.target.value = "";
+                      }}
+                    />
+                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+                      <span style={{ fontSize: 20, fontWeight: "bold", color: "var(--primary)", lineHeight: 1 }}>+</span>
+                      <span style={{ fontSize: 9, color: "var(--muted)", marginTop: 2, fontWeight: 500, textAlign: "center" }}>Add</span>
+                    </div>
+                  </label>
                 </div>
-              )}
-            </div>
 
-            {/* ── Right: info panel ── */}
-            <div className="product-detail-panel">
+                {/* Toggle Button */}
+                {images.length > (product.tiktokStatus === "active" ? 9 : 12) && (
+                  <button
+                    className="btn btn-ghost"
+                    style={{ marginTop: 12, fontSize: 12, alignSelf: "flex-start" }}
+                    onClick={() => setShowAllPhotos(!showAllPhotos)}
+                  >
+                    {showAllPhotos ? "↑ Show first " + (product.tiktokStatus === "active" ? "9" : "12") : "↓ View all " + images.length + " photos"}
+                  </button>
+                )}
+
+                {/* Media Status Messages */}
+                {mediaError && <div style={{ color: "var(--danger)", fontSize: 12, marginTop: 12 }}>{mediaError}</div>}
+                {savingMedia && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 12 }}>Saving…</div>}
+                {activeMediaJobs.length > 0 && (
+                  <div style={{ fontSize: 12, color: "#ff6b35", marginTop: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ display: "inline-block", animation: "spin 1s linear infinite" }}>⏳</span>
+                    {activeMediaJobs.some((j) => j.status === "error")
+                      ? "A change failed to save"
+                      : activeMediaJobs.some((j) => j.type === "split")
+                        ? "Splitting image…"
+                        : "Uploading photo(s)…"}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {photoPickerValue !== null && (
+            <SelectPhotoModal
+              images={images}
+              optionName={photoPickerValue.optionName}
+              value={photoPickerValue.value}
+              onClose={() => setPhotoPickerValue(null)}
+              onSave={(ids) => {
+                linkPhotosToValue(photoPickerValue.optionName, photoPickerValue.value, ids);
+                setPhotoPickerValue(null);
+              }}
+            />
+          )}
+
+          {/* Fullscreen Photo Modal */}
+          {showFullscreenPhoto && previewImage && (
+            <div
+              className="modal-overlay"
+              style={{ background: "rgba(0,0,0,0.9)" }}
+              onClick={() => setShowFullscreenPhoto(false)}
+            >
+              <div
+                style={{
+                  position: "relative",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: "100%",
+                  height: "100%",
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <img
+                  src={previewImage}
+                  alt={product.title}
+                  style={{ maxWidth: "90%", maxHeight: "90%", objectFit: "contain" }}
+                />
+                <button
+                  className="btn btn-ghost"
+                  style={{
+                    position: "absolute",
+                    top: 20,
+                    right: 20,
+                    color: "white",
+                    fontSize: 24,
+                  }}
+                  onClick={() => setShowFullscreenPhoto(false)}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Title, Description & Shipping (Full Width) */}
+          <div className="product-detail-panel" style={{ display: "contents" }}>
+              <div className="detail-section">
+                <h2>Edit catalog text</h2>
+                <div className="modal-field" style={{ marginBottom: 12 }}>
+                  <label>Title</label>
+                  {aiSuggestedTitle !== null && (
+                    <div style={{ marginBottom: 8, background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(168,85,247,0.08) 100%)", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 8, padding: "10px 12px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent, #6366f1)", letterSpacing: "0.04em" }}>✨ AI SUGGESTED</span>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button className="btn btn-primary" style={{ fontSize: 11, padding: "2px 10px" }} onClick={() => { handleTitleChange(aiSuggestedTitle); setAiSuggestedTitle(null); }}>Accept</button>
+                          <button className="btn btn-ghost" style={{ fontSize: 11, padding: "2px 8px" }} onClick={() => { dismissedAiTitleRef.current = true; setAiSuggestedTitle(null); }}>Discard</button>
+                        </div>
+                      </div>
+                      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary, var(--muted))" }}>{aiSuggestedTitle}</p>
+                    </div>
+                  )}
+                  <input className="input" value={title} onChange={(e) => handleTitleChange(e.target.value)} />
+                </div>
+                <div className="modal-field">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                    <label style={{ margin: 0 }}>Description</label>
+                    <button className="btn btn-ghost" style={{ fontSize: 11, padding: "2px 8px", display: "flex", alignItems: "center", gap: 4 }} onClick={generateAIDescription} disabled={aiDescLoading}>
+                      {aiDescLoading ? <><span style={{ display: "inline-block", width: 10, height: 10, border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />Generating…</> : <>✨ AI Suggest</>}
+                    </button>
+                  </div>
+                  {aiDescSuggestion !== null && (
+                    <div style={{ marginBottom: 10, background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(168,85,247,0.08) 100%)", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 8, padding: "10px 12px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent, #6366f1)", letterSpacing: "0.04em" }}>✨ AI SUGGESTED</span>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button className="btn btn-primary" style={{ fontSize: 11, padding: "2px 10px" }} onClick={() => { handleDescriptionChange(aiDescSuggestion); setAiDescSuggestion(null); }}>Accept</button>
+                          <button className="btn btn-ghost" style={{ fontSize: 11, padding: "2px 8px" }} onClick={() => { dismissedAiDescriptionRef.current = true; setAiDescSuggestion(null); }}>Discard</button>
+                        </div>
+                      </div>
+                      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary, var(--muted))" }}>{aiDescSuggestion}</p>
+                    </div>
+                  )}
+                  {aiDescError && <div style={{ fontSize: 12, color: "#ef4444", marginBottom: 6 }}>{aiDescError}</div>}
+                  <textarea className="input" rows={8} value={description} onChange={(e) => handleDescriptionChange(e.target.value)} />
+                </div>
+                <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 12 }}>
+                  <span style={{ fontSize: 12, color: "var(--muted)" }}>Listings use these as the base catalog fields.</span>
+                </div>
+              </div>
+
               <div className="detail-badges">
                 <span className="chip chip-draft">{badgeLabel(product.source)}</span>
                 <span className={`chip ${product.tiktokStatus === "active" ? "chip-active" : "chip-draft"}`}>
@@ -4576,13 +4879,10 @@ function ProductDetail() {
                   value={listingPrice ?? ""}
                   onChange={(e) => handleListingPriceChange(e.target.value)}
                 />
-                <span style={{ fontSize: 11, color: "var(--muted)" }}>
-                  Variants default to this price unless overridden individually below.
-                </span>
               </div>
 
               <div style={{ marginBottom: 8 }}>
-                <label style={{ fontSize: 11, color: "var(--muted)" }}>Source price (cost)</label>
+                <label style={{ fontSize: 11, color: "var(--muted)" }}>Source price (cost) - optional</label>
                 <DollarInput
                   style={{ maxWidth: 120, marginTop: 2 }}
                   value={sourcePriceInput}
@@ -4597,123 +4897,8 @@ function ProductDetail() {
                 />
               </div>
 
-              <div className="detail-section">
-                <h2>Scraped summary</h2>
-                <div className="detail-grid">
-                  <div><span>Imported</span><strong>{formatDate(product.importedAt)}</strong></div>
-                  <div><span>Images</span><strong>{imageCountLabel}</strong></div>
-                  <div><span>Variants</span><strong>{variants.filter((v) => v.active).length}</strong></div>
-                </div>
-              </div>
-
-              <div className="detail-section">
-                <h2>Edit catalog text</h2>
-                <div className="modal-field" style={{ marginBottom: 12 }}>
-                  <label>Title</label>
-                  {aiSuggestedTitle !== null && (
-                    <div style={{
-                      marginBottom: 8,
-                      background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(168,85,247,0.08) 100%)",
-                      border: "1px solid rgba(99,102,241,0.3)",
-                      borderRadius: 8,
-                      padding: "10px 12px",
-                    }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent, #6366f1)", letterSpacing: "0.04em" }}>✨ AI SUGGESTED</span>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button
-                            className="btn btn-primary"
-                            style={{ fontSize: 11, padding: "2px 10px" }}
-                            onClick={() => {
-                              handleTitleChange(aiSuggestedTitle);
-                              setAiSuggestedTitle(null);
-                            }}
-                          >
-                            Accept
-                          </button>
-                          <button
-                            className="btn btn-ghost"
-                            style={{ fontSize: 11, padding: "2px 8px" }}
-                            onClick={() => { dismissedAiTitleRef.current = true; setAiSuggestedTitle(null); }}
-                          >
-                            Discard
-                          </button>
-                        </div>
-                      </div>
-                      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary, var(--muted))" }}>{aiSuggestedTitle}</p>
-                    </div>
-                  )}
-                  <input className="input" value={title} onChange={(e) => handleTitleChange(e.target.value)} />
-                </div>
-                <div className="modal-field">
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                    <label style={{ margin: 0 }}>Description</label>
-                    <button
-                      className="btn btn-ghost"
-                      style={{ fontSize: 11, padding: "2px 8px", display: "flex", alignItems: "center", gap: 4 }}
-                      onClick={generateAIDescription}
-                      disabled={aiDescLoading}
-                    >
-                      {aiDescLoading ? (
-                        <>
-                          <span style={{ display: "inline-block", width: 10, height: 10, border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
-                          Generating…
-                        </>
-                      ) : (
-                        <>✨ AI Suggest</>
-                      )}
-                    </button>
-                  </div>
-                  {aiDescSuggestion !== null && (
-                    <div style={{
-                      marginBottom: 10,
-                      background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(168,85,247,0.08) 100%)",
-                      border: "1px solid rgba(99,102,241,0.3)",
-                      borderRadius: 8,
-                      padding: "10px 12px",
-                    }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent, #6366f1)", letterSpacing: "0.04em" }}>✨ AI SUGGESTED</span>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button
-                            className="btn btn-primary"
-                            style={{ fontSize: 11, padding: "2px 10px" }}
-                            onClick={() => {
-                              handleDescriptionChange(aiDescSuggestion);
-                              setAiDescSuggestion(null);
-                            }}
-                          >
-                            Accept
-                          </button>
-                          <button
-                            className="btn btn-ghost"
-                            style={{ fontSize: 11, padding: "2px 8px" }}
-                            onClick={() => { dismissedAiDescriptionRef.current = true; setAiDescSuggestion(null); }}
-                          >
-                            Discard
-                          </button>
-                        </div>
-                      </div>
-                      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary, var(--muted))" }}>{aiDescSuggestion}</p>
-                    </div>
-                  )}
-                  {aiDescError && (
-                    <div style={{ fontSize: 12, color: "#ef4444", marginBottom: 6 }}>{aiDescError}</div>
-                  )}
-                  <textarea
-                    className="input"
-                    rows={8}
-                    value={description}
-                    onChange={(e) => handleDescriptionChange(e.target.value)}
-                  />
-                </div>
-                <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 12 }}>
-                  <span style={{ fontSize: 12, color: "var(--muted)" }}>Listings use these as the base catalog fields.</span>
-                </div>
-              </div>
-
               {/* ── Draft Shipping Weight & Package Dimensions Section ── */}
-              <div className="detail-section" style={{ background: "var(--surface-hover)", padding: 14, borderRadius: 8 }}>
+              <div className="detail-section" style={{ background: "var(--surface-hover)", padding: 14, borderRadius: 8, gridColumn: "1 / -1", width: "100%" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                   <h2 style={{ margin: 0, fontSize: 14 }}>Shipping Weight & Package Dimensions</h2>
                   <button className="btn btn-ghost" style={{ fontSize: 11, padding: "2px 6px" }} onClick={applyAIShipping}>
@@ -4780,34 +4965,7 @@ function ProductDetail() {
                 </div>
               </div>
 
-              <div className="detail-section">
-                <h2>Structured Weverse info table</h2>
-                {infoTable.length === 0 ? (
-                  <p className="detail-copy">No structured info table was exposed in the payload.</p>
-                ) : (
-                  <div className="variant-list">
-                    {infoTable.map((row, index) => (
-                      <div key={`${row.label}-${index}`} className="variant-row" style={{ gap: 16 }}>
-                        <div style={{ minWidth: 180 }}><strong>{row.label}</strong></div>
-                        <div style={{ flex: 1 }}><span style={{ whiteSpace: "pre-wrap" }}>{row.value}</span></div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {preorder && (
-                <div className="detail-section">
-                  <h2>Pre-order</h2>
-                  <div className="detail-grid">
-                    <div><span>Enabled</span><strong>{product.preOrder ? "Yes" : "No"}</strong></div>
-                    <div><span>Delivery start</span><strong>{preorder.deliveryStartAt ?? "—"}</strong></div>
-                    <div><span>Delivery end</span><strong>{preorder.deliveryEndAt ?? "—"}</strong></div>
-                  </div>
-                </div>
-              )}
             </div>
-          </div>
 
           {legacyMigrationPending && (
             <div className="legacy-variant-banner">
@@ -4839,12 +4997,97 @@ function ProductDetail() {
             error={variantsError}
           />
 
-          {product.sourceUrl && (
-            <div className="card detail-section">
-              <h2>Source</h2>
-              <a href={product.sourceUrl} target="_blank" rel="noreferrer">{product.sourceUrl}</a>
+          {/* Source Section */}
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div style={{ padding: 20 }}>
+              <h2 style={{ margin: "0 0 16px 0" }}>Source</h2>
+
+              {/* Source URL */}
+              <div className="modal-field" style={{ marginBottom: 16 }}>
+                <label>Source URL</label>
+                {product.sourceUrl ? (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <a href={product.sourceUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: "var(--primary)", wordBreak: "break-all" }}>
+                      {product.sourceUrl}
+                    </a>
+                  </div>
+                ) : (
+                  <input
+                    className="input"
+                    type="text"
+                    placeholder="Add source URL"
+                    value={product.sourceUrl || ""}
+                    onChange={(e) => handleSourceUrlChange(e.target.value)}
+                  />
+                )}
+              </div>
+
+              {/* Expandable Images */}
+              <div style={{ marginBottom: 16, borderTop: "1px solid var(--border)", paddingTop: 16 }}>
+                <button
+                  className="btn btn-ghost"
+                  style={{ fontSize: 13, padding: "6px 0", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}
+                  onClick={() => refreshSourceData("images")}
+                  disabled={!product.sourceUrl || sourceRefreshLoading}
+                >
+                  {expandedSourceSection === "images" ? "▼" : "▶"} Images ({images.length})
+                </button>
+                {expandedSourceSection === "images" && sourceRefreshLoading && (
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>Loading source images…</div>
+                )}
+                {expandedSourceSection === "images" && !sourceRefreshLoading && sourceImages.length > 0 && (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginTop: 12 }}>
+                    {sourceImages.map((img, idx) => (
+                      <img
+                        key={idx}
+                        src={img.url}
+                        alt={`Source image ${idx + 1}`}
+                        style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 8, cursor: "pointer" }}
+                        title={`Click to add to listing`}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Expandable Variants */}
+              <div style={{ marginBottom: 16, borderTop: "1px solid var(--border)", paddingTop: 16 }}>
+                <button
+                  className="btn btn-ghost"
+                  style={{ fontSize: 13, padding: "6px 0", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}
+                  onClick={() => refreshSourceData("variants")}
+                  disabled={!product.sourceUrl || sourceRefreshLoading}
+                >
+                  {expandedSourceSection === "variants" ? "▼" : "▶"} Variants ({variants.filter((v) => v.active).length})
+                </button>
+                {expandedSourceSection === "variants" && sourceRefreshLoading && (
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>Loading source variants…</div>
+                )}
+                {expandedSourceSection === "variants" && !sourceRefreshLoading && sourceVariants.length > 0 && (
+                  <div style={{ fontSize: 12, marginTop: 12, lineHeight: 1.6, fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
+                    {sourceVariants.map((v, idx) => (
+                      <div key={idx}>{v}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Source Info Table */}
+              {infoTable.length > 0 && (
+                <div style={{ borderTop: "1px solid var(--border)", paddingTop: 16 }}>
+                  <h3 style={{ margin: "0 0 12px 0", fontSize: 13 }}>Source Info</h3>
+                  <div className="variant-list">
+                    {infoTable.map((row, index) => (
+                      <div key={`${row.label}-${index}`} className="variant-row" style={{ gap: 16 }}>
+                        <div style={{ minWidth: 180 }}><strong style={{ fontSize: 12 }}>{row.label}</strong></div>
+                        <div style={{ flex: 1 }}><span style={{ fontSize: 12, whiteSpace: "pre-wrap" }}>{row.value}</span></div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
       ) : null}
 
