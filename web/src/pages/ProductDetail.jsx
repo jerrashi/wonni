@@ -3356,43 +3356,39 @@ function ProductDetail() {
   const dismissedAiDescriptionRef = useRef(false);
   const { jobs: mediaJobs, enqueue: enqueueMediaJob } = useMediaJobQueue();
 
-  // ── Unsaved-changes staging ──────────────────────────────────────────────
-  // { fields: {...changed}, updatedAt } | null — mirrors the doc's own
-  // `pendingEdits` field and doubles as the write buffer for markFieldsDirty.
-  const [pendingEdits, setPendingEdits] = useState(null);
-  const isDirty = !!pendingEdits && Object.keys(pendingEdits.fields || {}).length > 0;
+  // ── Autosave for text fields ────────────────────────────────────────────────
+  // Holds this tab's own latest field values, used to ensure a keystroke never
+  // gets clobbered by a delayed server echo. When the debounced write lands,
+  // this ref is cleared so the next server snapshot (confirming the write) is
+  // trusted as the canonical state.
+  const localFieldsRef = useRef(null);
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState("");
-  // Always holds this tab's own latest intended values for whatever it has
-  // staged — the onSnapshot hydration below trusts this over anything the
-  // server echoes back, so a keystroke never gets clobbered by a delayed
-  // round-trip of an earlier debounced write.
-  const localPendingFieldsRef = useRef(null);
+  const [lastSaveTime, setLastSaveTime] = useState(null);
 
-  async function writePendingEditsNow() {
+  async function writeFieldsNow() {
     if (!productId) return;
-    const fields = localPendingFieldsRef.current;
+    const fields = localFieldsRef.current;
     if (!fields || Object.keys(fields).length === 0) return;
     try {
+      setSaving(true);
       await updateDoc(doc(db, "products", productId), {
-        pendingEdits: { fields, updatedAt: serverTimestamp() },
+        ...fields,
+        updatedAt: serverTimestamp(),
       });
+      setLastSaveTime(Date.now());
+      localFieldsRef.current = null;
     } catch (err) {
-      // Non-fatal: the edit is still safe in localPendingFieldsRef/pendingEdits
-      // state and will be retried by the next markFieldsDirty call or by Save.
-      console.warn("Could not sync pending edit:", err);
+      console.warn("Could not autosave field edits:", err);
+    } finally {
+      setSaving(false);
     }
   }
-  const scheduleWritePendingEdits = useDebouncedCallback(writePendingEditsNow, 1000);
+  const scheduleWriteFields = useDebouncedCallback(writeFieldsNow, 1000);
 
-  // Stages a patch of field(s) into the local unsaved-edit buffer (instant,
-  // optimistic) and schedules a debounced sync to Firestore so the edit
-  // survives a crash/reload — see pendingEdits doc-field in the plan.
   function markFieldsDirty(patch) {
-    const fields = { ...(localPendingFieldsRef.current ?? {}), ...patch };
-    localPendingFieldsRef.current = fields;
-    setPendingEdits({ fields, updatedAt: null });
-    scheduleWritePendingEdits();
+    const fields = { ...(localFieldsRef.current ?? {}), ...patch };
+    localFieldsRef.current = fields;
+    scheduleWriteFields();
   }
 
   useEffect(() => {
@@ -3406,16 +3402,11 @@ function ProductDetail() {
         const next = { id: snap.id, ...snap.data() };
         setProduct(next);
 
-        // Merge this tab's own unconfirmed edits (always freshest) over
-        // whatever the server's pendingEdits currently holds (may include
-        // another tab/device's still-unsaved edits) — this is what makes an
-        // interrupted draft reappear, still unsaved, on reload/another device,
-        // without a delayed round-trip of our own write stomping a live keystroke.
-        const remotePendingFields = next.pendingEdits?.fields ?? null;
-        const localPendingFields = localPendingFieldsRef.current;
-        const effectiveFields = { ...(remotePendingFields ?? {}), ...(localPendingFields ?? {}) };
-        localPendingFieldsRef.current = Object.keys(effectiveFields).length ? effectiveFields : null;
-        setPendingEdits(localPendingFieldsRef.current ? { fields: effectiveFields, updatedAt: next.pendingEdits?.updatedAt ?? null } : null);
+        // This tab's own in-flight edits (always freshest) win over the server's
+        // echo. Once the debounced write lands, localFieldsRef is cleared, so the
+        // next snapshot is trusted — no stale edits linger after a refresh.
+        const localFields = localFieldsRef.current;
+        const effectiveFields = localFields ? { ...next, ...localFields } : next;
 
         const nextTitle = effectiveFields.title ?? next.title ?? "";
         const nextDescription = effectiveFields.description ?? next.description ?? "";
@@ -4687,12 +4678,8 @@ function ProductDetail() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {saveError && <span style={{ fontSize: 12, color: "var(--danger)" }}>{saveError}</span>}
-          {isDirty && (
-            <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-              {saving ? "Saving…" : "Save"}
-            </button>
-          )}
+          {saving && <span style={{ fontSize: 12, color: "var(--muted)" }}>Saving…</span>}
+          {!saving && lastSaveTime && <span style={{ fontSize: 12, color: "var(--muted)" }}>Saved</span>}
           {product && (
             <button className="btn btn-primary" onClick={() => setShowPostModal(true)}>
               📤 Post
