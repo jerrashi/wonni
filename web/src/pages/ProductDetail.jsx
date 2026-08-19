@@ -4915,6 +4915,7 @@ function ProductDetail() {
                       display: "flex",
                       alignItems: "center",
                       gap: 4,
+                      zIndex: 10,
                     }}
                     onClick={(e) => {
                       e.stopPropagation();
