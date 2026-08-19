@@ -4,6 +4,8 @@ const admin = require("firebase-admin");
 // Called by the Chrome extension background script via reportMercariStatus()
 // after each listing attempt. Updates the product document's listingStatus,
 // listingUrl, and listingId fields so the web app reflects the live state.
+// Also live-syncs variant Mercari fields to listings/{productId}.variations[]
+// if that doc exists, so wonni-app's sale-tracking pipeline can find them.
 exports.updateMercariListingStatus = onCall(
   { timeoutSeconds: 30 },
   async (request) => {
@@ -49,6 +51,36 @@ exports.updateMercariListingStatus = onCall(
 
         tx.update(ref, { variants, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
       });
+
+      // Live-sync to listings/{productId}.variations[] if that doc exists
+      // (only if "Post to Wonni" has run; don't create listings as a side effect)
+      const listingRef = db.collection("listings").doc(productId);
+      const listingSnap = await listingRef.get();
+      if (listingSnap.exists) {
+        const variations = Array.isArray(listingSnap.data().variations)
+          ? [...listingSnap.data().variations]
+          : [];
+        const varIdx = variations.findIndex((v) => v?.id === variantId);
+        if (varIdx !== -1) {
+          const crossPostStatus = { ...variations[varIdx].crossPostStatus };
+          const crossPostListingIds = { ...variations[varIdx].crossPostListingIds };
+
+          crossPostStatus.mercari = status;
+          if (listingId) crossPostListingIds.mercari = listingId;
+          if (url) crossPostListingIds.mercariUrl = url;
+
+          variations[varIdx] = {
+            ...variations[varIdx],
+            crossPostStatus,
+            crossPostListingIds,
+          };
+
+          await listingRef.update({
+            variations,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+      }
 
       return { ok: true };
     }
