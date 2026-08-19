@@ -4851,10 +4851,10 @@ function ProductDetail() {
       ) : product ? (
         <div className="product-detail">
           {/* ── Photo Tile (Full Width) ── */}
-          <div className="card" style={{ marginBottom: 20, minHeight: 500 }}>
+          <div className="card" style={{ marginBottom: 20 }}>
             <div style={{ display: "flex", gap: 0, height: "100%", minHeight: 500 }}>
               {/* Large Preview (Left 50%) */}
-              <div style={{ flex: "0 0 50%", display: "flex", flexDirection: "column", borderRight: "1px solid var(--border)", padding: 16 }}>
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", borderRight: "1px solid var(--border)", padding: 16 }}>
                 <div
                   style={{
                     position: "relative",
@@ -4942,8 +4942,8 @@ function ProductDetail() {
               </div>
 
               {/* Thumbnail Grid (Right 50%) */}
-              <div style={{ flex: "0 0 50%", display: "flex", flexDirection: "column", padding: 16, minWidth: 0, overflowY: "auto" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, alignContent: "start", width: "100%" }}>
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: 16, minWidth: 0 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, flex: 1, width: "100%", overflowY: "auto", alignContent: "start" }}>
                   {(showAllPhotos ? images : images.slice(0, product.tiktokStatus === "active" ? 9 : 12)).map((image, index) => {
                     const actualIndex = showAllPhotos ? images.indexOf(image) : index;
                     const isActive = actualIndex === safePreviewIndex;
@@ -4957,8 +4957,7 @@ function ProductDetail() {
                         key={image.id}
                         style={{
                           position: "relative",
-                          width: "100%",
-                          paddingBottom: "100%",
+                          aspectRatio: "1 / 1",
                           borderRadius: 8,
                           overflow: "hidden",
                           cursor: "pointer",
@@ -5024,8 +5023,7 @@ function ProductDetail() {
                   {/* Upload Button */}
                   <label style={{
                     position: "relative",
-                    width: "100%",
-                    paddingBottom: "100%",
+                    aspectRatio: "1 / 1",
                     display: "flex",
                     flexDirection: "column",
                     alignItems: "center",
