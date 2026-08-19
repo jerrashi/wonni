@@ -4858,6 +4858,8 @@ function ProductDetail() {
                 <div
                   style={{
                     position: "relative",
+                    flex: 1,
+                    width: "100%",
                     aspectRatio: "1 / 1",
                     background: "#000",
                     borderRadius: 8,
