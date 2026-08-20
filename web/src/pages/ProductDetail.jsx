@@ -2685,40 +2685,42 @@ function VariantsEditor({
           onChange={(e) => onVariantFieldChange(v.id, "quantity", Number(e.target.value) || 0)}
           onBlur={onCommit}
         />
-        {v.mercariUrl ? (
-          <a
-            href={v.mercariUrl}
-            target="_blank"
-            rel="noreferrer"
-            style={{ fontSize: 12, color: "var(--primary)", textDecoration: "underline", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-            title={v.mercariUrl}
-            onClick={(e) => {
-              if (e.metaKey || e.ctrlKey) return; // Allow cmd/ctrl+click to open in new tab
-              const url = prompt("Edit Mercari URL or item ID:", v.mercariUrl);
-              if (url !== null) {
-                e.preventDefault();
-                onVariantFieldChange(v.id, "mercariUrl", url || null);
-                onCommit();
-              }
-            }}
-          >
-            🔗 Live
-          </a>
-        ) : (
-          <button
-            className="btn btn-ghost"
-            style={{ fontSize: 11, padding: "2px 6px" }}
-            onClick={() => {
-              const url = prompt("Paste Mercari URL or item ID:");
-              if (url) {
-                onVariantFieldChange(v.id, "mercariUrl", url);
-                onCommit();
-              }
-            }}
-          >
-            + Add
-          </button>
-        )}
+        <span style={{ display: "flex", alignItems: "center", minWidth: 120 }}>
+          {v.mercariUrl ? (
+            <a
+              href={v.mercariUrl}
+              target="_blank"
+              rel="noreferrer"
+              style={{ fontSize: 12, color: "var(--primary)", textDecoration: "underline", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}
+              title={v.mercariUrl}
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey) return;
+                const url = prompt("Edit Mercari URL or item ID:", v.mercariUrl);
+                if (url !== null) {
+                  e.preventDefault();
+                  onVariantFieldChange(v.id, "mercariUrl", url || null);
+                  onCommit();
+                }
+              }}
+            >
+              🔗 Live
+            </a>
+          ) : (
+            <button
+              className="btn btn-ghost"
+              style={{ fontSize: 11, padding: "2px 6px", whiteSpace: "nowrap" }}
+              onClick={() => {
+                const url = prompt("Paste Mercari URL or item ID:");
+                if (url) {
+                  onVariantFieldChange(v.id, "mercariUrl", url);
+                  onCommit();
+                }
+              }}
+            >
+              + Add
+            </button>
+          )}
+        </span>
       </div>
     );
   }
