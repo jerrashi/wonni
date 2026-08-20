@@ -2685,49 +2685,40 @@ function VariantsEditor({
           onChange={(e) => onVariantFieldChange(v.id, "quantity", Number(e.target.value) || 0)}
           onBlur={onCommit}
         />
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          {v.mercariUrl ? (
-            <>
-              <a
-                href={v.mercariUrl}
-                target="_blank"
-                rel="noreferrer"
-                style={{ fontSize: 12, color: "var(--primary)", textDecoration: "underline", overflow: "hidden", textOverflow: "ellipsis", flex: 1, minWidth: 0 }}
-                title={v.mercariUrl}
-              >
-                🔗 View
-              </a>
-              <button
-                className="btn btn-ghost"
-                style={{ fontSize: 10, padding: "2px 6px", flexShrink: 0 }}
-                onClick={() => {
-                  const url = prompt("Edit Mercari URL or item ID:", v.mercariUrl);
-                  if (url !== null) {
-                    onVariantFieldChange(v.id, "mercariUrl", url || null);
-                    onCommit();
-                  }
-                }}
-                title="Edit URL"
-              >
-                ✏️
-              </button>
-            </>
-          ) : (
-            <button
-              className="btn btn-ghost"
-              style={{ fontSize: 11, padding: "4px 8px" }}
-              onClick={() => {
-                const url = prompt("Paste Mercari URL or item ID:");
-                if (url) {
-                  onVariantFieldChange(v.id, "mercariUrl", url);
-                  onCommit();
-                }
-              }}
-            >
-              + Add URL
-            </button>
-          )}
-        </div>
+        {v.mercariUrl ? (
+          <a
+            href={v.mercariUrl}
+            target="_blank"
+            rel="noreferrer"
+            style={{ fontSize: 12, color: "var(--primary)", textDecoration: "underline", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            title={v.mercariUrl}
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey) return; // Allow cmd/ctrl+click to open in new tab
+              const url = prompt("Edit Mercari URL or item ID:", v.mercariUrl);
+              if (url !== null) {
+                e.preventDefault();
+                onVariantFieldChange(v.id, "mercariUrl", url || null);
+                onCommit();
+              }
+            }}
+          >
+            🔗 Live
+          </a>
+        ) : (
+          <button
+            className="btn btn-ghost"
+            style={{ fontSize: 11, padding: "2px 6px" }}
+            onClick={() => {
+              const url = prompt("Paste Mercari URL or item ID:");
+              if (url) {
+                onVariantFieldChange(v.id, "mercariUrl", url);
+                onCommit();
+              }
+            }}
+          >
+            + Add
+          </button>
+        )}
       </div>
     );
   }
@@ -5177,9 +5168,11 @@ function ProductDetail() {
               </div>
 
               <div className="detail-badges">
-                <span className={`chip ${product.tiktokStatus === "active" ? "chip-active" : "chip-draft"}`}>
-                  TikTok: {product.tiktokStatus ?? "draft"}
-                </span>
+                {product.tiktokStatus === "active" && (
+                  <span className="chip chip-active">
+                    TikTok: Active
+                  </span>
+                )}
                 {product?.hasVariants ? (
                   mercariPostedVariants.length > 0 || variants.some((v) => v.mercariError) ? (
                     <button
@@ -5198,7 +5191,6 @@ function ProductDetail() {
                     </span>
                   ) : null
                 )}
-                {product.saleStatus && <span className="chip chip-pending">{product.saleStatus}</span>}
               </div>
 
               {/* Mercari URL field for non-variant products */}
