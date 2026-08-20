@@ -2412,11 +2412,12 @@ function VariantMercariTile({
     }
   }
 
+  const isOutOfStock = (variant.quantity ?? 0) === 0;
   return (
-    <div style={{ width: 150, border: "1px solid var(--border)", borderRadius: 8, padding: 8, fontSize: 12 }}>
+    <div style={{ width: 150, border: isOutOfStock ? "2px solid var(--warning)" : "1px solid var(--border)", borderRadius: 8, padding: 8, fontSize: 12, opacity: isOutOfStock ? 0.7 : 1 }}>
       <button
         onClick={() => setExpanded((v) => !v)}
-        style={{ display: "block", width: "100%", height: 90, border: "none", padding: 0, borderRadius: 6, overflow: "hidden", background: "var(--surface-hover)", cursor: "pointer" }}
+        style={{ display: "block", width: "100%", height: 90, border: "none", padding: 0, borderRadius: 6, overflow: "hidden", background: isOutOfStock ? "var(--surface-hover)" : "var(--surface-hover)", cursor: "pointer", opacity: isOutOfStock ? 0.8 : 1 }}
         title="Click to view/edit photos"
       >
         {thumbnail ? (
@@ -2425,7 +2426,10 @@ function VariantMercariTile({
           <span style={{ color: "var(--muted)" }}>No photo</span>
         )}
       </button>
-      <div style={{ marginTop: 6, fontWeight: 600 }}>{label}</div>
+      <div style={{ marginTop: 6, fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "start", gap: 4 }}>
+        <span>{label}</span>
+        {isOutOfStock && <span style={{ fontSize: 10, color: "var(--warning)", whiteSpace: "nowrap" }}>⚠️ OOS</span>}
+      </div>
       <div style={{ color: "var(--muted)", fontSize: 11, marginBottom: 6 }}>{title}</div>
 
       {status === "active" ? (
@@ -2472,7 +2476,9 @@ function VariantMercariTile({
       {(status === "active" || showLinkModal) && (
         <div style={{ marginTop: 8, borderTop: "1px solid var(--border)", paddingTop: 6 }}>
           <div style={{ fontSize: 11 }}>
-            <label style={{ fontSize: 10, color: "var(--muted)" }}>Mercari URL</label>
+            <label style={{ fontSize: 10, color: "var(--muted)", display: "flex", alignItems: "center", gap: 4 }}>
+              ✏️ Mercari URL
+            </label>
             <input
               type="text"
               className="input"
@@ -3119,6 +3125,7 @@ function MercariModal({
   }
 
   if (showVariantFlow) {
+    const allVariants = variants;
     const activeVariants = variants.filter((v) => v.active);
     return (
       <div className="modal-overlay" onClick={onClose}>
@@ -3136,7 +3143,7 @@ function MercariModal({
                 tokens={mercariTitleTokens}
                 gaps={mercariTitleGaps}
                 photoTemplate={mercariPhotoTemplate}
-                previewVariant={activeVariants[0] ?? null}
+                previewVariant={activeVariants[0] ?? allVariants[0] ?? null}
                 onTokensChange={onTokensChange}
                 onGapsChange={onGapsChange}
                 onPhotoTemplateChange={onPhotoTemplateChange}
@@ -3150,7 +3157,7 @@ function MercariModal({
               </button>
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-              {mercariTitleTokens && mercariPhotoTemplate && activeVariants.map((v) => (
+              {mercariTitleTokens && mercariPhotoTemplate && allVariants.map((v) => (
                 <VariantMercariTile
                   key={v.id}
                   variant={v}
@@ -3363,6 +3370,7 @@ function ProductDetail() {
   const dismissedAiTitleRef = useRef(false);
   const dismissedAiPriceRef = useRef(false);
   const dismissedAiDescriptionRef = useRef(false);
+  const variantsSectionRef = useRef(null);
   const { jobs: mediaJobs, enqueue: enqueueMediaJob } = useMediaJobQueue();
 
   // ── Autosave for text fields ────────────────────────────────────────────────
@@ -4642,7 +4650,8 @@ function ProductDetail() {
   async function handleDeleteProduct() {
     const liveOn = [
       product?.tiktokStatus === "active" ? "TikTok Shop" : null,
-      product?.ebayStatus === "active" ? "eBay" : null,
+      (product?.ebayStatus === "active" || product?.crossPostStatus?.ebay === "active" || product?.crossPostStatus?.ebay === "posted") ? "eBay" : null,
+      (product?.etsyStatus === "active" || product?.crossPostStatus?.etsy === "active" || product?.crossPostStatus?.etsy === "posted") ? "Etsy" : null,
     ].filter(Boolean);
     if (liveOn.length) {
       window.alert(
@@ -4659,6 +4668,10 @@ function ProductDetail() {
       setDeletingProduct(false);
       setError(e.message ?? "Delete failed.");
     }
+  }
+
+  function scrollToVariants() {
+    variantsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   return (
@@ -4691,12 +4704,6 @@ function ProductDetail() {
               title="Sync title, description, price, and photos to Mercari listing"
             >
               {mercariStatus === "updating" ? "⏳ Syncing…" : "🔄 Sync"}
-            </button>
-          )}
-          {/* Mercari modal link - shown when product has variants */}
-          {product?.hasVariants && (
-            <button className="btn btn-ghost" onClick={() => setShowMercariModal(true)}>
-              Mercari listings ({mercariPostedVariants.length}/{mercariInStockVariants.length})
             </button>
           )}
           {/* Overflow menu with Delete and Check Mercari for sold items */}
@@ -5126,20 +5133,32 @@ function ProductDetail() {
               </div>
 
               <div className="detail-badges">
-                <span className="chip chip-draft">{badgeLabel(product.source)}</span>
                 <span className={`chip ${product.tiktokStatus === "active" ? "chip-active" : "chip-draft"}`}>
                   TikTok: {product.tiktokStatus ?? "draft"}
                 </span>
-                <span className={`chip ${mercariStatus === "active" ? "chip-active" : (mercariStatus === "posting" || mercariStatus === "updating") ? "chip-pending" : "chip-draft"}`}>
-                  Mercari: {mercariStatus}
-                </span>
+                {product?.hasVariants ? (
+                  <button
+                    className={`chip ${mercariPostedVariants.length > 0 ? "chip-active" : "chip-draft"}`}
+                    style={{ border: "none", background: "none", cursor: "pointer", padding: 0 }}
+                    onClick={scrollToVariants}
+                    title="Click to view variants"
+                  >
+                    Mercari: {mercariPostedVariants.length > 0 ? `${mercariPostedVariants.length}/${mercariInStockVariants.length} Active` : "None"}
+                  </button>
+                ) : (
+                  <span className={`chip ${mercariStatus === "active" ? "chip-active" : (mercariStatus === "posting" || mercariStatus === "updating") ? "chip-pending" : "chip-draft"}`}>
+                    Mercari: {mercariStatus}
+                  </span>
+                )}
                 {product.saleStatus && <span className="chip chip-pending">{product.saleStatus}</span>}
               </div>
 
               {/* Mercari URL field for non-variant products */}
               {!product?.hasVariants && mercariStatus && (
                 <div className="modal-field" style={{ marginTop: 12, marginBottom: 8, maxWidth: 300 }}>
-                  <label style={{ fontSize: 12 }}>Mercari listing URL</label>
+                  <div style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
+                    <span>✏️ Mercari listing URL</span>
+                  </div>
                   <input
                     className="input"
                     type="text"
@@ -5307,29 +5326,34 @@ function ProductDetail() {
             </div>
           )}
 
-          <VariantsEditor
-            options={options}
-            variants={variants}
-            images={images}
-            listingPrice={listingPrice}
-            onOptionsChange={handleOptionsChange}
-            onVariantFieldChange={updateVariantField}
-            onBulkFieldChange={bulkSetFieldForPrimaryValue}
-            onBulkSetActive={bulkSetActive}
-            onMergeUnmatched={mergeUnmatchedInto}
-            onDiscardUnmatched={discardUnmatched}
-            onReactivateVariant={reactivateVariant}
-            onDeleteVariantPermanently={deleteVariantPermanently}
-            onOpenPhotoPicker={requestPhotoPicker}
-            onCommit={commitVariantsNow}
-            saving={savingVariants}
-            error={variantsError}
-          />
+          <div ref={variantsSectionRef}>
+            <VariantsEditor
+              options={options}
+              variants={variants}
+              images={images}
+              listingPrice={listingPrice}
+              onOptionsChange={handleOptionsChange}
+              onVariantFieldChange={updateVariantField}
+              onBulkFieldChange={bulkSetFieldForPrimaryValue}
+              onBulkSetActive={bulkSetActive}
+              onMergeUnmatched={mergeUnmatchedInto}
+              onDiscardUnmatched={discardUnmatched}
+              onReactivateVariant={reactivateVariant}
+              onDeleteVariantPermanently={deleteVariantPermanently}
+              onOpenPhotoPicker={requestPhotoPicker}
+              onCommit={commitVariantsNow}
+              saving={savingVariants}
+              error={variantsError}
+            />
+          </div>
 
           {/* Source Section */}
           <div className="card" style={{ marginBottom: 20 }}>
             <div style={{ padding: 20 }}>
-              <h2 style={{ margin: "0 0 16px 0" }}>Source</h2>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <h2 style={{ margin: 0 }}>Source</h2>
+                <span className="chip chip-draft">{badgeLabel(product.source)}</span>
+              </div>
 
               {/* Source URL */}
               <div className="modal-field" style={{ marginBottom: 16 }}>
