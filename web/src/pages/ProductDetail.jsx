@@ -2685,6 +2685,49 @@ function VariantsEditor({
           onChange={(e) => onVariantFieldChange(v.id, "quantity", Number(e.target.value) || 0)}
           onBlur={onCommit}
         />
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          {v.mercariUrl ? (
+            <>
+              <a
+                href={v.mercariUrl}
+                target="_blank"
+                rel="noreferrer"
+                style={{ fontSize: 12, color: "var(--primary)", textDecoration: "underline", overflow: "hidden", textOverflow: "ellipsis", flex: 1, minWidth: 0 }}
+                title={v.mercariUrl}
+              >
+                🔗 View
+              </a>
+              <button
+                className="btn btn-ghost"
+                style={{ fontSize: 10, padding: "2px 6px", flexShrink: 0 }}
+                onClick={() => {
+                  const url = prompt("Edit Mercari URL or item ID:", v.mercariUrl);
+                  if (url !== null) {
+                    onVariantFieldChange(v.id, "mercariUrl", url || null);
+                    onCommit();
+                  }
+                }}
+                title="Edit URL"
+              >
+                ✏️
+              </button>
+            </>
+          ) : (
+            <button
+              className="btn btn-ghost"
+              style={{ fontSize: 11, padding: "4px 8px" }}
+              onClick={() => {
+                const url = prompt("Paste Mercari URL or item ID:");
+                if (url) {
+                  onVariantFieldChange(v.id, "mercariUrl", url);
+                  onCommit();
+                }
+              }}
+            >
+              + Add URL
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -2819,6 +2862,7 @@ function VariantsEditor({
                 <span>SKU</span>
                 <span>Price</span>
                 <span>Qty</span>
+                <span>Mercari URL</span>
               </div>
               {activeVariants.map(renderRow)}
             </>
@@ -5137,18 +5181,22 @@ function ProductDetail() {
                   TikTok: {product.tiktokStatus ?? "draft"}
                 </span>
                 {product?.hasVariants ? (
-                  <button
-                    className={`chip ${mercariPostedVariants.length > 0 ? "chip-active" : "chip-draft"}`}
-                    style={{ border: "none", background: "none", cursor: "pointer", padding: 0 }}
-                    onClick={scrollToVariants}
-                    title="Click to view variants"
-                  >
-                    Mercari: {mercariPostedVariants.length > 0 ? `${mercariPostedVariants.length}/${mercariInStockVariants.length} Active` : "None"}
-                  </button>
+                  mercariPostedVariants.length > 0 || variants.some((v) => v.mercariError) ? (
+                    <button
+                      className={`chip ${variants.some((v) => v.mercariError) ? "chip-pending" : "chip-active"}`}
+                      style={{ border: "none", background: "none", cursor: "pointer", padding: 0 }}
+                      onClick={scrollToVariants}
+                      title="Click to view variants"
+                    >
+                      {variants.some((v) => v.mercariError) ? "⚠️ Mercari" : `Mercari: ${mercariPostedVariants.length}/${mercariInStockVariants.length} Active`}
+                    </button>
+                  ) : null
                 ) : (
-                  <span className={`chip ${mercariStatus === "active" ? "chip-active" : (mercariStatus === "posting" || mercariStatus === "updating") ? "chip-pending" : "chip-draft"}`}>
-                    Mercari: {mercariStatus}
-                  </span>
+                  mercariStatus === "active" || mercariStatus === "failed" || mercariError ? (
+                    <span className={`chip ${mercariStatus === "failed" || mercariError ? "chip-pending" : mercariStatus === "active" ? "chip-active" : (mercariStatus === "posting" || mercariStatus === "updating") ? "chip-pending" : "chip-draft"}`}>
+                      {mercariStatus === "failed" || mercariError ? "⚠️ Mercari" : `Mercari: ${mercariStatus}`}
+                    </span>
+                  ) : null
                 )}
                 {product.saleStatus && <span className="chip chip-pending">{product.saleStatus}</span>}
               </div>
@@ -5350,9 +5398,16 @@ function ProductDetail() {
           {/* Source Section */}
           <div className="card" style={{ marginBottom: 20 }}>
             <div style={{ padding: 20 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, gap: 8, flexWrap: "wrap" }}>
                 <h2 style={{ margin: 0 }}>Source</h2>
-                <span className="chip chip-draft">{badgeLabel(product.source)}</span>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <span className="chip chip-draft">{badgeLabel(product.source)}</span>
+                  {variants.some((v) => !v.active) && (
+                    <span className="chip chip-pending" title={`${variants.filter((v) => !v.active).length} out of stock`}>
+                      📦 {variants.filter((v) => !v.active).length}/{variants.length} OOS
+                    </span>
+                  )}
+                </div>
               </div>
 
               {/* Source URL */}
