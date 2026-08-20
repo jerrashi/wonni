@@ -2849,12 +2849,12 @@ function VariantsEditor({
           ) : (
             <>
               <div className="variants-table-row variants-table-header variants-table-row-checkbox">
-                <span />
-                <span>Variant</span>
-                <span>SKU</span>
-                <span>Price</span>
-                <span>Qty</span>
-                <span>Mercari URL</span>
+                <span style={{ flex: "0 0 40px" }} />
+                <span style={{ flex: "1 1 120px" }}>Variant</span>
+                <span style={{ flex: "1 1 110px" }}>SKU</span>
+                <span style={{ flex: "1 1 90px" }}>Price</span>
+                <span style={{ flex: "1 1 60px" }}>Qty</span>
+                <span style={{ flex: "1 1 100px" }}>Mercari</span>
               </div>
               {activeVariants.map(renderRow)}
             </>
