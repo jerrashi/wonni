@@ -24,34 +24,37 @@ const secretManager = new SecretManagerServiceClient();
 
 /**
  * Fetch eBay credentials from Google Cloud Secret Manager.
- * credentialSet: "ios" (wonni-app's own eBay) or "web" (dropship's eBay)
+ * Both iOS and web use the same eBay app credentials.
  */
-async function getEbayCredentials(credentialSet) {
-  const mapping = {
-    ios: { clientId: "EBAY_CLIENT_ID", certId: "EBAY_CERT_ID" },
-    web: { clientId: "DROPSHIP_EBAY_CLIENT_ID", certId: "DROPSHIP_EBAY_CLIENT_SECRET" }
-  };
-
-  if (!mapping[credentialSet]) {
+async function getEbayCredentials(credentialSet = "ios") {
+  if (!["ios", "web"].includes(credentialSet)) {
     throw new Error(`Unknown credential set: ${credentialSet}`);
   }
 
-  const { clientId: clientIdSecret, certId: certIdSecret } = mapping[credentialSet];
-
   try {
     const [clientIdResp] = await secretManager.accessSecretVersion({
-      name: `projects/${PROJECT_ID}/secrets/${clientIdSecret}/versions/latest`,
+      name: `projects/${PROJECT_ID}/secrets/EBAY_CLIENT_ID/versions/latest`,
     });
-    const [certIdResp] = await secretManager.accessSecretVersion({
-      name: `projects/${PROJECT_ID}/secrets/${certIdSecret}/versions/latest`,
-    });
+
+    let certId;
+    try {
+      const [certIdResp] = await secretManager.accessSecretVersion({
+        name: `projects/${PROJECT_ID}/secrets/EBAY_CERT_ID/versions/latest`,
+      });
+      certId = certIdResp.payload.data.toString();
+    } catch {
+      const [secretResp] = await secretManager.accessSecretVersion({
+        name: `projects/${PROJECT_ID}/secrets/EBAY_CLIENT_SECRET/versions/latest`,
+      });
+      certId = secretResp.payload.data.toString();
+    }
 
     return {
       clientId: clientIdResp.payload.data.toString(),
-      certId: certIdResp.payload.data.toString(),
+      certId: certId,
     };
   } catch (err) {
-    throw new Error(`Failed to fetch eBay credentials (${credentialSet}): ${err.message}`);
+    throw new Error(`Failed to fetch eBay credentials: ${err.message}`);
   }
 }
 

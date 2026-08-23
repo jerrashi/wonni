@@ -20,34 +20,37 @@ const secretManager = new SecretManagerServiceClient();
 
 /**
  * Fetch eBay credentials from Google Cloud Secret Manager.
- * credentialSet: "ios" (wonni-app's own eBay) or "web" (dropship's eBay)
+ * Both iOS and web use the same eBay app credentials.
  */
-async function getEbayCredentials(credentialSet) {
-  const mapping = {
-    ios: { clientId: "EBAY_CLIENT_ID", certId: "EBAY_CERT_ID" },
-    web: { clientId: "DROPSHIP_EBAY_CLIENT_ID", certId: "DROPSHIP_EBAY_CLIENT_SECRET" }
-  };
-
-  if (!mapping[credentialSet]) {
+async function getEbayCredentials(credentialSet = "ios") {
+  if (!["ios", "web"].includes(credentialSet)) {
     throw new Error(`Unknown credential set: ${credentialSet}`);
   }
 
-  const { clientId: clientIdSecret, certId: certIdSecret } = mapping[credentialSet];
-
   try {
     const [clientIdResp] = await secretManager.accessSecretVersion({
-      name: `projects/${PROJECT_ID}/secrets/${clientIdSecret}/versions/latest`,
+      name: `projects/${PROJECT_ID}/secrets/EBAY_CLIENT_ID/versions/latest`,
     });
-    const [certIdResp] = await secretManager.accessSecretVersion({
-      name: `projects/${PROJECT_ID}/secrets/${certIdSecret}/versions/latest`,
-    });
+
+    let certId;
+    try {
+      const [certIdResp] = await secretManager.accessSecretVersion({
+        name: `projects/${PROJECT_ID}/secrets/EBAY_CERT_ID/versions/latest`,
+      });
+      certId = certIdResp.payload.data.toString();
+    } catch {
+      const [secretResp] = await secretManager.accessSecretVersion({
+        name: `projects/${PROJECT_ID}/secrets/EBAY_CLIENT_SECRET/versions/latest`,
+      });
+      certId = secretResp.payload.data.toString();
+    }
 
     return {
       clientId: clientIdResp.payload.data.toString(),
-      certId: certIdResp.payload.data.toString(),
+      certId: certId,
     };
   } catch (err) {
-    throw new Error(`Failed to fetch eBay credentials (${credentialSet}): ${err.message}`);
+    throw new Error(`Failed to fetch eBay credentials: ${err.message}`);
   }
 }
 
@@ -1006,7 +1009,8 @@ exports.ebayCreateListing = onCall(
       throw new HttpsError("unauthenticated", "You must be signed in.");
     }
     const uid = request.auth.uid;
-    const { listingId, credentialSet = "ios" } = request.data;
+    const { listingId: rawListingId, productId, credentialSet = "ios" } = request.data;
+    const listingId = rawListingId || productId;
     if (!listingId) {
       throw new HttpsError("invalid-argument", "listingId is required.");
     }
@@ -1073,8 +1077,9 @@ exports.ebayCreateListing = onCall(
       const bucket = admin.storage().bucket();
       for (const path of photoPaths) {
         try {
-          const encodedPath = encodeURIComponent(path);
-          const url = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodedPath}?alt=media`;
+          const url = (path.startsWith("http://") || path.startsWith("https://"))
+            ? path
+            : `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(path)}?alt=media`;
           imageUrls.push(url);
         } catch (err) {
           console.error(`[ebayCreateListing] Error constructing URL for path ${path}:`, err);
@@ -1406,6 +1411,23 @@ exports.ebayCreateListing = onCall(
           ebay: ebayListingId
         }
       }, { merge: true });
+
+      // Dual-write to products collection if doc exists (for dropship/web parity)
+      try {
+        const productRef = db.collection("products").doc(listingId);
+        const productSnap = await productRef.get();
+        if (productSnap.exists) {
+          await productRef.update({
+            ebayStatus: "active",
+            "crossPostStatus.ebay": "active",
+            "crossPostListingIds.ebay": ebayListingId,
+            ebayListingId: ebayListingId,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+      } catch (pErr) {
+        console.warn(`[ebayCreateListing] Could not update products doc for ${listingId}:`, pErr.message);
+      }
 
       return { success: true, listingId: ebayListingId };
 

@@ -296,7 +296,9 @@ async function uploadListingImages(shopId, listingId, photoPaths, accessToken, c
   let rank = 1;
   for (const path of photoPaths.slice(0, 10)) {
     try {
-      const url = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(path)}?alt=media`;
+      const url = (path.startsWith("http://") || path.startsWith("https://"))
+        ? path
+        : `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(path)}?alt=media`;
       const buf = await downloadBuffer(url);
       await uploadImageToEtsy(shopId, listingId, rank, buf, accessToken, clientId);
       rank++;
@@ -346,7 +348,8 @@ exports.etsyCreateListing = onCall(
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Sign in required.");
     const uid = request.auth.uid;
-    const { listingId, credentialSet = "ios", taxonomyId, shippingProfileId, returnPolicyId } = request.data;
+    const { listingId: rawListingId, productId, credentialSet = "ios", taxonomyId, shippingProfileId, returnPolicyId } = request.data || {};
+    const listingId = rawListingId || productId;
     if (!listingId) throw new HttpsError("invalid-argument", "listingId is required.");
 
     const db = admin.firestore();
@@ -448,6 +451,23 @@ exports.etsyCreateListing = onCall(
         crossPostStatus: { etsy: "posted" },
         crossPostListingIds: { etsy: etsyListingId },
       }, { merge: true });
+
+      // Dual-write to products collection if doc exists (for dropship/web parity)
+      try {
+        const productRef = db.collection("products").doc(listingId);
+        const productSnap = await productRef.get();
+        if (productSnap.exists) {
+          await productRef.update({
+            etsyStatus: "active",
+            "crossPostStatus.etsy": "active",
+            "crossPostListingIds.etsy": etsyListingId,
+            etsyListingId: etsyListingId,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+      } catch (pErr) {
+        console.warn(`[etsyCreateListing] Could not update products doc for ${listingId}:`, pErr.message);
+      }
 
       return { success: true, listingId: etsyListingId };
     } catch (err) {
