@@ -124,10 +124,12 @@ exports.getEtsyShippingProfiles = getEtsyShippingProfiles;
 exports.getEtsyReturnPolicies = getEtsyReturnPolicies;
 
 // eBay Listing Management
-const { ebayCreateListing, ebayUpdateListing, ebayDeleteListing } = require("./ebay_listing");
+const { ebayCreateListing, ebayUpdateListing, ebayDeleteListing, ebayPullSync, ebayImportPullSync } = require("./ebay_listing");
 exports.ebayCreateListing = ebayCreateListing;
 exports.ebayUpdateListing = ebayUpdateListing;
 exports.ebayDeleteListing = ebayDeleteListing;
+exports.ebayPullSync = ebayPullSync;
+exports.ebayImportPullSync = ebayImportPullSync;
 
 // Sale cascade — decrements quantity across all platforms when a sale occurs
 const { decrementAndCascade, restockAndCascade, markSoldOutAndCascade } = require("./sale_sync");
