@@ -279,30 +279,134 @@ async function getCategoryAspects(accessToken, categoryId) {
   }
 }
 
-/**
- * Picks a value for one aspect the same way buildProductAspects does: a valid SELECTION_ONLY
- * value from eBay's allowed list (a free string would be rejected), or a neutral placeholder for
- * FREE_TEXT / unrecognized aspects. Best-effort by design — the goal is "the listing posts."
- */
-function fillValueForAspect(name, categoryAspects, brand) {
-  const meta = categoryAspects.find(a => a.name === name);
-  if (meta && meta.mode === "SELECTION_ONLY" && meta.values.length > 0) {
-    return [meta.values[0]];
+// Known brands / artist groups for scraping from listing titles
+const KNOWN_BRANDS = [
+  "BTS", "BT21", "BLACKPINK", "NewJeans", "TWICE", "Stray Kids", "SEVENTEEN",
+  "TXT", "TOMORROW X TOGETHER", "ENHYPEN", "LE SSERAFIM", "IVE", "aespa",
+  "NCT", "NCT 127", "NCT DREAM", "ATEEZ", "ITZY", "(G)I-DLE", "Red Velvet",
+  "EXO", "SHINee", "IU", "ZEROBASEONE", "BOYNEXTDOOR", "RIIZE", "TWS",
+  "Sanrio", "Hello Kitty", "Kuromi", "Cinnamoroll", "My Melody", "Pochacco",
+  "Pokemon", "Nintendo", "Disney", "Line Friends", "Kakao Friends", "Pop Mart",
+  "Nike", "Adidas", "Jordan", "Supreme", "Stussy", "Fear of God", "Essentials"
+];
+
+function resolveBrand(product = {}, listing = {}) {
+  // 1. User explicit input
+  if (listing.brand && listing.brand.trim() && listing.brand.trim() !== "Generic") return listing.brand.trim();
+  if (product.brand && product.brand.trim() && product.brand.trim() !== "Generic") return product.brand.trim();
+
+  // 2. Weverse artist name
+  if (product.artistName && product.artistName.trim()) return product.artistName.trim();
+
+  // 3. Scrape title for known brand/artist
+  const title = (listing.customTitle || product.title || "");
+  for (const brand of KNOWN_BRANDS) {
+    const regex = new RegExp(`\\b${brand.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b`, 'i');
+    if (regex.test(title)) {
+      return brand;
+    }
   }
-  return [brand && brand !== "Generic" ? brand : "Unbranded"];
+
+  // 4. AI suggested brand
+  if (product.aiSuggestedBrand && product.aiSuggestedBrand.trim()) {
+    return product.aiSuggestedBrand.trim();
+  }
+
+  // 5. Default
+  return "Unbranded";
+}
+
+function findMatchingAspectValue(aspectMeta, title = "", options = {}) {
+  const titleLower = title.toLowerCase();
+
+  // 1. Check option values
+  for (const [optName, optVal] of Object.entries(options)) {
+    if (typeof optVal === "string" && optVal.trim()) {
+      if (optName.toLowerCase() === aspectMeta.name.toLowerCase()) {
+        return optVal.trim();
+      }
+      const match = (aspectMeta.values || []).find(v => v.toLowerCase() === optVal.toLowerCase());
+      if (match) return match;
+    }
+  }
+
+  // 2. Standard category-specific helpers
+  const aspectLower = aspectMeta.name.toLowerCase();
+  if (aspectLower === "size type") {
+    return "Regular";
+  }
+  if (aspectLower === "department") {
+    if (/\b(women|women's|womens|ladies)\b/i.test(title)) return "Women";
+    if (/\b(men|men's|mens)\b/i.test(title)) return "Men";
+    if (/\b(kids|youth|child)\b/i.test(title)) return "Kids";
+    return "Unisex Adults";
+  }
+  if (aspectLower === "size") {
+    const sizeRegex = /\b(XS|S|M|L|XL|2XL|3XL|Small|Medium|Large|X-Large|XX-Large)\b/i;
+    const match = title.match(sizeRegex);
+    if (match) {
+      const s = match[1].toUpperCase();
+      if (s === "SMALL") return "S";
+      if (s === "MEDIUM") return "M";
+      if (s === "LARGE") return "L";
+      if (s === "X-LARGE") return "XL";
+      if (s === "XX-LARGE") return "2XL";
+      return s;
+    }
+  }
+  if (aspectLower === "color") {
+    const colorRegex = /\b(Black|White|Red|Blue|Navy|Green|Yellow|Pink|Purple|Orange|Grey|Gray|Brown|Beige|Gold|Silver)\b/i;
+    const match = title.match(colorRegex);
+    if (match) return match[1];
+  }
+
+  // Check if any allowed value appears as whole word in title
+  if (aspectMeta.values && aspectMeta.values.length > 0) {
+    for (const val of aspectMeta.values) {
+      if (val.length >= 3) {
+        const wordRegex = new RegExp(`\\b${val.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b`, 'i');
+        if (wordRegex.test(title)) {
+          return val;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Picks a value for one aspect: checks title/options match, valid SELECTION_ONLY value, or neutral fallback.
+ */
+function fillValueForAspect(name, categoryAspects, brand, title = "", options = {}) {
+  const meta = categoryAspects.find(a => a.name === name);
+  if (meta) {
+    const matched = findMatchingAspectValue(meta, title, options);
+    if (matched) return [matched];
+    if (meta.mode === "SELECTION_ONLY" && meta.values.length > 0) {
+      return [meta.values[0]];
+    }
+  }
+  return [brand && brand !== "Generic" && brand !== "Unbranded" ? brand : "Unbranded"];
 }
 
 /**
  * Builds the product.aspects object, satisfying every required aspect so the publish validates.
- * Brand is always set. SELECTION_ONLY aspects take a valid value from eBay's allowed list (a free
- * string would be rejected); FREE_TEXT aspects we have no data for get a neutral placeholder the
- * seller can refine on eBay. Best-effort by design — the goal is "the listing posts."
  */
-function buildProductAspects(categoryAspects, brand) {
-  const aspects = { Brand: [brand] };
+function buildProductAspects(categoryAspects, brand, title = "", options = {}, customAspects = {}) {
+  const aspects = { ...customAspects };
+  if (brand && brand !== "Generic") {
+    aspects.Brand = [brand];
+  } else {
+    aspects.Brand = ["Unbranded"];
+  }
+
+  // Ensure Size Type and Department are present if category accepts them
   for (const aspect of categoryAspects) {
-    if (!aspect.required || aspects[aspect.name]) continue; // already supplied (e.g. Brand)
-    aspects[aspect.name] = fillValueForAspect(aspect.name, categoryAspects, brand);
+    if (aspects[aspect.name]) continue; // already supplied
+    if (!aspect.required && aspect.name !== "Size Type" && aspect.name !== "Department") continue;
+
+    aspects[aspect.name] = fillValueForAspect(aspect.name, categoryAspects, brand, title, options);
   }
   return aspects;
 }
@@ -1137,26 +1241,27 @@ exports.ebayCreateListing = onCall(
         console.log(`[ebayCreateListing] Condition ${intendedCondition} not allowed for ${categoryId}; using ${conditionMapped}`);
       }
 
-      // 8. Create or update inventory item
-      const sku = `wonni_${listingId}`;
-      const itemOptions = {
-        hostname: host,
-        path: `/sell/inventory/v1/inventory_item/${sku}`,
-        method: "PUT",
-        headers: {
-          "Authorization": `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-          "Content-Language": "en-US"
-        }
-      };
+      // Fetch product doc for additional fields (brand, artistName, options, variants)
+      const productSnap = await db.collection("products").doc(listingId).get();
+      const product = productSnap.exists ? productSnap.data() : {};
+      const brand = resolveBrand(product, listing);
+      const price = typeof product.listingPrice === "number" ? product.listingPrice : (listing.price || 0.0);
+      const quantity = typeof listing.quantity === "number" ? listing.quantity : (typeof product.quantity === "number" ? product.quantity : 1);
 
-      const weightLbs = listing.shippingInfo?.weightLbs || 1.0;
-      const lengthIn = listing.shippingInfo?.packageDimensions?.lengthIn || 8.0;
-      const widthIn = listing.shippingInfo?.packageDimensions?.widthIn || 6.0;
-      const heightIn = listing.shippingInfo?.packageDimensions?.heightIn || 4.0;
-      const brand = listing.brand || "Generic";
-      const price = listing.price || 0.0;
-      const quantity = listing.quantity ?? 1;
+      const weightLbs = listing.shippingInfo?.weightLbs || product.weightLbs || 1.0;
+      const lengthIn = listing.shippingInfo?.packageDimensions?.lengthIn || product.lengthIn || 8.0;
+      const widthIn = listing.shippingInfo?.packageDimensions?.widthIn || product.widthIn || 6.0;
+      const heightIn = listing.shippingInfo?.packageDimensions?.heightIn || product.heightIn || 4.0;
+
+      const variations = (listing.variations && listing.variations.length > 0)
+        ? listing.variations
+        : (product.variants || []);
+      const hasVariations = variations.length > 1;
+
+      // 8. Create or update inventory item(s)
+      const sku = `wonni_${listingId}`;
+      const options = listing.options || product.options || {};
+      const aspects = buildProductAspects(categoryAspects, brand, title, options);
 
       const itemBody = {
         availability: {
@@ -1171,7 +1276,7 @@ exports.ebayCreateListing = onCall(
           imageUrls: imageUrls.slice(0, 12),
           brand: brand,
           mpn: "Does Not Apply",
-          aspects: buildProductAspects(categoryAspects, brand)
+          aspects: aspects
         },
         packageWeightAndSize: {
           weight: {
@@ -1195,8 +1300,94 @@ exports.ebayCreateListing = onCall(
         itemBody.conditionDescription = listing.conditionNotes;
       }
 
+      // If multi-variation, create individual variant inventory items and an item group
+      if (hasVariations) {
+        console.log(`[ebayCreateListing] Processing ${variations.length} variations for listing ${listingId}`);
+        const variationSpecs = [];
+        const dimensionMap = new Map();
+
+        for (let idx = 0; idx < variations.length; idx++) {
+          const v = variations[idx];
+          const varSku = `wonni_${listingId}_${idx}`;
+          const varQty = (typeof v.quantity === "number" && v.quantity >= 0) ? v.quantity : 1;
+          const varOpts = {};
+          (v.attributes || []).forEach(a => { varOpts[a.name] = a.value; });
+          if (v.optionValues) Object.assign(varOpts, v.optionValues);
+          if (!Object.keys(varOpts).length && v.name) varOpts.Size = v.name;
+
+          Object.entries(varOpts).forEach(([dName, dVal]) => {
+            if (!dimensionMap.has(dName)) dimensionMap.set(dName, new Set());
+            if (dVal) dimensionMap.get(dName).add(String(dVal));
+          });
+
+          const varAspects = buildProductAspects(categoryAspects, brand, title, varOpts, varOpts);
+          const varItemBody = {
+            ...itemBody,
+            availability: { shipToLocationAvailability: { quantity: varQty } },
+            product: {
+              ...itemBody.product,
+              aspects: varAspects
+            }
+          };
+
+          const varItemRes = await makeHttpRequest({
+            hostname: host,
+            path: `/sell/inventory/v1/inventory_item/${varSku}`,
+            method: "PUT",
+            headers: {
+              "Authorization": `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+              "Content-Language": "en-US"
+            }
+          }, varItemBody);
+          console.log(`[ebayCreateListing] Variant inventory item PUT SKU=${varSku}, status=${varItemRes.statusCode}`);
+        }
+
+        for (const [dName, valSet] of dimensionMap.entries()) {
+          variationSpecs.push({
+            name: dName,
+            values: Array.from(valSet)
+          });
+        }
+
+        // Create Inventory Item Group
+        const groupKey = `wonni_grp_${listingId}`;
+        const groupBody = {
+          title: title.slice(0, 80),
+          description: description.slice(0, 1000),
+          imageUrls: imageUrls.slice(0, 12),
+          aspects: buildProductAspects(categoryAspects, brand, title, {}),
+          variesBy: {
+            aspectsImageVariesBy: [],
+            specifications: variationSpecs.length > 0 ? variationSpecs : [{ name: "Size", values: ["Regular"] }]
+          },
+          variantSKUs: variations.map((_, idx) => `wonni_${listingId}_${idx}`)
+        };
+
+        const groupRes = await makeHttpRequest({
+          hostname: host,
+          path: `/sell/inventory/v1/inventory_item_group/${groupKey}`,
+          method: "PUT",
+          headers: {
+            "Authorization": `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+            "Content-Language": "en-US"
+          }
+        }, groupBody);
+        console.log(`[ebayCreateListing] Inventory item group PUT status=${groupRes.statusCode}`);
+      }
+
       console.log(`[ebayCreateListing] Creating inventory item for SKU=${sku}`);
-      const itemRes = await makeHttpRequest(itemOptions, itemBody);
+      const itemRes = await makeHttpRequest({
+        hostname: host,
+        path: `/sell/inventory/v1/inventory_item/${sku}`,
+        method: "PUT",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "Content-Language": "en-US"
+        }
+      }, itemBody);
       if (itemRes.statusCode !== 200 && itemRes.statusCode !== 201 && itemRes.statusCode !== 204) {
         throw new Error(`Failed to create eBay inventory item (${itemRes.statusCode}): ${itemRes.body}`);
       }
@@ -1840,5 +2031,162 @@ exports.ebayDeleteListing = onCall(
       }
       throw new HttpsError(code, friendlyEbayErrorMessage(err.message));
     }
+  }
+);
+
+/**
+ * Callable Function: ebayPullSync
+ * Fetches live eBay listing data (price, quantity, title, status) and returns diff with Wonni data.
+ * Expects: { listingId: string, credentialSet?: "ios" | "web" }
+ */
+exports.ebayPullSync = onCall(
+  { memory: "512MB", timeoutSeconds: 60 },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "You must be signed in.");
+    }
+    const uid = request.auth.uid;
+    const { listingId: rawListingId, productId, credentialSet = "ios" } = request.data || {};
+    const listingId = rawListingId || productId;
+    if (!listingId) {
+      throw new HttpsError("invalid-argument", "listingId is required.");
+    }
+
+    const credentials = await getEbayCredentials(credentialSet);
+    const db = admin.firestore();
+
+    const [listingDoc, productDoc] = await Promise.all([
+      db.collection("listings").doc(listingId).get(),
+      db.collection("products").doc(listingId).get()
+    ]);
+
+    const listing = listingDoc.exists ? listingDoc.data() : {};
+    const product = productDoc.exists ? productDoc.data() : {};
+
+    if (listing.userId && listing.userId !== uid && product.userId && product.userId !== uid) {
+      throw new HttpsError("permission-denied", "You do not own this listing.");
+    }
+
+    const { accessToken, isSandbox } = await getActiveAccessToken(uid, credentials.clientId, credentials.certId, db);
+    const host = isSandbox ? "api.sandbox.ebay.com" : "api.ebay.com";
+    const sku = `wonni_${listingId}`;
+
+    // 1. Fetch live offer from eBay
+    const offersRes = await makeHttpRequest({
+      hostname: host,
+      path: `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}`,
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      }
+    });
+
+    // 2. Fetch live inventory item from eBay
+    const itemRes = await makeHttpRequest({
+      hostname: host,
+      path: `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      }
+    });
+
+    if (offersRes.statusCode !== 200 && itemRes.statusCode !== 200) {
+      throw new HttpsError("not-found", "No live eBay listing found for this item.");
+    }
+
+    const offersData = offersRes.statusCode === 200 ? JSON.parse(offersRes.body) : {};
+    const itemData = itemRes.statusCode === 200 ? JSON.parse(itemRes.body) : {};
+
+    const offer = (offersData.offers || []).find(o => o.status === "PUBLISHED") || offersData.offers?.[0] || {};
+
+    const ebayTitle = itemData.product?.title || offer.listingDescription || null;
+    const ebayPrice = offer.pricingSummary?.price?.value ? parseFloat(offer.pricingSummary.price.value) : null;
+    const ebayQuantity = itemData.availability?.shipToLocationAvailability?.quantity != null
+      ? itemData.availability.shipToLocationAvailability.quantity
+      : (offer.availableQuantity != null ? offer.availableQuantity : null);
+    const ebayStatus = offer.status === "PUBLISHED" ? "active" : (offer.status ? offer.status.toLowerCase() : "active");
+    const ebayListingId = offer.listing?.listingId || listing.crossPostListingIds?.ebay || product.ebayListingId || null;
+
+    const wonniTitle = listing.customTitle || product.title || "";
+    const wonniPrice = typeof product.listingPrice === "number" ? product.listingPrice : (typeof listing.price === "number" ? listing.price : 0.0);
+    const wonniQty = typeof listing.quantity === "number" ? listing.quantity : (typeof product.quantity === "number" ? product.quantity : 1);
+
+    const diff = [];
+    if (ebayTitle && ebayTitle.trim() && ebayTitle.trim() !== wonniTitle.trim()) {
+      diff.push({ field: "Title", wonni: wonniTitle, external: ebayTitle, key: "title", value: ebayTitle });
+    }
+    if (ebayPrice != null && Math.abs(ebayPrice - wonniPrice) >= 0.01) {
+      diff.push({ field: "Price", wonni: `$${wonniPrice.toFixed(2)}`, external: `$${ebayPrice.toFixed(2)}`, key: "price", value: ebayPrice });
+    }
+    if (ebayQuantity != null && ebayQuantity !== wonniQty) {
+      diff.push({ field: "Quantity", wonni: String(wonniQty), external: String(ebayQuantity), key: "quantity", value: ebayQuantity });
+    }
+
+    return {
+      hasDrift: diff.length > 0,
+      diff,
+      ebayData: {
+        title: ebayTitle,
+        price: ebayPrice,
+        quantity: ebayQuantity,
+        status: ebayStatus,
+        listingId: ebayListingId
+      },
+      wonniData: {
+        title: wonniTitle,
+        price: wonniPrice,
+        quantity: wonniQty,
+        status: listing.crossPostStatus?.ebay || product.ebayStatus || "active"
+      }
+    };
+  }
+);
+
+/**
+ * Callable Function: ebayImportPullSync
+ * Applies selected external eBay fields to Wonni Firestore documents.
+ */
+exports.ebayImportPullSync = onCall(
+  { memory: "512MB", timeoutSeconds: 30 },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "You must be signed in.");
+    }
+    const uid = request.auth.uid;
+    const { listingId: rawListingId, productId, fields = {} } = request.data || {};
+    const listingId = rawListingId || productId;
+    if (!listingId) {
+      throw new HttpsError("invalid-argument", "listingId is required.");
+    }
+
+    const db = admin.firestore();
+    const productRef = db.collection("products").doc(listingId);
+    const listingRef = db.collection("listings").doc(listingId);
+
+    const updates = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+    const listingUpdates = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+
+    if (fields.title != null) {
+      updates.title = fields.title;
+      listingUpdates.customTitle = fields.title;
+    }
+    if (fields.price != null && typeof fields.price === "number") {
+      updates.listingPrice = fields.price;
+      listingUpdates.price = fields.price;
+    }
+    if (fields.quantity != null && typeof fields.quantity === "number") {
+      updates.quantity = fields.quantity;
+      listingUpdates.quantity = fields.quantity;
+    }
+
+    await Promise.all([
+      productRef.set(updates, { merge: true }),
+      listingRef.set(listingUpdates, { merge: true })
+    ]);
+
+    return { success: true };
   }
 );

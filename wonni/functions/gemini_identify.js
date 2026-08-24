@@ -37,6 +37,7 @@ Given a product title, an optional raw description, and optionally a product ima
 - "suggestedDescription": a concise 2-4 sentence buyer-friendly listing description. Lead with what the item is; end with a brief condition note if inferable. No markdown, no bullets.
 - "suggestedPrice": your best estimate of a fair resale price in USD (numeric, no currency symbol) for this item in typical used/collectible condition.
 - "suggestedCategory": one of ["Photocard", "Keychain/Accessory", "Apparel", "Plushie", "Poster/Print", "Album/CD", "Light Stick", "Stationery", "Mirror/Beauty", "Collectible Figure", "Other"].
+- "suggestedBrand": the inferred brand, manufacturer, or artist/group name (e.g. "BTS", "BLACKPINK", "NewJeans", "Sanrio", "Nike", "Pokemon", "HYBE", "Line Friends"), or null if truly generic/unbranded.
 - "suggestedTags": up to 5 short keyword tags relevant for search (e.g. ["BTS", "official", "photocard"]).
 Based on this listing data, what do you think the shipping dimensions and weight will be? Include:
 - "suggestedWeightOz": your best estimate of the shipped package weight in whole ounces, including packaging.
@@ -88,6 +89,9 @@ Return ONLY valid JSON — no markdown, no explanation.`,
         : {}),
       ...(typeof parsed.suggestedPrice === "number" && parsed.suggestedPrice > 0
         ? { aiSuggestedPrice: parsed.suggestedPrice }
+        : {}),
+      ...(typeof parsed.suggestedBrand === "string" && parsed.suggestedBrand && parsed.suggestedBrand.toLowerCase() !== "null" && parsed.suggestedBrand.toLowerCase() !== "unbranded"
+        ? { brand: parsed.suggestedBrand.slice(0, 60), aiSuggestedBrand: parsed.suggestedBrand.slice(0, 60) }
         : {}),
       // dropship has no separate user-override UI for category — the AI
       // suggestion just becomes the product's own `category` field directly,
