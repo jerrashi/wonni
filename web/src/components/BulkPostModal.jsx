@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { db, auth, callFunction } from "../firebase";
 import { EbayEditingNoticeModal } from "./EbayEditingNoticeModal";
+import { isPlatformAlreadyPosted } from "./PostModal";
 
 const PLATFORMS = [
   { id: "wonni", name: "Wonni", locked: true },
@@ -72,6 +73,10 @@ export default function BulkPostModal({ products, onClose }) {
 
         for (const platformId of Array.from(selected)) {
           if (platformId === "wonni") continue; // Already posted above
+          if (isPlatformAlreadyPosted(platformId, product)) {
+            allResults[product.id][platformId] = { status: "success", message: "Already live" };
+            continue;
+          }
 
           try {
             if (platformId === "ebay") {
@@ -257,8 +262,9 @@ export default function BulkPostModal({ products, onClose }) {
           {/* Platform checkboxes */}
           {PLATFORMS.map((p) => {
             const isConnected = integrations[p.id]?.isConnected;
-            const isSelected = selected.has(p.id);
-            const isDisabled = (p.requiresConnected && !isConnected) || p.locked;
+            const allAlreadyPosted = p.id !== "wonni" && products.length > 0 && products.every((prod) => isPlatformAlreadyPosted(p.id, prod));
+            const isSelected = selected.has(p.id) && !allAlreadyPosted;
+            const isDisabled = (p.requiresConnected && !isConnected) || p.locked || allAlreadyPosted;
 
             return (
               <div key={p.id} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}>
@@ -279,8 +285,13 @@ export default function BulkPostModal({ products, onClose }) {
                     {p.name}
                     {p.locked && " (always included)"}
                   </span>
-                  {isConnected && !p.locked && <span style={{ fontSize: 11, color: "var(--success)" }}>✓ Connected</span>}
-                  {!isConnected && p.requiresConnected && (
+                  {allAlreadyPosted && (
+                    <span style={{ fontSize: 11, color: "var(--accent, #6366f1)", fontWeight: 600, marginLeft: "auto" }}>
+                      ✓ All already posted
+                    </span>
+                  )}
+                  {!allAlreadyPosted && isConnected && !p.locked && <span style={{ fontSize: 11, color: "var(--success)" }}>✓ Connected</span>}
+                  {!allAlreadyPosted && !isConnected && p.requiresConnected && (
                     <span style={{ fontSize: 11, color: "var(--muted)" }}>Not connected</span>
                   )}
                 </label>
