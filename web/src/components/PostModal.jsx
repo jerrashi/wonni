@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { db, auth, callFunction } from "../firebase";
+import { EbayEditingNoticeModal } from "./EbayEditingNoticeModal";
 
 const PLATFORMS = [
   { id: "wonni", name: "Wonni", requiresConnected: false, locked: true },
@@ -14,6 +15,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
   const [integrations, setIntegrations] = useState({});
   const [hasSellingSettings, setHasSellingSettings] = useState(true);
   const [selected, setSelected] = useState(new Set(["wonni"])); // Wonni always selected
+  const [showEbayNotice, setShowEbayNotice] = useState(false);
   const [etsyCategory, setEtsyCategory] = useState(null);
   const [etsyCategories, setEtsyCategories] = useState([]);
   const [etsyCategorySearch, setEtsyCategorySearch] = useState("");
@@ -236,6 +238,9 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
               credentialSet: "web",
             });
             const ebayListingId = ebayRes.data?.listingId;
+            if (!localStorage.getItem("hasSeenEbayEditingNotice")) {
+              setShowEbayNotice(true);
+            }
             try {
               await updateDoc(doc(db, "products", product.id), {
                 ebayStatus: "active",
@@ -782,6 +787,14 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
           </button>
         </div>
       </div>
+
+      <EbayEditingNoticeModal
+        isOpen={showEbayNotice}
+        onClose={() => {
+          setShowEbayNotice(false);
+          onClose();
+        }}
+      />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { db, auth, callFunction } from "../firebase";
+import { EbayEditingNoticeModal } from "./EbayEditingNoticeModal";
 
 const PLATFORMS = [
   { id: "wonni", name: "Wonni", locked: true },
@@ -13,6 +14,7 @@ const PLATFORMS = [
 export default function BulkPostModal({ products, onClose }) {
   const [integrations, setIntegrations] = useState({});
   const [selected, setSelected] = useState(new Set(["wonni"])); // Wonni always selected
+  const [showEbayNotice, setShowEbayNotice] = useState(false);
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState("");
   const [results, setResults] = useState({});
@@ -79,6 +81,9 @@ export default function BulkPostModal({ products, onClose }) {
                 credentialSet: "web",
               });
               const ebayListingId = ebayRes.data?.listingId;
+              if (!localStorage.getItem("hasSeenEbayEditingNotice")) {
+                setShowEbayNotice(true);
+              }
               try {
                 await updateDoc(doc(db, "products", product.id), {
                   ebayStatus: "active",
@@ -297,6 +302,14 @@ export default function BulkPostModal({ products, onClose }) {
           </button>
         </div>
       </div>
+
+      <EbayEditingNoticeModal
+        isOpen={showEbayNotice}
+        onClose={() => {
+          setShowEbayNotice(false);
+          onClose();
+        }}
+      />
     </div>
   );
 }
