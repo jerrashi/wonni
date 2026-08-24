@@ -2304,6 +2304,8 @@ struct CrossPostStatusView: View {
     @State private var listeners: [ListenerRegistration] = []
     @State private var retryJob: CrossPostJob? = nil
     @State private var retryingEbay: Set<String> = []
+    @AppStorage("hasSeenEbayEditingNotice") private var hasSeenEbayEditingNotice = false
+    @State private var showEbayNoticeAlert = false
     @EnvironmentObject private var uploadManager: UploadManager
     @Environment(\.modelContext) private var modelContext
     @Query private var allDraftItems: [Item]
@@ -2411,6 +2413,13 @@ struct CrossPostStatusView: View {
         } message: {
             Text(uploadManager.photoUploadWarning ?? "")
         }
+        .alert("Managing Your eBay Listing", isPresented: $showEbayNoticeAlert) {
+            Button("Got It", role: .cancel) {
+                hasSeenEbayEditingNotice = true
+            }
+        } message: {
+            Text("Your item is now live on eBay!\n\n• To edit details: Update your listing right here in Wonni, and changes will push to eBay automatically.\n• Direct eBay edits: eBay locks the standard consumer edit page for API listings. To edit on eBay, use eBay Seller Hub (ebay.com/sh/lst/active).")
+        }
     }
 
     @ViewBuilder
@@ -2459,7 +2468,11 @@ struct CrossPostStatusView: View {
         for item in items {
             let reg = db.collection("listings").document(item.id).addSnapshotListener { snap, _ in
                 guard let data = snap?.data() else { return }
-                statuses[item.id] = data["crossPostStatus"] as? [String: String] ?? [:]
+                let cpStatus = data["crossPostStatus"] as? [String: String] ?? [:]
+                statuses[item.id] = cpStatus
+                if !hasSeenEbayEditingNotice && cpStatus["ebay"] == "posted" {
+                    showEbayNoticeAlert = true
+                }
             }
             listeners.append(reg)
         }
