@@ -3592,6 +3592,33 @@ function ProductDetail() {
     );
   }, [productId]);
 
+  // Background check for eBay drift when product is active on eBay
+  useEffect(() => {
+    if (!product || !productId) return;
+    const isEbayActive = product.ebayStatus === "active"
+      || product.crossPostStatus?.ebay === "active"
+      || product.crossPostStatus?.ebay === "posted";
+    if (!isEbayActive) return;
+
+    let isMounted = true;
+    (async () => {
+      try {
+        const res = await callFunction("ebayPullSync")({ productId, credentialSet: "web" });
+        if (isMounted) {
+          if (res.data?.hasDrift) {
+            setEbayPullSyncDiff(res.data);
+          } else {
+            setEbayPullSyncDiff(null);
+          }
+        }
+      } catch (err) {
+        console.debug("Background eBay sync check:", err.message);
+      }
+    })();
+
+    return () => { isMounted = false; };
+  }, [productId, product?.ebayStatus, product?.crossPostStatus?.ebay]);
+
   const preorder = product?.preOrder;
   const infoTable = useMemo(() => {
     const sourceInfo = product?.sourceInfo;
@@ -4901,7 +4928,7 @@ function ProductDetail() {
       )}
 
       {ebayPullSyncDiff && (
-        <div className="card" style={{ marginBottom: 12, padding: 14, border: "1px solid var(--accent, #6366f1)", borderRadius: 8, background: "var(--surface)" }}>
+        <div id="ebay-diff-card" className="card" style={{ marginBottom: 12, padding: 14, border: "1px solid var(--accent, #6366f1)", borderRadius: 8, background: "var(--surface)" }}>
           <div style={{ fontWeight: 600, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
             <span>📦 eBay Listing Changes Detected</span>
           </div>
@@ -5432,15 +5459,28 @@ function ProductDetail() {
                 {(product.ebayStatus === "active" || product.crossPostStatus?.ebay === "active" || product.crossPostStatus?.ebay === "posted") && (
                   <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                     <span className="chip chip-active">eBay: Active</span>
-                    <button
-                      className="btn btn-ghost"
-                      style={{ fontSize: 11, padding: "2px 8px", border: "1px solid var(--border)", borderRadius: 12 }}
-                      onClick={handleCheckEbaySync}
-                      disabled={checkingEbaySync}
-                      title="Check if edits were made on eBay Seller Hub"
-                    >
-                      {checkingEbaySync ? "⏳ Checking eBay…" : "🔄 Sync from eBay"}
-                    </button>
+                    {ebayPullSyncDiff?.hasDrift && (
+                      <button
+                        className="btn btn-warning"
+                        style={{
+                          fontSize: 11,
+                          padding: "2px 10px",
+                          borderRadius: 12,
+                          background: "rgba(245, 158, 11, 0.15)",
+                          color: "#f59e0b",
+                          border: "1px solid #f59e0b",
+                          fontWeight: 600,
+                          cursor: "pointer"
+                        }}
+                        onClick={() => {
+                          const diffEl = document.getElementById("ebay-diff-card");
+                          if (diffEl) diffEl.scrollIntoView({ behavior: "smooth" });
+                        }}
+                        title="Click to view and accept edits from eBay"
+                      >
+                        ⚠️ Accept edits from eBay ({ebayPullSyncDiff.diff.length})
+                      </button>
+                    )}
                   </div>
                 )}
                 {product.tiktokStatus === "active" && (
