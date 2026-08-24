@@ -113,6 +113,8 @@ const {
   suggestEtsyCategory,
   getEtsyShippingProfiles,
   getEtsyReturnPolicies,
+  etsyPullSync,
+  etsyImportPullSync,
 } = require("./etsy_listing");
 exports.etsyCreateListing = etsyCreateListing;
 exports.etsyUpdateListing = etsyUpdateListing;
@@ -122,6 +124,8 @@ exports.getEtsyCategories = getEtsyCategories;
 exports.suggestEtsyCategory = suggestEtsyCategory;
 exports.getEtsyShippingProfiles = getEtsyShippingProfiles;
 exports.getEtsyReturnPolicies = getEtsyReturnPolicies;
+exports.etsyPullSync = etsyPullSync;
+exports.etsyImportPullSync = etsyImportPullSync;
 
 // eBay Listing Management
 const { ebayCreateListing, ebayUpdateListing, ebayDeleteListing, ebayPullSync, ebayImportPullSync } = require("./ebay_listing");
