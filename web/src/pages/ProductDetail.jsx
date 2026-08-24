@@ -3317,6 +3317,10 @@ function ProductDetail() {
   const [ebayPullSyncDiff, setEbayPullSyncDiff] = useState(null);
   const [importingEbayChanges, setImportingEbayChanges] = useState(false);
   const [ebaySyncMessage, setEbaySyncMessage] = useState("");
+  const [checkingEtsySync, setCheckingEtsySync] = useState(false);
+  const [etsyPullSyncDiff, setEtsyPullSyncDiff] = useState(null);
+  const [importingEtsyChanges, setImportingEtsyChanges] = useState(false);
+  const [etsySyncMessage, setEtsySyncMessage] = useState("");
   const [weightLbs, setWeightLbs] = useState("0");
   const [weightOz, setWeightOz] = useState("6");
   const [lengthIn, setLengthIn] = useState("");
@@ -3619,6 +3623,33 @@ function ProductDetail() {
     return () => { isMounted = false; };
   }, [productId, product?.ebayStatus, product?.crossPostStatus?.ebay]);
 
+  // Background check for Etsy drift when product is active on Etsy
+  useEffect(() => {
+    if (!product || !productId) return;
+    const isEtsyActive = product.etsyStatus === "active"
+      || product.crossPostStatus?.etsy === "active"
+      || product.crossPostStatus?.etsy === "posted";
+    if (!isEtsyActive) return;
+
+    let isMounted = true;
+    (async () => {
+      try {
+        const res = await callFunction("etsyPullSync")({ productId, credentialSet: "web" });
+        if (isMounted) {
+          if (res.data?.hasDrift) {
+            setEtsyPullSyncDiff(res.data);
+          } else {
+            setEtsyPullSyncDiff(null);
+          }
+        }
+      } catch (err) {
+        console.debug("Background Etsy sync check:", err.message);
+      }
+    })();
+
+    return () => { isMounted = false; };
+  }, [productId, product?.etsyStatus, product?.crossPostStatus?.etsy]);
+
   const preorder = product?.preOrder;
   const infoTable = useMemo(() => {
     const sourceInfo = product?.sourceInfo;
@@ -3763,6 +3794,50 @@ function ProductDetail() {
       setEbaySyncMessage(`Import failed: ${err.message}`);
     } finally {
       setImportingEbayChanges(false);
+    }
+  }
+
+  async function handleCheckEtsySync() {
+    setCheckingEtsySync(true);
+    setEtsySyncMessage("");
+    setEtsyPullSyncDiff(null);
+    try {
+      const res = await callFunction("etsyPullSync")({ productId, credentialSet: "web" });
+      if (res.data?.hasDrift) {
+        setEtsyPullSyncDiff(res.data);
+      } else {
+        setEtsySyncMessage("✓ Etsy listing is up to date (no external changes detected).");
+        setTimeout(() => setEtsySyncMessage(""), 5000);
+      }
+    } catch (err) {
+      console.error("Etsy sync check failed:", err);
+      setEtsySyncMessage(`Sync check failed: ${err.message}`);
+    } finally {
+      setCheckingEtsySync(false);
+    }
+  }
+
+  async function importEtsyPullSyncChanges() {
+    if (!etsyPullSyncDiff?.etsyData) return;
+    setImportingEtsyChanges(true);
+    try {
+      const { title: etsyTitle, price: etsyPrice, quantity: etsyQuantity } = etsyPullSyncDiff.etsyData;
+      const fieldsToUpdate = {};
+      if (etsyTitle) fieldsToUpdate.title = etsyTitle;
+      if (etsyPrice != null) fieldsToUpdate.price = etsyPrice;
+      if (etsyQuantity != null) fieldsToUpdate.quantity = etsyQuantity;
+
+      await callFunction("etsyImportPullSync")({ productId, fields: fieldsToUpdate });
+      if (etsyTitle) setTitle(etsyTitle);
+      if (etsyPrice != null) setListingPrice(etsyPrice);
+      setEtsyPullSyncDiff(null);
+      setEtsySyncMessage("✓ Successfully applied changes from Etsy!");
+      setTimeout(() => setEtsySyncMessage(""), 5000);
+    } catch (err) {
+      console.error("Failed to import Etsy changes:", err);
+      setEtsySyncMessage(`Import failed: ${err.message}`);
+    } finally {
+      setImportingEtsyChanges(false);
     }
   }
 
@@ -4982,6 +5057,67 @@ function ProductDetail() {
         </div>
       )}
 
+      {etsySyncMessage && (
+        <div style={{ marginBottom: 12, fontSize: 12, color: "var(--info, #6366f1)", textAlign: "right" }}>
+          {etsySyncMessage}
+        </div>
+      )}
+
+      {etsyPullSyncDiff && (
+        <div id="etsy-diff-card" className="card" style={{ marginBottom: 12, padding: 14, border: "1px solid #f97316", borderRadius: 8, background: "var(--surface)" }}>
+          <div style={{ fontWeight: 600, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+            <span>🎨 Etsy Listing Changes Detected</span>
+          </div>
+          {etsyPullSyncDiff.diff.length === 0 ? (
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>No differences found. Live Etsy listing matches Wonni.</div>
+          ) : (
+            <>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>
+                The following fields differ between your Wonni data and the live Etsy listing:
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", fontSize: 12, marginBottom: 10, borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ textAlign: "left", color: "var(--muted)", borderBottom: "1px solid var(--border)" }}>
+                      <th style={{ padding: "6px 8px" }}>Field</th>
+                      <th style={{ padding: "6px 8px" }}>Current Wonni Value</th>
+                      <th style={{ padding: "6px 8px" }}>Live Etsy Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {etsyPullSyncDiff.diff.map((d, i) => (
+                      <tr key={i} style={{ borderBottom: "1px solid var(--surface-hover)" }}>
+                        <td style={{ padding: "6px 8px", fontWeight: 600 }}>{d.field}</td>
+                        <td style={{ padding: "6px 8px", color: "var(--danger, #ef4444)" }}>{String(d.wonni || "(empty)")}</td>
+                        <td style={{ padding: "6px 8px", color: "var(--success, #22c55e)", fontWeight: 600 }}>{String(d.external || "(empty)")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <button
+                  className="btn btn-primary"
+                  onClick={importEtsyPullSyncChanges}
+                  disabled={importingEtsyChanges}
+                  style={{ fontSize: 11, background: "#f97316", borderColor: "#f97316" }}
+                >
+                  {importingEtsyChanges ? "⏳ Applying…" : "✓ Accept edits from Etsy"}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => setEtsyPullSyncDiff(null)}
+                  disabled={importingEtsyChanges}
+                  style={{ fontSize: 11 }}
+                >
+                  ✕ Dismiss
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {error && <div className="card" style={{ marginBottom: 20, color: "var(--danger)" }}>{error}</div>}
 
       {loading ? (
@@ -5479,6 +5615,33 @@ function ProductDetail() {
                         title="Click to view and accept edits from eBay"
                       >
                         ⚠️ Accept edits from eBay ({ebayPullSyncDiff.diff.length})
+                      </button>
+                    )}
+                  </div>
+                )}
+                {(product.etsyStatus === "active" || product.crossPostStatus?.etsy === "active" || product.crossPostStatus?.etsy === "posted") && (
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <span className="chip chip-active">Etsy: Active</span>
+                    {etsyPullSyncDiff?.hasDrift && (
+                      <button
+                        className="btn btn-warning"
+                        style={{
+                          fontSize: 11,
+                          padding: "2px 10px",
+                          borderRadius: 12,
+                          background: "rgba(249, 115, 22, 0.15)",
+                          color: "#f97316",
+                          border: "1px solid #f97316",
+                          fontWeight: 600,
+                          cursor: "pointer"
+                        }}
+                        onClick={() => {
+                          const diffEl = document.getElementById("etsy-diff-card");
+                          if (diffEl) diffEl.scrollIntoView({ behavior: "smooth" });
+                        }}
+                        title="Click to view and accept edits from Etsy"
+                      >
+                        ⚠️ Accept edits from Etsy ({etsyPullSyncDiff.diff.length})
                       </button>
                     )}
                   </div>
