@@ -11,6 +11,36 @@ const PLATFORMS = [
   { id: "tiktok", name: "TikTok Shop", requiresConnected: true },
 ];
 
+export function isPlatformAlreadyPosted(platformId, product) {
+  if (!product) return false;
+  switch (platformId) {
+    case "ebay":
+      return product.ebayStatus === "active"
+        || product.crossPostStatus?.ebay === "active"
+        || product.crossPostStatus?.ebay === "posted"
+        || !!product.ebayListingId
+        || !!product.crossPostListingIds?.ebay;
+    case "etsy":
+      return product.etsyStatus === "active"
+        || product.crossPostStatus?.etsy === "active"
+        || product.crossPostStatus?.etsy === "posted"
+        || !!product.etsyListingId
+        || !!product.crossPostListingIds?.etsy;
+    case "tiktok":
+      return product.tiktokStatus === "active"
+        || product.crossPostStatus?.tiktok === "active"
+        || product.crossPostStatus?.tiktok === "posted";
+    case "mercari":
+      return product.listingStatus?.mercari === "active"
+        || product.crossPostStatus?.mercari === "posted"
+        || !!product.listingId?.mercari;
+    case "wonni":
+      return false;
+    default:
+      return false;
+  }
+}
+
 export default function PostModal({ product, onClose, mode = "modal", buttonRef }) {
   const [integrations, setIntegrations] = useState({});
   const [hasSellingSettings, setHasSellingSettings] = useState(true);
@@ -150,6 +180,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
 
   const togglePlatform = (platformId) => {
     if (platformId === "wonni") return; // Can't deselect Wonni
+    if (isPlatformAlreadyPosted(platformId, product)) return; // Can't select already posted platforms
     const newSelected = new Set(selected);
     if (newSelected.has(platformId)) {
       newSelected.delete(platformId);
@@ -431,8 +462,9 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
             {/* Platform checkboxes */}
             {PLATFORMS.map((p) => {
               const isConnected = integrations[p.id]?.isConnected;
-              const isSelected = selected.has(p.id);
-              const isDisabled = (p.requiresConnected && !isConnected) || p.locked;
+              const isAlreadyPosted = isPlatformAlreadyPosted(p.id, product);
+              const isSelected = selected.has(p.id) && !isAlreadyPosted;
+              const isDisabled = (p.requiresConnected && !isConnected) || p.locked || isAlreadyPosted;
 
               return (
                 <div key={p.id} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}>
@@ -447,8 +479,13 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                       {p.name}
                       {p.locked && " (always included)"}
                     </span>
-                    {isConnected && !p.locked && <span style={{ fontSize: 11, color: "var(--success)" }}>✓ Connected</span>}
-                    {!isConnected && p.requiresConnected && (
+                    {isAlreadyPosted && (
+                      <span style={{ fontSize: 11, color: "var(--accent, #6366f1)", fontWeight: 600, marginLeft: "auto" }}>
+                        ✓ Already Posted
+                      </span>
+                    )}
+                    {!isAlreadyPosted && isConnected && !p.locked && <span style={{ fontSize: 11, color: "var(--success)" }}>✓ Connected</span>}
+                    {!isAlreadyPosted && !isConnected && p.requiresConnected && (
                       <span style={{ fontSize: 11, color: "var(--muted)" }}>Not connected</span>
                     )}
                   </label>
@@ -457,8 +494,26 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                   {isSelected && p.id === "etsy" && (
                     <div style={{ marginTop: 12, paddingLeft: 24 }}>
                       {etsyError && (
-                        <div style={{ fontSize: 12, color: "var(--danger)", marginBottom: 8 }}>
-                          {etsyError}
+                        <div style={{ fontSize: 12, color: "var(--danger)", marginBottom: 8, padding: 8, background: "rgba(239, 68, 68, 0.08)", borderRadius: 6, border: "1px solid rgba(239, 68, 68, 0.2)" }}>
+                          <div style={{ marginBottom: 6 }}>{etsyError}</div>
+                          <div style={{ display: "flex", gap: 12 }}>
+                            <a
+                              href="https://www.etsy.com/sell"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ fontSize: 11, color: "var(--accent, #6366f1)", textDecoration: "underline", fontWeight: 600 }}
+                            >
+                              Open Etsy Shop Setup ↗
+                            </a>
+                            <a
+                              href="/web/settings"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ fontSize: 11, color: "var(--accent, #6366f1)", textDecoration: "underline", fontWeight: 600 }}
+                            >
+                              Settings ↗
+                            </a>
+                          </div>
                         </div>
                       )}
 
@@ -623,8 +678,9 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
           {/* Platform checkboxes */}
           {PLATFORMS.map((p) => {
             const isConnected = integrations[p.id]?.isConnected;
-            const isSelected = selected.has(p.id);
-            const isDisabled = (p.requiresConnected && !isConnected) || p.locked;
+            const isAlreadyPosted = isPlatformAlreadyPosted(p.id, product);
+            const isSelected = selected.has(p.id) && !isAlreadyPosted;
+            const isDisabled = (p.requiresConnected && !isConnected) || p.locked || isAlreadyPosted;
 
             return (
               <div key={p.id} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}>
@@ -639,8 +695,13 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                     {p.name}
                     {p.locked && " (always included)"}
                   </span>
-                  {isConnected && !p.locked && <span style={{ fontSize: 11, color: "var(--success)" }}>✓ Connected</span>}
-                  {!isConnected && p.requiresConnected && (
+                  {isAlreadyPosted && (
+                    <span style={{ fontSize: 11, color: "var(--accent, #6366f1)", fontWeight: 600, marginLeft: "auto" }}>
+                      ✓ Already Posted
+                    </span>
+                  )}
+                  {!isAlreadyPosted && isConnected && !p.locked && <span style={{ fontSize: 11, color: "var(--success)" }}>✓ Connected</span>}
+                  {!isAlreadyPosted && !isConnected && p.requiresConnected && (
                     <span style={{ fontSize: 11, color: "var(--muted)" }}>Not connected</span>
                   )}
                 </label>
@@ -649,8 +710,26 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                 {isSelected && p.id === "etsy" && (
                   <div style={{ marginTop: 12, paddingLeft: 24 }}>
                     {etsyError && (
-                      <div style={{ fontSize: 12, color: "var(--danger)", marginBottom: 8 }}>
-                        {etsyError}
+                      <div style={{ fontSize: 12, color: "var(--danger)", marginBottom: 8, padding: 8, background: "rgba(239, 68, 68, 0.08)", borderRadius: 6, border: "1px solid rgba(239, 68, 68, 0.2)" }}>
+                        <div style={{ marginBottom: 6 }}>{etsyError}</div>
+                        <div style={{ display: "flex", gap: 12 }}>
+                          <a
+                            href="https://www.etsy.com/sell"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ fontSize: 11, color: "var(--accent, #6366f1)", textDecoration: "underline", fontWeight: 600 }}
+                          >
+                            Open Etsy Shop Setup ↗
+                          </a>
+                          <a
+                            href="/web/settings"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ fontSize: 11, color: "var(--accent, #6366f1)", textDecoration: "underline", fontWeight: 600 }}
+                          >
+                            Settings ↗
+                          </a>
+                        </div>
                       </div>
                     )}
 
