@@ -75,19 +75,66 @@ async function getActiveEtsyToken(uid, clientId, sharedSecret, db) {
   const data = doc.data();
   const expiresAt = data.tokenExpiresAt?.toMillis() ?? 0;
 
+  let currentAccessToken = data.accessToken;
   if (Date.now() > expiresAt - 5 * 60 * 1000) {
     const refreshed = await refreshEtsyToken(clientId, sharedSecret, data.refreshToken);
     const newExpiry = admin.firestore.Timestamp.fromMillis(
       Date.now() + refreshed.expires_in * 1000
     );
+    currentAccessToken = refreshed.access_token;
     await ref.update({
       accessToken: refreshed.access_token,
       refreshToken: refreshed.refresh_token ?? data.refreshToken,
       tokenExpiresAt: newExpiry,
     });
-    return { accessToken: refreshed.access_token, shopId: data.shopId };
   }
-  return { accessToken: data.accessToken, shopId: data.shopId };
+
+  let shopId = data.shopId;
+  if (!shopId && currentAccessToken) {
+    const userId = currentAccessToken.split(".")[0];
+    if (userId) {
+      try {
+        const candidates = [clientId];
+        if (sharedSecret && sharedSecret !== clientId) candidates.push(sharedSecret);
+        for (const apiKey of candidates) {
+          const res = await makeHttpRequest({
+            hostname: "openapi.etsy.com",
+            path: `/v3/application/users/${userId}/shops`,
+            method: "GET",
+            headers: {
+              "x-api-key": apiKey,
+              "Authorization": `Bearer ${currentAccessToken}`,
+              "Content-Type": "application/json",
+            },
+          });
+          if (res.statusCode === 200) {
+            const parsed = JSON.parse(res.body);
+            if (parsed.results && parsed.results.length > 0) {
+              const shop = parsed.results[0];
+              shopId = String(shop.shop_id);
+              await ref.update({
+                shopId: shopId,
+                connectedUsername: shop.shop_name || data.connectedUsername || "Etsy Seller",
+              });
+              console.log(`[getActiveEtsyToken] Auto-recovered shopId ${shopId} (${shop.shop_name}) for uid=${uid}`);
+              break;
+            }
+          }
+        }
+      } catch (shopErr) {
+        console.warn("[getActiveEtsyToken] Auto-recovery of shopId failed:", shopErr.message);
+      }
+    }
+  }
+
+  if (!shopId) {
+    throw new HttpsError(
+      "failed-precondition",
+      "No Etsy seller shop found on this account. Please make sure your Etsy shop is open (etsy.com/sell) and reconnect Etsy in Settings."
+    );
+  }
+
+  return { accessToken: currentAccessToken, shopId };
 }
 
 // ─────────────────────────────────────────────────────────────
