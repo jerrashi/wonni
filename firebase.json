@@ -5,6 +5,8 @@
     "rewrites": [
       { "source": "/web/oauth/aliexpress", "destination": "/oauth/aliexpress/index.html" },
       { "source": "/web/oauth/tiktok", "destination": "/oauth/tiktok/index.html" },
+      { "source": "/web/oauth/ebay", "destination": "/oauth/ebay/index.html" },
+      { "source": "/web/oauth/etsy", "destination": "/oauth/etsy/index.html" },
       { "source": "/web/**", "destination": "/index.html" }
     ]
   },

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { db, auth, callFunction } from "../firebase";
 
 const PLATFORMS = [
@@ -58,21 +58,55 @@ export default function BulkPostModal({ products, onClose }) {
       for (const product of products) {
         allResults[product.id] = {};
 
+        // Always ensure product exists on Wonni first
+        try {
+          await callFunction("postToWonni")({
+            productId: product.id,
+          });
+          allResults[product.id].wonni = { status: "success" };
+        } catch (wErr) {
+          allResults[product.id].wonni = { status: "error", message: wErr.message };
+        }
+
         for (const platformId of Array.from(selected)) {
+          if (platformId === "wonni") continue; // Already posted above
+
           try {
-            if (platformId === "wonni") {
-              await callFunction("postToWonni")({
-                productId: product.id,
-              });
-            } else if (platformId === "ebay") {
-              await callFunction("ebayCreateListing")({
+            if (platformId === "ebay") {
+              const ebayRes = await callFunction("ebayCreateListing")({
+                listingId: product.id,
                 productId: product.id,
                 credentialSet: "web",
               });
+              const ebayListingId = ebayRes.data?.listingId;
+              try {
+                await updateDoc(doc(db, "products", product.id), {
+                  ebayStatus: "active",
+                  "crossPostStatus.ebay": "active",
+                  "crossPostListingIds.ebay": ebayListingId || null,
+                  ebayListingId: ebayListingId || null,
+                  updatedAt: serverTimestamp(),
+                });
+              } catch (syncErr) {
+                console.warn("Could not update product doc with ebay status:", syncErr);
+              }
             } else if (platformId === "etsy") {
-              // Etsy requires category selection - skip in bulk for now
-              allResults[product.id][platformId] = { status: "skipped", message: "Etsy requires category selection" };
-              continue;
+              const etsyRes = await callFunction("etsyCreateListing")({
+                listingId: product.id,
+                credentialSet: "web",
+              });
+              const etsyListingId = etsyRes.data?.listingId;
+              try {
+                await updateDoc(doc(db, "products", product.id), {
+                  etsyStatus: "active",
+                  "crossPostStatus.etsy": "active",
+                  "crossPostListingIds.etsy": etsyListingId || null,
+                  etsyListingId: etsyListingId || null,
+                  updatedAt: serverTimestamp(),
+                });
+              } catch (syncErr) {
+                console.warn("Could not update product doc with etsy status:", syncErr);
+              }
             } else if (platformId === "tiktok") {
               await callFunction("tiktokCreateListing")({
                 productId: product.id,

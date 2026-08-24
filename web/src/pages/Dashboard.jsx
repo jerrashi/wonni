@@ -245,10 +245,10 @@ function PostedPlatforms({ product }) {
   if (product.tiktokStatus === "active") {
     platforms.push({ id: "tiktok", name: "TikTok Shop", logo: "TT", status: "active" });
   }
-  if (product.ebayStatus === "active") {
+  if (product.ebayStatus === "active" || product.crossPostStatus?.ebay === "active" || product.crossPostStatus?.ebay === "posted") {
     platforms.push({ id: "ebay", name: "eBay", logo: "EB", status: "active" });
   }
-  if (product.crossPostStatus?.etsy === "active") {
+  if (product.etsyStatus === "active" || product.crossPostStatus?.etsy === "active" || product.crossPostStatus?.etsy === "posted") {
     platforms.push({ id: "etsy", name: "Etsy", logo: "ET", status: "active" });
   }
 
@@ -319,7 +319,11 @@ function ProductCard({ product, selected = false, onSelect = null, selectMode = 
     product.crossPostStatus?.wonni === "active" ||
     product.tiktokStatus === "active" ||
     product.ebayStatus === "active" ||
+    product.crossPostStatus?.ebay === "active" ||
+    product.crossPostStatus?.ebay === "posted" ||
+    product.etsyStatus === "active" ||
     product.crossPostStatus?.etsy === "active" ||
+    product.crossPostStatus?.etsy === "posted" ||
     product.listingStatus?.mercari === "active";
 
   async function handleDelete() {
@@ -531,7 +535,11 @@ export default function Dashboard() {
     p.crossPostStatus?.wonni === "active" ||
     p.tiktokStatus === "active" ||
     p.ebayStatus === "active" ||
+    p.crossPostStatus?.ebay === "active" ||
+    p.crossPostStatus?.ebay === "posted" ||
+    p.etsyStatus === "active" ||
     p.crossPostStatus?.etsy === "active" ||
+    p.crossPostStatus?.etsy === "posted" ||
     p.listingStatus?.mercari === "active";
 
   const filteredProducts =

@@ -38,6 +38,7 @@ export default function CreateDraftModal({ onClose, onCreated }) {
 
   // ── Single Draft Form State ──────────────────────────────────────────────────
   const [title, setTitle] = useState("");
+  const [brand, setBrand] = useState("");
   const [description, setDescription] = useState("");
   const [costPrice, setCostPrice] = useState("");
   const [sellPrice, setSellPrice] = useState("");
@@ -723,6 +724,7 @@ export default function CreateDraftModal({ onClose, onCreated }) {
         userId: uid,
         source: "photo_upload",
         title: finalTitle,
+        brand: brand.trim() || undefined,
         description: description.trim(),
         images: storedImages,
         imageAssets: storedImageAssets,
@@ -981,6 +983,16 @@ export default function CreateDraftModal({ onClose, onCreated }) {
                   placeholder="e.g. Vintage Printed Graphic T-Shirt"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
+                />
+              </div>
+
+              <div className="modal-field">
+                <label>Brand (Optional)</label>
+                <input
+                  className="input"
+                  placeholder="e.g. BTS, Nike, Sanrio, Unbranded"
+                  value={brand}
+                  onChange={(e) => setBrand(e.target.value)}
                 />
               </div>
 

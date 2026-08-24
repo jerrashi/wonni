@@ -1030,7 +1030,7 @@ a:hover { color: var(--accent-hover); }
 }
 
 .variants-table-row-checkbox {
-  grid-template-columns: 20px minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 0.8fr) minmax(0, 0.6fr);
+  grid-template-columns: 20px minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 0.8fr) minmax(0, 0.6fr) minmax(0, 0.8fr);
 }
 
 .variants-table-row-primary {
