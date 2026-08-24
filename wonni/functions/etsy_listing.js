@@ -135,6 +135,17 @@ async function etsyPatch(path, body, accessToken, clientId) {
   return { statusCode: res.statusCode, data: JSON.parse(res.body) };
 }
 
+async function etsyPut(path, body, accessToken, clientId) {
+  const payload = JSON.stringify(body);
+  const res = await makeHttpRequest({
+    hostname: "openapi.etsy.com",
+    path,
+    method: "PUT",
+    headers: etsyHeaders(accessToken, clientId, { "Content-Length": Buffer.byteLength(payload) }),
+  }, payload);
+  return { statusCode: res.statusCode, data: JSON.parse(res.body) };
+}
+
 // ─────────────────────────────────────────────────────────────
 // Taxonomy
 // ─────────────────────────────────────────────────────────────
@@ -340,6 +351,63 @@ exports.etsyCheckShopSetup = onCall(
   }
 );
 
+function buildEtsyInventoryPayload(variations = [], basePrice = 0.0) {
+  const products = [];
+
+  variations.forEach((v, idx) => {
+    const sku = v.sku || `SKU_${idx + 1}`;
+    const qty = (typeof v.quantity === "number" && v.quantity >= 0) ? v.quantity : 1;
+    const rawPrice = (typeof v.price === "number" && v.price > 0) ? v.price : basePrice;
+    const price = Math.max(0.20, Math.round(rawPrice * 100) / 100);
+
+    const property_values = [];
+    const attrs = v.attributes || [];
+    if (attrs.length > 0) {
+      attrs.forEach(({ name, value }) => {
+        if (name && value) {
+          property_values.push({
+            property_name: name,
+            values: [String(value)]
+          });
+        }
+      });
+    } else if (v.optionValues && Object.keys(v.optionValues).length > 0) {
+      Object.entries(v.optionValues).forEach(([name, value]) => {
+        if (name && value) {
+          property_values.push({
+            property_name: name,
+            values: [String(value)]
+          });
+        }
+      });
+    } else if (v.name) {
+      property_values.push({
+        property_name: "Size",
+        values: [String(v.name)]
+      });
+    }
+
+    products.push({
+      sku: sku,
+      property_values: property_values.length > 0 ? property_values : [{ property_name: "Size", values: ["Regular"] }],
+      offerings: [
+        {
+          price: price,
+          quantity: qty,
+          is_enabled: true
+        }
+      ]
+    });
+  });
+
+  return {
+    products,
+    price_on_property: [],
+    quantity_on_property: [],
+    sku_on_property: []
+  };
+}
+
 /**
  * etsyCreateListing — creates a new Etsy listing from a Wonni listing document.
  */
@@ -356,16 +424,27 @@ exports.etsyCreateListing = onCall(
     const credentials = await getEtsyCredentials(credentialSet);
     const { clientId, sharedSecret } = credentials;
 
-    // Load listing
+    // Load listing and product
+    const [listingDoc, productDoc] = await Promise.all([
+      db.collection("listings").doc(listingId).get(),
+      db.collection("products").doc(listingId).get()
+    ]);
+
+    if (!listingDoc.exists && !productDoc.exists) throw new HttpsError("not-found", "Listing not found.");
+    const listing = listingDoc.exists ? listingDoc.data() : {};
+    const product = productDoc.exists ? productDoc.data() : {};
+
+    if (listing.userId && listing.userId !== uid && product.userId && product.userId !== uid) {
+      throw new HttpsError("permission-denied", "Not your listing.");
+    }
+
     const listingRef = db.collection("listings").doc(listingId);
-    const listingDoc = await listingRef.get();
-    if (!listingDoc.exists) throw new HttpsError("not-found", "Listing not found.");
-    const listing = listingDoc.data();
-    if (listing.userId !== uid) throw new HttpsError("permission-denied", "Not your listing.");
+    const productRef = db.collection("products").doc(listingId);
 
     // Idempotency guard
-    if (listing.crossPostStatus?.etsy === "posted" && listing.crossPostListingIds?.etsy) {
-      return { success: true, listingId: listing.crossPostListingIds.etsy };
+    if ((listing.crossPostStatus?.etsy === "posted" && listing.crossPostListingIds?.etsy) ||
+        (product.etsyStatus === "active" && product.etsyListingId)) {
+      return { success: true, listingId: listing.crossPostListingIds?.etsy || product.etsyListingId };
     }
 
     await listingRef.set({ crossPostStatus: { etsy: "pending" } }, { merge: true });
@@ -398,15 +477,15 @@ exports.etsyCreateListing = onCall(
         );
       }
 
-      const title = (listing.customTitle || "").slice(0, 140);
-      const description = listing.customDescription || "";
+      const title = (listing.customTitle || product.title || "").slice(0, 140);
+      const description = listing.customDescription || product.description || "";
 
-      // Resolve taxonomy_id from the listing's existing category (no second Gemini call);
-      // when_made / who_made default for resale.
+      // Resolve taxonomy_id from category
       let taxonomy_id = taxonomyId;
       let when_made, who_made;
       if (!taxonomy_id) {
-        const resolved = await resolveEtsyFields(clientId, title, listing.category);
+        const categoryToResolve = listing.category || product.category || product.artistName;
+        const resolved = await resolveEtsyFields(clientId, title, categoryToResolve);
         taxonomy_id = resolved.taxonomy_id;
         when_made = resolved.when_made;
         who_made = resolved.who_made;
@@ -415,12 +494,14 @@ exports.etsyCreateListing = onCall(
         who_made = "someone_else";
       }
 
-      const priceAmount = Math.max(0.20, Math.round((listing.price ?? 0) * 100) / 100);
+      const rawPrice = typeof product.listingPrice === "number" ? product.listingPrice : (listing.price ?? 0);
+      const priceAmount = Math.max(0.20, Math.round(rawPrice * 100) / 100);
+      const quantity = typeof listing.quantity === "number" ? listing.quantity : (typeof product.quantity === "number" ? product.quantity : 1);
 
       const createBody = {
-        quantity: listing.quantity ?? 1,
-        title,
-        description: description || title,
+        quantity: quantity,
+        title: title || "Product",
+        description: description || title || "Product description",
         price: priceAmount,
         who_made,
         when_made,
@@ -442,37 +523,50 @@ exports.etsyCreateListing = onCall(
       const etsyListingId = String(created.listing_id);
 
       // Upload photos
-      const photoPaths = listing.photoPaths || [];
+      const photoPaths = (listing.photoPaths && listing.photoPaths.length > 0)
+        ? listing.photoPaths
+        : (product.images || []);
       if (photoPaths.length > 0) {
         await uploadListingImages(shopId, etsyListingId, photoPaths, accessToken, clientId);
       }
 
-      await listingRef.set({
-        crossPostStatus: { etsy: "posted" },
-        crossPostListingIds: { etsy: etsyListingId },
-      }, { merge: true });
-
-      // Dual-write to products collection if doc exists (for dropship/web parity)
-      try {
-        const productRef = db.collection("products").doc(listingId);
-        const productSnap = await productRef.get();
-        if (productSnap.exists) {
-          await productRef.update({
-            etsyStatus: "active",
-            "crossPostStatus.etsy": "active",
-            "crossPostListingIds.etsy": etsyListingId,
-            etsyListingId: etsyListingId,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
+      // Check variations and update listing inventory
+      const variations = (listing.variations && listing.variations.length > 0)
+        ? listing.variations
+        : (product.variants || []);
+      if (variations.length > 1) {
+        console.log(`[etsyCreateListing] Updating inventory for ${variations.length} variations on listing ${etsyListingId}`);
+        try {
+          const invPayload = buildEtsyInventoryPayload(variations, priceAmount);
+          const invRes = await etsyPut(
+            `/v3/application/listings/${etsyListingId}/inventory`,
+            invPayload,
+            accessToken,
+            clientId
+          );
+          console.log(`[etsyCreateListing] Inventory update status: ${invRes.statusCode}`);
+        } catch (invErr) {
+          console.warn(`[etsyCreateListing] Failed to update inventory variations:`, invErr.message);
         }
-      } catch (pErr) {
-        console.warn(`[etsyCreateListing] Could not update products doc for ${listingId}:`, pErr.message);
       }
+
+      await Promise.all([
+        listingRef.set({
+          crossPostStatus: { etsy: "posted" },
+          crossPostListingIds: { etsy: etsyListingId },
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true }),
+        productRef.set({
+          etsyStatus: "active",
+          "crossPostStatus.etsy": "active",
+          "crossPostListingIds.etsy": etsyListingId,
+          etsyListingId: etsyListingId,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true })
+      ]);
 
       return { success: true, listingId: etsyListingId };
     } catch (err) {
-      // Log the real reason server-side. HttpsError text is otherwise only returned to the
-      // client and never appears in Cloud Logging, which makes failures undiagnosable.
       console.error(
         `[etsyCreateListing] failed for listing ${listingId}:`,
         err instanceof HttpsError ? `${err.code}: ${err.message}` : (err && err.stack ? err.stack : err)
@@ -485,50 +579,226 @@ exports.etsyCreateListing = onCall(
 );
 
 /**
- * etsyUpdateListing — syncs title, description, and price to an existing Etsy listing.
+ * etsyUpdateListing — syncs title, description, price, and inventory to an existing Etsy listing.
  */
 exports.etsyUpdateListing = onCall(
   { timeoutSeconds: 60 },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Sign in required.");
     const uid = request.auth.uid;
-    const { listingId, credentialSet = "ios" } = request.data;
+    const { listingId: rawListingId, productId, credentialSet = "ios" } = request.data || {};
+    const listingId = rawListingId || productId;
     if (!listingId) throw new HttpsError("invalid-argument", "listingId is required.");
 
     const db = admin.firestore();
     const credentials = await getEtsyCredentials(credentialSet);
     const { clientId, sharedSecret } = credentials;
 
-    const listingDoc = await db.collection("listings").doc(listingId).get();
-    if (!listingDoc.exists) throw new HttpsError("not-found", "Listing not found.");
-    const listing = listingDoc.data();
-    if (listing.userId !== uid) throw new HttpsError("permission-denied", "Not your listing.");
+    const [listingDoc, productDoc] = await Promise.all([
+      db.collection("listings").doc(listingId).get(),
+      db.collection("products").doc(listingId).get()
+    ]);
 
-    const etsyId = listing.crossPostListingIds?.etsy;
+    if (!listingDoc.exists && !productDoc.exists) throw new HttpsError("not-found", "Listing not found.");
+    const listing = listingDoc.exists ? listingDoc.data() : {};
+    const product = productDoc.exists ? productDoc.data() : {};
+
+    if (listing.userId && listing.userId !== uid && product.userId && product.userId !== uid) {
+      throw new HttpsError("permission-denied", "Not your listing.");
+    }
+
+    const etsyId = listing.crossPostListingIds?.etsy || product.etsyListingId || product.crossPostListingIds?.etsy;
     if (!etsyId) throw new HttpsError("failed-precondition", "No Etsy listing ID on record.");
 
     const { accessToken, shopId } = await getActiveEtsyToken(uid, clientId, sharedSecret, db);
 
+    const title = (listing.customTitle || product.title || "").slice(0, 140);
+    const description = listing.customDescription || product.description || "";
+    const rawPrice = typeof product.listingPrice === "number" ? product.listingPrice : (listing.price ?? 0);
+    const priceAmount = Math.max(0.20, Math.round(rawPrice * 100) / 100);
+    const quantity = typeof listing.quantity === "number" ? listing.quantity : (typeof product.quantity === "number" ? product.quantity : 1);
+
     const { statusCode, data } = await etsyPatch(
       `/v3/application/shops/${shopId}/listings/${etsyId}`,
       {
-        title: (listing.customTitle || "").slice(0, 140),
-        description: listing.customDescription || "",
-        price: Math.max(0.20, Math.round((listing.price ?? 0) * 100) / 100),
-        quantity: listing.quantity ?? 1,
+        title,
+        description,
+        price: priceAmount,
+        quantity,
       },
       accessToken, clientId
     );
 
     if (statusCode === 404) {
-      await db.collection("listings").doc(listingId).set(
-        { crossPostStatus: { etsy: "deleted" } }, { merge: true }
-      );
+      await Promise.all([
+        db.collection("listings").doc(listingId).set({ crossPostStatus: { etsy: "deleted" } }, { merge: true }),
+        db.collection("products").doc(listingId).set({ etsyStatus: "deleted", "crossPostStatus.etsy": "deleted" }, { merge: true })
+      ]);
       throw new HttpsError("not-found", "Etsy listing not found — it may have been deleted.");
     }
     if (statusCode !== 200) {
       throw new HttpsError("internal", `Etsy update failed (${statusCode}): ${JSON.stringify(data)}`);
     }
+
+    // If variations exist, update inventory
+    const variations = (listing.variations && listing.variations.length > 0)
+      ? listing.variations
+      : (product.variants || []);
+    if (variations.length > 1) {
+      try {
+        const invPayload = buildEtsyInventoryPayload(variations, priceAmount);
+        await etsyPut(
+          `/v3/application/listings/${etsyId}/inventory`,
+          invPayload,
+          accessToken,
+          clientId
+        );
+      } catch (invErr) {
+        console.warn(`[etsyUpdateListing] Failed to update inventory variations:`, invErr.message);
+      }
+    }
+
+    await Promise.all([
+      db.collection("listings").doc(listingId).set({ updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }),
+      db.collection("products").doc(listingId).set({ updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
+    ]);
+
+    return { success: true };
+  }
+);
+
+/**
+ * Callable Function: etsyPullSync
+ * Fetches live Etsy listing data (price, quantity, title, status) and returns diff with Wonni data.
+ * Expects: { listingId: string, credentialSet?: "ios" | "web" }
+ */
+exports.etsyPullSync = onCall(
+  { memory: "512MiB", timeoutSeconds: 60 },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Sign in required.");
+    }
+    const uid = request.auth.uid;
+    const { listingId: rawListingId, productId, credentialSet = "ios" } = request.data || {};
+    const listingId = rawListingId || productId;
+    if (!listingId) {
+      throw new HttpsError("invalid-argument", "listingId is required.");
+    }
+
+    const db = admin.firestore();
+    const credentials = await getEtsyCredentials(credentialSet);
+    const { clientId, sharedSecret } = credentials;
+
+    const [listingDoc, productDoc] = await Promise.all([
+      db.collection("listings").doc(listingId).get(),
+      db.collection("products").doc(listingId).get()
+    ]);
+
+    const listing = listingDoc.exists ? listingDoc.data() : {};
+    const product = productDoc.exists ? productDoc.data() : {};
+
+    if (listing.userId && listing.userId !== uid && product.userId && product.userId !== uid) {
+      throw new HttpsError("permission-denied", "Not your listing.");
+    }
+
+    const etsyListingId = listing.crossPostListingIds?.etsy || product.etsyListingId || product.crossPostListingIds?.etsy;
+    if (!etsyListingId) {
+      throw new HttpsError("not-found", "No Etsy listing ID on record.");
+    }
+
+    const { accessToken } = await getActiveEtsyToken(uid, clientId, sharedSecret, db);
+
+    const { statusCode, data: etsyItem } = await etsyGet(
+      `/v3/application/listings/${etsyListingId}`,
+      accessToken,
+      clientId
+    );
+
+    if (statusCode !== 200) {
+      throw new HttpsError("not-found", `Etsy listing ${etsyListingId} not found (${statusCode}).`);
+    }
+
+    const etsyTitle = etsyItem.title || null;
+    const etsyPrice = etsyItem.price ? (etsyItem.price.amount / etsyItem.price.divisor) : null;
+    const etsyQuantity = typeof etsyItem.quantity === "number" ? etsyItem.quantity : null;
+    const etsyStatus = etsyItem.state === "active" ? "active" : (etsyItem.state ? etsyItem.state.toLowerCase() : "active");
+
+    const wonniTitle = listing.customTitle || product.title || "";
+    const wonniPrice = typeof product.listingPrice === "number" ? product.listingPrice : (typeof listing.price === "number" ? listing.price : 0.0);
+    const wonniQty = typeof listing.quantity === "number" ? listing.quantity : (typeof product.quantity === "number" ? product.quantity : 1);
+
+    const diff = [];
+    if (etsyTitle && etsyTitle.trim() && etsyTitle.trim() !== wonniTitle.trim()) {
+      diff.push({ field: "Title", wonni: wonniTitle, external: etsyTitle, key: "title", value: etsyTitle });
+    }
+    if (etsyPrice != null && Math.abs(etsyPrice - wonniPrice) >= 0.01) {
+      diff.push({ field: "Price", wonni: `$${wonniPrice.toFixed(2)}`, external: `$${etsyPrice.toFixed(2)}`, key: "price", value: etsyPrice });
+    }
+    if (etsyQuantity != null && etsyQuantity !== wonniQty) {
+      diff.push({ field: "Quantity", wonni: String(wonniQty), external: String(etsyQuantity), key: "quantity", value: etsyQuantity });
+    }
+
+    return {
+      hasDrift: diff.length > 0,
+      diff,
+      etsyData: {
+        title: etsyTitle,
+        price: etsyPrice,
+        quantity: etsyQuantity,
+        status: etsyStatus,
+        listingId: String(etsyListingId)
+      },
+      wonniData: {
+        title: wonniTitle,
+        price: wonniPrice,
+        quantity: wonniQty,
+        status: listing.crossPostStatus?.etsy || product.etsyStatus || "active"
+      }
+    };
+  }
+);
+
+/**
+ * Callable Function: etsyImportPullSync
+ * Applies selected external Etsy fields to Wonni Firestore documents.
+ */
+exports.etsyImportPullSync = onCall(
+  { memory: "512MiB", timeoutSeconds: 30 },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Sign in required.");
+    }
+    const uid = request.auth.uid;
+    const { listingId: rawListingId, productId, fields = {} } = request.data || {};
+    const listingId = rawListingId || productId;
+    if (!listingId) {
+      throw new HttpsError("invalid-argument", "listingId is required.");
+    }
+
+    const db = admin.firestore();
+    const productRef = db.collection("products").doc(listingId);
+    const listingRef = db.collection("listings").doc(listingId);
+
+    const updates = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+    const listingUpdates = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+
+    if (fields.title != null) {
+      updates.title = fields.title;
+      listingUpdates.customTitle = fields.title;
+    }
+    if (fields.price != null && typeof fields.price === "number") {
+      updates.listingPrice = fields.price;
+      listingUpdates.price = fields.price;
+    }
+    if (fields.quantity != null && typeof fields.quantity === "number") {
+      updates.quantity = fields.quantity;
+      listingUpdates.quantity = fields.quantity;
+    }
+
+    await Promise.all([
+      productRef.set(updates, { merge: true }),
+      listingRef.set(listingUpdates, { merge: true })
+    ]);
 
     return { success: true };
   }
