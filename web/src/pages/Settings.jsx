@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { doc, onSnapshot } from "firebase/firestore";
+import { doc, onSnapshot, setDoc } from "firebase/firestore";
 import { linkWithPopup } from "firebase/auth";
 import { db, auth, googleProvider, appleProvider, callFunction } from "../firebase";
 import Layout from "../components/Layout";
@@ -75,6 +75,20 @@ export default function Settings() {
   );
   const [linkError, setLinkError] = useState("");
 
+  // Seller address & shipping settings (for eBay & shipping policies)
+  const [addressLine1, setAddressLine1] = useState("");
+  const [city, setCity] = useState("");
+  const [stateOrProvince, setStateOrProvince] = useState("");
+  const [postalCode, setPostalCode] = useState("");
+  const [country, setCountry] = useState("US");
+  const [shippingType, setShippingType] = useState("calculated");
+  const [buyerPaysShipping, setBuyerPaysShipping] = useState(true);
+  const [handlingTimeDays, setHandlingTimeDays] = useState(1);
+  const [returnsAccepted, setReturnsAccepted] = useState(false);
+  const [returnWindowDays, setReturnWindowDays] = useState(30);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsSavedMessage, setSettingsSavedMessage] = useState("");
+
   async function linkProvider(provider) {
     setLinkError("");
     try {
@@ -94,6 +108,63 @@ export default function Settings() {
       setFeeRate(String((data.tiktokFeeRate ?? 0.075) * 100));
     });
   }, []);
+
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    const ref = doc(db, "users", uid, "sellingSettings", "default");
+    return onSnapshot(ref, (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data.defaultLocation) {
+          setAddressLine1(data.defaultLocation.addressLine1 || "");
+          setCity(data.defaultLocation.city || "");
+          setStateOrProvince(data.defaultLocation.stateOrProvince || "");
+          setPostalCode(data.defaultLocation.postalCode || "");
+          setCountry(data.defaultLocation.country || "US");
+        }
+        if (data.shippingType) setShippingType(data.shippingType);
+        if (typeof data.buyerPaysShipping === "boolean") setBuyerPaysShipping(data.buyerPaysShipping);
+        if (data.handlingTimeDays) setHandlingTimeDays(data.handlingTimeDays);
+        if (typeof data.returnsAccepted === "boolean") setReturnsAccepted(data.returnsAccepted);
+        if (data.returnWindowDays) setReturnWindowDays(data.returnWindowDays);
+      }
+    });
+  }, []);
+
+  async function handleSaveSellingSettings(e) {
+    e.preventDefault();
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    setSavingSettings(true);
+    setSettingsSavedMessage("");
+    try {
+      await setDoc(
+        doc(db, "users", uid, "sellingSettings", "default"),
+        {
+          defaultLocation: {
+            addressLine1,
+            city,
+            stateOrProvince,
+            postalCode,
+            country: country || "US",
+          },
+          shippingType,
+          buyerPaysShipping,
+          handlingTimeDays: parseInt(handlingTimeDays, 10) || 1,
+          returnsAccepted,
+          returnWindowDays: parseInt(returnWindowDays, 10) || 30,
+        },
+        { merge: true }
+      );
+      setSettingsSavedMessage("Settings saved successfully.");
+      setTimeout(() => setSettingsSavedMessage(""), 3000);
+    } catch (err) {
+      alert("Failed to save seller settings: " + err.message);
+    } finally {
+      setSavingSettings(false);
+    }
+  }
 
   useEffect(() => {
     const uid = auth.currentUser?.uid;
@@ -229,6 +300,153 @@ export default function Settings() {
             onDisconnect={() => disconnect("etsy")}
           />
         </div>
+      </div>
+
+      <div className="settings-section">
+        <h2>Seller & Shipping Settings (eBay)</h2>
+        <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 16 }}>
+          eBay requires a ship-from address and business policy settings to publish listings.
+        </p>
+        <form onSubmit={handleSaveSellingSettings}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                Street Address
+              </label>
+              <input
+                className="input"
+                style={{ width: "100%" }}
+                value={addressLine1}
+                onChange={(e) => setAddressLine1(e.target.value)}
+                placeholder="123 Main St"
+                required
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                City
+              </label>
+              <input
+                className="input"
+                style={{ width: "100%" }}
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                placeholder="New York"
+                required
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                State / Province
+              </label>
+              <input
+                className="input"
+                style={{ width: "100%" }}
+                value={stateOrProvince}
+                onChange={(e) => setStateOrProvince(e.target.value)}
+                placeholder="NY"
+                required
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                Postal Code
+              </label>
+              <input
+                className="input"
+                style={{ width: "100%" }}
+                value={postalCode}
+                onChange={(e) => setPostalCode(e.target.value)}
+                placeholder="10001"
+                required
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                Country
+              </label>
+              <input
+                className="input"
+                style={{ width: "100%" }}
+                value={country}
+                onChange={(e) => setCountry(e.target.value)}
+                placeholder="US"
+                required
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                Default Shipping Type
+              </label>
+              <select
+                className="input"
+                style={{ width: "100%" }}
+                value={shippingType}
+                onChange={(e) => setShippingType(e.target.value)}
+              >
+                <option value="calculated">USPS Ground Advantage (Calculated)</option>
+                <option value="mediaMailUSPS">USPS Media Mail</option>
+                <option value="firstClassEnvelope">USPS First Class Envelope</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                Handling Time (Days)
+              </label>
+              <input
+                className="input"
+                type="number"
+                min="1"
+                max="30"
+                style={{ width: "100%" }}
+                value={handlingTimeDays}
+                onChange={(e) => setHandlingTimeDays(e.target.value)}
+              />
+            </div>
+            <div style={{ gridColumn: "1 / -1", display: "flex", gap: 24, alignItems: "center", marginTop: 4 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={buyerPaysShipping}
+                  onChange={(e) => setBuyerPaysShipping(e.target.checked)}
+                />
+                Buyer pays shipping (Calculated)
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={returnsAccepted}
+                  onChange={(e) => setReturnsAccepted(e.target.checked)}
+                />
+                Accept returns
+              </label>
+              {returnsAccepted && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <label style={{ fontSize: 12 }}>Window:</label>
+                  <select
+                    className="input"
+                    style={{ padding: "4px 8px", fontSize: 12 }}
+                    value={returnWindowDays}
+                    onChange={(e) => setReturnWindowDays(e.target.value)}
+                  >
+                    <option value="14">14 days</option>
+                    <option value="30">30 days</option>
+                    <option value="60">60 days</option>
+                  </select>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <button className="btn btn-primary" type="submit" disabled={savingSettings}>
+              {savingSettings ? "Saving…" : "Save Seller Settings"}
+            </button>
+            {settingsSavedMessage && (
+              <span style={{ fontSize: 13, color: "var(--success)" }}>{settingsSavedMessage}</span>
+            )}
+          </div>
+        </form>
       </div>
 
       <div className="settings-section">

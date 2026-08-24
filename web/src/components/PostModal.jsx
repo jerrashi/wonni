@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { db, auth, callFunction } from "../firebase";
 
 const PLATFORMS = [
@@ -12,6 +12,7 @@ const PLATFORMS = [
 
 export default function PostModal({ product, onClose, mode = "modal", buttonRef }) {
   const [integrations, setIntegrations] = useState({});
+  const [hasSellingSettings, setHasSellingSettings] = useState(true);
   const [selected, setSelected] = useState(new Set(["wonni"])); // Wonni always selected
   const [etsyCategory, setEtsyCategory] = useState(null);
   const [etsyCategories, setEtsyCategories] = useState([]);
@@ -62,7 +63,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [mode, onClose, buttonRef]);
 
-  // Load integrations
+  // Load integrations and seller settings
   useEffect(() => {
     if (!uid) return;
     const loadIntegrations = async () => {
@@ -76,6 +77,14 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
         }
       }
       setIntegrations(intData);
+
+      try {
+        const settingsSnap = await getDoc(doc(db, "users", uid, "sellingSettings", "default"));
+        const data = settingsSnap.data() || {};
+        setHasSellingSettings(!!data.defaultLocation?.postalCode);
+      } catch {
+        setHasSellingSettings(false);
+      }
     };
     loadIntegrations();
   }, [uid]);
@@ -160,6 +169,18 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
       return;
     }
 
+    // Validate eBay requirements
+    if (selected.has("ebay")) {
+      if (!integrations.ebay?.isConnected) {
+        setError("eBay not connected. Please connect in Settings first.");
+        return;
+      }
+      if (!hasSellingSettings) {
+        setError("eBay requires a seller address. Please save your address in Settings first.");
+        return;
+      }
+    }
+
     // Validate Etsy requirements
     if (selected.has("etsy")) {
       if (!integrations.etsy?.isConnected) {
@@ -209,18 +230,43 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
               categoryId: null,
             });
           } else if (platformId === "ebay") {
-            await callFunction("ebayCreateListing")({
+            const ebayRes = await callFunction("ebayCreateListing")({
+              listingId: listingId || product.id,
               productId: product.id,
               credentialSet: "web",
             });
+            const ebayListingId = ebayRes.data?.listingId;
+            try {
+              await updateDoc(doc(db, "products", product.id), {
+                ebayStatus: "active",
+                "crossPostStatus.ebay": "active",
+                "crossPostListingIds.ebay": ebayListingId || null,
+                ebayListingId: ebayListingId || null,
+                updatedAt: serverTimestamp(),
+              });
+            } catch (syncErr) {
+              console.warn("Could not update product doc with ebay status:", syncErr);
+            }
           } else if (platformId === "etsy") {
-            await callFunction("etsyCreateListing")({
-              listingId,
+            const etsyRes = await callFunction("etsyCreateListing")({
+              listingId: listingId || product.id,
               credentialSet: "web",
               taxonomyId: etsyCategory.id,
               shippingProfileId: etsyShippingId,
               returnPolicyId: etsyReturnId,
             });
+            const etsyListingId = etsyRes.data?.listingId;
+            try {
+              await updateDoc(doc(db, "products", product.id), {
+                etsyStatus: "active",
+                "crossPostStatus.etsy": "active",
+                "crossPostListingIds.etsy": etsyListingId || null,
+                etsyListingId: etsyListingId || null,
+                updatedAt: serverTimestamp(),
+              });
+            } catch (syncErr) {
+              console.warn("Could not update product doc with etsy status:", syncErr);
+            }
           } else if (platformId === "mercari") {
             const variants = Array.isArray(product.variants) ? product.variants : [];
             const inStockVariants = product.hasVariants

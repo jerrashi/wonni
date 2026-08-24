@@ -2707,6 +2707,7 @@ function VariantsEditor({
           </a>
         ) : (
           <button
+            type="button"
             className="input"
             style={{ fontSize: 11, padding: "6px 8px", color: "var(--muted)", textAlign: "center", cursor: "pointer" }}
             onClick={() => {
@@ -2849,12 +2850,12 @@ function VariantsEditor({
           ) : (
             <>
               <div className="variants-table-row variants-table-header variants-table-row-checkbox">
-                <span style={{ flex: "0 0 40px" }} />
-                <span style={{ flex: "1 1 120px" }}>Variant</span>
-                <span style={{ flex: "1 1 110px" }}>SKU</span>
-                <span style={{ flex: "1 1 90px" }}>Price</span>
-                <span style={{ flex: "1 1 60px" }}>Qty</span>
-                <span style={{ flex: "1 1 100px" }}>Mercari</span>
+                <span />
+                <span>Variant</span>
+                <span>SKU</span>
+                <span>Price</span>
+                <span>Qty</span>
+                <span>Mercari</span>
               </div>
               {activeVariants.map(renderRow)}
             </>
@@ -3305,12 +3306,17 @@ function ProductDetail() {
   const [product, setProduct] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [deletingProduct, setDeletingProduct] = useState(false);
   const [title, setTitle] = useState("");
+  const [brand, setBrand] = useState("");
+  const [aiSuggestedBrand, setAiSuggestedBrand] = useState(null);
   const [description, setDescription] = useState("");
   const [listingPrice, setListingPrice] = useState(null);
   const [sourcePrice, setSourcePrice] = useState(null);
   const [sourcePriceInput, setSourcePriceInput] = useState("");
+  const [checkingEbaySync, setCheckingEbaySync] = useState(false);
+  const [ebayPullSyncDiff, setEbayPullSyncDiff] = useState(null);
+  const [importingEbayChanges, setImportingEbayChanges] = useState(false);
+  const [ebaySyncMessage, setEbaySyncMessage] = useState("");
   const [weightLbs, setWeightLbs] = useState("0");
   const [weightOz, setWeightOz] = useState("6");
   const [lengthIn, setLengthIn] = useState("");
@@ -3325,6 +3331,11 @@ function ProductDetail() {
   const [estimatedShippingDays, setEstimatedShippingDays] = useState("3");
   const [handlingTimeDays, setHandlingTimeDays] = useState("");
   const [images, setImages] = useState([]);
+  const imagesRef = useRef(images);
+  useEffect(() => { imagesRef.current = images; }, [images]);
+  const [draggingPhotoId, setDraggingPhotoId] = useState(null);
+  const dragStartImagesRef = useRef(null);
+  const dragHasCommittedRef = useRef(false);
   const [previewIndex, setPreviewIndex] = useState(0);
   // Tracked by stable image id, not array position — a background split of a
   // *different* image inserts a variable number of items ahead of this one,
@@ -3462,14 +3473,16 @@ function ProductDetail() {
         const effectiveFields = localFields ? { ...next, ...localFields } : next;
 
         const nextTitle = effectiveFields.title ?? next.title ?? "";
+        const nextBrand = effectiveFields.brand ?? next.brand ?? (next.artistName ?? "");
         const nextDescription = effectiveFields.description ?? next.description ?? "";
         setTitle(nextTitle);
+        setBrand(nextBrand);
         setDescription(nextDescription);
         const effListingPrice = "listingPrice" in effectiveFields ? effectiveFields.listingPrice : next.listingPrice;
         const nextListingPrice = typeof effListingPrice === "number" ? effListingPrice : null;
         setListingPrice(nextListingPrice);
 
-        // AI-suggested title/description/price — only surface a chip when the
+        // AI-suggested title/brand/description/price — only surface a chip when the
         // suggestion actually differs from the current value and the user
         // hasn't already dismissed it this session (re-dismissing on every
         // snapshot re-render would make Discard feel broken).
@@ -3477,6 +3490,11 @@ function ProductDetail() {
           !dismissedAiTitleRef.current
             && typeof next.aiSuggestedTitle === "string" && next.aiSuggestedTitle && next.aiSuggestedTitle !== nextTitle
             ? next.aiSuggestedTitle
+            : null
+        );
+        setAiSuggestedBrand(
+          typeof next.aiSuggestedBrand === "string" && next.aiSuggestedBrand && next.aiSuggestedBrand !== nextBrand
+            ? next.aiSuggestedBrand
             : null
         );
         setAiSuggestedPrice(
@@ -3670,6 +3688,55 @@ function ProductDetail() {
   function handleTitleChange(value) {
     setTitle(value);
     markFieldsDirty({ title: value });
+  }
+
+  function handleBrandChange(value) {
+    setBrand(value);
+    markFieldsDirty({ brand: value.trim() || null });
+  }
+
+  async function handleCheckEbaySync() {
+    setCheckingEbaySync(true);
+    setEbaySyncMessage("");
+    setEbayPullSyncDiff(null);
+    try {
+      const res = await callFunction("ebayPullSync")({ productId, credentialSet: "web" });
+      if (res.data?.hasDrift) {
+        setEbayPullSyncDiff(res.data);
+      } else {
+        setEbaySyncMessage("✓ eBay listing is up to date (no external changes detected).");
+        setTimeout(() => setEbaySyncMessage(""), 5000);
+      }
+    } catch (err) {
+      console.error("eBay sync check failed:", err);
+      setEbaySyncMessage(`Sync check failed: ${err.message}`);
+    } finally {
+      setCheckingEbaySync(false);
+    }
+  }
+
+  async function importEbayPullSyncChanges() {
+    if (!ebayPullSyncDiff?.ebayData) return;
+    setImportingEbayChanges(true);
+    try {
+      const { title: ebayTitle, price: ebayPrice, quantity: ebayQuantity } = ebayPullSyncDiff.ebayData;
+      const fieldsToUpdate = {};
+      if (ebayTitle) fieldsToUpdate.title = ebayTitle;
+      if (ebayPrice != null) fieldsToUpdate.price = ebayPrice;
+      if (ebayQuantity != null) fieldsToUpdate.quantity = ebayQuantity;
+
+      await callFunction("ebayImportPullSync")({ productId, fields: fieldsToUpdate });
+      if (ebayTitle) setTitle(ebayTitle);
+      if (ebayPrice != null) setListingPrice(ebayPrice);
+      setEbayPullSyncDiff(null);
+      setEbaySyncMessage("✓ Successfully applied changes from eBay!");
+      setTimeout(() => setEbaySyncMessage(""), 5000);
+    } catch (err) {
+      console.error("Failed to import eBay changes:", err);
+      setEbaySyncMessage(`Import failed: ${err.message}`);
+    } finally {
+      setImportingEbayChanges(false);
+    }
   }
 
   function handleDescriptionChange(value) {
@@ -4827,6 +4894,67 @@ function ProductDetail() {
         </div>
       )}
 
+      {ebaySyncMessage && (
+        <div style={{ marginBottom: 12, fontSize: 12, color: "var(--info, #6366f1)", textAlign: "right" }}>
+          {ebaySyncMessage}
+        </div>
+      )}
+
+      {ebayPullSyncDiff && (
+        <div className="card" style={{ marginBottom: 12, padding: 14, border: "1px solid var(--accent, #6366f1)", borderRadius: 8, background: "var(--surface)" }}>
+          <div style={{ fontWeight: 600, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+            <span>📦 eBay Listing Changes Detected</span>
+          </div>
+          {ebayPullSyncDiff.diff.length === 0 ? (
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>No differences found. Live eBay listing matches Wonni.</div>
+          ) : (
+            <>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>
+                The following fields differ between your Wonni data and the live eBay listing:
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", fontSize: 12, marginBottom: 10, borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ textAlign: "left", color: "var(--muted)", borderBottom: "1px solid var(--border)" }}>
+                      <th style={{ padding: "6px 8px" }}>Field</th>
+                      <th style={{ padding: "6px 8px" }}>Current Wonni Value</th>
+                      <th style={{ padding: "6px 8px" }}>Live eBay Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ebayPullSyncDiff.diff.map((d, i) => (
+                      <tr key={i} style={{ borderBottom: "1px solid var(--surface-hover)" }}>
+                        <td style={{ padding: "6px 8px", fontWeight: 600 }}>{d.field}</td>
+                        <td style={{ padding: "6px 8px", color: "var(--danger, #ef4444)" }}>{String(d.wonni || "(empty)")}</td>
+                        <td style={{ padding: "6px 8px", color: "var(--success, #22c55e)", fontWeight: 600 }}>{String(d.external || "(empty)")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <button
+                  className="btn btn-primary"
+                  onClick={importEbayPullSyncChanges}
+                  disabled={importingEbayChanges}
+                  style={{ fontSize: 11 }}
+                >
+                  {importingEbayChanges ? "⏳ Applying…" : "✓ Accept edits from eBay"}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => setEbayPullSyncDiff(null)}
+                  disabled={importingEbayChanges}
+                  style={{ fontSize: 11 }}
+                >
+                  ✕ Dismiss
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {error && <div className="card" style={{ marginBottom: 20, color: "var(--danger)" }}>{error}</div>}
 
       {loading ? (
@@ -4929,142 +5057,253 @@ function ProductDetail() {
               </div>
 
               {/* Thumbnail Grid (Right 50%) */}
-              <div className="photo-tile-grid">
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, flex: 1, width: "100%", overflowY: "auto", alignContent: "start" }}>
-                  {(showAllPhotos ? images : images.slice(0, product.tiktokStatus === "active" ? 9 : 12)).map((image, index) => {
-                    const actualIndex = showAllPhotos ? images.indexOf(image) : index;
-                    const isActive = actualIndex === safePreviewIndex;
-                    const tagLabels = (image.variantTags ?? []).map((t) => `${t.optionName}: ${t.value}`);
-                    const overLimit = Object.entries(PLATFORM_IMAGE_LIMITS)
-                      .filter(([, limit]) => actualIndex >= limit)
-                      .map(([name]) => name);
+              {(() => {
+                const maxVisiblePhotos = product.tiktokStatus === "active" ? 9 : 12;
+                const hasMorePhotos = images.length > maxVisiblePhotos;
+                const isPhotoGridMinimized = hasMorePhotos && !showAllPhotos;
 
-                    return (
-                      <div
-                        key={image.id}
-                        style={{
+                return (
+                  <div className="photo-tile-grid">
+                    <div
+                      style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, flex: 1, width: "100%", overflowY: "auto", alignContent: "start" }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (draggingPhotoId && dragStartImagesRef.current) {
+                          dragHasCommittedRef.current = true;
+                          const finalImages = imagesRef.current;
+                          const changed = finalImages.some((img, i) => img.id !== dragStartImagesRef.current[i]?.id);
+                          if (changed) {
+                            stageMediaEdit(finalImages);
+                          }
+                          setDraggingPhotoId(null);
+                          dragStartImagesRef.current = null;
+                        }
+                      }}
+                    >
+                      {(showAllPhotos ? images : images.slice(0, maxVisiblePhotos)).map((image, index) => {
+                        const actualIndex = showAllPhotos ? images.indexOf(image) : index;
+                        const isActive = actualIndex === safePreviewIndex;
+                        const isDraggingThis = image.id === draggingPhotoId;
+                        const tagLabels = (image.variantTags ?? []).map((t) => `${t.optionName}: ${t.value}`);
+                        const overLimit = Object.entries(PLATFORM_IMAGE_LIMITS)
+                          .filter(([, limit]) => actualIndex >= limit)
+                          .map(([name]) => name);
+
+                        return (
+                          <div
+                            key={image.id}
+                            style={{
+                              position: "relative",
+                              aspectRatio: "1 / 1",
+                              borderRadius: 8,
+                              overflow: "hidden",
+                              cursor: savingMedia ? "default" : isDraggingThis ? "grabbing" : "grab",
+                              border: isDraggingThis
+                                ? "2px dashed var(--primary)"
+                                : isActive
+                                  ? "3px solid var(--primary)"
+                                  : "1px solid var(--border)",
+                              opacity: isDraggingThis ? 0.35 : overLimit.length ? 0.6 : 1,
+                              transform: isDraggingThis ? "scale(0.96)" : "scale(1)",
+                              transition: "transform 0.15s ease, opacity 0.15s ease, border-color 0.15s ease",
+                              backgroundColor: "var(--surface-hover)",
+                            }}
+                            onMouseEnter={() => {
+                              if (!draggingPhotoId) setPreviewIndex(actualIndex);
+                            }}
+                            onDragStart={(e) => {
+                              if (savingMedia) return;
+                              setDraggingPhotoId(image.id);
+                              dragStartImagesRef.current = imagesRef.current;
+                              dragHasCommittedRef.current = false;
+                              e.dataTransfer.effectAllowed = "move";
+                              try {
+                                e.dataTransfer.setData("text/plain", image.id);
+                              } catch (_) {}
+                            }}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              e.dataTransfer.dropEffect = "move";
+                              if (draggingPhotoId && draggingPhotoId !== image.id) {
+                                const cur = imagesRef.current;
+                                const fromIdx = cur.findIndex((img) => img.id === draggingPhotoId);
+                                const toIdx = cur.findIndex((img) => img.id === image.id);
+                                if (fromIdx !== -1 && toIdx !== -1 && fromIdx !== toIdx) {
+                                  const next = moveItem(cur, fromIdx, toIdx);
+                                  imagesRef.current = next;
+                                  setImages(next);
+                                  setPreviewIndex(toIdx);
+                                }
+                              }
+                            }}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              dragHasCommittedRef.current = true;
+                              if (dragStartImagesRef.current) {
+                                const finalImages = imagesRef.current;
+                                const changed = finalImages.some((img, i) => img.id !== dragStartImagesRef.current[i]?.id);
+                                if (changed) {
+                                  stageMediaEdit(finalImages);
+                                }
+                              }
+                              setDraggingPhotoId(null);
+                              dragStartImagesRef.current = null;
+                            }}
+                            onDragEnd={(e) => {
+                              if (!dragHasCommittedRef.current && dragStartImagesRef.current) {
+                                if (e.dataTransfer.dropEffect === "none") {
+                                  setImages(dragStartImagesRef.current);
+                                  imagesRef.current = dragStartImagesRef.current;
+                                } else {
+                                  const finalImages = imagesRef.current;
+                                  const changed = finalImages.some((img, i) => img.id !== dragStartImagesRef.current[i]?.id);
+                                  if (changed) {
+                                    stageMediaEdit(finalImages);
+                                  }
+                                }
+                              }
+                              setDraggingPhotoId(null);
+                              dragStartImagesRef.current = null;
+                              dragHasCommittedRef.current = false;
+                            }}
+                            title={overLimit.length ? `Photo #${actualIndex + 1} won't be posted to ${overLimit.join(" or ")}.` : undefined}
+                            draggable={!savingMedia}
+                          >
+                            <img
+                              src={image.url}
+                              alt={`Photo ${actualIndex + 1}`}
+                              style={{
+                                position: "absolute",
+                                top: 0,
+                                left: 0,
+                                width: "100%",
+                                height: "100%",
+                                objectFit: "cover",
+                                pointerEvents: "none",
+                              }}
+                            />
+                            {/* Tags - bottom */}
+                            {tagLabels.length > 0 && (
+                              <div style={{
+                                position: "absolute",
+                                bottom: 0,
+                                left: 0,
+                                right: 0,
+                                background: "rgba(0,0,0,0.7)",
+                                color: "white",
+                                fontSize: 9,
+                                padding: "2px 4px",
+                                whiteSpace: "nowrap",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                zIndex: 2,
+                                pointerEvents: "none",
+                              }} title={tagLabels.join(", ")}>
+                                {tagLabels[0]}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+
+                      {/* Upload Button Tile (only when not minimized) */}
+                      {!isPhotoGridMinimized && (
+                        <label style={{
                           position: "relative",
                           aspectRatio: "1 / 1",
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          justifyContent: "center",
                           borderRadius: 8,
-                          overflow: "hidden",
-                          cursor: "pointer",
-                          border: isActive ? "3px solid var(--primary)" : "1px solid var(--border)",
-                          opacity: overLimit.length ? 0.6 : 1,
-                          backgroundColor: "var(--surface-hover)",
-                        }}
-                        onMouseEnter={() => setPreviewIndex(actualIndex)}
-                        onDragStart={(e) => {
-                          e.dataTransfer.effectAllowed = "move";
-                          setPreviewIndex(actualIndex);
-                        }}
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          e.dataTransfer.dropEffect = "move";
-                        }}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          if (safePreviewIndex !== actualIndex) {
-                            handleDropReorder(safePreviewIndex, actualIndex);
-                          }
-                        }}
-                        title={overLimit.length ? `Photo #${actualIndex + 1} won't be posted to ${overLimit.join(" or ")}.` : undefined}
-                        draggable={!savingMedia}
-                      >
-                        <img src={image.url} alt={`Photo ${actualIndex + 1}`} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover" }} />
-                        {/* Handle Icon - top left */}
-                        <div style={{
-                          position: "absolute",
-                          top: 4,
-                          left: 4,
-                          color: "white",
-                          fontSize: 12,
-                          opacity: 0.7,
-                          cursor: "grab",
-                          zIndex: 2,
-                        }} title="Drag to reorder">
-                          ⠿
-                        </div>
-                        {/* Tags - bottom */}
-                        {tagLabels.length > 0 && (
-                          <div style={{
-                            position: "absolute",
-                            bottom: 0,
-                            left: 0,
-                            right: 0,
-                            background: "rgba(0,0,0,0.7)",
-                            color: "white",
-                            fontSize: 9,
-                            padding: "2px 4px",
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            zIndex: 2,
-                          }} title={tagLabels.join(", ")}>
-                            {tagLabels[0]}
+                          border: "2px dashed var(--border)",
+                          background: "rgba(255, 255, 255, 0.03)",
+                          cursor: savingMedia ? "not-allowed" : "pointer",
+                          transition: "all 0.15s ease",
+                        }} title="Add photos to listing">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            disabled={savingMedia}
+                            style={{ display: "none" }}
+                            onChange={(e) => {
+                              const files = Array.from(e.target.files ?? []);
+                              if (files.length > 0) handleAddPhotos(files);
+                              e.target.value = "";
+                            }}
+                          />
+                          <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+                            <span style={{ fontSize: 20, fontWeight: "bold", color: "var(--primary)", lineHeight: 1 }}>+</span>
+                            <span style={{ fontSize: 9, color: "var(--muted)", marginTop: 2, fontWeight: 500, textAlign: "center" }}>Add</span>
                           </div>
+                        </label>
+                      )}
+                    </div>
+
+                    {/* Action Row below Grid (Toggle view and Trailing Add Photo button when minimized) */}
+                    {hasMorePhotos && (
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12, width: "100%" }}>
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          style={{ fontSize: 12 }}
+                          onClick={() => setShowAllPhotos(!showAllPhotos)}
+                        >
+                          {showAllPhotos ? "↑ Show first " + maxVisiblePhotos : "↓ View all " + images.length + " photos"}
+                        </button>
+                        {isPhotoGridMinimized && (
+                          <label
+                            className="btn btn-ghost"
+                            style={{
+                              fontSize: 12,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 6,
+                              cursor: savingMedia ? "not-allowed" : "pointer",
+                              opacity: savingMedia ? 0.5 : 1,
+                              margin: 0,
+                            }}
+                            title="Add photos to listing"
+                          >
+                            <input
+                              type="file"
+                              accept="image/*"
+                              multiple
+                              disabled={savingMedia}
+                              style={{ display: "none" }}
+                              onChange={(e) => {
+                                const files = Array.from(e.target.files ?? []);
+                                if (files.length > 0) handleAddPhotos(files);
+                                e.target.value = "";
+                              }}
+                            />
+                            <span>+ Add photo</span>
+                          </label>
                         )}
                       </div>
-                    );
-                  })}
+                    )}
 
-                  {/* Upload Button */}
-                  <label style={{
-                    position: "relative",
-                    aspectRatio: "1 / 1",
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    borderRadius: 8,
-                    border: "2px dashed var(--border)",
-                    background: "rgba(255, 255, 255, 0.03)",
-                    cursor: savingMedia ? "not-allowed" : "pointer",
-                    transition: "all 0.15s ease",
-                  }} title="Add photos to listing">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      disabled={savingMedia}
-                      style={{ display: "none" }}
-                      onChange={(e) => {
-                        const files = Array.from(e.target.files ?? []);
-                        if (files.length > 0) handleAddPhotos(files);
-                        e.target.value = "";
-                      }}
-                    />
-                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-                      <span style={{ fontSize: 20, fontWeight: "bold", color: "var(--primary)", lineHeight: 1 }}>+</span>
-                      <span style={{ fontSize: 9, color: "var(--muted)", marginTop: 2, fontWeight: 500, textAlign: "center" }}>Add</span>
-                    </div>
-                  </label>
-                </div>
-
-                {/* Toggle Button */}
-                {images.length > (product.tiktokStatus === "active" ? 9 : 12) && (
-                  <button
-                    className="btn btn-ghost"
-                    style={{ marginTop: 12, fontSize: 12, alignSelf: "flex-start" }}
-                    onClick={() => setShowAllPhotos(!showAllPhotos)}
-                  >
-                    {showAllPhotos ? "↑ Show first " + (product.tiktokStatus === "active" ? "9" : "12") : "↓ View all " + images.length + " photos"}
-                  </button>
-                )}
-
-                {/* Media Status Messages */}
-                {mediaError && <div style={{ color: "var(--danger)", fontSize: 12, marginTop: 12 }}>{mediaError}</div>}
-                {savingMedia && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 12 }}>Saving…</div>}
-                {activeMediaJobs.length > 0 && (
-                  <div style={{ fontSize: 12, color: "#ff6b35", marginTop: 12, display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ display: "inline-block", animation: "spin 1s linear infinite" }}>⏳</span>
-                    {activeMediaJobs.some((j) => j.status === "error")
-                      ? "A change failed to save"
-                      : activeMediaJobs.some((j) => j.type === "split")
-                        ? "Splitting image…"
-                        : "Uploading photo(s)…"}
+                    {/* Media Status Messages */}
+                    {mediaError && <div style={{ color: "var(--danger)", fontSize: 12, marginTop: 12 }}>{mediaError}</div>}
+                    {savingMedia && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 12 }}>Saving…</div>}
+                    {activeMediaJobs.length > 0 && (
+                      <div style={{ fontSize: 12, color: "#ff6b35", marginTop: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ display: "inline-block", animation: "spin 1s linear infinite" }}>⏳</span>
+                        {activeMediaJobs.some((j) => j.status === "error")
+                          ? "A change failed to save"
+                          : activeMediaJobs.some((j) => j.type === "split")
+                            ? "Splitting image…"
+                            : "Uploading photo(s)…"}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                );
+              })()}
             </div>
           </div>
 
@@ -5141,6 +5380,27 @@ function ProductDetail() {
                   )}
                   <input className="input" value={title} onChange={(e) => handleTitleChange(e.target.value)} />
                 </div>
+                <div className="modal-field" style={{ marginBottom: 12 }}>
+                  <label>Brand (Optional)</label>
+                  {aiSuggestedBrand !== null && (
+                    <div style={{ marginBottom: 8, background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(168,85,247,0.08) 100%)", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 8, padding: "10px 12px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent, #6366f1)", letterSpacing: "0.04em" }}>✨ AI SUGGESTED BRAND</span>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button className="btn btn-primary" style={{ fontSize: 11, padding: "2px 10px" }} onClick={() => { handleBrandChange(aiSuggestedBrand); setAiSuggestedBrand(null); }}>Accept</button>
+                          <button className="btn btn-ghost" style={{ fontSize: 11, padding: "2px 8px" }} onClick={() => setAiSuggestedBrand(null)}>Discard</button>
+                        </div>
+                      </div>
+                      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary, var(--muted))" }}>{aiSuggestedBrand}</p>
+                    </div>
+                  )}
+                  <input
+                    className="input"
+                    placeholder="e.g. BTS, Nike, Sanrio, Unbranded"
+                    value={brand}
+                    onChange={(e) => handleBrandChange(e.target.value)}
+                  />
+                </div>
                 <div className="modal-field">
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                     <label style={{ margin: 0 }}>Description</label>
@@ -5169,6 +5429,20 @@ function ProductDetail() {
               </div>
 
               <div className="detail-badges">
+                {(product.ebayStatus === "active" || product.crossPostStatus?.ebay === "active" || product.crossPostStatus?.ebay === "posted") && (
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <span className="chip chip-active">eBay: Active</span>
+                    <button
+                      className="btn btn-ghost"
+                      style={{ fontSize: 11, padding: "2px 8px", border: "1px solid var(--border)", borderRadius: 12 }}
+                      onClick={handleCheckEbaySync}
+                      disabled={checkingEbaySync}
+                      title="Check if edits were made on eBay Seller Hub"
+                    >
+                      {checkingEbaySync ? "⏳ Checking eBay…" : "🔄 Sync from eBay"}
+                    </button>
+                  </div>
+                )}
                 {product.tiktokStatus === "active" && (
                   <span className="chip chip-active">
                     TikTok: Active
