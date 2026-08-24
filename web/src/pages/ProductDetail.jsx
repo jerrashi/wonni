@@ -3306,6 +3306,7 @@ function ProductDetail() {
   const [product, setProduct] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [deletingProduct, setDeletingProduct] = useState(false);
   const [title, setTitle] = useState("");
   const [brand, setBrand] = useState("");
   const [aiSuggestedBrand, setAiSuggestedBrand] = useState(null);
