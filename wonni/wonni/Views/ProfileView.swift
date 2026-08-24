@@ -1055,6 +1055,8 @@ struct EditListingSheet: View {
     @State private var initialPlatforms: Set<String> = []
     @State private var crossPostErrorMessage: String? = nil
     @State private var showCrossPostError = false
+    @AppStorage("hasSeenEbayEditingNotice") private var hasSeenEbayEditingNotice = false
+    @State private var showEbayNoticeAlert = false
     /// Platforms with a repost in flight from `repostToPlatform`, so the status badge can show
     /// "In progress" immediately — `listing` here is a `let` snapshot that won't reflect the
     /// Firestore write until the parent reloads and re-presents this sheet.
@@ -1269,6 +1271,13 @@ struct EditListingSheet: View {
                 }
             } message: { message in
                 Text(message)
+            }
+            .alert("Managing Your eBay Listing", isPresented: $showEbayNoticeAlert) {
+                Button("Got It", role: .cancel) {
+                    hasSeenEbayEditingNotice = true
+                }
+            } message: {
+                Text("Your item is now live on eBay!\n\n• To edit details: Update your listing right here in Wonni, and changes will push to eBay automatically.\n• Direct eBay edits: eBay locks the standard consumer edit page for API listings. To edit on eBay, use eBay Seller Hub (ebay.com/sh/lst/active).")
             }
         }
     }
@@ -1760,6 +1769,9 @@ struct EditListingSheet: View {
                 let functions = Functions.functions()
                 if platform == "ebay" {
                     let _ = try await functions.httpsCallable("ebayCreateListing").call(["listingId": id])
+                    if !hasSeenEbayEditingNotice {
+                        await MainActor.run { showEbayNoticeAlert = true }
+                    }
                 }
                 await MainActor.run { repostingPlatforms.remove(platform) }
                 onSave([])
