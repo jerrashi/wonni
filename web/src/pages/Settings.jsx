@@ -212,12 +212,12 @@ export default function Settings() {
     if (platform === "etsy") {
       const codeVerifier = generateCodeVerifier();
       const codeChallenge = await generateCodeChallenge(codeVerifier);
-      sessionStorage.setItem(`etsy_verifier_${state}`, codeVerifier);
+      localStorage.setItem(`etsy_verifier_${state}`, codeVerifier);
 
       const etsyUrl = "https://www.etsy.com/oauth/connect?" + new URLSearchParams({
         response_type: "code",
         client_id: ETSY_CLIENT_ID,
-        redirect_uri: "https://wonni-app.web.app/web/oauth/etsy",
+        redirect_uri: "https://wonni-app.web.app/oauth/etsy",
         scope: "listings_w listings_r shops_r",
         state,
         code_challenge: codeChallenge,
