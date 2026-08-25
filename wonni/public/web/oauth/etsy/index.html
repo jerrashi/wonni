@@ -33,7 +33,6 @@
       }
       document.body.innerText = "Connecting Etsy…";
       try {
-        // Retrieve the code verifier from sessionStorage (stored by Settings.jsx before redirect)
         const codeVerifier = sessionStorage.getItem(`etsy_verifier_${state}`);
         if (!codeVerifier) {
           throw new Error("Code verifier not found. Please try connecting again.");
@@ -48,7 +47,6 @@
           credentialSet: "web",
         });
 
-        // Clean up sessionStorage
         sessionStorage.removeItem(`etsy_verifier_${state}`);
 
         document.body.innerText = "Etsy connected! You can close this window.";

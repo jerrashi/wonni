@@ -33,7 +33,7 @@
       }
       document.body.innerText = "Connecting eBay…";
       try {
-        await httpsCallable(functions, "dropshipEbayExchangeToken")({ code, state });
+        await httpsCallable(functions, "ebayExchangeToken")({ code, state, credentialSet: "web" });
         document.body.innerText = "eBay connected! You can close this window.";
         setTimeout(() => window.close(), 1500);
       } catch (e) {

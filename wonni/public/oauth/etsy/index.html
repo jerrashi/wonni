@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Completing Etsy Sign-In…</title>
+  <title>Connecting Etsy…</title>
   <style>
     body {
-      font-family: -apple-system, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -14,27 +14,91 @@
       margin: 0;
       background: #f5f5f7;
       color: #1d1d1f;
+      text-align: center;
     }
-    p { font-size: 17px; }
+    .card {
+      background: #fff;
+      padding: 32px 40px;
+      border-radius: 12px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+      max-width: 360px;
+    }
+    p { font-size: 16px; margin: 0; }
+    .status { font-weight: 600; margin-bottom: 8px; }
   </style>
-  <script>
-    (function () {
-      var params = new URLSearchParams(window.location.search);
-      var code = params.get('code');
-      var state = params.get('state');
-      var error = params.get('error');
-
-      if (code) {
-        var redirect = 'wonni://oauth/etsy?code=' + encodeURIComponent(code);
-        if (state) redirect += '&state=' + encodeURIComponent(state);
-        window.location.href = redirect;
-      } else if (error) {
-        window.location.href = 'wonni://oauth/etsy?error=' + encodeURIComponent(error);
-      }
-    })();
-  </script>
 </head>
 <body>
-  <p>Completing Etsy sign-in…</p>
+  <div class="card">
+    <p id="status-text" class="status">Connecting Etsy…</p>
+    <p id="sub-text" style="font-size: 13px; color: #86868b;">Please wait while we complete the connection.</p>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getAuth } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+    import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyCrroW6RXSl15a4j9FPeAUOqkiNCx3g2Lk",
+      authDomain: "wonni-app.firebaseapp.com",
+      projectId: "wonni-app",
+      storageBucket: "wonni-app.firebasestorage.app",
+      messagingSenderId: "840012373819",
+      appId: "1:840012373819:web:c5081552e35940d578a11e",
+    };
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const functions = getFunctions(app);
+
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const state = params.get("state");
+    const error = params.get("error");
+    const statusText = document.getElementById("status-text");
+    const subText = document.getElementById("sub-text");
+
+    const codeVerifier = state ? (localStorage.getItem(`etsy_verifier_${state}`) || sessionStorage.getItem(`etsy_verifier_${state}`)) : null;
+
+    if (error) {
+      statusText.innerText = "Connection Failed";
+      subText.innerText = error;
+      if (!codeVerifier) {
+        window.location.href = 'wonni://oauth/etsy?error=' + encodeURIComponent(error);
+      }
+    } else if (!code) {
+      statusText.innerText = "No code received";
+      subText.innerText = "Please close this window and try connecting again.";
+    } else if (codeVerifier) {
+      // Web Flow
+      auth.authStateReady().then(async () => {
+        if (!auth.currentUser) {
+          statusText.innerText = "Not signed in";
+          subText.innerText = "Please sign in to Wonni first.";
+          return;
+        }
+        try {
+          await httpsCallable(functions, "etsyExchangeToken")({
+            code,
+            codeVerifier,
+            redirectUri: "https://wonni-app.web.app/oauth/etsy",
+            credentialSet: "web",
+          });
+          localStorage.removeItem(`etsy_verifier_${state}`);
+          sessionStorage.removeItem(`etsy_verifier_${state}`);
+          statusText.innerText = "✓ Etsy Connected!";
+          subText.innerText = "You can close this window.";
+          setTimeout(() => window.close(), 1500);
+        } catch (e) {
+          statusText.innerText = "Error Connecting";
+          subText.innerText = e.message;
+        }
+      });
+    } else {
+      // iOS Flow: forward to custom URL scheme
+      var redirect = 'wonni://oauth/etsy?code=' + encodeURIComponent(code);
+      if (state) redirect += '&state=' + encodeURIComponent(state);
+      window.location.href = redirect;
+    }
+  </script>
 </body>
 </html>
