@@ -213,6 +213,7 @@ export default function Settings() {
       const codeVerifier = generateCodeVerifier();
       const codeChallenge = await generateCodeChallenge(codeVerifier);
       localStorage.setItem(`etsy_verifier_${state}`, codeVerifier);
+      localStorage.setItem("latest_etsy_verifier", codeVerifier);
 
       const etsyUrl = "https://www.etsy.com/oauth/connect?" + new URLSearchParams({
         response_type: "code",
