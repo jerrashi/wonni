@@ -7,6 +7,7 @@ import UnsavedChangesModal from "../components/UnsavedChangesModal";
 import PostModal from "../components/PostModal";
 import OverflowMenu from "../components/OverflowMenu";
 import ApplyMercariEditsModal from "../components/ApplyMercariEditsModal";
+import ApplyEbayEditsModal from "../components/ApplyEbayEditsModal";
 import { useDebouncedCallback } from "../hooks/useDebouncedCallback";
 import { normalizeImageAssets, buildImagePayload } from "../lib/media";
 import { useMediaJobQueue } from "../lib/mediaJobQueue";
@@ -3400,6 +3401,9 @@ function ProductDetail() {
   const [applyingMercariEdits, setApplyingMercariEdits] = useState(false);
   const [syncingEbay, setSyncingEbay] = useState(false);
   const [deletingEbay, setDeletingEbay] = useState(false);
+  const [showEbaySyncModal, setShowEbaySyncModal] = useState(false);
+  const [ebayListingDetails, setEbayListingDetails] = useState(null);
+  const [applyingEbaySync, setApplyingEbaySync] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState(null);
   const [aiDescLoading, setAiDescLoading] = useState(false);
   const [aiDescSuggestion, setAiDescSuggestion] = useState(null); // string | null
@@ -4883,16 +4887,32 @@ function ProductDetail() {
       setError("No eBay listing to sync.");
       return;
     }
-    if (!window.confirm("Push changes to eBay? Title, description, and price will be updated on the live listing.")) return;
     setSyncingEbay(true);
     setError("");
     try {
-      await callFunction("ebayUpdateListing")({ productId });
-      setToast({ message: "eBay listing updated successfully" });
+      const details = await callFunction("ebayGetListingDetails")({ productId });
+      setEbayListingDetails(details.data);
+      setShowEbaySyncModal(true);
     } catch (e) {
-      setError(`Failed to sync eBay listing: ${e.message}`);
+      setError(`Failed to load eBay listing details: ${e.message}`);
     } finally {
       setSyncingEbay(false);
+    }
+  }
+
+  async function handleApplyEbaySync(applyFrom) {
+    if (!applyFrom) return;
+    setApplyingEbaySync(true);
+    setError("");
+    try {
+      await callFunction("ebaySyncListing")({ productId, applyFrom });
+      setShowEbaySyncModal(false);
+      setEbayListingDetails(null);
+      setToast({ message: `Applied ${applyFrom === "wonni" ? "Wonni" : "eBay"} version to both platforms` });
+    } catch (e) {
+      setError(`Failed to sync: ${e.message}`);
+    } finally {
+      setApplyingEbaySync(false);
     }
   }
 
@@ -6143,6 +6163,19 @@ function ProductDetail() {
         onDontChange={handleDontChangeMercari}
         applying={applyingMercariEdits}
       />
+
+      {showEbaySyncModal && (
+        <ApplyEbayEditsModal
+          product={product}
+          listingDetails={ebayListingDetails}
+          onApply={handleApplyEbaySync}
+          onCancel={() => {
+            setShowEbaySyncModal(false);
+            setEbayListingDetails(null);
+          }}
+          isLoading={applyingEbaySync}
+        />
+      )}
     </Layout>
   );
 }

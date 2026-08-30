@@ -497,14 +497,24 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                         className="btn btn-ghost"
                         style={{ fontSize: 12, padding: "4px 12px" }}
                         onClick={() => {
-                          if (window.confirm("Push changes to eBay? Title, description, and price will be updated.")) {
-                            callFunction("ebayUpdateListing")({ productId: product.id })
-                              .then(() => alert("eBay listing updated"))
-                              .catch((e) => alert(`Error: ${e.message}`));
-                          }
+                          setError("");
+                          callFunction("ebayGetListingDetails")({ productId: product.id })
+                            .then((res) => {
+                              // Store details and trigger modal or alert based on sync state
+                              const { wonni, ebay } = res.data;
+                              const hasDiff = wonni.title !== ebay.title ||
+                                            wonni.description !== ebay.description ||
+                                            Math.abs((wonni.price ?? 0) - (ebay.price ?? 0)) > 0.01;
+                              if (hasDiff) {
+                                alert("Differences detected. Use the Sync button in ProductDetail to choose which version to keep.");
+                              } else {
+                                alert("eBay and Wonni are already in sync!");
+                              }
+                            })
+                            .catch((e) => setError(`Error: ${e.message}`));
                         }}
                       >
-                        ↻ Sync to eBay
+                        ↻ Check Sync
                       </button>
                       <button
                         className="btn btn-danger"
@@ -512,8 +522,8 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                         onClick={() => {
                           if (window.confirm("Delete eBay listing? It will be removed from eBay.")) {
                             callFunction("ebayDeleteListing")({ productId: product.id })
-                              .then(() => alert("eBay listing deleted"))
-                              .catch((e) => alert(`Error: ${e.message}`));
+                              .then(() => setResults((prev) => ({ ...prev, ebay: { status: "deleted" } })))
+                              .catch((e) => setError(`Error: ${e.message}`));
                           }
                         }}
                       >
