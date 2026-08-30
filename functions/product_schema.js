@@ -8,7 +8,7 @@ function buildNewProductDoc(rawData) {
     userId: rawData.userId,
     source: rawData.source, // "weverse", "aliexpress", "photo_upload", etc.
     sourceId: rawData.sourceId, // weverseSaleId, aliexpressId, etc.
-    sourceUrl: rawData.sourceUrl,
+    ...(rawData.sourceUrl && { sourceUrl: rawData.sourceUrl }),
 
     // Basic info
     title: rawData.title,
