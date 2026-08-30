@@ -490,6 +490,38 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                     )}
                   </label>
 
+                  {/* eBay-specific options: sync/delete if already posted */}
+                  {p.id === "ebay" && isPlatformAlreadyPosted("ebay", product) && (
+                    <div style={{ marginTop: 12, paddingLeft: 24, display: "flex", gap: 8 }}>
+                      <button
+                        className="btn btn-ghost"
+                        style={{ fontSize: 12, padding: "4px 12px" }}
+                        onClick={() => {
+                          if (window.confirm("Push changes to eBay? Title, description, and price will be updated.")) {
+                            callFunction("ebayUpdateListing")({ productId: product.id })
+                              .then(() => alert("eBay listing updated"))
+                              .catch((e) => alert(`Error: ${e.message}`));
+                          }
+                        }}
+                      >
+                        ↻ Sync to eBay
+                      </button>
+                      <button
+                        className="btn btn-danger"
+                        style={{ fontSize: 12, padding: "4px 12px" }}
+                        onClick={() => {
+                          if (window.confirm("Delete eBay listing? It will be removed from eBay.")) {
+                            callFunction("ebayDeleteListing")({ productId: product.id })
+                              .then(() => alert("eBay listing deleted"))
+                              .catch((e) => alert(`Error: ${e.message}`));
+                          }
+                        }}
+                      >
+                        🗑️ Delete from eBay
+                      </button>
+                    </div>
+                  )}
+
                   {/* Etsy-specific options */}
                   {isSelected && p.id === "etsy" && (
                     <div style={{ marginTop: 12, paddingLeft: 24 }}>
