@@ -3,6 +3,7 @@ const admin = require("firebase-admin");
 const https = require("https");
 const { callAliexpressApi } = require("./aliexpress_auth");
 const { importTimeGeminiFields, geminiApiKey } = require("./gemini_identify");
+const { buildNewProductDoc } = require("./product_schema");
 
 const ALLOWED_IMAGE_HOSTS = [".alicdn.com", ".aliexpress-media.com"];
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -175,29 +176,36 @@ exports.aliexpressImportProduct = onCall(
     const docRef = db.collection("products").doc();
     const { options, variants } = mapAliexpressVariants(product.variants, docRef.id);
     const finalImages = storedImages.length ? storedImages : product.images.slice(0, 5);
+    const sourceImages = product.images.slice(0, 5); // Original AliExpress CDN URLs
+
     const geminiFields = await importTimeGeminiFields({
       title: product.title,
       description: product.description ?? "",
       images: finalImages,
     });
-    await docRef.set({
+
+    // Build new schema product
+    const newProduct = buildNewProductDoc({
       userId: uid,
-      aliexpressProductId: product.productId,
-      aliexpressProductUrl: product.productUrl ?? productUrl ?? "",
+      source: "aliexpress",
+      sourceId: product.productId,
+      sourceUrl: product.productUrl ?? productUrl ?? "",
       title: product.title,
       description: product.description ?? "",
-      images: finalImages,
-      aliexpressPrice: product.price,
+      sourceCost: product.price,
       listingPrice: typeof product.listingPrice === "number" ? product.listingPrice : null,
+      sourceImages,
+      images: finalImages,
       options,
       variants,
-      hasVariants: options.length > 0,
-      tiktokStatus: "draft",
+      aliexpressProductId: product.productId,
+      aliexpressUrl: product.productUrl ?? productUrl ?? "",
       ...geminiFields,
       importedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    await docRef.set(newProduct);
     return { productId: docRef.id };
   }
 );
