@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { db, auth, callFunction } from "../firebase";
 import { EbayEditingNoticeModal } from "./EbayEditingNoticeModal";
+import { getCrossPostStatus, getCrossPostListingId } from "../lib/schemaCompat";
 
 const PLATFORMS = [
   { id: "wonni", name: "Wonni", requiresConnected: false, locked: true },
@@ -13,32 +14,9 @@ const PLATFORMS = [
 
 export function isPlatformAlreadyPosted(platformId, product) {
   if (!product) return false;
-  switch (platformId) {
-    case "ebay":
-      return product.ebayStatus === "active"
-        || product.crossPostStatus?.ebay === "active"
-        || product.crossPostStatus?.ebay === "posted"
-        || !!product.ebayListingId
-        || !!product.crossPostListingIds?.ebay;
-    case "etsy":
-      return product.etsyStatus === "active"
-        || product.crossPostStatus?.etsy === "active"
-        || product.crossPostStatus?.etsy === "posted"
-        || !!product.etsyListingId
-        || !!product.crossPostListingIds?.etsy;
-    case "tiktok":
-      return product.tiktokStatus === "active"
-        || product.crossPostStatus?.tiktok === "active"
-        || product.crossPostStatus?.tiktok === "posted";
-    case "mercari":
-      return product.listingStatus?.mercari === "active"
-        || product.crossPostStatus?.mercari === "posted"
-        || !!product.listingId?.mercari;
-    case "wonni":
-      return false;
-    default:
-      return false;
-  }
+  const status = getCrossPostStatus(product, platformId);
+  const listingId = getCrossPostListingId(product, platformId);
+  return status === "active" || status === "posted" || !!listingId;
 }
 
 export default function PostModal({ product, onClose, mode = "modal", buttonRef }) {
