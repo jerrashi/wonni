@@ -281,6 +281,143 @@ exports.ebayDeleteListing = onCall(
   }
 );
 
+// Fetch current eBay listing details for comparison/sync
+exports.ebayGetListingDetails = onCall(
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME], timeoutSeconds: 30, memory: "256MiB" },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+    const { productId } = request.data;
+    if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
+
+    const db = admin.firestore();
+    const snap = await db.collection("products").doc(productId).get();
+    if (!snap.exists) throw new HttpsError("not-found", "Product not found.");
+
+    const product = snap.data();
+    if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
+    if (!product.ebayOfferId) throw new HttpsError("failed-precondition", "No eBay listing found.");
+
+    try {
+      const offer = await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${product.ebayOfferId}`);
+      const sku = product.ebayHasVariations ? null : productId; // Only fetch single-variant inventory
+      let inventory = null;
+
+      if (sku && !product.ebayHasVariations) {
+        inventory = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
+      }
+
+      return {
+        wonni: {
+          title: product.title ?? "",
+          description: canonicalDescription(product),
+          price: product.listingPrice ?? computeEbaySellPrice(product),
+          quantity: product.variants?.reduce((sum, v) => sum + (v.quantity ?? 0), 0) ?? 1,
+        },
+        ebay: {
+          title: offer?.title ?? "",
+          description: offer?.listingDescription ?? "",
+          price: offer?.pricingSummary?.price?.value
+            ? parseFloat(offer.pricingSummary.price.value)
+            : null,
+          quantity: inventory?.availability?.shipToLocationAvailability?.quantity ?? 0,
+        },
+      };
+    } catch (e) {
+      throw new HttpsError("internal", `Failed to fetch eBay listing: ${e.message}`);
+    }
+  }
+);
+
+// Sync bidirectional: apply chosen version (wonni or ebay) to the other platform
+exports.ebaySyncListing = onCall(
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME], timeoutSeconds: 60, memory: "256MiB" },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+    const { productId, applyFrom } = request.data;
+    if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
+    if (!["wonni", "ebay"].includes(applyFrom)) throw new HttpsError("invalid-argument", "applyFrom must be 'wonni' or 'ebay'.");
+
+    const db = admin.firestore();
+    const docRef = db.collection("products").doc(productId);
+    const snap = await docRef.get();
+    if (!snap.exists) throw new HttpsError("not-found", "Product not found.");
+
+    const product = snap.data();
+    if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
+    if (!product.ebayOfferId) throw new HttpsError("failed-precondition", "No eBay listing found.");
+
+    try {
+      if (applyFrom === "wonni") {
+        // Push Wonni version to eBay
+        const title = (product.title ?? "").slice(0, 80);
+        const description = canonicalDescription(product);
+        const price = product.listingPrice ?? computeEbaySellPrice(product);
+
+        await ebayRequest(uid, "PATCH", `/sell/inventory/v1/offer/${product.ebayOfferId}`, {
+          listingDescription: description,
+        });
+
+        // Update inventory
+        const sku = productId;
+        const qty = product.variants?.reduce((sum, v) => sum + (v.quantity ?? 0), 0) ?? 1;
+        await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
+          product: toEbayInventoryProduct(product, { imageLimit: 12, title }),
+          condition: "NEW",
+          availability: { shipToLocationAvailability: { quantity: qty } },
+        });
+
+        // Re-publish
+        await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${product.ebayOfferId}/publish`);
+      } else {
+        // Pull eBay version to Wonni
+        const offer = await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${product.ebayOfferId}`);
+        const sku = productId;
+        const inventory = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
+
+        const updatePayload = {
+          title: offer?.title ?? product.title,
+          description: offer?.listingDescription ?? product.description,
+          listingPrice: offer?.pricingSummary?.price?.value
+            ? parseFloat(offer.pricingSummary.price.value)
+            : product.listingPrice,
+        };
+
+        if (inventory?.availability?.shipToLocationAvailability?.quantity != null) {
+          // Update variant quantities if multi-variant
+          if (product.ebayHasVariations && Array.isArray(product.variants)) {
+            const totalQty = inventory.availability.shipToLocationAvailability.quantity;
+            const batch = db.batch();
+            product.variants.forEach((v, index) => {
+              batch.update(docRef, {
+                [`variants.${index}.quantity`]: Math.max(0, v.quantity ?? 0),
+              });
+            });
+            await batch.commit();
+          } else {
+            updatePayload.quantity = inventory.availability.shipToLocationAvailability.quantity;
+          }
+        }
+
+        await docRef.update(updatePayload);
+      }
+
+      // Update sync timestamp
+      await docRef.update({
+        ebayLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return { success: true };
+    } catch (e) {
+      throw new HttpsError("internal", `Failed to sync listing: ${e.message}`);
+    }
+  }
+);
+
 // Update an eBay listing with current Wonni product data (title, description, price, images)
 exports.ebayUpdateListing = onCall(
   { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME], timeoutSeconds: 60, memory: "256MiB" },

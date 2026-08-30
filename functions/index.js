@@ -10,7 +10,7 @@ const { identifyProductsInImage } = require("./identify_products");
 const { placeAliexpressOrder, confirmTiktokShipment, pollAliexpressTracking } = require("./aliexpress_order");
 const { tiktokExchangeToken } = require("./tiktok_auth");
 const { dropshipEbayExchangeToken } = require("./ebay_auth");
-const { dropshipEbayCreateListing, ebayDeleteListing, ebayUpdateListing } = require("./ebay_listing");
+const { dropshipEbayCreateListing, ebayDeleteListing, ebayUpdateListing, ebayGetListingDetails, ebaySyncListing } = require("./ebay_listing");
 const { tiktokCreateListing, tiktokUpdateListing, tiktokDeleteListing, getTiktokCategories } = require("./tiktok_listing");
 const { etsyExchangeToken } = require("./etsy_auth");
 const { etsyPullSync, etsyImportPullSync } = require("./etsy_listing");
@@ -48,6 +48,8 @@ module.exports = {
   ebayCreateListing: dropshipEbayCreateListing,
   ebayDeleteListing,
   ebayUpdateListing,
+  ebayGetListingDetails,
+  ebaySyncListing,
 
   // Etsy listings
   etsyPullSync,
