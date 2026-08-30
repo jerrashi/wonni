@@ -12,6 +12,8 @@ const { tiktokExchangeToken } = require("./tiktok_auth");
 const { dropshipEbayExchangeToken } = require("./ebay_auth");
 const { dropshipEbayCreateListing } = require("./ebay_listing");
 const { tiktokCreateListing, tiktokUpdateListing, tiktokDeleteListing, getTiktokCategories } = require("./tiktok_listing");
+const { etsyExchangeToken } = require("./etsy_auth");
+const { etsyPullSync, etsyImportPullSync } = require("./etsy_listing");
 const { updateMercariListingStatus, ensureMercariListingDetails } = require("./mercari_listing");
 const { syncTiktokOrders, syncTiktokOrdersScheduled } = require("./tiktok_orders");
 const { disconnectPlatform, updateSettings, generateOAuthState } = require("./user_settings");
@@ -23,6 +25,7 @@ module.exports = {
   aliexpressExchangeToken,
   tiktokExchangeToken,
   dropshipEbayExchangeToken,
+  etsyExchangeToken,
 
   // Products
   aliexpressImportProduct,
@@ -41,6 +44,12 @@ module.exports = {
 
   // eBay listings
   dropshipEbayCreateListing,
+  // Alias for web app compatibility (unified backend naming)
+  ebayCreateListing: dropshipEbayCreateListing,
+
+  // Etsy listings
+  etsyPullSync,
+  etsyImportPullSync,
 
   // Mercari listings
   updateMercariListingStatus,

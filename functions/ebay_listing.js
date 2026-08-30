@@ -73,8 +73,10 @@ exports.dropshipEbayCreateListing = onCall(
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
 
-    const { productId, sellPrice, quantity } = request.data;
+    const { productId, sellPrice, quantity, credentialSet } = request.data;
     if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
+    // credentialSet is passed by web app but not used in the unified backend yet;
+    // both iOS and web currently route through the same eBay credentials
 
     const db = admin.firestore();
     const docRef = db.collection("products").doc(productId);
