@@ -111,6 +111,8 @@ exports.weverseBulkImportProducts = onCall(
             }
 
             const finalImages = storedImages.length ? storedImages : product.images;
+            const sourceImages = extractSourceImages(storedImageAssets, product.images);
+
             const geminiFields = await importTimeGeminiFields({
               title: product.title,
               description: product.description,
@@ -118,33 +120,31 @@ exports.weverseBulkImportProducts = onCall(
             });
 
             const docRef = db.collection("products").doc();
-            await docRef.set({
+            const newProduct = buildNewProductDoc({
               userId: uid,
               source: "weverse",
-              weverseSaleId: saleId,
+              sourceId: saleId,
+              sourceUrl: parsed.url,
               title: product.title,
               description: product.description,
-              weverseInfoTable: product.infoTable,
+              sourceCost: product.price,
+              sourceImages,
               images: finalImages,
               imageAssets: storedImageAssets.length ? storedImageAssets : product.imageAssets,
-              listingImages: finalImages,
-              price: product.price,
-              aliexpressPrice: product.price,
               options: product.options,
               variants: product.variants,
-              hasVariants: product.options.length > 0,
+              weverseSaleId: saleId,
+              weverseArtistId: parsed.artistId,
+              weverseInfoTable: product.infoTable,
               artistName: product.artistName,
               saleStatus: product.saleStatus,
               preOrder: product.preOrder,
-              sourceUrl: parsed.url,
-              orderSheetNumber: item.orderSheetNumber ?? null,
-              orderSheetGroupNumber: item.orderSheetGroupNumber ?? null,
-              tiktokStatus: "draft",
               ...geminiFields,
               importedAt: admin.firestore.FieldValue.serverTimestamp(),
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             });
 
+            await docRef.set(newProduct);
             importedProductIds.push(docRef.id);
           } catch (err) {
             // Release the claim so this saleId isn't misreported as "existing"
