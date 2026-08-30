@@ -3398,6 +3398,8 @@ function ProductDetail() {
   const [importingMercariChanges, setImportingMercariChanges] = useState(false);
   const [showApplyMercariEditsModal, setShowApplyMercariEditsModal] = useState(false);
   const [applyingMercariEdits, setApplyingMercariEdits] = useState(false);
+  const [syncingEbay, setSyncingEbay] = useState(false);
+  const [deletingEbay, setDeletingEbay] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState(null);
   const [aiDescLoading, setAiDescLoading] = useState(false);
   const [aiDescSuggestion, setAiDescSuggestion] = useState(null); // string | null
@@ -4876,6 +4878,42 @@ function ProductDetail() {
     }
   }
 
+  async function handleEbaySyncListing() {
+    if (!product?.ebayOfferId) {
+      setError("No eBay listing to sync.");
+      return;
+    }
+    if (!window.confirm("Push changes to eBay? Title, description, and price will be updated on the live listing.")) return;
+    setSyncingEbay(true);
+    setError("");
+    try {
+      await callFunction("ebayUpdateListing")({ productId });
+      setToast({ message: "eBay listing updated successfully" });
+    } catch (e) {
+      setError(`Failed to sync eBay listing: ${e.message}`);
+    } finally {
+      setSyncingEbay(false);
+    }
+  }
+
+  async function handleEbayDeleteListing() {
+    if (!product?.ebayOfferId) {
+      setError("No eBay listing to delete.");
+      return;
+    }
+    if (!window.confirm("Delete eBay listing? This will remove the listing from eBay.")) return;
+    setDeletingEbay(true);
+    setError("");
+    try {
+      await callFunction("ebayDeleteListing")({ productId });
+      setToast({ message: "eBay listing deleted" });
+    } catch (e) {
+      setError(`Failed to delete eBay listing: ${e.message}`);
+    } finally {
+      setDeletingEbay(false);
+    }
+  }
+
   function scrollToVariants() {
     variantsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -4920,6 +4958,12 @@ function ProductDetail() {
                 onClick: checkMercariSoldItems,
                 disabled: checkingMercariSold
               },
+              ...(product?.ebayOfferId ? [{
+                label: deletingEbay ? "⏳ Deleting…" : "Delete from eBay",
+                onClick: handleEbayDeleteListing,
+                disabled: deletingEbay,
+                danger: true
+              }] : []),
               {
                 label: deletingProduct ? "Deleting…" : "Delete listing",
                 onClick: handleDeleteProduct,
@@ -5596,6 +5640,15 @@ function ProductDetail() {
                 {(product.ebayStatus === "active" || product.crossPostStatus?.ebay === "active" || product.crossPostStatus?.ebay === "posted") && (
                   <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                     <span className="chip chip-active">eBay: Active</span>
+                    <button
+                      className="btn btn-ghost"
+                      style={{ fontSize: 11, padding: "2px 10px", borderRadius: 12, cursor: "pointer" }}
+                      onClick={handleEbaySyncListing}
+                      disabled={syncingEbay}
+                      title="Push changes to eBay"
+                    >
+                      {syncingEbay ? "⏳ Syncing…" : "↻ Sync"}
+                    </button>
                     {ebayPullSyncDiff?.hasDrift && (
                       <button
                         className="btn btn-warning"
