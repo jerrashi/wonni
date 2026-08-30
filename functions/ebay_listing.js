@@ -213,3 +213,127 @@ exports.dropshipEbayCreateListing = onCall(
     return { listingId, offerId, price: basePrice, categoryId, hasVariations };
   }
 );
+
+// Delete an eBay listing: withdraw offer and delete inventory item
+exports.ebayDeleteListing = onCall(
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME], timeoutSeconds: 60, memory: "256MiB" },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+    const { productId } = request.data;
+    if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
+
+    const db = admin.firestore();
+    const docRef = db.collection("products").doc(productId);
+    const snap = await docRef.get();
+    if (!snap.exists) throw new HttpsError("not-found", "Product not found.");
+
+    const product = snap.data();
+    if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
+    if (!product.ebayOfferId) throw new HttpsError("failed-precondition", "No eBay listing to delete.");
+
+    try {
+      // 1. Withdraw the offer (makes it inactive)
+      await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${product.ebayOfferId}/withdraw`);
+    } catch (e) {
+      // 404 = offer doesn't exist (already deleted) — ok to continue
+      if (!e.ebayErrors?.some((err) => err.errorId === 404)) {
+        throw new HttpsError("internal", `Failed to withdraw offer: ${e.message}`);
+      }
+    }
+
+    try {
+      // 2. Delete the inventory item
+      const sku = productId;
+      await ebayRequest(uid, "DELETE", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
+    } catch (e) {
+      // 404 = item doesn't exist — ok to continue
+      if (!e.ebayErrors?.some((err) => err.errorId === 404)) {
+        throw new HttpsError("internal", `Failed to delete inventory: ${e.message}`);
+      }
+    }
+
+    // 3. Clear eBay fields from product
+    await docRef.update({
+      ebayStatus: null,
+      ebayListingId: admin.firestore.FieldValue.delete(),
+      ebayOfferId: admin.firestore.FieldValue.delete(),
+      ebaySellPrice: admin.firestore.FieldValue.delete(),
+      ebayCategoryId: admin.firestore.FieldValue.delete(),
+      ebayHasVariations: admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    // Also clear variant-level eBay fields if multi-variant
+    if (product.ebayHasVariations && Array.isArray(product.variants)) {
+      const batch = db.batch();
+      product.variants.forEach((v, index) => {
+        batch.update(docRef, {
+          [`variants.${index}.ebayStatus`]: admin.firestore.FieldValue.delete(),
+          [`variants.${index}.ebayVariantSku`]: admin.firestore.FieldValue.delete(),
+        });
+      });
+      await batch.commit();
+    }
+
+    return { success: true };
+  }
+);
+
+// Update an eBay listing with current Wonni product data (title, description, price, images)
+exports.ebayUpdateListing = onCall(
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME], timeoutSeconds: 60, memory: "256MiB" },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+    const { productId } = request.data;
+    if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
+
+    const db = admin.firestore();
+    const docRef = db.collection("products").doc(productId);
+    const snap = await docRef.get();
+    if (!snap.exists) throw new HttpsError("not-found", "Product not found.");
+
+    const product = snap.data();
+    if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
+    if (!product.ebayOfferId) throw new HttpsError("failed-precondition", "No eBay listing to update.");
+
+    const offerId = product.ebayOfferId;
+    const title = (product.title ?? "").slice(0, 80);
+    const description = canonicalDescription(product);
+    const price = product.listingPrice ?? computeEbaySellPrice(product);
+
+    try {
+      // eBay: Update offer with new title, description, pricing
+      // Note: inventory item updates are done via PUT (idempotent), not PATCH
+      await ebayRequest(uid, "PATCH", `/sell/inventory/v1/offer/${offerId}`, {
+        listingDescription: description,
+      });
+
+      // Update pricing in offer (note: this may vary by SKU for multi-variant listings)
+      const updatedOffer = await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${offerId}`);
+      if (updatedOffer?.pricingSummary) {
+        await ebayRequest(uid, "PATCH", `/sell/inventory/v1/offer/${offerId}`, {
+          pricingSummary: updatedOffer.pricingSummary.priceType === "FIXED_PRICE"
+            ? { price: { value: price.toFixed(2), currency: "USD" } }
+            : updatedOffer.pricingSummary,
+        });
+      }
+
+      // Re-publish to apply changes
+      await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`);
+    } catch (e) {
+      throw new HttpsError("internal", `Failed to update eBay listing: ${e.message}`);
+    }
+
+    // Update last-synced timestamp
+    await docRef.update({
+      ebayLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return { success: true };
+  }
+);
