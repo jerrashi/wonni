@@ -116,7 +116,7 @@ async function migrate() {
         console.error(`❌ Error transforming ${doc.id}: ${result.error}`);
         errorCount++;
       } else {
-        batch.set(doc.ref, result.data);
+        batch.set(doc.ref, result.data, { ignoreUndefinedProperties: true });
         successCount++;
         batchCount++;
 
