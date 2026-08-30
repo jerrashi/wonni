@@ -231,11 +231,18 @@ exports.ebayDeleteListing = onCall(
 
     const product = snap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
+
+    console.log(`Deleting eBay listing for product ${productId}:`, {
+      ebayListingId: product.ebayListingId,
+      ebayOfferId: product.ebayOfferId,
+      ebayStatus: product.ebayStatus,
+    });
+
     if (!product.ebayListingId && !product.ebayOfferId) {
-      throw new HttpsError("failed-precondition", "No eBay listing to delete.");
+      throw new HttpsError("failed-precondition", "No eBay listing to delete. Neither ebayListingId nor ebayOfferId found.");
     }
     const offerId = product.ebayOfferId;
-    if (!offerId) throw new HttpsError("failed-precondition", "eBay offer ID not found. Listing may not be fully published.");
+    if (!offerId) throw new HttpsError("failed-precondition", `eBay offer ID not found. Product has listingId: ${product.ebayListingId}. Listing may not be fully published.`);
 
     try {
       // 1. Withdraw the offer (makes it inactive)
