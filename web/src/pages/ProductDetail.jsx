@@ -4979,7 +4979,7 @@ function ProductDetail() {
                 disabled: checkingMercariSold
               },
               ...(product?.ebayOfferId ? [{
-                label: deletingEbay ? "⏳ Deleting…" : "Delete from eBay",
+                label: deletingEbay ? "⏳ Deleting…" : "🗑️ Delete eBay listing",
                 onClick: handleEbayDeleteListing,
                 disabled: deletingEbay,
                 danger: true
@@ -5659,13 +5659,13 @@ function ProductDetail() {
               <div className="detail-badges">
                 {(product.ebayStatus === "active" || product.crossPostStatus?.ebay === "active" || product.crossPostStatus?.ebay === "posted") && (
                   <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    <span className="chip chip-active">eBay: Active</span>
+                    <span className="chip chip-active">eBay: Live</span>
                     <button
                       className="btn btn-ghost"
                       style={{ fontSize: 11, padding: "2px 10px", borderRadius: 12, cursor: "pointer" }}
                       onClick={handleEbaySyncListing}
                       disabled={syncingEbay}
-                      title="Push changes to eBay"
+                      title="Sync between Wonni and eBay"
                     >
                       {syncingEbay ? "⏳ Syncing…" : "↻ Sync"}
                     </button>

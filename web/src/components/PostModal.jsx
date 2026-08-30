@@ -480,8 +480,8 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                       {p.locked && " (always included)"}
                     </span>
                     {isAlreadyPosted && (
-                      <span style={{ fontSize: 11, color: "var(--accent, #6366f1)", fontWeight: 600, marginLeft: "auto" }}>
-                        ✓ Already Posted
+                      <span style={{ fontSize: 11, color: "var(--success, #10b981)", fontWeight: 600, marginLeft: "auto" }}>
+                        ✓ Live
                       </span>
                     )}
                     {!isAlreadyPosted && isConnected && !p.locked && <span style={{ fontSize: 11, color: "var(--success)" }}>✓ Connected</span>}
@@ -492,7 +492,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
 
                   {/* eBay-specific options: sync/delete if already posted */}
                   {p.id === "ebay" && isPlatformAlreadyPosted("ebay", product) && (
-                    <div style={{ marginTop: 12, paddingLeft: 24, display: "flex", gap: 8 }}>
+                    <div style={{ marginTop: 12, paddingLeft: 24, display: "flex", gap: 8, justifyContent: "space-between" }}>
                       <button
                         className="btn btn-ghost"
                         style={{ fontSize: 12, padding: "4px 12px" }}
@@ -500,7 +500,6 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                           setError("");
                           callFunction("ebayGetListingDetails")({ productId: product.id })
                             .then((res) => {
-                              // Store details and trigger modal or alert based on sync state
                               const { wonni, ebay } = res.data;
                               const hasDiff = wonni.title !== ebay.title ||
                                             wonni.description !== ebay.description ||
@@ -514,7 +513,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                             .catch((e) => setError(`Error: ${e.message}`));
                         }}
                       >
-                        ↻ Check Sync
+                        ↻ Sync
                       </button>
                       <button
                         className="btn btn-danger"
@@ -527,7 +526,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                           }
                         }}
                       >
-                        🗑️ Delete from eBay
+                        🗑️ Delete
                       </button>
                     </div>
                   )}
