@@ -8,6 +8,7 @@ import PostModal from "../components/PostModal";
 import OverflowMenu from "../components/OverflowMenu";
 import ApplyMercariEditsModal from "../components/ApplyMercariEditsModal";
 import ApplyEbayEditsModal from "../components/ApplyEbayEditsModal";
+import { getSourceCost, getCrossPostStatus, getCrossPostListingId, isPostedToPlatform } from "../lib/schemaCompat";
 import { useDebouncedCallback } from "../hooks/useDebouncedCallback";
 import { normalizeImageAssets, buildImagePayload } from "../lib/media";
 import { useMediaJobQueue } from "../lib/mediaJobQueue";
@@ -3058,7 +3059,7 @@ function MercariModal({
       // `price` is the scraped source price at import time, not a real
       // per-variant override.
       ? String((typeof product.listingPrice === "number" ? product.listingPrice : singleVariant.price) ?? 15)
-      : (product.listingPrice ?? product.suggestedSellPrice ?? product.aliexpressPrice * 2.2 ?? 15).toFixed(2)
+      : (product.listingPrice ?? product.suggestedSellPrice ?? getSourceCost(product) ?? product.aliexpressPrice * 2.2 ?? 15).toFixed(2)
   );
   const [condition, setCondition] = useState(product.mercariCondition ?? product.condition ?? "good");
   const [buyerPaysShipping, setBuyerPaysShipping] = useState(product.mercariBuyerPaysShipping ?? true);
@@ -3099,7 +3100,7 @@ function MercariModal({
       productId: product.id,
       title: product.title,
       description: product.description,
-      price: parseFloat(price) || product.aliexpressPrice * 2.2 || 15,
+      price: parseFloat(price) || getSourceCost(product) ?? product.aliexpressPrice * 2.2 || 15,
       condition,
       brand: product.brand || product.artistName || "",
       suggestedCategory: product.category || product.artistName || product.title,
@@ -3242,9 +3243,9 @@ function MercariModal({
               value={price}
               onChange={(e) => setPrice(e.target.value)}
             />
-            {product.aliexpressPrice > 0 && (
+            {getSourceCost(product) ?? product.aliexpressPrice > 0 && (
               <span style={{ fontSize: 11, color: "var(--muted)" }}>
-                Cost: ${product.aliexpressPrice.toFixed(2)} · Est Proceeds: ${(parseFloat(price || 0) * 0.9).toFixed(2)}
+                Cost: ${getSourceCost(product) ?? product.aliexpressPrice.toFixed(2)} · Est Proceeds: ${(parseFloat(price || 0) * 0.9).toFixed(2)}
               </span>
             )}
           </div>
@@ -3606,7 +3607,7 @@ function ProductDetail() {
   // Background check for eBay drift when product is active on eBay
   useEffect(() => {
     if (!product || !productId) return;
-    const isEbayActive = product.ebayStatus === "active"
+    const isEbayActive = getCrossPostStatus(product, "ebay") === "active"
       || product.crossPostStatus?.ebay === "active"
       || product.crossPostStatus?.ebay === "posted";
     if (!isEbayActive) return;
@@ -4883,7 +4884,7 @@ function ProductDetail() {
   }
 
   async function handleEbaySyncListing() {
-    if (!product?.ebayOfferId) {
+    if (!getCrossPostListingId(product, "ebay")) {
       setError("No eBay listing to sync.");
       return;
     }
@@ -4917,7 +4918,7 @@ function ProductDetail() {
   }
 
   async function handleEbayDeleteListing() {
-    if (!product?.ebayOfferId) {
+    if (!getCrossPostListingId(product, "ebay")) {
       setError("No eBay listing to delete.");
       return;
     }
@@ -4978,7 +4979,7 @@ function ProductDetail() {
                 onClick: checkMercariSoldItems,
                 disabled: checkingMercariSold
               },
-              ...(product?.ebayOfferId ? [{
+              ...(getCrossPostListingId(product, "ebay") ? [{
                 label: deletingEbay ? "⏳ Deleting…" : "🗑️ Delete eBay listing",
                 onClick: handleEbayDeleteListing,
                 disabled: deletingEbay,
@@ -5657,7 +5658,7 @@ function ProductDetail() {
               </div>
 
               <div className="detail-badges">
-                {(product.ebayStatus === "active" || product.crossPostStatus?.ebay === "active" || product.crossPostStatus?.ebay === "posted") && (
+                {(getCrossPostStatus(product, "ebay") === "active" || product.crossPostStatus?.ebay === "active" || product.crossPostStatus?.ebay === "posted") && (
                   <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                     <span className="chip chip-active">eBay: Live</span>
                     <button
