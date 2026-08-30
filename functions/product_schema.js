@@ -3,7 +3,18 @@
 
 // New unified schema structure for all products
 function buildNewProductDoc(rawData) {
-  return {
+  // Helper to filter out undefined values
+  const cleanObject = (obj) => {
+    const cleaned = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (value !== undefined) {
+        cleaned[key] = value;
+      }
+    }
+    return cleaned;
+  };
+
+  return cleanObject({
     // Core
     userId: rawData.userId,
     source: rawData.source, // "weverse", "aliexpress", "photo_upload", etc.
@@ -89,7 +100,7 @@ function buildNewProductDoc(rawData) {
     // Metadata
     importedAt: rawData.importedAt || new Date(),
     updatedAt: rawData.updatedAt || new Date(),
-  };
+  });
 }
 
 // Extract source image URLs from imageAssets or fall back to images
