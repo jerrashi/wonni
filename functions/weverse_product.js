@@ -3,6 +3,7 @@ const admin = require("firebase-admin");
 
 const { downloadBuffer, savePublicBuffer } = require("./product_media");
 const { importTimeGeminiFields, geminiApiKey } = require("./gemini_identify");
+const { buildNewProductDoc, extractSourceImages } = require("./product_schema");
 
 const MAX_IMAGES = 24;
 const USER_AGENT =
@@ -318,6 +319,8 @@ exports.weverseImportProduct = onCall(
     }
 
     const finalImages = storedImages.length ? storedImages : product.images;
+    const sourceImages = extractSourceImages(storedImageAssets, product.images);
+
     const geminiFields = await importTimeGeminiFields({
       title: product.title,
       description: product.description,
@@ -325,33 +328,34 @@ exports.weverseImportProduct = onCall(
     });
 
     const docRef = db.collection("products").doc();
-    await docRef.set({
+
+    // Build new schema product
+    const newProduct = buildNewProductDoc({
       userId: uid,
       source: "weverse",
-      weverseSaleId: parsed.saleId,
-      weverseArtistId: parsed.artistId,
+      sourceId: parsed.saleId,
       sourceUrl: product.sourceUrl,
       title: product.title,
       description: product.description,
+      sourceCost: product.price,
+      listingPrice: null,
+      sourceImages,
       images: finalImages,
       imageAssets: storedImageAssets.length ? storedImageAssets : product.imageAssets,
-      weverseInfoTable: product.infoTable,
-      sourcePrice: product.price,
-      // Kept for compatibility with Dashboard/ListModal which read aliexpressPrice
-      aliexpressPrice: product.price,
-      listingPrice: null,
       options: product.options,
       variants: product.variants,
-      hasVariants: product.options.length > 0,
+      weverseSaleId: parsed.saleId,
+      weverseArtistId: parsed.artistId,
+      weverseInfoTable: product.infoTable,
       artistName: product.artistName,
       saleStatus: product.saleStatus,
       preOrder: product.preOrder,
-      tiktokStatus: "draft",
       ...geminiFields,
       importedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    await docRef.set(newProduct);
     return { productId: docRef.id };
   }
 );
