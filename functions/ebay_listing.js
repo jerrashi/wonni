@@ -190,7 +190,6 @@ exports.dropshipEbayCreateListing = onCall(
     const listingId = published?.listingId;
     const updatePayload = {
       ebayListingId: listingId ?? null,
-      ebayOfferId: offerId,
       ebayStatus: "active",
       ebaySellPrice: basePrice,
       ebayCategoryId: categoryId,
@@ -232,48 +231,20 @@ exports.ebayDeleteListing = onCall(
     const product = snap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
 
-    if (!product.ebayListingId && !product.ebayOfferId) {
-      throw new HttpsError("failed-precondition", "No eBay listing to delete.");
+    if (!product.ebayListingId) {
+      throw new HttpsError("failed-precondition", "No eBay listing found.");
     }
 
-    let offerId = product.ebayOfferId;
-
-    // If offerId is missing, look it up from eBay by SKU
-    if (!offerId) {
-      try {
-        const sku = productId;
-        const offers = await ebayRequest(
-          uid, "GET", `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}&marketplace_id=EBAY_US`
-        );
-        offerId = offers?.offers?.[0]?.offerId;
-        if (!offerId) {
-          throw new HttpsError("failed-precondition", "Could not find eBay offer. Listing may have already been deleted.");
-        }
-      } catch (e) {
-        throw new HttpsError("internal", `Failed to look up eBay offer: ${e.message}`);
-      }
-    }
+    const listingId = product.ebayListingId;
 
     try {
-      // 1. Withdraw the offer (makes it inactive)
+      // End the listing on eBay (this deletes/withdraws it)
       try {
-        await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/withdraw`);
-      } catch (withdrawErr) {
-        // 404 = offer doesn't exist (already deleted) — ok to continue
-        // 25013 = offer already inactive — ok to continue
-        if (!withdrawErr.ebayErrors?.some((err) => err.errorId === 404 || err.errorId === 25013)) {
-          throw withdrawErr;
-        }
-      }
-
-      // 2. Delete the inventory item
-      const sku = productId;
-      try {
-        await ebayRequest(uid, "DELETE", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
-      } catch (inventoryErr) {
-        // 404 = item doesn't exist — ok to continue
-        if (!inventoryErr.ebayErrors?.some((err) => err.errorId === 404)) {
-          throw inventoryErr;
+        await ebayRequest(uid, "POST", `/sell/inventory/v1/listing/${listingId}/end_sale`);
+      } catch (endErr) {
+        // 404 = listing doesn't exist (already deleted) — ok to continue
+        if (!endErr.ebayErrors?.some((err) => err.errorId === 404)) {
+          throw endErr;
         }
       }
     } catch (e) {
