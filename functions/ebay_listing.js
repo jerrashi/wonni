@@ -239,23 +239,29 @@ exports.ebayDeleteListing = onCall(
 
     try {
       // 1. Withdraw the offer (makes it inactive)
-      await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${product.ebayOfferId}/withdraw`);
-    } catch (e) {
-      // 404 = offer doesn't exist (already deleted) — ok to continue
-      if (!e.ebayErrors?.some((err) => err.errorId === 404)) {
-        throw new HttpsError("internal", `Failed to withdraw offer: ${e.message}`);
+      try {
+        await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/withdraw`);
+      } catch (withdrawErr) {
+        // 404 = offer doesn't exist (already deleted) — ok to continue
+        // 25013 = offer already inactive — ok to continue
+        if (!withdrawErr.ebayErrors?.some((err) => err.errorId === 404 || err.errorId === 25013)) {
+          throw withdrawErr;
+        }
       }
-    }
 
-    try {
       // 2. Delete the inventory item
       const sku = productId;
-      await ebayRequest(uid, "DELETE", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
-    } catch (e) {
-      // 404 = item doesn't exist — ok to continue
-      if (!e.ebayErrors?.some((err) => err.errorId === 404)) {
-        throw new HttpsError("internal", `Failed to delete inventory: ${e.message}`);
+      try {
+        await ebayRequest(uid, "DELETE", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
+      } catch (inventoryErr) {
+        // 404 = item doesn't exist — ok to continue
+        if (!inventoryErr.ebayErrors?.some((err) => err.errorId === 404)) {
+          throw inventoryErr;
+        }
       }
+    } catch (e) {
+      const errorMsg = e.ebayErrors?.map((err) => `${err.errorId}: ${err.message}`).join("; ") || e.message;
+      throw new HttpsError("internal", `Failed to delete eBay listing: ${errorMsg}`);
     }
 
     // 3. Clear eBay fields from product
