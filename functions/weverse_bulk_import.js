@@ -4,6 +4,7 @@ const admin = require("firebase-admin");
 const { downloadBuffer, savePublicBuffer } = require("./product_media");
 const { fetchWeverseSale, validateSaleForImport, mapSaleToProduct, parseWeverseUrl } = require("./weverse_product");
 const { importTimeGeminiFields, geminiApiKey } = require("./gemini_identify");
+const { buildNewProductDoc, extractSourceImages } = require("./product_schema");
 
 const BATCH_SIZE_LIMIT = 25;
 const CONCURRENCY_CHUNK_SIZE = 4;
