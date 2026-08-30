@@ -232,17 +232,27 @@ exports.ebayDeleteListing = onCall(
     const product = snap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
 
-    console.log(`Deleting eBay listing for product ${productId}:`, {
-      ebayListingId: product.ebayListingId,
-      ebayOfferId: product.ebayOfferId,
-      ebayStatus: product.ebayStatus,
-    });
-
     if (!product.ebayListingId && !product.ebayOfferId) {
-      throw new HttpsError("failed-precondition", "No eBay listing to delete. Neither ebayListingId nor ebayOfferId found.");
+      throw new HttpsError("failed-precondition", "No eBay listing to delete.");
     }
-    const offerId = product.ebayOfferId;
-    if (!offerId) throw new HttpsError("failed-precondition", `eBay offer ID not found. Product has listingId: ${product.ebayListingId}. Listing may not be fully published.`);
+
+    let offerId = product.ebayOfferId;
+
+    // If offerId is missing, look it up from eBay by SKU
+    if (!offerId) {
+      try {
+        const sku = productId;
+        const offers = await ebayRequest(
+          uid, "GET", `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}&marketplace_id=EBAY_US`
+        );
+        offerId = offers?.offers?.[0]?.offerId;
+        if (!offerId) {
+          throw new HttpsError("failed-precondition", "Could not find eBay offer. Listing may have already been deleted.");
+        }
+      } catch (e) {
+        throw new HttpsError("internal", `Failed to look up eBay offer: ${e.message}`);
+      }
+    }
 
     try {
       // 1. Withdraw the offer (makes it inactive)
