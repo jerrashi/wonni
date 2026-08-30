@@ -71,14 +71,14 @@ function buildNewProductDoc(rawData) {
 
     // Source-specific fields
     ...(rawData.source === "weverse" && {
-      weverseSaleId: rawData.weverseSaleId,
-      weverseArtistId: rawData.weverseArtistId,
+      ...(rawData.weverseSaleId && { weverseSaleId: rawData.weverseSaleId }),
+      ...(rawData.weverseArtistId && { weverseArtistId: rawData.weverseArtistId }),
       weverseInfoTable: rawData.weverseInfoTable || [],
-      artistName: rawData.artistName || null,
+      ...(rawData.artistName && { artistName: rawData.artistName }),
     }),
     ...(rawData.source === "aliexpress" && {
-      aliexpressProductId: rawData.aliexpressProductId,
-      aliexpressUrl: rawData.aliexpressUrl,
+      ...(rawData.aliexpressProductId && { aliexpressProductId: rawData.aliexpressProductId }),
+      ...(rawData.aliexpressUrl && { aliexpressUrl: rawData.aliexpressUrl }),
     }),
 
     // AI suggestions
