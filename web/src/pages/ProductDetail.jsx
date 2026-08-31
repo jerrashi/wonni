@@ -3243,9 +3243,9 @@ function MercariModal({
               value={price}
               onChange={(e) => setPrice(e.target.value)}
             />
-            {getSourceCost(product) ?? product.aliexpressPrice > 0 && (
+            {(getSourceCost(product) ?? product.aliexpressPrice) > 0 && (
               <span style={{ fontSize: 11, color: "var(--muted)" }}>
-                Cost: ${getSourceCost(product) ?? product.aliexpressPrice.toFixed(2)} · Est Proceeds: ${(parseFloat(price || 0) * 0.9).toFixed(2)}
+                Cost: ${(getSourceCost(product) ?? product.aliexpressPrice).toFixed(2)} · Est Proceeds: ${(parseFloat(price || 0) * 0.9).toFixed(2)}
               </span>
             )}
           </div>
