@@ -72,12 +72,16 @@ exports.dropshipEbayExchangeToken = onCall(
     }
 
     await admin.firestore().doc(`users/${uid}/integrations/ebay`).set({
+      platform: "ebay",
+      isConnected: true,
+      connectedUsername: tokens.ebay_username || null, // eBay username if available from token
+      connectedAt: admin.firestore.FieldValue.serverTimestamp(),
+      // Web-specific OAuth token storage (iOS doesn't need this)
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
       tokenExpiresAt: Date.now() + (tokens.expires_in ?? 7200) * 1000,
       refreshTokenExpiresAt: Date.now() + (tokens.refresh_token_expires_in ?? 0) * 1000,
       environment: EBAY_ENV.value(),
-      isConnected: true,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 

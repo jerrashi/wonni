@@ -93,11 +93,14 @@ exports.aliexpressExchangeToken = onCall(
     const expiresAt = Date.now() + (parsed.expire_time ?? 3600) * 1000;
 
     await admin.firestore().doc(`users/${uid}/integrations/aliexpress`).set({
+      platform: "aliexpress",
+      isConnected: true,
+      connectedUsername: parsed.account ?? parsed.user_nick ?? "",
+      connectedAt: admin.firestore.FieldValue.serverTimestamp(),
+      // Web-specific OAuth token storage
       accessToken: parsed.access_token,
       refreshToken: parsed.refresh_token,
       tokenExpiresAt: expiresAt,
-      connectedUsername: parsed.account ?? parsed.user_nick ?? "",
-      isConnected: true,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
