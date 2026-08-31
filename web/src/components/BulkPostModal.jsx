@@ -85,16 +85,14 @@ export default function BulkPostModal({ products, onClose }) {
                 productId: product.id,
                 credentialSet: "web",
               });
-              const ebayListingId = ebayRes.data?.listingId;
+              const ebayOfferId = ebayRes.data?.offerId;
               if (!localStorage.getItem("hasSeenEbayEditingNotice")) {
                 setShowEbayNotice(true);
               }
               try {
                 await updateDoc(doc(db, "products", product.id), {
-                  ebayStatus: "active",
                   "crossPostStatus.ebay": "active",
-                  "crossPostListingIds.ebay": ebayListingId || null,
-                  ebayListingId: ebayListingId || null,
+                  "crossPostListingIds.ebay": ebayOfferId || null,
                   updatedAt: serverTimestamp(),
                 });
               } catch (syncErr) {
@@ -108,10 +106,8 @@ export default function BulkPostModal({ products, onClose }) {
               const etsyListingId = etsyRes.data?.listingId;
               try {
                 await updateDoc(doc(db, "products", product.id), {
-                  etsyStatus: "active",
                   "crossPostStatus.etsy": "active",
                   "crossPostListingIds.etsy": etsyListingId || null,
-                  etsyListingId: etsyListingId || null,
                   updatedAt: serverTimestamp(),
                 });
               } catch (syncErr) {
@@ -121,7 +117,7 @@ export default function BulkPostModal({ products, onClose }) {
               await callFunction("tiktokCreateListing")({
                 productId: product.id,
                 title: product.title.slice(0, 255),
-                sellPrice: parseFloat(product.listingPrice || product.aliexpressPrice * 2.5 || 0),
+                sellPrice: parseFloat(product.listingPrice || (product.sourceCost ?? product.aliexpressPrice ?? 0) * 2.5 || 0),
                 categoryId: null,
               });
             } else if (platformId === "mercari") {
@@ -138,7 +134,7 @@ export default function BulkPostModal({ products, onClose }) {
                     variantId: variant.id,
                     title: product.title,
                     description: product.description,
-                    price: parseFloat(product.listingPrice || variant.price || product.aliexpressPrice * 2.2 || 15),
+                    price: parseFloat(product.listingPrice || variant.price || (product.sourceCost ?? product.aliexpressPrice ?? 0) * 2.2 || 15),
                     condition: product.condition || "good",
                     brand: product.brand || "",
                     suggestedCategory: product.category || "",
@@ -174,7 +170,7 @@ export default function BulkPostModal({ products, onClose }) {
                   productId: product.id,
                   title: product.title,
                   description: product.description,
-                  price: parseFloat(product.listingPrice || product.aliexpressPrice * 2.2 || 15),
+                  price: parseFloat(product.listingPrice || (product.sourceCost ?? product.aliexpressPrice ?? 0) * 2.2 || 15),
                   condition: product.condition || "good",
                   brand: product.brand || "",
                   suggestedCategory: product.category || "",
