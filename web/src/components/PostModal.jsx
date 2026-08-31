@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { db, auth, callFunction } from "../firebase";
 import { EbayEditingNoticeModal } from "./EbayEditingNoticeModal";
-import { getCrossPostStatus, getCrossPostListingId } from "../lib/schemaCompat";
 
 const PLATFORMS = [
   { id: "wonni", name: "Wonni", requiresConnected: false, locked: true },
@@ -14,8 +13,8 @@ const PLATFORMS = [
 
 export function isPlatformAlreadyPosted(platformId, product) {
   if (!product) return false;
-  const status = getCrossPostStatus(product, platformId);
-  const listingId = getCrossPostListingId(product, platformId);
+  const status = product.crossPostStatus?.[platformId];
+  const listingId = product.crossPostListingIds?.[platformId];
   return status === "active" || status === "posted" || !!listingId;
 }
 
@@ -237,7 +236,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
             await callFunction("tiktokCreateListing")({
               productId: product.id,
               title: product.title.slice(0, 255),
-              sellPrice: parseFloat(product.listingPrice || product.aliexpressPrice * 2.5 || 0),
+              sellPrice: parseFloat(product.listingPrice || (product.sourceCost ?? product.aliexpressPrice ?? 0) * 2.5 || 0),
               categoryId: null,
             });
           } else if (platformId === "ebay") {
@@ -246,16 +245,14 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
               productId: product.id,
               credentialSet: "web",
             });
-            const ebayListingId = ebayRes.data?.listingId;
+            const ebayOfferId = ebayRes.data?.offerId;
             if (!localStorage.getItem("hasSeenEbayEditingNotice")) {
               setShowEbayNotice(true);
             }
             try {
               await updateDoc(doc(db, "products", product.id), {
-                ebayStatus: "active",
                 "crossPostStatus.ebay": "active",
-                "crossPostListingIds.ebay": ebayListingId || null,
-                ebayListingId: ebayListingId || null,
+                "crossPostListingIds.ebay": ebayOfferId || null,
                 updatedAt: serverTimestamp(),
               });
             } catch (syncErr) {
@@ -272,10 +269,8 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
             const etsyListingId = etsyRes.data?.listingId;
             try {
               await updateDoc(doc(db, "products", product.id), {
-                etsyStatus: "active",
                 "crossPostStatus.etsy": "active",
                 "crossPostListingIds.etsy": etsyListingId || null,
-                etsyListingId: etsyListingId || null,
                 updatedAt: serverTimestamp(),
               });
             } catch (syncErr) {
@@ -295,7 +290,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                   variantId: variant.id,
                   title: product.title,
                   description: product.description,
-                  price: parseFloat(product.listingPrice || variant.price || product.aliexpressPrice * 2.2 || 15),
+                  price: parseFloat(product.listingPrice || variant.price || (product.sourceCost ?? product.aliexpressPrice ?? 0) * 2.2 || 15),
                   condition: product.condition || "good",
                   brand: product.brand || "",
                   suggestedCategory: product.category || "",
@@ -331,7 +326,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                 productId: product.id,
                 title: product.title,
                 description: product.description,
-                price: parseFloat(product.listingPrice || product.aliexpressPrice * 2.2 || 15),
+                price: parseFloat(product.listingPrice || (product.sourceCost ?? product.aliexpressPrice ?? 0) * 2.2 || 15),
                 condition: product.condition || "good",
                 brand: product.brand || "",
                 suggestedCategory: product.category || "",
