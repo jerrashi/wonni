@@ -217,6 +217,9 @@ export default function Settings() {
       localStorage.setItem("latest_etsy_verifier", codeVerifier);
 
       const handleEtsyMessage = async (event) => {
+        // Validate origin to prevent postMessage spoofing
+        if (event.origin !== window.location.origin || event.source !== popup) return;
+
         if (event.data?.type === "ETSY_AUTH_CALLBACK") {
           const { code, state: returnedState, error } = event.data;
 
@@ -224,7 +227,7 @@ export default function Settings() {
             window.removeEventListener("message", handleEtsyMessage);
             if (event.source) {
               try {
-                event.source.postMessage({ type: "ETSY_AUTH_ERROR", error }, "*");
+                event.source.postMessage({ type: "ETSY_AUTH_ERROR", error }, window.location.origin);
               } catch (_) {}
             }
             alert(`Etsy authorization failed: ${error}`);
@@ -254,7 +257,7 @@ export default function Settings() {
                       type: "ETSY_AUTH_SUCCESS",
                       shopName: res.data?.shopName,
                     },
-                    "*"
+                    window.location.origin
                   );
                 } catch (_) {}
               }
@@ -275,7 +278,7 @@ export default function Settings() {
                       type: "ETSY_AUTH_ERROR",
                       error: err.message || "Failed to exchange token",
                     },
-                    "*"
+                    window.location.origin
                   );
                 } catch (_) {}
               }
@@ -314,6 +317,9 @@ export default function Settings() {
       const popup = window.open(urls[platform], "ebayOAuth", "width=600,height=700");
 
       const handleEbayMessage = (event) => {
+        // Validate origin to prevent postMessage spoofing
+        if (event.origin !== window.location.origin || event.source !== popup) return;
+
         if (event.data?.type === "EBAY_AUTH_SUCCESS") {
           window.removeEventListener("message", handleEbayMessage);
           // Refresh integrations to show eBay as connected

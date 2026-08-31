@@ -42,13 +42,13 @@
       try {
         await httpsCallable(functions, "ebayExchangeToken")({ code, state, credentialSet: "web" });
 
-        // Notify parent window of success
-        window.opener?.postMessage({ type: "EBAY_AUTH_SUCCESS" }, "*");
+        // Notify parent window of success (use explicit targetOrigin, not '*')
+        window.opener?.postMessage({ type: "EBAY_AUTH_SUCCESS" }, window.location.origin);
         document.body.innerText = "eBay connected! You can close this window.";
         setTimeout(() => window.close(), 1500);
       } catch (e) {
         // Notify parent window of error
-        window.opener?.postMessage({ type: "EBAY_AUTH_ERROR", error: e.message }, "*");
+        window.opener?.postMessage({ type: "EBAY_AUTH_ERROR", error: e.message }, window.location.origin);
         document.body.innerText = "Error: " + e.message;
       }
     });
