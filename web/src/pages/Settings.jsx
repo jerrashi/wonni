@@ -213,19 +213,126 @@ export default function Settings() {
       const codeVerifier = generateCodeVerifier();
       const codeChallenge = await generateCodeChallenge(codeVerifier);
       localStorage.setItem(`etsy_verifier_${state}`, codeVerifier);
+      sessionStorage.setItem(`etsy_verifier_${state}`, codeVerifier);
       localStorage.setItem("latest_etsy_verifier", codeVerifier);
+
+      const handleEtsyMessage = async (event) => {
+        if (event.data?.type === "ETSY_AUTH_CALLBACK") {
+          const { code, state: returnedState, error } = event.data;
+
+          if (error) {
+            window.removeEventListener("message", handleEtsyMessage);
+            if (event.source) {
+              try {
+                event.source.postMessage({ type: "ETSY_AUTH_ERROR", error }, "*");
+              } catch (_) {}
+            }
+            alert(`Etsy authorization failed: ${error}`);
+            return;
+          }
+
+          if (code) {
+            window.removeEventListener("message", handleEtsyMessage);
+            const verifier =
+              (returnedState && (localStorage.getItem(`etsy_verifier_${returnedState}`) || sessionStorage.getItem(`etsy_verifier_${returnedState}`))) ||
+              localStorage.getItem(`etsy_verifier_${state}`) ||
+              sessionStorage.getItem(`etsy_verifier_${state}`) ||
+              localStorage.getItem("latest_etsy_verifier") ||
+              codeVerifier;
+
+            try {
+              const res = await callFunction("etsyExchangeToken")({
+                code,
+                codeVerifier: verifier,
+                redirectUri: "https://wonni-app.web.app/web/oauth/etsy",
+              });
+
+              if (event.source) {
+                try {
+                  event.source.postMessage(
+                    {
+                      type: "ETSY_AUTH_SUCCESS",
+                      shopName: res.data?.shopName,
+                    },
+                    "*"
+                  );
+                } catch (_) {}
+              }
+
+              if (returnedState) {
+                localStorage.removeItem(`etsy_verifier_${returnedState}`);
+                sessionStorage.removeItem(`etsy_verifier_${returnedState}`);
+              }
+              localStorage.removeItem(`etsy_verifier_${state}`);
+              sessionStorage.removeItem(`etsy_verifier_${state}`);
+              localStorage.removeItem("latest_etsy_verifier");
+            } catch (err) {
+              console.error("Failed to exchange Etsy token:", err);
+              if (event.source) {
+                try {
+                  event.source.postMessage(
+                    {
+                      type: "ETSY_AUTH_ERROR",
+                      error: err.message || "Failed to exchange token",
+                    },
+                    "*"
+                  );
+                } catch (_) {}
+              }
+              alert(`Failed to connect Etsy: ${err.message || "Unknown error"}`);
+            }
+          }
+        }
+      };
+
+      window.addEventListener("message", handleEtsyMessage);
 
       const etsyUrl = "https://www.etsy.com/oauth/connect?" + new URLSearchParams({
         response_type: "code",
         client_id: ETSY_CLIENT_ID,
-        redirect_uri: "https://wonni-app.web.app/oauth/etsy",
+        redirect_uri: "https://wonni-app.web.app/web/oauth/etsy",
         scope: "listings_w listings_r shops_r",
         state,
         code_challenge: codeChallenge,
         code_challenge_method: "S256",
       });
 
-      window.open(etsyUrl, "_blank", "width=600,height=700");
+      const popup = window.open(etsyUrl, "etsyOAuth", "width=600,height=700");
+
+      const timer = setInterval(() => {
+        if (popup && popup.closed) {
+          clearInterval(timer);
+          window.removeEventListener("message", handleEtsyMessage);
+        }
+      }, 1000);
+
+      return;
+    }
+
+    // Handle eBay OAuth with postMessage (similar to Etsy)
+    if (platform === "ebay") {
+      const popup = window.open(urls[platform], "ebayOAuth", "width=600,height=700");
+
+      const handleEbayMessage = (event) => {
+        if (event.data?.type === "EBAY_AUTH_SUCCESS") {
+          window.removeEventListener("message", handleEbayMessage);
+          // Refresh integrations to show eBay as connected
+          loadIntegrations();
+        } else if (event.data?.type === "EBAY_AUTH_ERROR") {
+          window.removeEventListener("message", handleEbayMessage);
+          alert(`eBay authorization failed: ${event.data.error}`);
+        }
+      };
+
+      window.addEventListener("message", handleEbayMessage);
+
+      const timer = setInterval(() => {
+        if (popup && popup.closed) {
+          clearInterval(timer);
+          window.removeEventListener("message", handleEbayMessage);
+        }
+      }, 1000);
+
       return;
     }
 
