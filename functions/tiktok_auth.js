@@ -82,13 +82,16 @@ exports.tiktokExchangeToken = onCall(
     const shopCipher = parsed.data.authorized_shops?.[0]?.cipher ?? "";
 
     await admin.firestore().doc(`users/${uid}/integrations/tiktok`).set({
+      platform: "tiktok",
+      isConnected: true,
+      connectedUsername: seller_name ?? open_id ?? "",
+      connectedAt: admin.firestore.FieldValue.serverTimestamp(),
+      // Web-specific OAuth token storage
       accessToken: access_token,
       refreshToken: refresh_token,
       tokenExpiresAt: Date.now() + (access_token_expire_in ?? 3600) * 1000,
       shopId,
       shopCipher,
-      connectedUsername: seller_name ?? open_id ?? "",
-      isConnected: true,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
