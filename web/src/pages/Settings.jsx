@@ -314,20 +314,17 @@ export default function Settings() {
 
     // Handle eBay OAuth with postMessage (similar to Etsy)
     if (platform === "ebay") {
+      // Store auth state in sessionStorage so OAuth window can access it
+      if (auth.currentUser) {
+        sessionStorage.setItem("ebay_auth_user_id", auth.currentUser.uid);
+      }
       const popup = window.open(urls[platform], "ebayOAuth", "width=600,height=700");
 
       const handleEbayMessage = (event) => {
         // Validate origin to prevent postMessage spoofing
         if (event.origin !== window.location.origin || event.source !== popup) return;
 
-        if (event.data?.type === "EBAY_AUTH_REQUEST") {
-          // OAuth window is asking if user is authenticated
-          // Send back the current auth state
-          popup?.postMessage(
-            { type: "EBAY_AUTH_STATE", isAuthenticated: !!auth.currentUser },
-            window.location.origin
-          );
-        } else if (event.data?.type === "EBAY_AUTH_SUCCESS") {
+        if (event.data?.type === "EBAY_AUTH_SUCCESS") {
           window.removeEventListener("message", handleEbayMessage);
           // Refresh integrations to show eBay as connected
           loadIntegrations();
