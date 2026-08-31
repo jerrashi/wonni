@@ -320,7 +320,14 @@ export default function Settings() {
         // Validate origin to prevent postMessage spoofing
         if (event.origin !== window.location.origin || event.source !== popup) return;
 
-        if (event.data?.type === "EBAY_AUTH_SUCCESS") {
+        if (event.data?.type === "EBAY_AUTH_REQUEST") {
+          // OAuth window is asking if user is authenticated
+          // Send back the current auth state
+          popup?.postMessage(
+            { type: "EBAY_AUTH_STATE", isAuthenticated: !!auth.currentUser },
+            window.location.origin
+          );
+        } else if (event.data?.type === "EBAY_AUTH_SUCCESS") {
           window.removeEventListener("message", handleEbayMessage);
           // Refresh integrations to show eBay as connected
           loadIntegrations();

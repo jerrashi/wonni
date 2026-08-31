@@ -28,17 +28,48 @@
   } else {
     document.body.innerText = "Connecting eBay…";
 
+    let authCheckComplete = false;
+    let hasUser = false;
+
+    // Listen for parent's auth state response
+    const handleAuthState = (event) => {
+      if (event.origin !== window.location.origin) return;
+      if (event.data?.type === "EBAY_AUTH_STATE") {
+        if (event.data.isAuthenticated) {
+          hasUser = true;
+          proceedWithToken();
+        } else {
+          document.body.innerText = "Not signed in. Please sign in to Wonni first, then try again.";
+        }
+        authCheckComplete = true;
+      }
+    };
+
+    window.addEventListener("message", handleAuthState);
+
     // Use onAuthStateChanged to handle auth state across window contexts
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       unsubscribe();
+      authCheckComplete = true;
 
       if (!user) {
         // Request auth from parent window via postMessage
-        window.opener?.postMessage({ type: "EBAY_AUTH_REQUEST" }, "*");
+        window.opener?.postMessage({ type: "EBAY_AUTH_REQUEST" }, window.location.origin);
         document.body.innerText = "Waiting for authentication…";
+        // Give parent 3 seconds to respond
+        setTimeout(() => {
+          if (!hasUser) {
+            document.body.innerText = "Not signed in. Please sign in to Wonni first, then try again.";
+          }
+        }, 3000);
         return;
       }
 
+      hasUser = true;
+      proceedWithToken();
+    });
+
+    async function proceedWithToken() {
       try {
         await httpsCallable(functions, "ebayExchangeToken")({ code, state, credentialSet: "web" });
 
@@ -51,7 +82,7 @@
         window.opener?.postMessage({ type: "EBAY_AUTH_ERROR", error: e.message }, window.location.origin);
         document.body.innerText = "Error: " + e.message;
       }
-    });
+    }
   }
 </script>
 </body>
