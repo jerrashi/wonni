@@ -24,15 +24,20 @@ class ListingRepository: ObservableObject {
             print("[ListingRepository] ERROR: User not authenticated")
             throw NSError(domain: "ListingRepository", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
-        
+
         var listingToSave = listing
         listingToSave.userId = userId
         listingToSave.updatedAt = Timestamp(date: Date())
-        
+
         if listingToSave.createdAt == nil {
             listingToSave.createdAt = Timestamp(date: Date())
         }
-        
+
+        // Ensure active listings always have publishedAt set
+        if listingToSave.status == .active && listingToSave.publishedAt == nil {
+            listingToSave.publishedAt = Timestamp(date: Date())
+        }
+
         do {
             if let id = listing.id {
                 print("[ListingRepository] Updating existing document: \(id)")
