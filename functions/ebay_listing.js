@@ -9,7 +9,7 @@ const MARKETPLACE_ID = "EBAY_US";
 // Rough eBay economics: ~13.25% final value fee + $0.30 per order, plus you pay
 // Weverse price + Weverse shipping to you + shipping to the buyer.
 function computeEbaySellPrice(product) {
-  const cost = product.sourcePrice ?? product.aliexpressPrice ?? 0;
+  const cost = product.sourceCost ?? 0;
   if (product.listingPrice) return product.listingPrice;
   // markup covers fees (~13.5%), ~US shipping, and margin
   return Math.ceil((cost * 1.35 + 8) * 100) / 100;
@@ -85,8 +85,8 @@ exports.dropshipEbayCreateListing = onCall(
 
     const product = snap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
-    if (product.ebayStatus === "active" && product.ebayListingId) {
-      return { listingId: product.ebayListingId, alreadyListed: true };
+    if (product.crossPostStatus?.ebay === "active") {
+      return { listingId: product.crossPostListingIds?.ebay, alreadyListed: true };
     }
 
     const sku = productId; // Firestore doc ID doubles as the parent eBay SKU
@@ -180,20 +180,17 @@ exports.dropshipEbayCreateListing = onCall(
     if (!offerId) throw new HttpsError("internal", "Could not create or find eBay offer.");
 
     // 3. Publish
-    let published;
+    let listingId;
     try {
-      published = await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`);
+      const published = await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`);
+      listingId = published?.listingId;
     } catch (e) {
       throw new HttpsError("internal", e.message);
     }
 
-    const listingId = published?.listingId;
     const updatePayload = {
-      ebayListingId: listingId ?? null,
-      ebayStatus: "active",
-      ebaySellPrice: basePrice,
-      ebayCategoryId: categoryId,
-      ebayHasVariations: hasVariations,
+      "crossPostListingIds.ebay": offerId ?? null,
+      "crossPostStatus.ebay": "active",
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
@@ -201,7 +198,7 @@ exports.dropshipEbayCreateListing = onCall(
     if (hasVariations) {
       const variantUpdates = {};
       variationData.variations.forEach((v, index) => {
-        variantUpdates[`variants.${index}.ebayStatus`] = "active";
+        variantUpdates[`variants.${index}.crossPostStatus.ebay`] = "active";
         variantUpdates[`variants.${index}.ebayVariantSku`] = v.sku;
       });
       Object.assign(updatePayload, variantUpdates);
@@ -231,16 +228,15 @@ exports.ebayDeleteListing = onCall(
     const product = snap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
 
-    if (!product.ebayListingId) {
+    const offerId = product.crossPostListingIds?.ebay;
+    if (!offerId) {
       throw new HttpsError("failed-precondition", "No eBay listing found.");
     }
-
-    const listingId = product.ebayListingId;
 
     try {
       // End the listing on eBay (this deletes/withdraws it)
       try {
-        await ebayRequest(uid, "POST", `/sell/inventory/v1/listing/${listingId}/end_sale`);
+        await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`, { status: "UNPUBLISHED" });
       } catch (endErr) {
         // 404 = listing doesn't exist (already deleted) — ok to continue
         if (!endErr.ebayErrors?.some((err) => err.errorId === 404)) {
@@ -254,12 +250,8 @@ exports.ebayDeleteListing = onCall(
 
     // 3. Clear eBay fields from product
     await docRef.update({
-      ebayStatus: null,
-      ebayListingId: admin.firestore.FieldValue.delete(),
-      ebayOfferId: admin.firestore.FieldValue.delete(),
-      ebaySellPrice: admin.firestore.FieldValue.delete(),
-      ebayCategoryId: admin.firestore.FieldValue.delete(),
-      ebayHasVariations: admin.firestore.FieldValue.delete(),
+      "crossPostStatus.ebay": admin.firestore.FieldValue.delete(),
+      "crossPostListingIds.ebay": admin.firestore.FieldValue.delete(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
@@ -268,8 +260,7 @@ exports.ebayDeleteListing = onCall(
       const batch = db.batch();
       product.variants.forEach((v, index) => {
         batch.update(docRef, {
-          [`variants.${index}.ebayStatus`]: admin.firestore.FieldValue.delete(),
-          [`variants.${index}.ebayVariantSku`]: admin.firestore.FieldValue.delete(),
+          [`variants.${index}.crossPostStatus.ebay`]: admin.firestore.FieldValue.delete(),
         });
       });
       await batch.commit();
@@ -295,10 +286,11 @@ exports.ebayGetListingDetails = onCall(
 
     const product = snap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
-    if (!product.ebayOfferId) throw new HttpsError("failed-precondition", "No eBay listing found.");
+    const offerId = product.crossPostListingIds?.ebay;
+    if (!offerId) throw new HttpsError("failed-precondition", "No eBay listing found.");
 
     try {
-      const offer = await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${product.ebayOfferId}`);
+      const offer = await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${offerId}`);
       const sku = product.ebayHasVariations ? null : productId; // Only fetch single-variant inventory
       let inventory = null;
 
@@ -346,7 +338,8 @@ exports.ebaySyncListing = onCall(
 
     const product = snap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
-    if (!product.ebayOfferId) throw new HttpsError("failed-precondition", "No eBay listing found.");
+    const offerId = product.crossPostListingIds?.ebay;
+    if (!offerId) throw new HttpsError("failed-precondition", "No eBay listing found.");
 
     try {
       if (applyFrom === "wonni") {
@@ -355,7 +348,7 @@ exports.ebaySyncListing = onCall(
         const description = canonicalDescription(product);
         const price = product.listingPrice ?? computeEbaySellPrice(product);
 
-        await ebayRequest(uid, "PATCH", `/sell/inventory/v1/offer/${product.ebayOfferId}`, {
+        await ebayRequest(uid, "PATCH", `/sell/inventory/v1/offer/${offerId}`, {
           listingDescription: description,
         });
 
@@ -369,10 +362,10 @@ exports.ebaySyncListing = onCall(
         });
 
         // Re-publish
-        await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${product.ebayOfferId}/publish`);
+        await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`);
       } else {
         // Pull eBay version to Wonni
-        const offer = await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${product.ebayOfferId}`);
+        const offer = await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${offerId}`);
         const sku = productId;
         const inventory = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
 
@@ -433,9 +426,8 @@ exports.ebayUpdateListing = onCall(
 
     const product = snap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
-    if (!product.ebayOfferId) throw new HttpsError("failed-precondition", "No eBay listing to update.");
-
-    const offerId = product.ebayOfferId;
+    const offerId = product.crossPostListingIds?.ebay;
+    if (!offerId) throw new HttpsError("failed-precondition", "No eBay listing to update.");
     const title = (product.title ?? "").slice(0, 80);
     const description = canonicalDescription(product);
     const price = product.listingPrice ?? computeEbaySellPrice(product);
