@@ -73,12 +73,12 @@ final class AIQualityTrackingTests: XCTestCase {
     func test_rawSignalsPassThrough() {
         let t = snapshot(
             visionTitle: "Compact Disc", visionAccepted: true,
-            model: "gemini-3.1-flash-lite", prompt: "2026-07-14.1", undoCount: 2
+            model: "gemini-2.5-flash-lite", prompt: "2026-08-31.1", undoCount: 2
         )
         XCTAssertEqual(t.visionTitle, "Compact Disc")
         XCTAssertTrue(t.visionTitleAccepted)
-        XCTAssertEqual(t.aiModel, "gemini-3.1-flash-lite")
-        XCTAssertEqual(t.promptVersion, "2026-07-14.1")
+        XCTAssertEqual(t.aiModel, "gemini-2.5-flash-lite")
+        XCTAssertEqual(t.promptVersion, "2026-08-31.1")
         XCTAssertEqual(t.undoCount, 2)
     }
 }
