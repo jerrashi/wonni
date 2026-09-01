@@ -4871,13 +4871,36 @@ function ProductDetail() {
     }
   }
 
-  async function refreshSourceData(section) {
-    // Check cooldown: only refresh if 24 hours have passed since last refresh
-    if (lastSourceRefresh && Date.now() - lastSourceRefresh < 24 * 60 * 60 * 1000) {
-      return; // Cooldown active, don't refresh
+  async function toggleSourceSection(section) {
+    if (expandedSourceSection === section) {
+      setExpandedSourceSection(null);
+      return;
+    }
+    setExpandedSourceSection(section);
+
+    // Hydrate immediately from existing product source data if available
+    if (section === "images") {
+      const existing = (product?.sourceImages?.length)
+        ? product.sourceImages.map((u) => (typeof u === "string" ? { url: u } : u))
+        : (product?.imageAssets || []).map((a) => ({ url: a.sourceUrl || a.url }));
+      if (existing.length > 0 && sourceImages.length === 0) {
+        setSourceImages(existing);
+      }
+    } else if (section === "variants") {
+      const existing = (product?.sourceVariants?.length)
+        ? product.sourceVariants
+        : (product?.variants || []).map((v) => ({
+            name: v.optionValues ? Object.entries(v.optionValues).map(([k, val]) => `${k}: ${val}`).join(" / ") : v.sku || "Variant",
+            price: v.price || v.sourcePrice || 0,
+            stockId: v.sku || null,
+            soldOut: v.quantity === 0 || v.active === false,
+          }));
+      if (existing.length > 0 && sourceVariants.length === 0) {
+        setSourceVariants(existing);
+      }
     }
 
-    if (!product || !product.sourceUrl || !product.source) return;
+    if (!product?.sourceUrl) return;
 
     setSourceRefreshLoading(true);
     try {
@@ -4885,19 +4908,17 @@ function ProductDetail() {
         productId: product.id,
         source: product.source,
         sourceUrl: product.sourceUrl,
-        section: section, // "images" or "variants"
+        section,
       });
 
-      if (section === "images") {
-        setSourceImages(result.data.images || []);
-      } else if (section === "variants") {
-        setSourceVariants(result.data.variants || []);
+      if (result?.data?.images?.length) {
+        setSourceImages(result.data.images);
       }
-
-      setLastSourceRefresh(Date.now());
-      setExpandedSourceSection(section);
+      if (result?.data?.variants?.length) {
+        setSourceVariants(result.data.variants);
+      }
     } catch (err) {
-      console.error("Failed to refresh source data:", err);
+      console.warn("Source data refresh notice:", err?.message);
     } finally {
       setSourceRefreshLoading(false);
     }
@@ -6214,26 +6235,65 @@ function ProductDetail() {
               <div style={{ marginBottom: 16, borderTop: "1px solid var(--border)", paddingTop: 16 }}>
                 <button
                   className="btn btn-ghost"
-                  style={{ fontSize: 13, padding: "6px 0", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}
-                  onClick={() => refreshSourceData("images")}
-                  disabled={!product.sourceUrl || sourceRefreshLoading}
+                  style={{ width: "100%", justifyContent: "flex-start", fontSize: 13, padding: "6px 0", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}
+                  onClick={() => toggleSourceSection("images")}
                 >
-                  {expandedSourceSection === "images" ? "▼" : "▶"} Images ({images.length})
+                  <span style={{ fontSize: 10 }}>{expandedSourceSection === "images" ? "▼" : "▶"}</span>
+                  <span style={{ fontWeight: 600 }}>Source Images</span>
+                  <span className="chip" style={{ fontSize: 10, padding: "2px 6px", marginLeft: "auto" }}>
+                    {sourceImages.length || product?.sourceImages?.length || (images.length ? `${images.length} in draft` : "View")}
+                  </span>
                 </button>
-                {expandedSourceSection === "images" && sourceRefreshLoading && (
-                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>Loading source images…</div>
+                {expandedSourceSection === "images" && sourceRefreshLoading && sourceImages.length === 0 && (
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>Fetching original images from source…</div>
                 )}
-                {expandedSourceSection === "images" && !sourceRefreshLoading && sourceImages.length > 0 && (
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginTop: 12 }}>
-                    {sourceImages.map((img, idx) => (
-                      <img
-                        key={idx}
-                        src={img.url}
-                        alt={`Source image ${idx + 1}`}
-                        style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 8, cursor: "pointer" }}
-                        title={`Click to add to listing`}
-                      />
-                    ))}
+                {expandedSourceSection === "images" && (sourceImages.length > 0 || product?.sourceImages?.length > 0 || images.length > 0) && (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>
+                      Original photos from source CDN. Click any photo to preview or add to your listing.
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(80px, 1fr))", gap: 8 }}>
+                      {(sourceImages.length > 0 ? sourceImages : (product?.sourceImages || images)).map((img, idx) => {
+                        const imgUrl = typeof img === "string" ? img : (img.url || img.sourceUrl);
+                        const isInDraft = images.some((d) => d.url === imgUrl);
+                        return (
+                          <div
+                            key={idx}
+                            style={{
+                              position: "relative",
+                              borderRadius: "var(--radius)",
+                              overflow: "hidden",
+                              border: isInDraft ? "2px solid var(--primary)" : "1px solid var(--border)",
+                              aspectRatio: "1",
+                              background: "var(--surface-high)",
+                              cursor: "pointer",
+                            }}
+                            onClick={() => {
+                              if (!isInDraft) {
+                                stageMediaEdit([...images, { id: `src_${Date.now()}_${idx}`, url: imgUrl, sourceUrl: imgUrl, kind: "source" }]);
+                              }
+                            }}
+                            title={isInDraft ? "Already added to draft photos" : "Click to add photo to draft"}
+                          >
+                            <img
+                              src={imgUrl}
+                              alt={`Source ${idx + 1}`}
+                              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                              loading="lazy"
+                            />
+                            {isInDraft ? (
+                              <span style={{ position: "absolute", bottom: 2, right: 2, background: "var(--primary)", color: "white", fontSize: 9, padding: "1px 4px", borderRadius: 3, fontWeight: 700 }}>
+                                ✓ Added
+                              </span>
+                            ) : (
+                              <span style={{ position: "absolute", bottom: 2, right: 2, background: "rgba(0,0,0,0.6)", color: "white", fontSize: 9, padding: "1px 4px", borderRadius: 3 }}>
+                                + Add
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>
@@ -6242,20 +6302,63 @@ function ProductDetail() {
               <div style={{ marginBottom: 16, borderTop: "1px solid var(--border)", paddingTop: 16 }}>
                 <button
                   className="btn btn-ghost"
-                  style={{ fontSize: 13, padding: "6px 0", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}
-                  onClick={() => refreshSourceData("variants")}
-                  disabled={!product.sourceUrl || sourceRefreshLoading}
+                  style={{ width: "100%", justifyContent: "flex-start", fontSize: 13, padding: "6px 0", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}
+                  onClick={() => toggleSourceSection("variants")}
                 >
-                  {expandedSourceSection === "variants" ? "▼" : "▶"} Variants ({variants.filter((v) => v.active).length})
+                  <span style={{ fontSize: 10 }}>{expandedSourceSection === "variants" ? "▼" : "▶"}</span>
+                  <span style={{ fontWeight: 600 }}>Source Variations</span>
+                  <span className="chip" style={{ fontSize: 10, padding: "2px 6px", marginLeft: "auto" }}>
+                    {sourceVariants.length || product?.sourceVariants?.length || variants.length || "View"}
+                  </span>
                 </button>
-                {expandedSourceSection === "variants" && sourceRefreshLoading && (
-                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>Loading source variants…</div>
+                {expandedSourceSection === "variants" && sourceRefreshLoading && sourceVariants.length === 0 && (
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>Fetching original variants from source…</div>
                 )}
-                {expandedSourceSection === "variants" && !sourceRefreshLoading && sourceVariants.length > 0 && (
-                  <div style={{ fontSize: 12, marginTop: 12, lineHeight: 1.6, fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
-                    {sourceVariants.map((v, idx) => (
-                      <div key={idx}>{v}</div>
-                    ))}
+                {expandedSourceSection === "variants" && (sourceVariants.length > 0 || product?.sourceVariants?.length > 0 || variants.length > 0) && (
+                  <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+                    {(sourceVariants.length > 0 ? sourceVariants : (product?.sourceVariants || variants)).map((v, idx) => {
+                      const vName = typeof v === "string" ? v : (v.name || (v.optionValues ? Object.entries(v.optionValues).map(([k, val]) => `${k}: ${val}`).join(" / ") : `Variant #${idx + 1}`));
+                      const vPrice = typeof v === "object" ? (v.price ?? v.sourcePrice) : null;
+                      const isSoldOut = typeof v === "object" ? Boolean(v.soldOut || v.quantity === 0 || v.active === false) : false;
+                      const stockId = typeof v === "object" ? (v.stockId || v.sku) : null;
+
+                      return (
+                        <div
+                          key={idx}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            padding: "8px 12px",
+                            background: "var(--surface-high)",
+                            borderRadius: "var(--radius)",
+                            fontSize: 12,
+                          }}
+                        >
+                          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                            <span style={{ fontWeight: 600 }}>{vName}</span>
+                            {stockId && (
+                              <span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "monospace" }}>
+                                ID: {stockId}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            {vPrice != null && (
+                              <span style={{ fontWeight: 600, color: "var(--text)" }}>
+                                ${Number(vPrice).toFixed(2)}
+                              </span>
+                            )}
+                            <span
+                              className={`chip ${isSoldOut ? "chip-draft" : "chip-live"}`}
+                              style={{ fontSize: 10, padding: "2px 6px" }}
+                            >
+                              {isSoldOut ? "Sold Out" : "In Stock"}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
