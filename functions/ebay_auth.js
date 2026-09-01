@@ -71,10 +71,12 @@ exports.dropshipEbayExchangeToken = onCall(
       throw new HttpsError("internal", e.message);
     }
 
+    const connectedUsername = tokens.ebay_username || "Connected Account";
+
     await admin.firestore().doc(`users/${uid}/integrations/ebay`).set({
       platform: "ebay",
       isConnected: true,
-      connectedUsername: tokens.ebay_username || null, // eBay username if available from token
+      connectedUsername,
       connectedAt: admin.firestore.FieldValue.serverTimestamp(),
       // Web-specific OAuth token storage (iOS doesn't need this)
       accessToken: tokens.access_token,
@@ -85,7 +87,7 @@ exports.dropshipEbayExchangeToken = onCall(
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    return { success: true };
+    return { success: true, connectedUsername, username: connectedUsername };
   }
 );
 
