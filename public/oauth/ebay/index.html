@@ -76,7 +76,10 @@
     } else {
       let notifiedOpener = false;
 
-      // Handle Web Popup Flow via postMessage to window.opener
+      // Web popup flow: hand the code back to the dashboard window, which is
+      // signed in and will call the exchange function itself. The popup does
+      // NOT need its own Firebase session — that was the old bug that left
+      // this page stuck on "Waiting for authentication…".
       if (window.opener) {
         statusText.innerText = "Connecting eBay…";
         subText.innerText = "Finalizing connection with your dashboard…";
@@ -100,34 +103,25 @@
         } catch (_) {}
       }
 
-      // Standalone web fallback or iOS app redirect
+      // Standalone web fallback (page opened directly, no dashboard window).
       if (!notifiedOpener) {
-        // Fall back to direct Firebase function call if user session exists
         function handleExchange(user) {
           if (!user) {
-            // iOS App Flow: forward to custom URL scheme
-            var redirect = 'wonni://oauth/ebay?code=' + encodeURIComponent(code);
-            if (state) redirect += '&state=' + encodeURIComponent(state);
-            window.location.href = redirect;
+            statusText.innerText = "Not signed in";
+            subText.innerText = "Please sign in to Wonni in your main window first, then try again.";
             return;
           }
 
           statusText.innerText = "Exchanging eBay Token…";
           subText.innerText = "Linking your eBay account…";
 
-          const exchangeFn = httpsCallable(functions, "dropshipEbayExchangeToken");
-          exchangeFn({
+          httpsCallable(functions, "dropshipEbayExchangeToken")({
             code,
             state,
-            credentialSet: "web"
-          }).catch((err) => {
-            if (err.code === "not-found" || err.message?.includes("NOT_FOUND")) {
-              return httpsCallable(functions, "ebayExchangeToken")({ code, state, credentialSet: "web" });
-            }
-            throw err;
+            credentialSet: "web",
           }).then((res) => {
             statusText.innerText = "✓ eBay Connected!";
-            const username = res.data?.connectedUsername || res.data?.ebayUsername || res.data?.username;
+            const username = res.data?.connectedUsername || res.data?.username;
             subText.innerText = username ? `Connected as ${username}. Closing window…` : "You can close this window.";
             setTimeout(() => window.close(), 1800);
           }).catch((e) => {

@@ -341,6 +341,44 @@ Pre-production validation is needed before Phase B cutover, but documentation + 
 
 **Status:** Validation guidance complete; actual validation deferred to before production deployment
 
+## As of 2026-09-01 — eBay web OAuth login + username sync fixed & working
+
+**eBay connect flow works end-to-end in this version.** The popup no longer
+hangs on "Waiting for authentication…", and the Settings row shows the real
+eBay account handle (e.g. `urbaneclecticeboutique`) instead of the
+"Connected Account" placeholder.
+
+Three bugs, all introduced by earlier churn, fixed together:
+
+1. **Callback page protocol mismatch** (the "Waiting for authentication…"
+   hang). `public/oauth/ebay/index.html` was still on the old self-exchange
+   pattern: it tried to call the exchange function from inside the popup
+   (which has no Firebase session) and, on `user == null`, posted an
+   `EBAY_AUTH_REQUEST` that nothing listens for. Rewritten to mirror the
+   AliExpress/Etsy pages — relay `{type:"EBAY_AUTH_CALLBACK", code, state}`
+   to `window.opener` and let the signed-in dashboard (`Settings.jsx`,
+   already wired) do the token exchange. Popup needs no auth of its own.
+
+2. **Wrong eBay API host for username lookup.** `functions/ebay_auth.js`
+   (wonni-app repo) fetched the username from `api.ebay.com`, but the
+   Commerce Identity API (`/commerce/identity/v1/user/`) is served from
+   `apiz.ebay.com` / `apiz.sandbox.ebay.com`. Added `ebayIdentityApiHost()`
+   + a `fetchEbayUsername()` helper; result is written to
+   `users/{uid}/integrations/ebay.connectedUsername`, which the UI reads.
+
+3. **Missing OAuth scope (web).** `Settings.jsx` `EBAY_SCOPES` requested
+   only `sell.inventory` + `sell.account`. Added
+   `commerce.identity.readonly` (iOS already requested it) so the token is
+   authorized to call `getUser`. **Existing connected users must disconnect
+   + reconnect eBay once** to re-consent to the new scope.
+
+Also fixed a deploy blocker in `functions/ebay_auth.js`: earlier reverts had
+stripped its `module.exports`, so `ebay_listing.js` / `recover_ebay_offer_ids.js`
+imported `undefined` for `EBAY_CLIENT_ID`/`EBAY_CLIENT_SECRET`/`EBAY_RU_NAME`
+and `firebase deploy` failed with `secrets/undefined`. Full export surface
+restored. Deleted stale duplicate `oauth/ebay/index.html` copies under the
+wonni-app repo's `wonni/public/`.
+
 ## Phase 1 notes (variations)
 - `MAX_VARIATION_DIMENSIONS` in `ProductDetail.jsx` caps variation structure
   at 2 dimensions (primary + sub), matching Etsy's UI. Not generalized to N
