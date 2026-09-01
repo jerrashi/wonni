@@ -37,6 +37,24 @@ async function tokenRequest(bodyParams) {
   return json;
 }
 
+async function fetchEbayUserInfo(accessToken) {
+  const response = await fetch(`https://${ebayApiHost()}/commerce/identity/v1/user/`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(`eBay user API error (${response.status})`);
+  }
+  return {
+    username: data.username ?? "eBay User",
+    userId: data.userId ?? null,
+  };
+}
+
 // Exchange authorization code for access + refresh tokens
 exports.dropshipEbayExchangeToken = onCall(
   { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME] },
@@ -71,7 +89,14 @@ exports.dropshipEbayExchangeToken = onCall(
       throw new HttpsError("internal", e.message);
     }
 
-    const connectedUsername = tokens.ebay_username || "Connected Account";
+    // Fetch eBay user info for display name
+    let connectedUsername = "eBay User";
+    try {
+      const userInfo = await fetchEbayUserInfo(tokens.access_token);
+      connectedUsername = userInfo.username;
+    } catch (err) {
+      console.warn("Failed to fetch eBay user info:", err.message);
+    }
 
     await admin.firestore().doc(`users/${uid}/integrations/ebay`).set({
       platform: "ebay",
