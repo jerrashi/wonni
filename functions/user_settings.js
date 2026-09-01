@@ -9,7 +9,7 @@ exports.generateOAuthState = onCall(async (request) => {
   if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
 
   const { platform } = request.data;
-  if (!["aliexpress", "tiktok", "ebay"].includes(platform)) {
+  if (!["aliexpress", "tiktok", "ebay", "etsy"].includes(platform)) {
     throw new HttpsError("invalid-argument", "Invalid platform.");
   }
 
@@ -26,7 +26,7 @@ exports.disconnectPlatform = onCall(async (request) => {
   if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
 
   const { platform } = request.data;
-  if (!["aliexpress", "tiktok", "ebay"].includes(platform)) {
+  if (!["aliexpress", "tiktok", "ebay", "etsy"].includes(platform)) {
     throw new HttpsError("invalid-argument", "Invalid platform.");
   }
 
