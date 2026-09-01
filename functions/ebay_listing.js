@@ -64,7 +64,33 @@ async function getListingPolicies(uid, handlingTimeDays) {
 async function resolveEbayOffer(uid, product, productId) {
   const storedId = String(product?.crossPostListingIds?.ebay || product?.ebayListingId || "").trim();
 
-  // 1. If storedId is present and not a 12-digit listing ID, try fetching it directly as an offerId
+  // 1. If storedId is a 12-digit listing ID, attempt bulk_migrate_listing to convert/retrieve its Inventory API offer
+  if (storedId && /^\d{12}$/.test(storedId)) {
+    try {
+      console.log(`[resolveEbayOffer] Attempting bulk_migrate_listing for listingId=${storedId}`);
+      const migrateRes = await ebayRequest(uid, "POST", "/sell/inventory/v1/bulk_migrate_listing", {
+        requests: [{ listingId: storedId }],
+      });
+      console.log(`[resolveEbayOffer] bulk_migrate_listing response:`, JSON.stringify(migrateRes));
+      const resp = migrateRes?.responses?.[0];
+      const migratedOfferId = resp?.offers?.[0]?.offerId || resp?.offerId;
+      if (migratedOfferId) {
+        console.log(`[resolveEbayOffer] Successfully migrated listingId=${storedId} to offerId=${migratedOfferId}`);
+        const offer = await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${migratedOfferId}`);
+        const docRef = admin.firestore().collection("products").doc(productId);
+        await docRef.update({
+          "crossPostListingIds.ebay": migratedOfferId,
+          ebayListingId: storedId,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        return { offer, offerId: migratedOfferId, sku: offer?.sku || resp?.inventoryItemGroupKey || productId };
+      }
+    } catch (migErr) {
+      console.warn(`[resolveEbayOffer] bulk_migrate_listing for ${storedId} failed (${migErr.message}). Continuing with search...`);
+    }
+  }
+
+  // 2. If storedId is present and not a 12-digit listing ID, try fetching it directly as an offerId
   if (storedId && !/^\d{12}$/.test(storedId)) {
     try {
       const offer = await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${storedId}`);
@@ -76,7 +102,7 @@ async function resolveEbayOffer(uid, product, productId) {
     }
   }
 
-  // 2. Build list of candidate SKUs to query (productId, draftId, listingId, product.sku, variant SKUs)
+  // 3. Build list of candidate SKUs to query (productId, draftId, listingId, product.sku, variant SKUs)
   const candidateSkus = new Set();
   if (productId) {
     candidateSkus.add(productId);
@@ -134,7 +160,7 @@ async function resolveEbayOffer(uid, product, productId) {
     }
   }
 
-  // 3. Query all user's offers from eBay (up to 100) and find by storedId (listingId or offerId) or title match
+  // 4. Query user's offers from eBay (up to 100) and find by storedId (listingId or offerId) or title match
   try {
     const allOffersRes = await ebayRequest(
       uid,
@@ -145,7 +171,7 @@ async function resolveEbayOffer(uid, product, productId) {
     if (allOffers.length > 0) {
       const matchedOffer = (storedId && allOffers.find((o) => o.listingId === storedId || o.offerId === storedId))
         || (product?.title && allOffers.find((o) => o.title?.toLowerCase() === product.title.trim().toLowerCase()))
-        || (product?.title && allOffers.find((o) => o.title && (product.title.toLowerCase().includes(o.title.toLowerCase().slice(0, 25)) || o.title.toLowerCase().includes(product.title.toLowerCase().slice(0, 25)))));
+        || (product?.title && allOffers.find((o) => o.title && (product.title.toLowerCase().includes(o.title.toLowerCase().slice(0, 20)) || o.title.toLowerCase().includes(product.title.toLowerCase().slice(0, 20)))));
 
       if (matchedOffer?.offerId) {
         console.log(`[resolveEbayOffer] Recovered offerId=${matchedOffer.offerId} (listingId=${matchedOffer.listingId}, SKU=${matchedOffer.sku}) from user offer list`);
