@@ -7,10 +7,15 @@ const EBAY_CLIENT_SECRET = defineSecret("EBAY_CLIENT_SECRET");
 const EBAY_RU_NAME = defineSecret("EBAY_RU_NAME"); // eBay "RuName" (redirect_uri value)
 const EBAY_ENV = defineString("EBAY_ENV", { default: "sandbox" }); // "sandbox" | "production"
 
+// Scopes requested when *refreshing* an access token. eBay's refresh_token
+// grant rejects (invalid_scope) anything that wasn't in the user's original
+// authorization, so this must stay a subset that every connected account has.
+// commerce.identity.readonly is requested at authorize time (Settings.jsx /
+// ProfileView.swift) and only needed once, at token exchange, to read the
+// username — deliberately NOT listed here.
 const EBAY_SCOPES = [
   "https://api.ebay.com/oauth/api_scope/sell.inventory",
   "https://api.ebay.com/oauth/api_scope/sell.account",
-  "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
 ].join(" ");
 
 function ebayApiHost() {
