@@ -53,6 +53,12 @@
     const auth = getAuth(app);
     const functions = getFunctions(app);
 
+    // The dashboard window that opens this popup. eBay's RuName only ever
+    // redirects here on wonni-app.web.app, and the app is served from the same
+    // origin — so target postMessage explicitly instead of "*" to keep the
+    // one-time OAuth code from leaking to an unexpected opener.
+    const TRUSTED_OPENER_ORIGIN = "https://wonni-app.web.app";
+
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
     const state = params.get("state");
@@ -65,7 +71,7 @@
       subText.innerText = error;
       if (window.opener) {
         try {
-          window.opener.postMessage({ type: "EBAY_AUTH_CALLBACK", error, state }, "*");
+          window.opener.postMessage({ type: "EBAY_AUTH_CALLBACK", error, state }, TRUSTED_OPENER_ORIGIN);
         } catch (_) {}
       } else {
         window.location.href = 'wonni://oauth/ebay?error=' + encodeURIComponent(error);
@@ -85,6 +91,7 @@
         subText.innerText = "Finalizing connection with your dashboard…";
 
         window.addEventListener("message", (event) => {
+          if (event.origin !== TRUSTED_OPENER_ORIGIN) return;
           if (event.data?.type === "EBAY_AUTH_SUCCESS") {
             statusText.innerText = "✓ eBay Connected!";
             subText.innerText = event.data.username
@@ -98,7 +105,7 @@
         });
 
         try {
-          window.opener.postMessage({ type: "EBAY_AUTH_CALLBACK", code, state }, "*");
+          window.opener.postMessage({ type: "EBAY_AUTH_CALLBACK", code, state }, TRUSTED_OPENER_ORIGIN);
           notifiedOpener = true;
         } catch (_) {}
       }
