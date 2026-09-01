@@ -37,24 +37,6 @@ async function tokenRequest(bodyParams) {
   return json;
 }
 
-async function fetchEbayUserInfo(accessToken) {
-  const response = await fetch(`https://${ebayApiHost()}/commerce/identity/v1/user/`, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(`eBay user API error (${response.status})`);
-  }
-  return {
-    username: data.username ?? "eBay User",
-    userId: data.userId ?? null,
-  };
-}
-
 // Exchange authorization code for access + refresh tokens
 exports.dropshipEbayExchangeToken = onCall(
   { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME] },
@@ -89,14 +71,7 @@ exports.dropshipEbayExchangeToken = onCall(
       throw new HttpsError("internal", e.message);
     }
 
-    // Fetch eBay user info for display name
-    let connectedUsername = "eBay User";
-    try {
-      const userInfo = await fetchEbayUserInfo(tokens.access_token);
-      connectedUsername = userInfo.username;
-    } catch (err) {
-      console.warn("Failed to fetch eBay user info:", err.message);
-    }
+    const connectedUsername = tokens.ebay_username || "Connected Account";
 
     await admin.firestore().doc(`users/${uid}/integrations/ebay`).set({
       platform: "ebay",
@@ -144,34 +119,26 @@ async function refreshEbayToken(uid) {
 // Authenticated eBay REST call. Returns parsed JSON (or null for 204).
 async function ebayRequest(uid, method, path, body) {
   const accessToken = await refreshEbayToken(uid);
+  const hasBody = body !== undefined && body !== null;
   const response = await fetch(`https://${ebayApiHost()}${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
-      "Content-Language": "en-US",
-      Accept: "application/json",
+      // Content-Language must only be sent when there is a request body —
+      // eBay returns error 25709 if it's included on GET/DELETE requests.
+      ...(hasBody ? { "Content-Language": "en-US" } : {}),
     },
-    body: body ? JSON.stringify(body) : undefined,
+    ...(hasBody && { body: JSON.stringify(body) }),
   });
 
   if (response.status === 204) return null;
-  const json = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const detail = json.errors?.[0]?.message ?? JSON.stringify(json);
-    const err = new Error(`eBay ${method} ${path} failed (${response.status}): ${detail}`);
-    err.status = response.status;
-    err.ebayErrors = json.errors ?? [];
-    throw err;
+    const text = await response.text();
+    throw new Error(`eBay API error (${response.status}): ${text}`);
   }
-  return json;
+  return response.json();
 }
 
-module.exports = {
-  dropshipEbayExchangeToken: exports.dropshipEbayExchangeToken,
-  refreshEbayToken,
-  ebayRequest,
-  EBAY_CLIENT_ID,
-  EBAY_CLIENT_SECRET,
-  EBAY_RU_NAME,
-};
+exports.ebayRequest = ebayRequest;
+exports.refreshEbayToken = refreshEbayToken;
