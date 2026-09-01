@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, Component, Fragment } from "react";
-import { deleteField, doc, deleteDoc, onSnapshot, serverTimestamp, updateDoc } from "firebase/firestore";
+import { collection, deleteField, doc, deleteDoc, onSnapshot, query, serverTimestamp, updateDoc, where } from "firebase/firestore";
 import { useBlocker, useNavigate, useParams } from "react-router-dom";
 import { auth, db, callFunction, uploadImageBlob } from "../firebase";
 import Layout from "../components/Layout";
@@ -8,10 +8,10 @@ import PostModal from "../components/PostModal";
 import OverflowMenu from "../components/OverflowMenu";
 import ApplyMercariEditsModal from "../components/ApplyMercariEditsModal";
 import ApplyEbayEditsModal from "../components/ApplyEbayEditsModal";
-import { getSourceCost, getCrossPostStatus, getCrossPostListingId, isPostedToPlatform } from "../lib/schemaCompat";
 import { useDebouncedCallback } from "../hooks/useDebouncedCallback";
 import { normalizeImageAssets, buildImagePayload } from "../lib/media";
 import { useMediaJobQueue } from "../lib/mediaJobQueue";
+import { getPlatformListingUrl } from "../lib/platformLinks";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -3059,7 +3059,7 @@ function MercariModal({
       // `price` is the scraped source price at import time, not a real
       // per-variant override.
       ? String((typeof product.listingPrice === "number" ? product.listingPrice : singleVariant.price) ?? 15)
-      : (product.listingPrice ?? product.suggestedSellPrice ?? getSourceCost(product) ?? product.aliexpressPrice * 2.2 ?? 15).toFixed(2)
+      : (product.listingPrice ?? product.suggestedSellPrice ?? product.sourceCost ?? product.aliexpressPrice * 2.2 ?? 15).toFixed(2)
   );
   const [condition, setCondition] = useState(product.mercariCondition ?? product.condition ?? "good");
   const [buyerPaysShipping, setBuyerPaysShipping] = useState(product.mercariBuyerPaysShipping ?? true);
@@ -3100,7 +3100,7 @@ function MercariModal({
       productId: product.id,
       title: product.title,
       description: product.description,
-      price: parseFloat(price) || getSourceCost(product) || product.aliexpressPrice * 2.2 || 15,
+      price: parseFloat(price) || product.sourceCost || product.aliexpressPrice * 2.2 || 15,
       condition,
       brand: product.brand || product.artistName || "",
       suggestedCategory: product.category || product.artistName || product.title,
@@ -3243,9 +3243,9 @@ function MercariModal({
               value={price}
               onChange={(e) => setPrice(e.target.value)}
             />
-            {(getSourceCost(product) ?? product.aliexpressPrice) > 0 && (
+            {(product.sourceCost ?? product.aliexpressPrice) > 0 && (
               <span style={{ fontSize: 11, color: "var(--muted)" }}>
-                Cost: ${(getSourceCost(product) ?? product.aliexpressPrice).toFixed(2)} · Est Proceeds: ${(parseFloat(price || 0) * 0.9).toFixed(2)}
+                Cost: ${(product.sourceCost ?? product.aliexpressPrice).toFixed(2)} · Est Proceeds: ${(parseFloat(price || 0) * 0.9).toFixed(2)}
               </span>
             )}
           </div>
@@ -3336,7 +3336,11 @@ function ProductDetail() {
   const [buyerPaysShipping, setBuyerPaysShipping] = useState(true);
   const [handlingFee, setHandlingFee] = useState("0");
   const [estimatedShippingDays, setEstimatedShippingDays] = useState("3");
-  const [handlingTimeDays, setHandlingTimeDays] = useState("");
+  const [handlingTimeDays, setHandlingTimeDays] = useState(1);
+  const [tags, setTags] = useState([]);
+  const [allUserTags, setAllUserTags] = useState([]);
+  const [tagInput, setTagInput] = useState("");
+  const [showTagSuggestions, setShowTagSuggestions] = useState(false);
   const [images, setImages] = useState([]);
   const imagesRef = useRef(images);
   useEffect(() => { imagesRef.current = images; }, [images]);
@@ -3559,7 +3563,9 @@ function ProductDetail() {
         setHandlingFee(String(effectiveFields.handlingFee ?? next.handlingFee ?? 0));
         setEstimatedShippingDays(String(effectiveFields.estimatedShippingDays ?? next.estimatedShippingDays ?? 3));
         const effHandlingTimeDays = "handlingTimeDays" in effectiveFields ? effectiveFields.handlingTimeDays : next.handlingTimeDays;
-        setHandlingTimeDays(effHandlingTimeDays != null ? String(effHandlingTimeDays) : "");
+        setHandlingTimeDays(typeof effHandlingTimeDays === "number" ? effHandlingTimeDays : 1);
+        const effTags = "tags" in effectiveFields ? effectiveFields.tags : next.tags;
+        setTags(Array.isArray(effTags) ? effTags : []);
 
         const mergedForImages = { ...next };
         if ("images" in effectiveFields) mergedForImages.images = effectiveFields.images;
@@ -3607,8 +3613,7 @@ function ProductDetail() {
   // Background check for eBay drift when product is active on eBay
   useEffect(() => {
     if (!product || !productId) return;
-    const isEbayActive = getCrossPostStatus(product, "ebay") === "active"
-      || product.crossPostStatus?.ebay === "active"
+    const isEbayActive = product.crossPostStatus?.ebay === "active"
       || product.crossPostStatus?.ebay === "posted";
     if (!isEbayActive) return;
 
@@ -3634,8 +3639,7 @@ function ProductDetail() {
   // Background check for Etsy drift when product is active on Etsy
   useEffect(() => {
     if (!product || !productId) return;
-    const isEtsyActive = product.etsyStatus === "active"
-      || product.crossPostStatus?.etsy === "active"
+    const isEtsyActive = product.crossPostStatus?.etsy === "active"
       || product.crossPostStatus?.etsy === "posted";
     if (!isEtsyActive) return;
 
@@ -3656,7 +3660,26 @@ function ProductDetail() {
     })();
 
     return () => { isMounted = false; };
-  }, [productId, product?.etsyStatus, product?.crossPostStatus?.etsy]);
+  }, [productId, product?.crossPostStatus?.etsy]);
+
+  // Load all existing tags across the user's products for autocomplete suggestions
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    const q = query(collection(db, "products"), where("userId", "==", uid));
+    return onSnapshot(q, (snap) => {
+      const tagSet = new Set();
+      snap.docs.forEach((docSnap) => {
+        const docTags = docSnap.data()?.tags;
+        if (Array.isArray(docTags)) {
+          docTags.forEach((t) => {
+            if (typeof t === "string" && t.trim()) tagSet.add(t.trim());
+          });
+        }
+      });
+      setAllUserTags(Array.from(tagSet).sort((a, b) => a.localeCompare(b)));
+    });
+  }, []);
 
   const preorder = product?.preOrder;
   const infoTable = useMemo(() => {
@@ -3671,10 +3694,10 @@ function ProductDetail() {
   }, [product?.sourceInfo]);
   const safePreviewIndex = Math.min(previewIndex, Math.max(0, images.length - 1));
 
-  const mercariStatus = product?.listingStatus?.mercari ?? "draft";
-  const mercariUrl = product?.listingUrl?.mercari ?? null;
-  const mercariItemId = product?.listingId?.mercari ?? null;
-  const mercariError = product?.listingError?.mercari ?? null;
+  const mercariStatus = product?.crossPostStatus?.mercari ?? "draft";
+  const mercariUrl = product?.crossPostUrls?.mercari ?? null;
+  const mercariItemId = product?.crossPostListingIds?.mercari ?? null;
+  const mercariError = product?.crossPostErrors?.mercari ?? null;
   // For variant products, the header button reflects aggregate progress
   // across variants instead of the (unused, for these products) top-level
   // listingStatus.mercari field — only in-stock variants count toward "done".
@@ -3909,8 +3932,28 @@ function ProductDetail() {
   }
 
   function handleHandlingTimeDaysChange(raw) {
-    setHandlingTimeDays(raw);
-    markFieldsDirty({ handlingTimeDays: raw === "" ? null : parseInt(raw, 10) || null });
+    const parsed = parseInt(raw, 10);
+    const val = Number.isNaN(parsed) ? 1 : parsed;
+    setHandlingTimeDays(val);
+    markFieldsDirty({ handlingTimeDays: val });
+  }
+
+  function handleAddTag(tagToAdd) {
+    const clean = (typeof tagToAdd === "string" ? tagToAdd : tagInput).trim();
+    if (!clean) return;
+    if (!tags.includes(clean)) {
+      const nextTags = [...tags, clean];
+      setTags(nextTags);
+      markFieldsDirty({ tags: nextTags });
+    }
+    setTagInput("");
+    setShowTagSuggestions(false);
+  }
+
+  function handleRemoveTag(tagToRemove) {
+    const nextTags = tags.filter((t) => t !== tagToRemove);
+    setTags(nextTags);
+    markFieldsDirty({ tags: nextTags });
   }
 
   // Commits the staged buffer into the live fields and clears it — the
@@ -4884,7 +4927,7 @@ function ProductDetail() {
   }
 
   async function handleEbaySyncListing() {
-    if (!getCrossPostListingId(product, "ebay")) {
+    if (!product?.crossPostListingIds?.ebay) {
       setError("No eBay listing to sync.");
       return;
     }
@@ -4918,7 +4961,7 @@ function ProductDetail() {
   }
 
   async function handleEbayDeleteListing() {
-    if (!getCrossPostListingId(product, "ebay")) {
+    if (!product?.crossPostListingIds?.ebay) {
       setError("No eBay listing to delete.");
       return;
     }
@@ -4979,7 +5022,7 @@ function ProductDetail() {
                 onClick: checkMercariSoldItems,
                 disabled: checkingMercariSold
               },
-              ...(getCrossPostListingId(product, "ebay") ? [{
+              ...(product?.crossPostListingIds?.ebay ? [{
                 label: deletingEbay ? "⏳ Deleting…" : "🗑️ Delete eBay listing",
                 onClick: handleEbayDeleteListing,
                 disabled: deletingEbay,
@@ -5287,7 +5330,7 @@ function ProductDetail() {
 
               {/* Thumbnail Grid (Right 50%) */}
               {(() => {
-                const maxVisiblePhotos = product.tiktokStatus === "active" ? 9 : 12;
+                const maxVisiblePhotos = product.crossPostStatus?.tiktok === "active" ? 9 : 12;
                 const hasMorePhotos = images.length > maxVisiblePhotos;
                 const isPhotoGridMinimized = hasMorePhotos && !showAllPhotos;
 
@@ -5652,15 +5695,166 @@ function ProductDetail() {
                   {aiDescError && <div style={{ fontSize: 12, color: "#ef4444", marginBottom: 6 }}>{aiDescError}</div>}
                   <textarea className="input" rows={8} value={description} onChange={(e) => handleDescriptionChange(e.target.value)} />
                 </div>
+
+                {/* Tags section */}
+                <div className="modal-field" style={{ marginTop: 12 }}>
+                  <label>Tags</label>
+                  {tags.length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                      {tags.map((tag) => (
+                        <span
+                          key={tag}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 6,
+                            padding: "3px 8px",
+                            background: "var(--surface-high)",
+                            border: "var(--border-thin) solid var(--border)",
+                            borderRadius: "var(--radius)",
+                            fontSize: 12,
+                            fontFamily: "'Space Mono', monospace",
+                            color: "var(--text)",
+                          }}
+                        >
+                          <span>🏷️ {tag}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveTag(tag)}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              color: "var(--muted)",
+                              cursor: "pointer",
+                              padding: "0 2px",
+                              fontSize: 12,
+                              lineHeight: 1,
+                            }}
+                            title={`Remove ${tag}`}
+                          >
+                            ✕
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ position: "relative", display: "flex", gap: 8 }}>
+                    <input
+                      className="input"
+                      placeholder="Add a tag (e.g. K-Pop, Photocard, Winter)..."
+                      value={tagInput}
+                      onChange={(e) => {
+                        setTagInput(e.target.value);
+                        setShowTagSuggestions(true);
+                      }}
+                      onFocus={() => setShowTagSuggestions(true)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          handleAddTag(tagInput);
+                        } else if (e.key === "Escape") {
+                          setShowTagSuggestions(false);
+                        }
+                      }}
+                      style={{ flex: 1 }}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ fontSize: 12, padding: "6px 14px", whiteSpace: "nowrap" }}
+                      onClick={() => handleAddTag(tagInput)}
+                      disabled={!tagInput.trim()}
+                    >
+                      Add Tag
+                    </button>
+
+                    {showTagSuggestions && tagInput.trim() && (
+                      (() => {
+                        const matchingSuggestions = allUserTags.filter(
+                          (t) =>
+                            t.toLowerCase().includes(tagInput.trim().toLowerCase()) &&
+                            !tags.includes(t)
+                        );
+                        if (matchingSuggestions.length === 0) return null;
+                        return (
+                          <div
+                            style={{
+                              position: "absolute",
+                              top: "100%",
+                              left: 0,
+                              right: 90,
+                              background: "var(--surface)",
+                              border: "var(--border-thin) solid var(--border)",
+                              borderRadius: "var(--radius)",
+                              marginTop: 4,
+                              maxHeight: 180,
+                              overflowY: "auto",
+                              zIndex: 30,
+                              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.4)",
+                            }}
+                          >
+                            {matchingSuggestions.map((st) => (
+                              <div
+                                key={st}
+                                style={{
+                                  padding: "8px 12px",
+                                  fontSize: 13,
+                                  cursor: "pointer",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 8,
+                                  borderBottom: "1px solid var(--surface-high)",
+                                }}
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  handleAddTag(st);
+                                }}
+                              >
+                                <span style={{ color: "var(--primary)" }}>🏷️</span> {st}
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()
+                    )}
+                  </div>
+                </div>
+
                 <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 12 }}>
                   <span style={{ fontSize: 12, color: "var(--muted)" }}>Listings use these as the base catalog fields.</span>
                 </div>
               </div>
 
               <div className="detail-badges">
-                {(getCrossPostStatus(product, "ebay") === "active" || product.crossPostStatus?.ebay === "active" || product.crossPostStatus?.ebay === "posted") && (
+                {product.crossPostStatus?.wonni === "active" && (
+                  <span
+                    className="chip chip-active"
+                    style={{ cursor: "pointer" }}
+                    onClick={() => {
+                      const url = getPlatformListingUrl("wonni", product);
+                      if (url) {
+                        if (url.startsWith("http")) window.open(url, "_blank", "noopener,noreferrer");
+                        else navigate(url);
+                      }
+                    }}
+                    title="Click to view on Wonni"
+                  >
+                    Wonni: Active ↗
+                  </span>
+                )}
+                {(product.crossPostStatus?.ebay === "active" || product.crossPostStatus?.ebay === "posted") && (
                   <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    <span className="chip chip-active">eBay: Live</span>
+                    <span
+                      className="chip chip-active"
+                      style={{ cursor: "pointer" }}
+                      onClick={() => {
+                        const url = getPlatformListingUrl("ebay", product);
+                        if (url) window.open(url, "_blank", "noopener,noreferrer");
+                      }}
+                      title="Click to open live eBay listing"
+                    >
+                      eBay: Live ↗
+                    </span>
                     <button
                       className="btn btn-ghost"
                       style={{ fontSize: 11, padding: "2px 10px", borderRadius: 12, cursor: "pointer" }}
@@ -5694,9 +5888,19 @@ function ProductDetail() {
                     )}
                   </div>
                 )}
-                {(product.etsyStatus === "active" || product.crossPostStatus?.etsy === "active" || product.crossPostStatus?.etsy === "posted") && (
+                {(product.crossPostStatus?.etsy === "active" || product.crossPostStatus?.etsy === "posted") && (
                   <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    <span className="chip chip-active">Etsy: Active</span>
+                    <span
+                      className="chip chip-active"
+                      style={{ cursor: "pointer" }}
+                      onClick={() => {
+                        const url = getPlatformListingUrl("etsy", product);
+                        if (url) window.open(url, "_blank", "noopener,noreferrer");
+                      }}
+                      title="Click to open live Etsy listing"
+                    >
+                      Etsy: Active ↗
+                    </span>
                     {etsyPullSyncDiff?.hasDrift && (
                       <button
                         className="btn btn-warning"
@@ -5721,16 +5925,24 @@ function ProductDetail() {
                     )}
                   </div>
                 )}
-                {product.tiktokStatus === "active" && (
-                  <span className="chip chip-active">
-                    TikTok: Active
+                {product.crossPostStatus?.tiktok === "active" && (
+                  <span
+                    className="chip chip-active"
+                    style={{ cursor: "pointer" }}
+                    onClick={() => {
+                      const url = getPlatformListingUrl("tiktok", product);
+                      if (url) window.open(url, "_blank", "noopener,noreferrer");
+                    }}
+                    title="Click to open TikTok listing"
+                  >
+                    TikTok: Active ↗
                   </span>
                 )}
                 {product?.hasVariants ? (
                   mercariPostedVariants.length > 0 || variants.some((v) => v.mercariError) ? (
                     <button
                       className={`chip ${variants.some((v) => v.mercariError) ? "chip-pending" : "chip-active"}`}
-                      style={{ border: "none", background: "none", cursor: "pointer", padding: 0 }}
+                      style={{ border: "none", cursor: "pointer" }}
                       onClick={scrollToVariants}
                       title="Click to view variants"
                     >
@@ -5739,8 +5951,18 @@ function ProductDetail() {
                   ) : null
                 ) : (
                   mercariStatus === "active" || mercariStatus === "failed" || mercariError ? (
-                    <span className={`chip ${mercariStatus === "failed" || mercariError ? "chip-pending" : mercariStatus === "active" ? "chip-active" : (mercariStatus === "posting" || mercariStatus === "updating") ? "chip-pending" : "chip-draft"}`}>
-                      {mercariStatus === "failed" || mercariError ? "⚠️ Mercari" : `Mercari: ${mercariStatus}`}
+                    <span
+                      className={`chip ${mercariStatus === "failed" || mercariError ? "chip-pending" : mercariStatus === "active" ? "chip-active" : (mercariStatus === "posting" || mercariStatus === "updating") ? "chip-pending" : "chip-draft"}`}
+                      style={{ cursor: mercariStatus === "active" ? "pointer" : "default" }}
+                      onClick={() => {
+                        if (mercariStatus === "active") {
+                          const url = getPlatformListingUrl("mercari", product);
+                          if (url) window.open(url, "_blank", "noopener,noreferrer");
+                        }
+                      }}
+                      title={mercariStatus === "active" ? "Click to open live Mercari listing" : undefined}
+                    >
+                      {mercariStatus === "failed" || mercariError ? "⚠️ Mercari" : `Mercari: ${mercariStatus} ↗`}
                     </span>
                   ) : null
                 )}
@@ -5900,8 +6122,25 @@ function ProductDetail() {
                     <input className="input" type="number" min="1" value={estimatedShippingDays} onChange={(e) => handleEstimatedShippingDaysChange(e.target.value)} />
                   </div>
                   <div className="modal-field">
-                    <label style={{ fontSize: 11 }}>Handling time (days)</label>
-                    <input className="input" type="number" min="0" placeholder="account default" value={handlingTimeDays} onChange={(e) => handleHandlingTimeDaysChange(e.target.value)} />
+                    <label style={{ fontSize: 11 }}>Handling time</label>
+                    <select
+                      className="input"
+                      value={handlingTimeDays}
+                      onChange={(e) => handleHandlingTimeDaysChange(e.target.value)}
+                      style={{ width: "100%", background: "var(--surface)", color: "var(--text)" }}
+                    >
+                      <option value={0}>Same Business Day (0 days)</option>
+                      <option value={1}>1 Business Day</option>
+                      <option value={2}>2 Business Days</option>
+                      <option value={3}>3 Business Days</option>
+                      <option value={5}>5 Business Days (1 week)</option>
+                      <option value={10}>10 Business Days (2 weeks)</option>
+                      <option value={15}>15 Business Days (3 weeks)</option>
+                      <option value={20}>20 Business Days (4 weeks)</option>
+                      <option value={30}>30 Business Days (6 weeks — eBay max)</option>
+                      <option value={40}>40 Business Days (8 weeks — Etsy pre-order)</option>
+                      <option value={50}>50 Business Days (10 weeks — Etsy max)</option>
+                    </select>
                   </div>
                 </div>
               </div>

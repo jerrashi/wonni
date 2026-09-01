@@ -6,6 +6,7 @@ import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import ProductDetail from "./pages/ProductDetail";
 import Orders from "./pages/Orders";
+import Sales from "./pages/Sales";
 import Settings from "./pages/Settings";
 import { MediaJobQueueProvider } from "./lib/mediaJobQueue";
 import BackgroundTasksTray from "./components/BackgroundTasksTray";
@@ -34,6 +35,7 @@ const router = createBrowserRouter(
         { path: "/login", element: <Login /> },
         { path: "/", element: <ProtectedRoute><Dashboard /></ProtectedRoute> },
         { path: "/products/:productId", element: <ProtectedRoute><ProductDetail /></ProtectedRoute> },
+        { path: "/sales", element: <ProtectedRoute><Sales /></ProtectedRoute> },
         { path: "/orders", element: <ProtectedRoute><Orders /></ProtectedRoute> },
         { path: "/settings", element: <ProtectedRoute><Settings /></ProtectedRoute> },
       ],

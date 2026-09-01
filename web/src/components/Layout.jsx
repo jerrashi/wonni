@@ -31,6 +31,7 @@ export default function Layout({ children }) {
         </button>
         <div className="sidebar-logo">Wonni Drop</div>
         <NavLink to="/" end>Dashboard</NavLink>
+        <NavLink to="/sales">Sales</NavLink>
         <NavLink to="/orders">Orders</NavLink>
         <NavLink to="/settings">Settings</NavLink>
         <div className="sidebar-signout" style={{ marginTop: "auto", padding: "0 8px" }}>

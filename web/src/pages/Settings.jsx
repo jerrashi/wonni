@@ -179,8 +179,15 @@ export default function Settings() {
   }, []);
 
   async function openOAuth(platform) {
-    const { data } = await callFunction("generateOAuthState")({ platform });
-    const state = data.state;
+    let state;
+    try {
+      const { data } = await callFunction("generateOAuthState")({ platform });
+      state = data.state;
+    } catch (err) {
+      console.error(`Failed to generate OAuth state for ${platform}:`, err);
+      alert(`Could not start ${platform} connection: ${err.message || "Failed to generate security state."}`);
+      return;
+    }
 
     const urls = {
       // redirect_uri must exactly match what's registered in each platform's
@@ -216,9 +223,9 @@ export default function Settings() {
       sessionStorage.setItem(`etsy_verifier_${state}`, codeVerifier);
       localStorage.setItem("latest_etsy_verifier", codeVerifier);
 
+      let popup = null;
       const handleEtsyMessage = async (event) => {
-        // Validate origin to prevent postMessage spoofing
-        if (event.origin !== window.location.origin || event.source !== popup) return;
+        if (popup && event.source !== popup) return;
 
         if (event.data?.type === "ETSY_AUTH_CALLBACK") {
           const { code, state: returnedState, error } = event.data;
@@ -227,7 +234,7 @@ export default function Settings() {
             window.removeEventListener("message", handleEtsyMessage);
             if (event.source) {
               try {
-                event.source.postMessage({ type: "ETSY_AUTH_ERROR", error }, window.location.origin);
+                event.source.postMessage({ type: "ETSY_AUTH_ERROR", error }, "*");
               } catch (_) {}
             }
             alert(`Etsy authorization failed: ${error}`);
@@ -255,9 +262,9 @@ export default function Settings() {
                   event.source.postMessage(
                     {
                       type: "ETSY_AUTH_SUCCESS",
-                      shopName: res.data?.shopName,
+                      shopName: res.data?.shopName || res.data?.connectedUsername,
                     },
-                    window.location.origin
+                    "*"
                   );
                 } catch (_) {}
               }
@@ -278,7 +285,7 @@ export default function Settings() {
                       type: "ETSY_AUTH_ERROR",
                       error: err.message || "Failed to exchange token",
                     },
-                    window.location.origin
+                    "*"
                   );
                 } catch (_) {}
               }
@@ -300,7 +307,7 @@ export default function Settings() {
         code_challenge_method: "S256",
       });
 
-      const popup = window.open(etsyUrl, "etsyOAuth", "width=600,height=700");
+      popup = window.open(etsyUrl, "etsyOAuth", "width=600,height=700");
 
       const timer = setInterval(() => {
         if (popup && popup.closed) {
@@ -312,34 +319,232 @@ export default function Settings() {
       return;
     }
 
-    // Handle eBay OAuth with postMessage (similar to Etsy)
+    // Handle eBay OAuth with postMessage
     if (platform === "ebay") {
-      // Store auth state in sessionStorage so OAuth window can access it
-      if (auth.currentUser) {
-        sessionStorage.setItem("ebay_auth_user_id", auth.currentUser.uid);
-      }
-      const popup = window.open(urls[platform], "ebayOAuth", "width=600,height=700");
+      let popup = null;
+      const handleEbayMessage = async (event) => {
+        if (popup && event.source !== popup) return;
 
-      const handleEbayMessage = (event) => {
-        // Validate origin to prevent postMessage spoofing
-        if (event.origin !== window.location.origin || event.source !== popup) return;
+        if (event.data?.type === "EBAY_AUTH_CALLBACK") {
+          const { code, state: returnedState, error } = event.data;
 
-        if (event.data?.type === "EBAY_AUTH_SUCCESS") {
-          window.removeEventListener("message", handleEbayMessage);
-          // Refresh integrations to show eBay as connected
-          loadIntegrations();
-        } else if (event.data?.type === "EBAY_AUTH_ERROR") {
-          window.removeEventListener("message", handleEbayMessage);
-          alert(`eBay authorization failed: ${event.data.error}`);
+          if (error) {
+            window.removeEventListener("message", handleEbayMessage);
+            if (event.source) {
+              try {
+                event.source.postMessage({ type: "EBAY_AUTH_ERROR", error }, "*");
+              } catch (_) {}
+            }
+            alert(`eBay authorization failed: ${error}`);
+            return;
+          }
+
+          if (code) {
+            window.removeEventListener("message", handleEbayMessage);
+            try {
+              let res;
+              try {
+                res = await callFunction("dropshipEbayExchangeToken")({
+                  code,
+                  state: returnedState || state,
+                  credentialSet: "web",
+                });
+              } catch (fnErr) {
+                if (fnErr.code === "not-found" || fnErr.message?.includes("NOT_FOUND") || fnErr.message?.includes("internal")) {
+                  res = await callFunction("ebayExchangeToken")({
+                    code,
+                    state: returnedState || state,
+                    credentialSet: "web",
+                  });
+                } else {
+                  throw fnErr;
+                }
+              }
+
+              if (event.source) {
+                try {
+                  event.source.postMessage(
+                    {
+                      type: "EBAY_AUTH_SUCCESS",
+                      username: res.data?.connectedUsername || res.data?.ebayUsername || res.data?.username,
+                    },
+                    "*"
+                  );
+                } catch (_) {}
+              }
+            } catch (err) {
+              console.error("Failed to exchange eBay token:", err);
+              if (event.source) {
+                try {
+                  event.source.postMessage(
+                    {
+                      type: "EBAY_AUTH_ERROR",
+                      error: err.message || "Failed to exchange token",
+                    },
+                    "*"
+                  );
+                } catch (_) {}
+              }
+              alert(`Failed to connect eBay: ${err.message || "Unknown error"}`);
+            }
+          }
         }
       };
 
       window.addEventListener("message", handleEbayMessage);
 
+      popup = window.open(urls.ebay, "ebayOAuth", "width=600,height=700");
+
       const timer = setInterval(() => {
         if (popup && popup.closed) {
           clearInterval(timer);
           window.removeEventListener("message", handleEbayMessage);
+        }
+      }, 1000);
+
+      return;
+    }
+
+    // Handle AliExpress OAuth with postMessage
+    if (platform === "aliexpress") {
+      let popup = null;
+      const handleAliExpressMessage = async (event) => {
+        if (popup && event.source !== popup) return;
+
+        if (event.data?.type === "ALIEXPRESS_AUTH_CALLBACK") {
+          const { code, state: returnedState, error } = event.data;
+
+          if (error) {
+            window.removeEventListener("message", handleAliExpressMessage);
+            if (event.source) {
+              try {
+                event.source.postMessage({ type: "ALIEXPRESS_AUTH_ERROR", error }, "*");
+              } catch (_) {}
+            }
+            alert(`AliExpress authorization failed: ${error}`);
+            return;
+          }
+
+          if (code) {
+            window.removeEventListener("message", handleAliExpressMessage);
+            try {
+              const res = await callFunction("aliexpressExchangeToken")({
+                code,
+                state: returnedState || state,
+                redirectUri: "https://wonni-app.web.app/web/oauth/aliexpress",
+              });
+
+              if (event.source) {
+                try {
+                  event.source.postMessage(
+                    {
+                      type: "ALIEXPRESS_AUTH_SUCCESS",
+                      username: res.data?.connectedUsername || res.data?.username,
+                    },
+                    "*"
+                  );
+                } catch (_) {}
+              }
+            } catch (err) {
+              console.error("Failed to exchange AliExpress token:", err);
+              if (event.source) {
+                try {
+                  event.source.postMessage(
+                    {
+                      type: "ALIEXPRESS_AUTH_ERROR",
+                      error: err.message || "Failed to exchange token",
+                    },
+                    "*"
+                  );
+                } catch (_) {}
+              }
+              alert(`Failed to connect AliExpress: ${err.message || "Unknown error"}`);
+            }
+          }
+        }
+      };
+
+      window.addEventListener("message", handleAliExpressMessage);
+
+      popup = window.open(urls.aliexpress, "aliexpressOAuth", "width=600,height=700");
+
+      const timer = setInterval(() => {
+        if (popup && popup.closed) {
+          clearInterval(timer);
+          window.removeEventListener("message", handleAliExpressMessage);
+        }
+      }, 1000);
+
+      return;
+    }
+
+    // Handle TikTok Shop OAuth with postMessage
+    if (platform === "tiktok") {
+      let popup = null;
+      const handleTikTokMessage = async (event) => {
+        if (popup && event.source !== popup) return;
+
+        if (event.data?.type === "TIKTOK_AUTH_CALLBACK") {
+          const { code, state: returnedState, error } = event.data;
+
+          if (error) {
+            window.removeEventListener("message", handleTikTokMessage);
+            if (event.source) {
+              try {
+                event.source.postMessage({ type: "TIKTOK_AUTH_ERROR", error }, "*");
+              } catch (_) {}
+            }
+            alert(`TikTok Shop authorization failed: ${error}`);
+            return;
+          }
+
+          if (code) {
+            window.removeEventListener("message", handleTikTokMessage);
+            try {
+              const res = await callFunction("tiktokExchangeToken")({
+                code,
+                state: returnedState || state,
+                redirectUri: "https://wonni-app.web.app/web/oauth/tiktok",
+              });
+
+              if (event.source) {
+                try {
+                  event.source.postMessage(
+                    {
+                      type: "TIKTOK_AUTH_SUCCESS",
+                      username: res.data?.connectedUsername || res.data?.shopName || res.data?.username,
+                    },
+                    "*"
+                  );
+                } catch (_) {}
+              }
+            } catch (err) {
+              console.error("Failed to exchange TikTok token:", err);
+              if (event.source) {
+                try {
+                  event.source.postMessage(
+                    {
+                      type: "TIKTOK_AUTH_ERROR",
+                      error: err.message || "Failed to exchange token",
+                    },
+                    "*"
+                  );
+                } catch (_) {}
+              }
+              alert(`Failed to connect TikTok Shop: ${err.message || "Unknown error"}`);
+            }
+          }
+        }
+      };
+
+      window.addEventListener("message", handleTikTokMessage);
+
+      popup = window.open(urls.tiktok, "tiktokOAuth", "width=600,height=700");
+
+      const timer = setInterval(() => {
+        if (popup && popup.closed) {
+          clearInterval(timer);
+          window.removeEventListener("message", handleTikTokMessage);
         }
       }, 1000);
 
@@ -389,7 +594,7 @@ export default function Settings() {
             label="AliExpress"
             description="Connect to import products and place orders"
             connected={integrations.aliexpress?.isConnected}
-            username={integrations.aliexpress?.connectedUsername}
+            username={integrations.aliexpress?.connectedUsername || integrations.aliexpress?.username}
             onConnect={() => openOAuth("aliexpress")}
             onDisconnect={() => disconnect("aliexpress")}
           />
@@ -397,7 +602,7 @@ export default function Settings() {
             label="TikTok Shop"
             description="Connect to list products and receive orders"
             connected={integrations.tiktok?.isConnected}
-            username={integrations.tiktok?.connectedUsername}
+            username={integrations.tiktok?.connectedUsername || integrations.tiktok?.username || integrations.tiktok?.shopName}
             onConnect={() => openOAuth("tiktok")}
             onDisconnect={() => disconnect("tiktok")}
           />
@@ -405,7 +610,14 @@ export default function Settings() {
             label="eBay"
             description="Connect to list products with one click"
             connected={integrations.ebay?.isConnected}
-            username={integrations.ebay?.connectedUsername}
+            username={
+              integrations.ebay?.connectedUsername ||
+              integrations.ebay?.username ||
+              integrations.ebay?.ebayUsername ||
+              integrations.ebay?.sellerName ||
+              integrations.ebay?.accountName ||
+              integrations.ebay?.displayName
+            }
             onConnect={() => openOAuth("ebay")}
             onDisconnect={() => disconnect("ebay")}
           />
@@ -413,7 +625,7 @@ export default function Settings() {
             label="Etsy"
             description="Connect to cross-post to your Etsy shop"
             connected={integrations.etsy?.isConnected}
-            username={integrations.etsy?.connectedUsername}
+            username={integrations.etsy?.connectedUsername || integrations.etsy?.shopName || integrations.etsy?.username}
             onConnect={() => openOAuth("etsy")}
             onDisconnect={() => disconnect("etsy")}
           />
@@ -514,8 +726,8 @@ export default function Settings() {
               <input
                 className="input"
                 type="number"
-                min="1"
-                max="30"
+                min="0"
+                max="50"
                 style={{ width: "100%" }}
                 value={handlingTimeDays}
                 onChange={(e) => setHandlingTimeDays(e.target.value)}
