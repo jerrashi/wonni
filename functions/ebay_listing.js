@@ -29,26 +29,89 @@ async function getMerchantLocationKey(uid) {
 }
 
 // First business policy of each type — eBay offers require all three.
-async function getListingPolicies(uid) {
+async function getListingPolicies(uid, handlingTimeDays) {
   const [fulfillment, payment, returns] = await Promise.all([
     ebayRequest(uid, "GET", `/sell/account/v1/fulfillment_policy?marketplace_id=${MARKETPLACE_ID}`),
     ebayRequest(uid, "GET", `/sell/account/v1/payment_policy?marketplace_id=${MARKETPLACE_ID}`),
     ebayRequest(uid, "GET", `/sell/account/v1/return_policy?marketplace_id=${MARKETPLACE_ID}`),
   ]);
 
-  const policies = {
-    fulfillmentPolicyId: fulfillment?.fulfillmentPolicies?.[0]?.fulfillmentPolicyId,
-    paymentPolicyId: payment?.paymentPolicies?.[0]?.paymentPolicyId,
-    returnPolicyId: returns?.returnPolicies?.[0]?.returnPolicyId,
-  };
+  const fulfillmentPolicies = fulfillment?.fulfillmentPolicies || [];
+  let matchingFulfillment = null;
 
-  if (!policies.fulfillmentPolicyId || !policies.paymentPolicyId || !policies.returnPolicyId) {
+  if (typeof handlingTimeDays === "number" && handlingTimeDays > 0) {
+    matchingFulfillment = fulfillmentPolicies.find(
+      (p) => p.handlingTime?.value === handlingTimeDays && p.handlingTime?.unit === "DAY"
+    );
+  }
+
+  const fulfillmentPolicyId = matchingFulfillment?.fulfillmentPolicyId
+    || fulfillmentPolicies[0]?.fulfillmentPolicyId;
+  const paymentPolicyId = payment?.paymentPolicies?.[0]?.paymentPolicyId;
+  const returnPolicyId = returns?.returnPolicies?.[0]?.returnPolicyId;
+
+  if (!fulfillmentPolicyId || !paymentPolicyId || !returnPolicyId) {
     throw new HttpsError(
       "failed-precondition",
       "Missing eBay business policies (shipping/payment/return). Opt in to business policies in Seller Hub and create one of each."
     );
   }
-  return policies;
+  return { fulfillmentPolicyId, paymentPolicyId, returnPolicyId };
+}
+
+// Resiliently resolve the eBay Offer ID for a product.
+// Recovers automatically if the stored ID is a 12-digit listing ID (e.g. 147542181716) or if offer moved.
+async function resolveEbayOffer(uid, product, productId) {
+  const storedId = product?.crossPostListingIds?.ebay;
+  const sku = productId;
+  const altSku = `wonni_${productId}`;
+
+  // 1. If storedId is present and not a 12-digit listing ID, try fetching it directly
+  if (storedId && !/^\d{12}$/.test(String(storedId).trim())) {
+    try {
+      const offer = await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${storedId}`);
+      if (offer && offer.offerId) {
+        return { offer, offerId: offer.offerId, sku: offer.sku || sku };
+      }
+    } catch (err) {
+      console.log(`[resolveEbayOffer] Direct fetch of offer ${storedId} failed (${err.message}). Searching by SKU...`);
+    }
+  }
+
+  // 2. Query eBay for offers under SKU (both productId and wonni_${productId})
+  for (const querySku of [sku, altSku]) {
+    try {
+      const result = await ebayRequest(
+        uid,
+        "GET",
+        `/sell/inventory/v1/offer?sku=${encodeURIComponent(querySku)}&marketplace_id=${MARKETPLACE_ID}`
+      );
+      const offers = result?.offers || [];
+      if (offers.length > 0) {
+        const targetOffer = offers.find((o) => o.listingId === storedId || o.offerId === storedId)
+          || offers.find((o) => o.status === "PUBLISHED")
+          || offers[0];
+
+        if (targetOffer?.offerId) {
+          console.log(`[resolveEbayOffer] Recovered offerId=${targetOffer.offerId} (listingId=${targetOffer.listingId}) for SKU ${querySku}`);
+          const docRef = admin.firestore().collection("products").doc(productId);
+          await docRef.update({
+            "crossPostListingIds.ebay": targetOffer.offerId,
+            ebayListingId: targetOffer.listingId || (typeof storedId === "string" && /^\d{12}$/.test(storedId) ? storedId : null),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          return { offer: targetOffer, offerId: targetOffer.offerId, sku: querySku };
+        }
+      }
+    } catch (skuErr) {
+      console.warn(`[resolveEbayOffer] Error querying offers for SKU ${querySku}:`, skuErr.message);
+    }
+  }
+
+  throw new HttpsError(
+    "not-found",
+    `No eBay offer found for product ${productId} (stored ID: ${storedId || "none"}).`
+  );
 }
 
 // Auto-pick a category from the title via the Taxonomy API
@@ -286,32 +349,40 @@ exports.ebayGetListingDetails = onCall(
 
     const product = snap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
-    const offerId = product.crossPostListingIds?.ebay;
-    if (!offerId) throw new HttpsError("failed-precondition", "No eBay listing found.");
 
     try {
-      const offer = await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${offerId}`);
-      const sku = product.ebayHasVariations ? null : productId; // Only fetch single-variant inventory
-      let inventory = null;
+      const { offer, sku } = await resolveEbayOffer(uid, product, productId);
 
-      if (sku && !product.ebayHasVariations) {
-        inventory = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
+      let inventory = null;
+      if (sku) {
+        try {
+          inventory = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
+        } catch {
+          // Ignore inventory fetch error for multi-variant items
+        }
       }
+
+      const wonniPhotos = listingImagesFor(product);
 
       return {
         wonni: {
           title: product.title ?? "",
           description: canonicalDescription(product),
           price: product.listingPrice ?? computeEbaySellPrice(product),
-          quantity: product.variants?.reduce((sum, v) => sum + (v.quantity ?? 0), 0) ?? 1,
+          quantity: product.variants?.reduce((sum, v) => sum + (v.quantity ?? 0), 0) ?? (product.quantity ?? 1),
+          photoCount: wonniPhotos.length,
+          handlingTimeDays: product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays ?? null,
         },
         ebay: {
-          title: offer?.title ?? "",
+          title: offer?.title || inventory?.product?.title || "",
           description: offer?.listingDescription ?? "",
           price: offer?.pricingSummary?.price?.value
             ? parseFloat(offer.pricingSummary.price.value)
-            : null,
-          quantity: inventory?.availability?.shipToLocationAvailability?.quantity ?? 0,
+            : (offer?.pricingSummary?.minimumAdvertisedPrice?.value ? parseFloat(offer.pricingSummary.minimumAdvertisedPrice.value) : null),
+          quantity: inventory?.availability?.shipToLocationAvailability?.quantity ?? (offer?.availableQuantity ?? 0),
+          photoCount: inventory?.product?.imageUrls?.length ?? 0,
+          offerId: offer?.offerId,
+          listingId: offer?.listingId,
         },
       };
     } catch (e) {
@@ -338,13 +409,12 @@ exports.ebaySyncListing = onCall(
 
     const product = snap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
-    const offerId = product.crossPostListingIds?.ebay;
-    if (!offerId) throw new HttpsError("failed-precondition", "No eBay listing found.");
 
     try {
+      const { offer, offerId, sku } = await resolveEbayOffer(uid, product, productId);
+
       if (applyFrom === "wonni") {
-        // Push Wonni version to eBay
-        const sku = productId;
+        // Push Wonni version to eBay (title, description, price, photos, shipping/handling time, variation quantities)
         const title = (product.title ?? "").slice(0, 80);
         const description = canonicalDescription(product);
         const basePrice = product.listingPrice ?? computeEbaySellPrice(product);
@@ -375,9 +445,21 @@ exports.ebaySyncListing = onCall(
 
         await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, inventoryPayload);
 
+        // Re-resolve policies for handling time updates
+        const handlingTimeDays = product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays;
+        let listingPolicies = null;
+        try {
+          listingPolicies = await getListingPolicies(uid, handlingTimeDays);
+        } catch (polErr) {
+          console.warn("[ebaySyncListing] Retaining existing listing policies:", polErr.message);
+        }
+
         const offerPatchPayload = {
           listingDescription: description,
         };
+        if (listingPolicies) {
+          offerPatchPayload.listingPolicies = listingPolicies;
+        }
 
         if (hasVariations) {
           offerPatchPayload.pricingSummary = {
@@ -401,8 +483,6 @@ exports.ebaySyncListing = onCall(
         await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`);
       } else {
         // Pull eBay version to Wonni
-        const offer = await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${offerId}`);
-        const sku = productId;
         const inventory = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
 
         const updatePayload = {
@@ -414,7 +494,6 @@ exports.ebaySyncListing = onCall(
         };
 
         if (inventory?.availability?.shipToLocationAvailability?.quantity != null) {
-          // Update variant quantities if multi-variant
           if (product.ebayHasVariations && Array.isArray(product.variants)) {
             const batch = db.batch();
             product.variants.forEach((v, index) => {
@@ -444,7 +523,7 @@ exports.ebaySyncListing = onCall(
   }
 );
 
-// Update an eBay listing with current Wonni product data (title, description, price, images, variations/quantities)
+// Update an eBay listing with current Wonni product data (title, description, price, images, variations/quantities, shipping)
 exports.ebayUpdateListing = onCall(
   { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME], timeoutSeconds: 60, memory: "256MiB" },
   async (request) => {
@@ -461,19 +540,18 @@ exports.ebayUpdateListing = onCall(
 
     const product = snap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
-    const offerId = product.crossPostListingIds?.ebay;
-    if (!offerId) throw new HttpsError("failed-precondition", "No eBay listing to update.");
-
-    const sku = productId;
-    const title = (product.title ?? "").slice(0, 80);
-    const description = canonicalDescription(product);
-    const basePrice = product.listingPrice ?? computeEbaySellPrice(product);
-
-    // Check if product has variants
-    const variationData = buildEbayVariations(product);
-    const hasVariations = variationData !== null;
 
     try {
+      const { offerId, sku } = await resolveEbayOffer(uid, product, productId);
+
+      const title = (product.title ?? "").slice(0, 80);
+      const description = canonicalDescription(product);
+      const basePrice = product.listingPrice ?? computeEbaySellPrice(product);
+
+      // Check if product has variants
+      const variationData = buildEbayVariations(product);
+      const hasVariations = variationData !== null;
+
       // 1. Update inventory item in-place via idempotent PUT
       const inventoryPayload = {
         product: toEbayInventoryProduct(product, { imageLimit: 12, title }),
@@ -498,10 +576,22 @@ exports.ebayUpdateListing = onCall(
 
       await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, inventoryPayload);
 
+      // Re-resolve policies for handling time updates
+      const handlingTimeDays = product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays;
+      let listingPolicies = null;
+      try {
+        listingPolicies = await getListingPolicies(uid, handlingTimeDays);
+      } catch (polErr) {
+        console.warn("[ebayUpdateListing] Retaining existing listing policies:", polErr.message);
+      }
+
       // 2. Update the existing offer in-place (PATCH)
       const offerPatchPayload = {
         listingDescription: description,
       };
+      if (listingPolicies) {
+        offerPatchPayload.listingPolicies = listingPolicies;
+      }
 
       if (hasVariations) {
         offerPatchPayload.pricingSummary = {
@@ -523,16 +613,16 @@ exports.ebayUpdateListing = onCall(
 
       // 3. Re-publish the existing offer to apply changes to the live listing without deleting/recreating
       await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`);
+
+      // Update last-synced timestamp
+      await docRef.update({
+        ebayLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return { success: true };
     } catch (e) {
       throw new HttpsError("internal", `Failed to update eBay listing: ${e.message}`);
     }
-
-    // Update last-synced timestamp
-    await docRef.update({
-      ebayLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    return { success: true };
   }
 );

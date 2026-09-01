@@ -3,11 +3,25 @@ function cleanText(value) {
 }
 
 function listingImagesFor(product, limit) {
-  const images = Array.isArray(product.listingImages) && product.listingImages.length
-    ? product.listingImages
-    : Array.isArray(product.images)
-      ? product.images
-      : [];
+  let images = [];
+  if (Array.isArray(product.listingImages) && product.listingImages.length) {
+    images = product.listingImages;
+  } else if (Array.isArray(product.imageAssets) && product.imageAssets.length) {
+    images = product.imageAssets.map(a => typeof a === "string" ? a : a?.url).filter(Boolean);
+  } else if (Array.isArray(product.photoPaths) && product.photoPaths.length) {
+    images = product.photoPaths;
+  } else if (Array.isArray(product.images) && product.images.length) {
+    images = product.images.map(img => typeof img === "string" ? img : img?.url).filter(Boolean);
+  }
+
+  images = images.map(img => {
+    if (!img) return "";
+    if (typeof img === "object") img = img.url || "";
+    if (typeof img !== "string") return "";
+    if (img.startsWith("http://") || img.startsWith("https://") || img.startsWith("data:")) return img;
+    return `https://firebasestorage.googleapis.com/v0/b/wonni-app.firebasestorage.app/o/${encodeURIComponent(img)}?alt=media`;
+  }).filter(Boolean);
+
   return typeof limit === "number" ? images.slice(0, limit) : images;
 }
 
