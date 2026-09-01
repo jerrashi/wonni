@@ -3,6 +3,7 @@
     "public": "public",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [
+      { "source": "/privacy", "destination": "/privacy/index.html" },
       { "source": "/web/oauth/aliexpress", "destination": "/oauth/aliexpress/index.html" },
       { "source": "/web/oauth/tiktok", "destination": "/oauth/tiktok/index.html" },
       { "source": "/web/oauth/ebay", "destination": "/oauth/ebay/index.html" },

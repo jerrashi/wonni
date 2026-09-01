@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { collection, doc, deleteDoc, query, where, orderBy, onSnapshot } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import { db, callFunction } from "../firebase";
@@ -7,13 +7,15 @@ import Layout from "../components/Layout";
 import CreateDraftModal from "../components/CreateDraftModal";
 import PostModal from "../components/PostModal";
 import BulkPostModal from "../components/BulkPostModal";
+import BulkTagModal from "../components/BulkTagModal";
+import { getPlatformListingUrl } from "../lib/platformLinks";
 
 // ── List Modal ────────────────────────────────────────────────────────────────
 
 function ListModal({ product, onClose, onListed }) {
   const [title, setTitle] = useState(product.title.slice(0, 255));
   const [price, setPrice] = useState(
-    ((product.listingPrice ?? product.aliexpressPrice * 2.5) || 0).toFixed(2)
+    ((product.listingPrice ?? (product.sourceCost ?? product.aliexpressPrice ?? 0) * 2.5) || 0).toFixed(2)
   );
   const [categories, setCategories] = useState([]);
   const [loadingCats, setLoadingCats] = useState(true);
@@ -79,9 +81,9 @@ function ListModal({ product, onClose, onListed }) {
               value={price}
               onChange={(e) => setPrice(e.target.value)}
             />
-            {product.aliexpressPrice > 0 && (
+            {(product.sourceCost ?? product.aliexpressPrice) > 0 && (
               <span style={{ fontSize: 11, color: "var(--muted)" }}>
-                Cost: ${product.aliexpressPrice.toFixed(2)} · Margin: ${(parseFloat(price || 0) * 0.925 - product.aliexpressPrice).toFixed(2)}
+                Cost: ${(product.sourceCost ?? product.aliexpressPrice).toFixed(2)} · Margin: ${(parseFloat(price || 0) * 0.925 - (product.sourceCost ?? product.aliexpressPrice)).toFixed(2)}
               </span>
             )}
           </div>
@@ -242,13 +244,13 @@ function PostedPlatforms({ product }) {
   if (product.crossPostStatus?.wonni === "active") {
     platforms.push({ id: "wonni", name: "Wonni", logo: "W", status: "active" });
   }
-  if (product.tiktokStatus === "active") {
+  if (product.crossPostStatus?.tiktok === "active") {
     platforms.push({ id: "tiktok", name: "TikTok Shop", logo: "TT", status: "active" });
   }
-  if (product.ebayStatus === "active" || product.crossPostStatus?.ebay === "active" || product.crossPostStatus?.ebay === "posted") {
+  if (product.crossPostStatus?.ebay === "active" || product.crossPostStatus?.ebay === "posted") {
     platforms.push({ id: "ebay", name: "eBay", logo: "EB", status: "active" });
   }
-  if (product.etsyStatus === "active" || product.crossPostStatus?.etsy === "active" || product.crossPostStatus?.etsy === "posted") {
+  if (product.crossPostStatus?.etsy === "active" || product.crossPostStatus?.etsy === "posted") {
     platforms.push({ id: "etsy", name: "Etsy", logo: "ET", status: "active" });
   }
 
@@ -265,7 +267,7 @@ function PostedPlatforms({ product }) {
     } else if (postedCount > 0) {
       platforms.push({ id: "mercari", name: "Mercari", logo: "MR", status: "incomplete" });
     }
-  } else if (product.listingStatus?.mercari === "active") {
+  } else if (product.crossPostStatus?.mercari === "active") {
     platforms.push({ id: "mercari", name: "Mercari", logo: "MR", status: "active" });
   }
 
@@ -273,31 +275,51 @@ function PostedPlatforms({ product }) {
 
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-      {platforms.map((p) => (
-        <div
-          key={p.id}
-          title={p.name + (p.status === "incomplete" ? " (incomplete)" : "")}
-          style={{
-            width: 32,
-            height: 32,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: p.status === "incomplete" ? "var(--surface-high)" : "var(--surface-high)",
-            border: p.status === "incomplete" ? "1px solid var(--warning)" : "var(--border-thin) solid var(--primary)",
-            borderRadius: "var(--radius)",
-            fontSize: 11,
-            fontWeight: 700,
-            color: p.status === "incomplete" ? "var(--warning)" : "var(--primary)",
-            cursor: "pointer",
-            fontFamily: "'Space Mono', monospace",
-            textTransform: "uppercase",
-            letterSpacing: "0.05em"
-          }}
-        >
-          {p.logo}
-        </div>
-      ))}
+      {platforms.map((p) => {
+        const listingUrl = getPlatformListingUrl(p.id, product);
+        return (
+          <div
+            key={p.id}
+            title={p.name + (p.status === "incomplete" ? " (incomplete)" : "") + (listingUrl ? ` - Click to open live listing` : "")}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (listingUrl) {
+                if (listingUrl.startsWith("http")) {
+                  window.open(listingUrl, "_blank", "noopener,noreferrer");
+                } else {
+                  window.location.href = listingUrl;
+                }
+              }
+            }}
+            style={{
+              width: 32,
+              height: 32,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: p.status === "incomplete" ? "var(--surface-high)" : "var(--surface-high)",
+              border: p.status === "incomplete" ? "1px solid var(--warning)" : "var(--border-thin) solid var(--primary)",
+              borderRadius: "var(--radius)",
+              fontSize: 11,
+              fontWeight: 700,
+              color: p.status === "incomplete" ? "var(--warning)" : "var(--primary)",
+              cursor: listingUrl ? "pointer" : "default",
+              fontFamily: "'Space Mono', monospace",
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              transition: "transform 0.15s ease, box-shadow 0.15s ease",
+            }}
+            onMouseEnter={(e) => {
+              if (listingUrl) e.currentTarget.style.transform = "scale(1.1)";
+            }}
+            onMouseLeave={(e) => {
+              if (listingUrl) e.currentTarget.style.transform = "scale(1)";
+            }}
+          >
+            {p.logo}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -317,14 +339,12 @@ function ProductCard({ product, selected = false, onSelect = null, selectMode = 
 
   const isLive =
     product.crossPostStatus?.wonni === "active" ||
-    product.tiktokStatus === "active" ||
-    product.ebayStatus === "active" ||
+    product.crossPostStatus?.tiktok === "active" ||
     product.crossPostStatus?.ebay === "active" ||
     product.crossPostStatus?.ebay === "posted" ||
-    product.etsyStatus === "active" ||
     product.crossPostStatus?.etsy === "active" ||
     product.crossPostStatus?.etsy === "posted" ||
-    product.listingStatus?.mercari === "active";
+    product.crossPostStatus?.mercari === "active";
 
   async function handleDelete() {
     if (!window.confirm(`Delete "${product.title}"? This can't be undone.`)) return;
@@ -431,6 +451,29 @@ function ProductCard({ product, selected = false, onSelect = null, selectMode = 
               : `${product.images?.length ?? 0} images${product.variants?.length ? ` · ${product.variants.length} variants` : ""}`}
           </div>
 
+          {/* Tag badges */}
+          {Array.isArray(product.tags) && product.tags.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 8, marginBottom: 2 }}>
+              {product.tags.map((tag) => (
+                <span
+                  key={tag}
+                  style={{
+                    fontSize: 10,
+                    padding: "2px 6px",
+                    background: "var(--surface-high)",
+                    border: "var(--border-thin) solid var(--border)",
+                    borderRadius: 4,
+                    color: "var(--text-secondary)",
+                    fontFamily: "'Space Mono', monospace",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  🏷️ {tag}
+                </span>
+              ))}
+            </div>
+          )}
+
           {/* Bottom section: Platforms + Delete button + Post button */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: "auto", paddingTop: 12 }}>
             {/* Platform logos */}
@@ -494,8 +537,10 @@ export default function Dashboard() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [mobileDraftsExpanded, setMobileDraftsExpanded] = useState(false);
   const [filter, setFilter] = useState("all"); // "all", "draft", "live"
+  const [selectedTag, setSelectedTag] = useState(null); // null (All) or specific tag string
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [showBulkPostModal, setShowBulkPostModal] = useState(false);
+  const [showBulkTagModal, setShowBulkTagModal] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
 
   useEffect(() => {
@@ -531,23 +576,40 @@ export default function Dashboard() {
   const mobileDrafts = products.filter((p) => p.source === "ios" && p.isDraft !== false);
   const regularProducts = products.filter((p) => !(p.source === "ios" && p.isDraft !== false));
 
+  // Collect all unique tags across user's products
+  const allTags = useMemo(() => {
+    const tagSet = new Set();
+    products.forEach((p) => {
+      if (Array.isArray(p.tags)) {
+        p.tags.forEach((t) => {
+          if (typeof t === "string" && t.trim()) tagSet.add(t.trim());
+        });
+      }
+    });
+    return Array.from(tagSet).sort((a, b) => a.localeCompare(b));
+  }, [products]);
+
   const isLive = (p) =>
     p.crossPostStatus?.wonni === "active" ||
-    p.tiktokStatus === "active" ||
-    p.ebayStatus === "active" ||
+    p.crossPostStatus?.tiktok === "active" ||
     p.crossPostStatus?.ebay === "active" ||
     p.crossPostStatus?.ebay === "posted" ||
-    p.etsyStatus === "active" ||
     p.crossPostStatus?.etsy === "active" ||
     p.crossPostStatus?.etsy === "posted" ||
-    p.listingStatus?.mercari === "active";
+    p.crossPostStatus?.mercari === "active";
 
-  const filteredProducts =
+  let filteredProducts =
     filter === "live"
       ? regularProducts.filter(isLive)
       : filter === "draft"
       ? regularProducts.filter((p) => !isLive(p))
       : regularProducts;
+
+  if (selectedTag) {
+    filteredProducts = filteredProducts.filter(
+      (p) => Array.isArray(p.tags) && p.tags.includes(selectedTag)
+    );
+  }
 
   const allSelected = filteredProducts.length > 0 && filteredProducts.every((p) => selectedIds.has(p.id));
   const someSelected = filteredProducts.some((p) => selectedIds.has(p.id));
@@ -656,6 +718,13 @@ export default function Dashboard() {
                   {selectedIds.size} selected
                 </span>
                 <button
+                  className="btn btn-secondary"
+                  style={{ fontSize: 12, padding: "8px 12px" }}
+                  onClick={() => setShowBulkTagModal(true)}
+                >
+                  🏷️ Tag Selected
+                </button>
+                <button
                   className="btn btn-primary"
                   style={{ fontSize: 12, padding: "8px 12px" }}
                   onClick={() => setShowBulkPostModal(true)}
@@ -665,6 +734,32 @@ export default function Dashboard() {
               </div>
             )}
           </div>
+
+          {/* Tag filter bar */}
+          {allTags.length > 0 && (
+            <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginRight: 4 }}>
+                🏷️ Tags:
+              </span>
+              <button
+                className={`btn ${selectedTag === null ? "btn-primary" : "btn-ghost"}`}
+                style={{ fontSize: 11, padding: "4px 10px", borderRadius: 14 }}
+                onClick={() => { setSelectedTag(null); setSelectedIds(new Set()); }}
+              >
+                All
+              </button>
+              {allTags.map((tag) => (
+                <button
+                  key={tag}
+                  className={`btn ${selectedTag === tag ? "btn-primary" : "btn-ghost"}`}
+                  style={{ fontSize: 11, padding: "4px 10px", borderRadius: 14 }}
+                  onClick={() => { setSelectedTag(selectedTag === tag ? null : tag); setSelectedIds(new Set()); }}
+                >
+                  🏷️ {tag}
+                </button>
+              ))}
+            </div>
+          )}
 
           {selectMode && (
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
@@ -708,6 +803,20 @@ export default function Dashboard() {
           products={regularProducts.filter((p) => selectedIds.has(p.id))}
           onClose={() => {
             setShowBulkPostModal(false);
+            setSelectedIds(new Set());
+          }}
+        />
+      )}
+
+      {showBulkTagModal && selectedIds.size > 0 && (
+        <BulkTagModal
+          products={regularProducts.filter((p) => selectedIds.has(p.id))}
+          allUserTags={allTags}
+          onClose={() => {
+            setShowBulkTagModal(false);
+          }}
+          onUpdated={() => {
+            setShowBulkTagModal(false);
             setSelectedIds(new Set());
           }}
         />

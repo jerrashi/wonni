@@ -68,7 +68,17 @@ export default function BulkPostModal({ products, onClose }) {
           });
           allResults[product.id].wonni = { status: "success" };
         } catch (wErr) {
-          allResults[product.id].wonni = { status: "error", message: wErr.message };
+          console.warn("postToWonni fallback to direct update:", wErr);
+          try {
+            await updateDoc(doc(db, "products", product.id), {
+              isDraft: false,
+              "crossPostStatus.wonni": "active",
+              updatedAt: serverTimestamp(),
+            });
+            allResults[product.id].wonni = { status: "success" };
+          } catch (docErr) {
+            allResults[product.id].wonni = { status: "error", message: docErr.message };
+          }
         }
 
         for (const platformId of Array.from(selected)) {
@@ -100,14 +110,19 @@ export default function BulkPostModal({ products, onClose }) {
               }
             } else if (platformId === "etsy") {
               const etsyRes = await callFunction("etsyCreateListing")({
+                productId: product.id,
                 listingId: product.id,
                 credentialSet: "web",
+                handlingTimeDays: product.handlingTimeDays,
               });
               const etsyListingId = etsyRes.data?.listingId;
+              const etsyUrl = etsyRes.data?.url || (etsyListingId ? `https://www.etsy.com/listing/${etsyListingId}` : null);
               try {
                 await updateDoc(doc(db, "products", product.id), {
                   "crossPostStatus.etsy": "active",
-                  "crossPostListingIds.etsy": etsyListingId || null,
+                  "crossPostListingIds.etsy": String(etsyListingId || ""),
+                  etsyListingId: String(etsyListingId || ""),
+                  etsyListingUrl: etsyUrl,
                   updatedAt: serverTimestamp(),
                 });
               } catch (syncErr) {

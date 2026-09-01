@@ -728,11 +728,13 @@ export default function CreateDraftModal({ onClose, onCreated }) {
         description: description.trim(),
         images: storedImages,
         imageAssets: storedImageAssets,
-        aliexpressPrice: parsedCost, // Cost price
+        sourceCost: parsedCost,
         suggestedSellPrice: parsedSell,
         variants: mappedVariants,
-        tiktokStatus: "draft",
-        ebayStatus: "draft",
+        crossPostStatus: {
+          tiktok: "draft",
+          ebay: "draft",
+        },
         importedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -809,11 +811,13 @@ export default function CreateDraftModal({ onClose, onCreated }) {
           description: `Created from photo split (${activePhoto.file?.name ?? "Photo"}).`,
           images: [storedUrl],
           imageAssets: [{ id: `${storedUrl}-0`, url: storedUrl, sourceUrl: storedUrl, kind: "cover" }],
-          aliexpressPrice: itemCost,
+          sourceCost: itemCost,
           suggestedSellPrice: itemSell,
           variants: [],
-          tiktokStatus: "draft",
-          ebayStatus: "draft",
+          crossPostStatus: {
+            tiktok: "draft",
+            ebay: "draft",
+          },
           importedAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });

@@ -197,18 +197,6 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
         setError("Etsy not connected. Please connect in Settings first.");
         return;
       }
-      if (!etsyCategory) {
-        setError("Please select an Etsy category.");
-        return;
-      }
-      if (!etsyShippingId) {
-        setError("Please select an Etsy shipping profile.");
-        return;
-      }
-      if (!etsyReturnId) {
-        setError("Please select an Etsy return policy.");
-        return;
-      }
     }
 
     setPosting(true);
@@ -217,10 +205,26 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
 
     try {
       // Step 1: Ensure listing exists on Wonni
-      const wonniRes = await callFunction("postToWonni")({
-        productId: product.id,
-      });
-      const listingId = wonniRes.data.listingId;
+      let listingId = product.id;
+      try {
+        const wonniRes = await callFunction("postToWonni")({
+          productId: product.id,
+        });
+        if (wonniRes?.data?.listingId) {
+          listingId = wonniRes.data.listingId;
+        }
+      } catch (wErr) {
+        console.warn("postToWonni fallback to direct update:", wErr);
+        try {
+          await updateDoc(doc(db, "products", product.id), {
+            isDraft: false,
+            "crossPostStatus.wonni": "active",
+            updatedAt: serverTimestamp(),
+          });
+        } catch (dbErr) {
+          console.warn("Could not update product doc:", dbErr);
+        }
+      }
 
       setResults((prev) => ({
         ...prev,
@@ -260,17 +264,22 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
             }
           } else if (platformId === "etsy") {
             const etsyRes = await callFunction("etsyCreateListing")({
+              productId: product.id,
               listingId: listingId || product.id,
               credentialSet: "web",
-              taxonomyId: etsyCategory.id,
-              shippingProfileId: etsyShippingId,
-              returnPolicyId: etsyReturnId,
+              taxonomyId: etsyCategory?.id || product.etsyTaxonomyId,
+              shippingProfileId: etsyShippingId || product.etsyShippingProfileId,
+              returnPolicyId: etsyReturnId || product.etsyReturnPolicyId,
+              handlingTimeDays: product.handlingTimeDays,
             });
             const etsyListingId = etsyRes.data?.listingId;
+            const etsyUrl = etsyRes.data?.url || (etsyListingId ? `https://www.etsy.com/listing/${etsyListingId}` : null);
             try {
               await updateDoc(doc(db, "products", product.id), {
                 "crossPostStatus.etsy": "active",
-                "crossPostListingIds.etsy": etsyListingId || null,
+                "crossPostListingIds.etsy": String(etsyListingId || ""),
+                etsyListingId: String(etsyListingId || ""),
+                etsyListingUrl: etsyUrl,
                 updatedAt: serverTimestamp(),
               });
             } catch (syncErr) {

@@ -1,50 +1,145 @@
-<!doctype html>
-<html>
-<head><title>Connecting TikTok Shop…</title></head>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connecting TikTok Shop…</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      background: #f5f5f7;
+      color: #1d1d1f;
+      text-align: center;
+    }
+    .card {
+      background: #fff;
+      padding: 32px 40px;
+      border-radius: 12px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+      max-width: 360px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    p { font-size: 16px; margin: 0; }
+    .status { font-weight: 600; margin-bottom: 8px; font-size: 18px; }
+    .sub { font-size: 13px; color: #86868b; line-height: 1.4; margin-top: 6px; }
+  </style>
+</head>
 <body>
-<script type="module">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getAuth } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-  import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js";
+  <div class="card">
+    <p id="status-text" class="status">Connecting TikTok Shop…</p>
+    <p id="sub-text" class="sub">Please wait while we complete the connection.</p>
+  </div>
 
-  const firebaseConfig = {
-    apiKey: "AIzaSyCrroW6RXSl15a4j9FPeAUOqkiNCx3g2Lk",
-    authDomain: "wonni-app.firebaseapp.com",
-    projectId: "wonni-app",
-    storageBucket: "wonni-app.firebasestorage.app",
-    messagingSenderId: "840012373819",
-    appId: "1:840012373819:web:c5081552e35940d578a11e",
-  };
-  const app = initializeApp(firebaseConfig);
-  const auth = getAuth(app);
-  const functions = getFunctions(app);
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+    import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js";
 
-  const params = new URLSearchParams(window.location.search);
-  const code = params.get("code") ?? params.get("auth_code");
-  const state = params.get("state");
+    const firebaseConfig = {
+      apiKey: "AIzaSyCrroW6RXSl15a4j9FPeAUOqkiNCx3g2Lk",
+      authDomain: "wonni-app.firebaseapp.com",
+      projectId: "wonni-app",
+      storageBucket: "wonni-app.firebasestorage.app",
+      messagingSenderId: "840012373819",
+      appId: "1:840012373819:web:c5081552e35940d578a11e",
+    };
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const functions = getFunctions(app);
 
-  if (!code) {
-    document.body.innerText = "No code received. Close this window and try again.";
-  } else {
-    auth.authStateReady().then(async () => {
-      if (!auth.currentUser) {
-        document.body.innerText = "Not signed in. Please sign in from the dashboard first.";
-        return;
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code") ?? params.get("auth_code");
+    const state = params.get("state");
+    const error = params.get("error") || params.get("error_description");
+    const statusText = document.getElementById("status-text");
+    const subText = document.getElementById("sub-text");
+
+    if (error) {
+      statusText.innerText = "Connection Failed";
+      subText.innerText = error;
+      if (window.opener) {
+        try {
+          window.opener.postMessage({ type: "TIKTOK_AUTH_CALLBACK", error, state }, "*");
+        } catch (_) {}
+      } else {
+        window.location.href = 'wonni://oauth/tiktok?error=' + encodeURIComponent(error);
       }
-      document.body.innerText = "Connecting TikTok Shop…";
-      try {
-        await httpsCallable(functions, "tiktokExchangeToken")({
-          code,
-          state,
-          redirectUri: window.location.origin + window.location.pathname,
+    } else if (!code) {
+      statusText.innerText = "No Code Received";
+      subText.innerText = "Please close this window and try connecting again.";
+    } else {
+      let notifiedOpener = false;
+
+      // Handle Web Popup Flow via postMessage to window.opener
+      if (window.opener) {
+        statusText.innerText = "Connecting TikTok Shop…";
+        subText.innerText = "Finalizing connection with your dashboard…";
+
+        window.addEventListener("message", (event) => {
+          if (event.data?.type === "TIKTOK_AUTH_SUCCESS") {
+            statusText.innerText = "✓ TikTok Shop Connected!";
+            subText.innerText = event.data.username
+              ? `Connected as ${event.data.username}. Closing window…`
+              : "You can close this window.";
+            setTimeout(() => window.close(), 1500);
+          } else if (event.data?.type === "TIKTOK_AUTH_ERROR") {
+            statusText.innerText = "Connection Failed";
+            subText.innerText = event.data.error || "Failed to exchange token.";
+          }
         });
-        document.body.innerText = "TikTok Shop connected! You can close this window.";
-        setTimeout(() => window.close(), 1500);
-      } catch (e) {
-        document.body.innerText = "Error: " + e.message;
+
+        try {
+          window.opener.postMessage({ type: "TIKTOK_AUTH_CALLBACK", code, state }, "*");
+          notifiedOpener = true;
+        } catch (_) {}
       }
-    });
-  }
-</script>
+
+      // Standalone web fallback or iOS app redirect
+      if (!notifiedOpener) {
+        function handleExchange(user) {
+          if (!user) {
+            // iOS App Flow: forward to custom URL scheme
+            var redirect = 'wonni://oauth/tiktok?code=' + encodeURIComponent(code);
+            if (state) redirect += '&state=' + encodeURIComponent(state);
+            window.location.href = redirect;
+            return;
+          }
+
+          statusText.innerText = "Exchanging TikTok Token…";
+          subText.innerText = "Linking your TikTok Shop…";
+
+          httpsCallable(functions, "tiktokExchangeToken")({
+            code,
+            state,
+            redirectUri: window.location.origin + window.location.pathname,
+          }).then((res) => {
+            statusText.innerText = "✓ TikTok Shop Connected!";
+            const username = res.data?.connectedUsername || res.data?.shopName || res.data?.username;
+            subText.innerText = username ? `Connected as ${username}. Closing window…` : "You can close this window.";
+            setTimeout(() => window.close(), 1800);
+          }).catch((e) => {
+            console.error("TikTok exchange error:", e);
+            statusText.innerText = "Error Connecting TikTok Shop";
+            subText.innerText = e.message || "Failed to exchange token.";
+          });
+        }
+
+        if (auth.currentUser) {
+          handleExchange(auth.currentUser);
+        } else {
+          const unsub = onAuthStateChanged(auth, (user) => {
+            unsub();
+            handleExchange(user);
+          });
+        }
+      }
+    }
+  </script>
 </body>
 </html>
