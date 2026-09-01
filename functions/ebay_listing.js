@@ -60,26 +60,52 @@ async function getListingPolicies(uid, handlingTimeDays) {
 }
 
 // Resiliently resolve the eBay Offer ID for a product.
-// Recovers automatically if the stored ID is a 12-digit listing ID (e.g. 147542181716) or if offer moved.
+// Recovers automatically if the stored ID is a 12-digit listing ID (e.g. 147542181716), draft ID, or if offer moved.
 async function resolveEbayOffer(uid, product, productId) {
-  const storedId = product?.crossPostListingIds?.ebay;
-  const sku = productId;
-  const altSku = `wonni_${productId}`;
+  const storedId = String(product?.crossPostListingIds?.ebay || product?.ebayListingId || "").trim();
 
-  // 1. If storedId is present and not a 12-digit listing ID, try fetching it directly
-  if (storedId && !/^\d{12}$/.test(String(storedId).trim())) {
+  // 1. If storedId is present and not a 12-digit listing ID, try fetching it directly as an offerId
+  if (storedId && !/^\d{12}$/.test(storedId)) {
     try {
       const offer = await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${storedId}`);
       if (offer && offer.offerId) {
-        return { offer, offerId: offer.offerId, sku: offer.sku || sku };
+        return { offer, offerId: offer.offerId, sku: offer.sku || productId };
       }
     } catch (err) {
-      console.log(`[resolveEbayOffer] Direct fetch of offer ${storedId} failed (${err.message}). Searching by SKU...`);
+      console.log(`[resolveEbayOffer] Direct fetch of offer ${storedId} failed (${err.message}). Searching by candidate SKUs...`);
     }
   }
 
-  // 2. Query eBay for offers under SKU (both productId and wonni_${productId})
-  for (const querySku of [sku, altSku]) {
+  // 2. Build list of candidate SKUs to query (productId, draftId, listingId, product.sku, variant SKUs)
+  const candidateSkus = new Set();
+  if (productId) {
+    candidateSkus.add(productId);
+    candidateSkus.add(`wonni_${productId}`);
+  }
+  if (product?.draftId) {
+    candidateSkus.add(product.draftId);
+    candidateSkus.add(`wonni_${product.draftId}`);
+  }
+  if (product?.listingId) {
+    candidateSkus.add(product.listingId);
+    candidateSkus.add(`wonni_${product.listingId}`);
+  }
+  if (product?.sourceListingId) {
+    candidateSkus.add(product.sourceListingId);
+    candidateSkus.add(`wonni_${product.sourceListingId}`);
+  }
+  if (product?.sku) {
+    candidateSkus.add(product.sku);
+    candidateSkus.add(`wonni_${product.sku}`);
+  }
+  if (Array.isArray(product?.variants)) {
+    product.variants.forEach((v) => {
+      if (v.sku) candidateSkus.add(v.sku);
+      if (v.ebayVariantSku) candidateSkus.add(v.ebayVariantSku);
+    });
+  }
+
+  for (const querySku of candidateSkus) {
     try {
       const result = await ebayRequest(
         uid,
@@ -88,24 +114,52 @@ async function resolveEbayOffer(uid, product, productId) {
       );
       const offers = result?.offers || [];
       if (offers.length > 0) {
-        const targetOffer = offers.find((o) => o.listingId === storedId || o.offerId === storedId)
+        const targetOffer = (storedId && offers.find((o) => o.listingId === storedId || o.offerId === storedId))
           || offers.find((o) => o.status === "PUBLISHED")
           || offers[0];
 
         if (targetOffer?.offerId) {
-          console.log(`[resolveEbayOffer] Recovered offerId=${targetOffer.offerId} (listingId=${targetOffer.listingId}) for SKU ${querySku}`);
+          console.log(`[resolveEbayOffer] Recovered offerId=${targetOffer.offerId} (listingId=${targetOffer.listingId}) for candidate SKU ${querySku}`);
           const docRef = admin.firestore().collection("products").doc(productId);
           await docRef.update({
             "crossPostListingIds.ebay": targetOffer.offerId,
-            ebayListingId: targetOffer.listingId || (typeof storedId === "string" && /^\d{12}$/.test(storedId) ? storedId : null),
+            ebayListingId: targetOffer.listingId || (storedId && /^\d{12}$/.test(storedId) ? storedId : null),
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           });
-          return { offer: targetOffer, offerId: targetOffer.offerId, sku: querySku };
+          return { offer: targetOffer, offerId: targetOffer.offerId, sku: targetOffer.sku || querySku };
         }
       }
     } catch (skuErr) {
-      console.warn(`[resolveEbayOffer] Error querying offers for SKU ${querySku}:`, skuErr.message);
+      console.warn(`[resolveEbayOffer] Error querying offers for candidate SKU ${querySku}:`, skuErr.message);
     }
+  }
+
+  // 3. Query all user's offers from eBay (up to 100) and find by storedId (listingId or offerId) or title match
+  try {
+    const allOffersRes = await ebayRequest(
+      uid,
+      "GET",
+      `/sell/inventory/v1/offer?marketplace_id=${MARKETPLACE_ID}&limit=100`
+    );
+    const allOffers = allOffersRes?.offers || [];
+    if (allOffers.length > 0) {
+      const matchedOffer = (storedId && allOffers.find((o) => o.listingId === storedId || o.offerId === storedId))
+        || (product?.title && allOffers.find((o) => o.title?.toLowerCase() === product.title.trim().toLowerCase()))
+        || (product?.title && allOffers.find((o) => o.title && (product.title.toLowerCase().includes(o.title.toLowerCase().slice(0, 25)) || o.title.toLowerCase().includes(product.title.toLowerCase().slice(0, 25)))));
+
+      if (matchedOffer?.offerId) {
+        console.log(`[resolveEbayOffer] Recovered offerId=${matchedOffer.offerId} (listingId=${matchedOffer.listingId}, SKU=${matchedOffer.sku}) from user offer list`);
+        const docRef = admin.firestore().collection("products").doc(productId);
+        await docRef.update({
+          "crossPostListingIds.ebay": matchedOffer.offerId,
+          ebayListingId: matchedOffer.listingId || (storedId && /^\d{12}$/.test(storedId) ? storedId : null),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        return { offer: matchedOffer, offerId: matchedOffer.offerId, sku: matchedOffer.sku || productId };
+      }
+    }
+  } catch (allErr) {
+    console.warn("[resolveEbayOffer] Error fetching user offers list:", allErr.message);
   }
 
   throw new HttpsError(
