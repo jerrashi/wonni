@@ -8,6 +8,7 @@ import CreateDraftModal from "../components/CreateDraftModal";
 import PostModal from "../components/PostModal";
 import BulkPostModal from "../components/BulkPostModal";
 import BulkTagModal from "../components/BulkTagModal";
+import OverflowMenu from "../components/OverflowMenu";
 import { getPlatformListingUrl } from "../lib/platformLinks";
 
 // ── List Modal ────────────────────────────────────────────────────────────────
@@ -360,6 +361,32 @@ function ProductCard({ product, selected = false, onSelect = null, selectMode = 
   return (
     <>
       <div className="product-card" style={{ position: "relative" }}>
+        {/* Upper-right actions submenu */}
+        <div
+          style={{
+            position: "absolute",
+            top: 8,
+            right: 8,
+            zIndex: 20,
+            background: "rgba(20, 20, 25, 0.75)",
+            backdropFilter: "blur(6px)",
+            borderRadius: "var(--radius)",
+            border: "1px solid rgba(255, 255, 255, 0.1)",
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <OverflowMenu
+            items={[
+              {
+                label: deleting ? "Deleting…" : "Delete Product",
+                danger: true,
+                disabled: deleting,
+                onClick: handleDelete,
+              },
+            ]}
+          />
+        </div>
+
         {/* Image with badges */}
         <button
           className="product-card-image"
@@ -474,37 +501,13 @@ function ProductCard({ product, selected = false, onSelect = null, selectMode = 
             </div>
           )}
 
-          {/* Bottom section: Platforms + Delete button + Post button */}
+          {/* Bottom section: Platforms + Post button */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: "auto", paddingTop: 12 }}>
             {/* Platform logos */}
             <PostedPlatforms product={product} />
 
             {/* Spacer */}
             <div style={{ flex: 1 }} />
-
-            {/* Delete icon button */}
-            <button
-              onClick={handleDelete}
-              disabled={deleting}
-              style={{
-                width: 28,
-                height: 28,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                background: "transparent",
-                border: `var(--border-thin) solid var(--danger)`,
-                color: "var(--danger)",
-                cursor: "pointer",
-                fontSize: 14,
-                borderRadius: "var(--radius)",
-                transition: "all 0.15s",
-                opacity: deleting ? 0.5 : 1,
-              }}
-              title="Delete"
-            >
-              ✕
-            </button>
 
             {/* Post button */}
             <button
