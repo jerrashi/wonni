@@ -4,11 +4,19 @@
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [
       { "source": "/privacy", "destination": "/privacy/index.html" },
+      { "source": "/oauth/aliexpress", "destination": "/oauth/aliexpress/index.html" },
+      { "source": "/oauth/tiktok", "destination": "/oauth/tiktok/index.html" },
+      { "source": "/oauth/ebay", "destination": "/oauth/ebay/index.html" },
+      { "source": "/oauth/etsy", "destination": "/oauth/etsy/index.html" },
       { "source": "/web/oauth/aliexpress", "destination": "/oauth/aliexpress/index.html" },
       { "source": "/web/oauth/tiktok", "destination": "/oauth/tiktok/index.html" },
       { "source": "/web/oauth/ebay", "destination": "/oauth/ebay/index.html" },
       { "source": "/web/oauth/etsy", "destination": "/oauth/etsy/index.html" },
-      { "source": "/web/**", "destination": "/index.html" }
+      { "source": "/sell/oauth/aliexpress", "destination": "/oauth/aliexpress/index.html" },
+      { "source": "/sell/oauth/tiktok", "destination": "/oauth/tiktok/index.html" },
+      { "source": "/sell/oauth/ebay", "destination": "/oauth/ebay/index.html" },
+      { "source": "/sell/oauth/etsy", "destination": "/oauth/etsy/index.html" },
+      { "source": "**", "destination": "/index.html" }
     ]
   },
   "firestore": {

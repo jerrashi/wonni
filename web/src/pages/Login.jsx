@@ -26,7 +26,7 @@ export default function Login() {
   const [pendingLink, setPendingLink] = useState(null);
 
   useEffect(() => {
-    if (user) navigate("/", { replace: true });
+    if (user) navigate("/sell", { replace: true });
   }, [user, navigate]);
 
   async function signIn(provider) {

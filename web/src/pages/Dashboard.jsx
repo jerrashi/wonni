@@ -391,7 +391,7 @@ function ProductCard({ product, selected = false, onSelect = null, selectMode = 
         <button
           className="product-card-image"
           style={{ position: "relative" }}
-          onClick={() => navigate(`/products/${product.id}`)}
+          onClick={() => navigate(`/sell/products/${product.id}`)}
         >
           {primaryImage ? (
             <img src={primaryImage} alt={product.title} />
@@ -462,7 +462,7 @@ function ProductCard({ product, selected = false, onSelect = null, selectMode = 
 
         <div className="product-card-body">
           {/* Title */}
-          <button className="product-card-title-button" onClick={() => navigate(`/products/${product.id}`)}>
+          <button className="product-card-title-button" onClick={() => navigate(`/sell/products/${product.id}`)}>
             <div className="product-card-title">{product.title}</div>
           </button>
 
