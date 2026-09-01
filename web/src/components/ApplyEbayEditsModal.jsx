@@ -11,6 +11,8 @@ export default function ApplyEbayEditsModal({ product, listingDetails, onApply, 
     description: wonni.description !== ebay.description,
     price: Math.abs((wonni.price ?? 0) - (ebay.price ?? 0)) > 0.01,
     quantity: wonni.quantity !== ebay.quantity,
+    photos: wonni.photoCount != null && ebay.photoCount != null && wonni.photoCount !== ebay.photoCount,
+    handlingTime: wonni.handlingTimeDays != null && ebay.handlingTimeDays != null && wonni.handlingTimeDays !== ebay.handlingTimeDays,
   };
 
   const anyDifference = Object.values(hasDifferences).some(v => v);
@@ -25,7 +27,7 @@ export default function ApplyEbayEditsModal({ product, listingDetails, onApply, 
           background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 12, padding: 24, maxWidth: 400, boxShadow: "0 10px 40px rgba(0, 0, 0, 0.2)"
         }}>
           <h3>eBay & Wonni are in sync</h3>
-          <p style={{ color: "var(--muted)", marginTop: 8, marginBottom: 16 }}>Title, description, price, and quantity all match. No changes needed.</p>
+          <p style={{ color: "var(--muted)", marginTop: 8, marginBottom: 16 }}>Title, description, price, quantity, and photos all match. No changes needed.</p>
           <button className="btn btn-primary" onClick={onCancel} style={{ width: "100%" }}>
             Close
           </button>
@@ -82,10 +84,24 @@ export default function ApplyEbayEditsModal({ product, listingDetails, onApply, 
                 </tr>
               )}
               {hasDifferences.quantity && (
-                <tr style={{ background: "rgba(249, 115, 22, 0.05)" }}>
+                <tr style={{ borderBottom: (hasDifferences.photos || hasDifferences.handlingTime) ? "1px solid var(--border)" : "none", background: "rgba(249, 115, 22, 0.05)" }}>
                   <td style={{ padding: 12, fontWeight: 600 }}>Quantity</td>
                   <td style={{ padding: 12 }}>{wonni.quantity}</td>
                   <td style={{ padding: 12 }}>{ebay.quantity}</td>
+                </tr>
+              )}
+              {hasDifferences.photos && (
+                <tr style={{ borderBottom: hasDifferences.handlingTime ? "1px solid var(--border)" : "none", background: "rgba(249, 115, 22, 0.05)" }}>
+                  <td style={{ padding: 12, fontWeight: 600 }}>Photos</td>
+                  <td style={{ padding: 12 }}>{wonni.photoCount} photos</td>
+                  <td style={{ padding: 12 }}>{ebay.photoCount} photos</td>
+                </tr>
+              )}
+              {hasDifferences.handlingTime && (
+                <tr style={{ background: "rgba(249, 115, 22, 0.05)" }}>
+                  <td style={{ padding: 12, fontWeight: 600 }}>Handling Time</td>
+                  <td style={{ padding: 12 }}>{wonni.handlingTimeDays} day{wonni.handlingTimeDays === 1 ? "" : "s"}</td>
+                  <td style={{ padding: 12 }}>{ebay.handlingTimeDays} day{ebay.handlingTimeDays === 1 ? "" : "s"}</td>
                 </tr>
               )}
             </tbody>
