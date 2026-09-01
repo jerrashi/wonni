@@ -29,11 +29,15 @@ export default function Layout({ children }) {
         >
           {collapsed ? "▸" : "▾"}
         </button>
-        <div className="sidebar-logo">Wonni Drop</div>
-        <NavLink to="/" end>Dashboard</NavLink>
-        <NavLink to="/sales">Sales</NavLink>
-        <NavLink to="/orders">Orders</NavLink>
-        <NavLink to="/settings">Settings</NavLink>
+        <NavLink to="/sell" end>Dashboard</NavLink>
+        <NavLink to="/sell/sales">Sales</NavLink>
+        <NavLink to="/sell/orders">Orders</NavLink>
+        <NavLink to="/sell/settings">Settings</NavLink>
+        {auth.currentUser && (
+          <NavLink to={`/profile/${auth.currentUser.uid}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13, marginTop: 12, opacity: 0.85 }}>
+            ↗ View Public Store
+          </NavLink>
+        )}
         <div className="sidebar-signout" style={{ marginTop: "auto", padding: "0 8px" }}>
           <button
             className="btn btn-ghost"

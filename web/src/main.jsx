@@ -12,10 +12,19 @@ import { MediaJobQueueProvider } from "./lib/mediaJobQueue";
 import BackgroundTasksTray from "./components/BackgroundTasksTray";
 import "./index.css";
 
+import PublicListingDetail from "./pages/PublicListingDetail";
+import PublicProfile from "./pages/PublicProfile";
+
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuthState();
   if (loading) return <div className="loading">Loading...</div>;
   return user ? children : <Navigate to="/login" replace />;
+}
+
+function RootRedirect() {
+  const { user, loading } = useAuthState();
+  if (loading) return <div className="loading">Loading...</div>;
+  return user ? <Navigate to="/sell" replace /> : <Navigate to="/login" replace />;
 }
 
 function RootLayout() {
@@ -27,28 +36,34 @@ function RootLayout() {
   );
 }
 
-const router = createBrowserRouter(
-  [
-    {
-      element: <RootLayout />,
-      children: [
-        { path: "/login", element: <Login /> },
-        { path: "/", element: <ProtectedRoute><Dashboard /></ProtectedRoute> },
-        { path: "/products/:productId", element: <ProtectedRoute><ProductDetail /></ProtectedRoute> },
-        { path: "/sales", element: <ProtectedRoute><Sales /></ProtectedRoute> },
-        { path: "/orders", element: <ProtectedRoute><Orders /></ProtectedRoute> },
-        { path: "/settings", element: <ProtectedRoute><Settings /></ProtectedRoute> },
-      ],
-    },
-  ],
+const router = createBrowserRouter([
   {
-    // This app is served at wonni-app.web.app/web (Phase B merge, sharing
-    // wonni-app's Hosting site with the iOS app's own oauth/privacy pages)
-    // rather than its own site root. A data router (not plain BrowserRouter)
-    // is required here so ProductDetail's useBlocker navigation guard works.
-    basename: "/web",
-  }
-);
+    element: <RootLayout />,
+    children: [
+      { path: "/", element: <RootRedirect /> },
+      { path: "/login", element: <Login /> },
+      
+      // Public Views
+      { path: "/listing/:listingId", element: <PublicListingDetail /> },
+      { path: "/profile/:userId", element: <PublicProfile /> },
+
+      // Seller Portal (/sell/...)
+      { path: "/sell", element: <ProtectedRoute><Dashboard /></ProtectedRoute> },
+      { path: "/sell/products/:productId", element: <ProtectedRoute><ProductDetail /></ProtectedRoute> },
+      { path: "/sell/sales", element: <ProtectedRoute><Sales /></ProtectedRoute> },
+      { path: "/sell/orders", element: <ProtectedRoute><Orders /></ProtectedRoute> },
+      { path: "/sell/settings", element: <ProtectedRoute><Settings /></ProtectedRoute> },
+
+      // Backward-compatibility redirects for existing paths
+      { path: "/products/:productId", element: <Navigate to="/sell/products/:productId" replace /> },
+      { path: "/sales", element: <Navigate to="/sell/sales" replace /> },
+      { path: "/orders", element: <Navigate to="/sell/orders" replace /> },
+      { path: "/settings", element: <Navigate to="/sell/settings" replace /> },
+      { path: "/web", element: <Navigate to="/sell" replace /> },
+      { path: "/web/*", element: <Navigate to="/sell" replace /> },
+    ],
+  },
+]);
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>

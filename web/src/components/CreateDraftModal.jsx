@@ -741,7 +741,7 @@ export default function CreateDraftModal({ onClose, onCreated }) {
 
       onCreated?.(docRef.id);
       onClose();
-      navigate(`/products/${docRef.id}`);
+      navigate(`/sell/products/${docRef.id}`);
     } catch (e) {
       setError(e.message ?? "Could not save product draft.");
     } finally {

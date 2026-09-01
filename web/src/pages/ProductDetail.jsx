@@ -4940,7 +4940,7 @@ function ProductDetail() {
     setDeletingProduct(true);
     try {
       await deleteDoc(doc(db, "products", productId));
-      navigate("/");
+      navigate("/sell");
     } catch (e) {
       setDeletingProduct(false);
       setError(e.message ?? "Delete failed.");
@@ -5038,6 +5038,10 @@ function ProductDetail() {
           {/* Overflow menu with Delete and Check Mercari for sold items */}
           <OverflowMenu
             items={[
+              {
+                label: "👁️ View public listing",
+                onClick: () => window.open(`/listing/${productId}`, "_blank")
+              },
               {
                 label: checkingMercariSold ? "⏳ Checking…" : "🔍 Check Mercari for sold items",
                 onClick: checkMercariSoldItems,
