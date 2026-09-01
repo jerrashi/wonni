@@ -6133,9 +6133,9 @@ function ProductDetail() {
                       <option value={10}>10 Business Days (2 weeks)</option>
                       <option value={15}>15 Business Days (3 weeks)</option>
                       <option value={20}>20 Business Days (4 weeks)</option>
-                      <option value={30}>30 Business Days (6 weeks — eBay max)</option>
-                      <option value={40}>40 Business Days (8 weeks — Etsy pre-order)</option>
-                      <option value={50}>50 Business Days (10 weeks — Etsy max)</option>
+                      <option value={30}>30 Business Days (6 weeks)</option>
+                      <option value={40}>40 Business Days (8 weeks)</option>
+                      <option value={50}>50 Business Days (10 weeks)</option>
                     </select>
                   </div>
                 </div>
