@@ -10,10 +10,34 @@ const EBAY_ENV = defineString("EBAY_ENV", { default: "sandbox" }); // "sandbox" 
 const EBAY_SCOPES = [
   "https://api.ebay.com/oauth/api_scope/sell.inventory",
   "https://api.ebay.com/oauth/api_scope/sell.account",
+  "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
 ].join(" ");
 
 function ebayApiHost() {
   return EBAY_ENV.value() === "production" ? "api.ebay.com" : "api.sandbox.ebay.com";
+}
+
+// The Commerce Identity API is served from a separate subdomain (apiz.*),
+// NOT the api.* host used for sell/* and identity/v1/oauth2 calls.
+function ebayIdentityApiHost() {
+  return EBAY_ENV.value() === "production" ? "apiz.ebay.com" : "apiz.sandbox.ebay.com";
+}
+
+// Look up the authenticated seller's eBay username for display in Settings.
+// Requires the commerce.identity.readonly OAuth scope on the access token.
+async function fetchEbayUsername(accessToken) {
+  const response = await fetch(`https://${ebayIdentityApiHost()}/commerce/identity/v1/user/`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+    },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(`eBay identity API error (${response.status}): ${JSON.stringify(data)}`);
+  }
+  return data.username || data.userId || null;
 }
 
 function basicAuthHeader() {
@@ -71,7 +95,14 @@ exports.dropshipEbayExchangeToken = onCall(
       throw new HttpsError("internal", e.message);
     }
 
-    const connectedUsername = tokens.ebay_username || "Connected Account";
+    // Fetch the authenticated user's eBay username for the "Connected as" row.
+    let connectedUsername = "Connected Account";
+    try {
+      connectedUsername =
+        (await fetchEbayUsername(tokens.access_token)) || connectedUsername;
+    } catch (e) {
+      console.error("Failed to fetch eBay username:", e.message);
+    }
 
     await admin.firestore().doc(`users/${uid}/integrations/ebay`).set({
       platform: "ebay",
@@ -140,5 +171,14 @@ async function ebayRequest(uid, method, path, body) {
   return response.json();
 }
 
-exports.ebayRequest = ebayRequest;
-exports.refreshEbayToken = refreshEbayToken;
+module.exports = {
+  dropshipEbayExchangeToken: exports.dropshipEbayExchangeToken,
+  ebayExchangeToken: exports.dropshipEbayExchangeToken,
+  refreshEbayToken,
+  ebayRequest,
+  ebayApiHost,
+  EBAY_CLIENT_ID,
+  EBAY_CLIENT_SECRET,
+  EBAY_RU_NAME,
+  EBAY_ENV,
+};
