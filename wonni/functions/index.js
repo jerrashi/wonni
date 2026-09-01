@@ -7,8 +7,8 @@ const geminiApiKey = defineSecret("GEMINI_API_KEY");
 // Model-quality tracking (spec T1): both ride back to the client and onto the
 // published listing doc, so "% similar to final output by model/prompt" can be
 // compared across changes. Bump PROMPT_VERSION on ANY edit to the prompt below.
-const GEMINI_MODEL = "gemini-3.1-flash-lite";
-const PROMPT_VERSION = "2026-07-14.1";
+const GEMINI_MODEL = "gemini-2.5-flash-lite";
+const PROMPT_VERSION = "2026-08-31.1";
 
 exports.identifyItem = onCall({
   secrets: [geminiApiKey],
