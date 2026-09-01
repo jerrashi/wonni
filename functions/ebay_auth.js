@@ -13,8 +13,7 @@ const EBAY_SCOPES = [
 ].join(" ");
 
 function ebayApiHost() {
-  const envVal = (typeof EBAY_ENV !== "undefined" && EBAY_ENV?.value) ? EBAY_ENV.value() : (process.env.EBAY_ENV || "production");
-  return envVal === "production" ? "api.ebay.com" : "api.sandbox.ebay.com";
+  return EBAY_ENV.value() === "production" ? "api.ebay.com" : "api.sandbox.ebay.com";
 }
 
 function basicAuthHeader() {
@@ -55,10 +54,7 @@ exports.dropshipEbayExchangeToken = onCall(
     if (!stored?.nonce || stored.nonce !== state) {
       throw new HttpsError("invalid-argument", "Invalid OAuth state.");
     }
-    const createdAtMillis = stored.createdAt?.toMillis
-      ? stored.createdAt.toMillis()
-      : (stored.createdAt ? new Date(stored.createdAt).getTime() : Date.now());
-    if (Date.now() - createdAtMillis > 10 * 60 * 1000) {
+    if (Date.now() - stored.createdAt.toMillis() > 10 * 60 * 1000) {
       await stateRef.delete();
       throw new HttpsError("deadline-exceeded", "OAuth state expired.");
     }
@@ -75,43 +71,21 @@ exports.dropshipEbayExchangeToken = onCall(
       throw new HttpsError("internal", e.message);
     }
 
-    let connectedUsername = tokens.ebay_username || null;
-    if (!connectedUsername && tokens.access_token) {
-      try {
-        const userRes = await fetch(`https://${ebayApiHost()}/commerce/identity/v1/user/`, {
-          headers: {
-            Authorization: `Bearer ${tokens.access_token}`,
-            Accept: "application/json",
-          },
-        });
-        if (userRes.ok) {
-          const userData = await userRes.json();
-          connectedUsername = userData.username || userData.userId || userData.accountId || null;
-        } else {
-          console.warn(`eBay user API returned ${userRes.status}: ${await userRes.text()}`);
-        }
-      } catch (err) {
-        console.warn("Failed to fetch eBay user info:", err.message);
-      }
-    }
-
-    const usernameToSave = connectedUsername || "Connected Account";
-
     await admin.firestore().doc(`users/${uid}/integrations/ebay`).set({
       platform: "ebay",
       isConnected: true,
-      connectedUsername: usernameToSave,
+      connectedUsername: tokens.ebay_username || null, // eBay username if available from token
       connectedAt: admin.firestore.FieldValue.serverTimestamp(),
       // Web-specific OAuth token storage (iOS doesn't need this)
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
       tokenExpiresAt: Date.now() + (tokens.expires_in ?? 7200) * 1000,
       refreshTokenExpiresAt: Date.now() + (tokens.refresh_token_expires_in ?? 0) * 1000,
-      environment: ebayApiHost().includes("sandbox") ? "sandbox" : "production",
+      environment: EBAY_ENV.value(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    return { success: true, connectedUsername: usernameToSave, username: usernameToSave };
+    return { success: true };
   }
 );
 
@@ -143,18 +117,15 @@ async function refreshEbayToken(uid) {
 // Authenticated eBay REST call. Returns parsed JSON (or null for 204).
 async function ebayRequest(uid, method, path, body) {
   const accessToken = await refreshEbayToken(uid);
-  const hasBody = body !== undefined && body !== null;
   const response = await fetch(`https://${ebayApiHost()}${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
-      // Content-Language must only be sent when there is a request body —
-      // eBay returns error 25709 if it's included on GET/DELETE requests.
-      ...(hasBody ? { "Content-Language": "en-US" } : {}),
+      "Content-Language": "en-US",
       Accept: "application/json",
     },
-    body: hasBody ? JSON.stringify(body) : undefined,
+    body: body ? JSON.stringify(body) : undefined,
   });
 
   if (response.status === 204) return null;
@@ -171,12 +142,9 @@ async function ebayRequest(uid, method, path, body) {
 
 module.exports = {
   dropshipEbayExchangeToken: exports.dropshipEbayExchangeToken,
-  ebayExchangeToken: exports.dropshipEbayExchangeToken,
   refreshEbayToken,
   ebayRequest,
-  ebayApiHost,
   EBAY_CLIENT_ID,
   EBAY_CLIENT_SECRET,
   EBAY_RU_NAME,
-  EBAY_ENV,
 };
