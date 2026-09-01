@@ -372,6 +372,16 @@ Three bugs, all introduced by earlier churn, fixed together:
    authorized to call `getUser`. **Existing connected users must disconnect
    + reconnect eBay once** to re-consent to the new scope.
 
+**Follow-up (same day):** the first pass put `commerce.identity.readonly`
+into `EBAY_SCOPES` in `functions/ebay_auth.js`, which is also used for the
+`refresh_token` grant in `refreshEbayToken()`. eBay rejects a refresh whose
+scope isn't a subset of the original authorization, so every already-connected
+account got `invalid_scope` on refresh → uncaught error → **"✕ INTERNAL" on
+any eBay listing/post action**. Fixed by removing the identity scope from
+that constant — it's requested at authorize time (`Settings.jsx` /
+`ProfileView.swift`) and only needed once, at token exchange, for the
+username read. Posting to eBay works again in this version.
+
 Also fixed a deploy blocker in `functions/ebay_auth.js`: earlier reverts had
 stripped its `module.exports`, so `ebay_listing.js` / `recover_ebay_offer_ids.js`
 imported `undefined` for `EBAY_CLIENT_ID`/`EBAY_CLIENT_SECRET`/`EBAY_RU_NAME`
