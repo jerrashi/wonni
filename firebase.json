@@ -1,0 +1,26 @@
+{
+  "hosting": {
+    "public": "/Users/jerryshi/Documents/GitHub/wonni_dropship/public",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      { "source": "/privacy", "destination": "/privacy/index.html" },
+      { "source": "/web/oauth/aliexpress", "destination": "/oauth/aliexpress/index.html" },
+      { "source": "/web/oauth/tiktok", "destination": "/oauth/tiktok/index.html" },
+      { "source": "/web/oauth/ebay", "destination": "/oauth/ebay/index.html" },
+      { "source": "/web/oauth/etsy", "destination": "/oauth/etsy/index.html" },
+      { "source": "/web/**", "destination": "/index.html" }
+    ]
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "**/node_modules/**"
+      ]
+    }
+  ]
+}

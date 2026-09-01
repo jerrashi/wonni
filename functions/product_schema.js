@@ -51,33 +51,33 @@ function buildNewProductDoc(rawData) {
       active: v.active !== false,
       sourceVariantId: v.sourceVariantId || null,
       // Platform cross-post status
-      crossPostStatus: {
-        ebay: v.ebayStatus || null,
-        etsy: v.etsyStatus || null,
+      crossPostStatus: v.crossPostStatus || {
+        ebay: null,
+        etsy: null,
         mercari: v.mercariStatus || null,
-        tiktok: v.tiktokStatus || null,
+        tiktok: null,
       },
-      crossPostListingIds: {
-        ebay: v.ebayListingId || null,
-        etsy: v.etsyListingId || null,
+      crossPostListingIds: v.crossPostListingIds || {
+        ebay: null,
+        etsy: null,
         mercari: v.mercariListingId || null,
-        tiktok: v.tiktokListingId || null,
+        tiktok: null,
       },
       mercariUrl: v.mercariUrl || null,
     })),
 
     // Cross-post status (product level)
-    crossPostStatus: {
-      ebay: rawData.ebayStatus || null,
-      etsy: rawData.etsyStatus || null,
+    crossPostStatus: rawData.crossPostStatus || {
+      ebay: null,
+      etsy: null,
       mercari: rawData.mercariStatus || null,
-      tiktok: rawData.tiktokStatus || "draft",
+      tiktok: null,
     },
-    crossPostListingIds: {
-      ebay: rawData.ebayListingId || null,
-      etsy: rawData.etsyListingId || null,
+    crossPostListingIds: rawData.crossPostListingIds || {
+      ebay: null,
+      etsy: null,
       mercari: rawData.mercariListingId || null,
-      tiktok: rawData.tiktokListingId || null,
+      tiktok: null,
     },
 
     // Source-specific fields

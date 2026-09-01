@@ -85,7 +85,7 @@ async function syncOrdersForUser(uid) {
           productId = p.id;
           aliexpressProductId = p.data().aliexpressProductId;
           productTitle = p.data().title;
-          aliexpressPrice = p.data().aliexpressPrice ?? 0;
+          aliexpressPrice = p.data().sourceCost ?? 0;
         }
       }
 

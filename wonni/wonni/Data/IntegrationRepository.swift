@@ -34,11 +34,10 @@ public class IntegrationRepository: ObservableObject {
     private let usersCollection = "users"
     private let integrationsSubcollection = "integrations"
 
-    // Etsy/Facebook Marketplace aren't functional yet (Etsy's backend is real
-    // but currently broken; Facebook has no automation, just a manual-entry
-    // webview — see #66). Hidden from the UI until they work; not removed
-    // from the backend since Mercari/eBay's own sale cascade code shares
-    // files with Etsy's (sale_sync.js/sale_poller.js).
+    // Mercari + eBay enabled for App Store launch v1.0.
+    // Etsy/Facebook integrations remain in backend but commented out from UI.
+    // (Etsy's backend is real but currently broken; Facebook has no automation,
+    // just a manual-entry webview — see #66.)
     public static let supportedPlatforms = ["ebay", "mercari"]
     
     @Published public var integrations: [PlatformIntegration] = []

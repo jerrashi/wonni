@@ -21,17 +21,22 @@ exports.updateMercariListingStatus = onCall(
     if (snap.data()?.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
 
     const update = {
-      "listingStatus.mercari": status,
+      "crossPostStatus.mercari": status,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
-    if (listingId) update["listingId.mercari"] = listingId;
-    if (url) update["listingUrl.mercari"] = url;
-    if (category) update["listingCategory.mercari"] = category;
-    if (outcomeError) update["listingError.mercari"] = outcomeError;
+    if (listingId) {
+      update["crossPostListingIds.mercari"] = listingId;
+    }
+    if (url) {
+      update["crossPostUrls.mercari"] = url;
+    }
+    if (outcomeError) {
+      update["crossPostErrors.mercari"] = outcomeError;
+    }
     if (status === "active") {
       // Clear any stale error on success
-      update["listingError.mercari"] = admin.firestore.FieldValue.delete();
+      update["crossPostErrors.mercari"] = admin.firestore.FieldValue.delete();
     }
 
     await ref.update(update);
@@ -65,10 +70,10 @@ exports.ensureMercariListingDetails = onCall(
       description: product.description ?? "",
       images: product.images ?? [],
       listingPrice: product.listingPrice ?? null,
-      sourcePrice: product.sourcePrice ?? product.aliexpressPrice ?? null,
-      listingStatus: product.listingStatus?.mercari ?? "draft",
-      listingUrl: product.listingUrl?.mercari ?? null,
-      listingId: product.listingId?.mercari ?? null,
+      sourcePrice: product.sourceCost ?? null,
+      listingStatus: product.crossPostStatus?.mercari ?? "draft",
+      listingUrl: product.crossPostUrls?.mercari ?? null,
+      listingId: product.crossPostListingIds?.mercari ?? null,
     };
   }
 );

@@ -81,7 +81,7 @@ exports.tiktokCreateListing = onCall(
 
     const product = snap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
-    if (product.tiktokStatus === "active") return { tiktokProductId: product.tiktokProductId };
+    if (product.crossPostStatus?.tiktok === "active") return { tiktokProductId: product.tiktokProductId };
 
     // Upload images
     const imgIds = [];
@@ -93,7 +93,7 @@ exports.tiktokCreateListing = onCall(
 
     const finalPrice = sellPrice
       ?? product.listingPrice
-      ?? product.aliexpressPrice * 2.5;
+      ?? (product.sourceCost ?? 0) * 2.5;
 
     const { images: _ignoredImages, ...basePayload } = toTiktokProductPayload(product, {
       titleOverride,
@@ -127,7 +127,7 @@ exports.tiktokCreateListing = onCall(
     const tiktokProductId = response.data?.product_id;
     await docRef.update({
       tiktokProductId,
-      tiktokStatus: "active",
+      "crossPostStatus.tiktok": "active",
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
@@ -176,7 +176,7 @@ exports.tiktokDeleteListing = onCall(
       await tiktokRequest("DELETE", "/api/products/202309/products", { product_ids: [tiktokProductId] }, uid);
     }
 
-    await ref.update({ tiktokStatus: "inactive", updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    await ref.update({ "crossPostStatus.tiktok": "inactive", updatedAt: admin.firestore.FieldValue.serverTimestamp() });
     return { success: true };
   }
 );

@@ -1,13 +1,13 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
-const { ebayRequest, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME } = require("./ebay_auth");
+const { ebayRequest, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET } = require("./ebay_auth");
 
 const MARKETPLACE_ID = "EBAY_US";
 
 // Recover offerId for existing eBay listings by querying eBay's offer API
 // Called manually after the schema migration: firebaseTools.connect({ projectId: "wonni-app" }); await callFunction("recoverEbayOfferIds")({})
 exports.recoverEbayOfferIds = onCall(
-  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME], timeoutSeconds: 300, memory: "512MiB" },
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 300, memory: "512MiB" },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
