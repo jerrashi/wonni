@@ -41,6 +41,7 @@ exports.postToWonni = onCall(
     if (product.listingId?.mercari) crossPostListingIds.mercari = product.listingId.mercari;
     if (product.listingUrl?.mercari) crossPostListingIds.mercariUrl = product.listingUrl.mercari;
 
+    const existingPublishedAt = alreadyPosted ? listingSnap.data().publishedAt : null;
     const listingFields = {
       userId: uid,
       ...toListingFields({
@@ -77,6 +78,10 @@ exports.postToWonni = onCall(
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         publishedAt: admin.firestore.FieldValue.serverTimestamp(),
       }),
+      // If re-publishing a draft that was saved without publishedAt, set it now
+      ...(alreadyPosted && !existingPublishedAt ? {
+        publishedAt: admin.firestore.FieldValue.serverTimestamp(),
+      } : {}),
     };
 
     await listingRef.set(listingFields, { merge: true });
