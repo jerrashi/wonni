@@ -3,43 +3,29 @@
 <head><title>Connecting eBay…</title></head>
 <body>
 <script type="module">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getAuth } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-  import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js";
-
-  const firebaseConfig = {
-    apiKey: "AIzaSyCrroW6RXSl15a4j9FPeAUOqkiNCx3g2Lk",
-    authDomain: "wonni-app.firebaseapp.com",
-    projectId: "wonni-app",
-    storageBucket: "wonni-app.firebasestorage.app",
-    messagingSenderId: "840012373819",
-    appId: "1:840012373819:web:c5081552e35940d578a11e",
-  };
-  const app = initializeApp(firebaseConfig);
-  const auth = getAuth(app);
-  const functions = getFunctions(app);
-
   const params = new URLSearchParams(window.location.search);
   const code = params.get("code");
   const state = params.get("state");
+  const error = params.get("error");
 
-  if (!code) {
+  document.body.innerText = "Connecting…";
+
+  if (error) {
+    if (window.opener) {
+      window.opener.postMessage({ type: "EBAY_AUTH_CALLBACK", error }, "*");
+    }
+    document.body.innerText = `Error: ${error}. Close this window.`;
+  } else if (!code) {
+    if (window.opener) {
+      window.opener.postMessage({ type: "EBAY_AUTH_CALLBACK", error: "No code received" }, "*");
+    }
     document.body.innerText = "No code received. Close this window and try again.";
   } else {
-    auth.authStateReady().then(async () => {
-      if (!auth.currentUser) {
-        document.body.innerText = "Not signed in. Please sign in from the dashboard first.";
-        return;
-      }
-      document.body.innerText = "Connecting eBay…";
-      try {
-        await httpsCallable(functions, "ebayExchangeToken")({ code, state, credentialSet: "web" });
-        document.body.innerText = "eBay connected! You can close this window.";
-        setTimeout(() => window.close(), 1500);
-      } catch (e) {
-        document.body.innerText = "Error: " + e.message;
-      }
-    });
+    if (window.opener) {
+      window.opener.postMessage({ type: "EBAY_AUTH_CALLBACK", code, state }, "*");
+    }
+    document.body.innerText = "eBay connected! You can close this window.";
+    setTimeout(() => window.close(), 1500);
   }
 </script>
 </body>
