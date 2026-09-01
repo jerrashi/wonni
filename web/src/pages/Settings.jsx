@@ -21,6 +21,7 @@ const EBAY_AUTH_HOST = import.meta.env.VITE_EBAY_ENV === "production"
 const EBAY_SCOPES = [
   "https://api.ebay.com/oauth/api_scope/sell.inventory",
   "https://api.ebay.com/oauth/api_scope/sell.account",
+  "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
 ].join(" ");
 const ETSY_CLIENT_ID = import.meta.env.VITE_ETSY_CLIENT_ID ?? "REPLACE_ME";
 
