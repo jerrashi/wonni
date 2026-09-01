@@ -49,10 +49,48 @@ function toEtsyDraftListing(product, { taxonomyId, price, quantity = 1 } = {}) {
   };
 }
 
+// Build eBay item variations from product variants/options.
+// Returns { itemSpecifics, variations } for multi-variant inventory items.
+function buildEbayVariations(product) {
+  const variants = Array.isArray(product.variants) ? product.variants : [];
+  const options = Array.isArray(product.options) ? product.options : [];
+
+  if (variants.length === 0 || options.length === 0) {
+    return null;
+  }
+
+  // Collect option names (eBay calls these "item specifics")
+  const itemSpecifics = options.reduce((acc, opt) => {
+    acc[opt.name] = opt.values || [];
+    return acc;
+  }, {});
+
+  // Build variation entries: each has its own SKU, price, quantity, and option values
+  const ebayVariations = variants
+    .filter((v) => v.active !== false)
+    .map((variant, index) => {
+      const variantSku = variant.sku || `${product.id}-${index}`;
+      const variantPrice = variant.price ?? product.listingPrice ?? null;
+      const variantQty = typeof variant.quantity === "number" && variant.quantity >= 0
+        ? variant.quantity
+        : (variant.quantity != null && !isNaN(variant.quantity) ? Math.max(0, Number(variant.quantity)) : 0);
+
+      return {
+        sku: variantSku.slice(0, 64), // eBay SKU limit
+        price: variantPrice,
+        quantity: variantQty,
+        itemSpecifics: variant.optionValues || {}, // e.g., { "Size": "M", "Color": "Red" }
+      };
+    });
+
+  return ebayVariations.length > 0 ? { itemSpecifics, variations: ebayVariations } : null;
+}
+
 module.exports = {
   listingImagesFor,
   canonicalDescription,
   toEbayInventoryProduct,
   toTiktokProductPayload,
   toEtsyDraftListing,
+  buildEbayVariations,
 };

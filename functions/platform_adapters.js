@@ -67,11 +67,13 @@ function buildEbayVariations(product) {
 
   // Build variation entries: each has its own SKU, price, quantity, and option values
   const ebayVariations = variants
-    .filter((v) => v.active !== false && (v.quantity ?? 0) > 0)
+    .filter((v) => v.active !== false)
     .map((variant, index) => {
       const variantSku = variant.sku || `${product.id}-${index}`;
       const variantPrice = variant.price ?? product.listingPrice ?? null;
-      const variantQty = variant.quantity ?? 1;
+      const variantQty = typeof variant.quantity === "number" && variant.quantity >= 0
+        ? variant.quantity
+        : (variant.quantity != null && !isNaN(variant.quantity) ? Math.max(0, Number(variant.quantity)) : 0);
 
       return {
         sku: variantSku.slice(0, 64), // eBay SKU limit

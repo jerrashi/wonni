@@ -344,24 +344,60 @@ exports.ebaySyncListing = onCall(
     try {
       if (applyFrom === "wonni") {
         // Push Wonni version to eBay
+        const sku = productId;
         const title = (product.title ?? "").slice(0, 80);
         const description = canonicalDescription(product);
-        const price = product.listingPrice ?? computeEbaySellPrice(product);
+        const basePrice = product.listingPrice ?? computeEbaySellPrice(product);
 
-        await ebayRequest(uid, "PATCH", `/sell/inventory/v1/offer/${offerId}`, {
-          listingDescription: description,
-        });
+        const variationData = buildEbayVariations(product);
+        const hasVariations = variationData !== null;
 
-        // Update inventory
-        const sku = productId;
-        const qty = product.variants?.reduce((sum, v) => sum + (v.quantity ?? 0), 0) ?? 1;
-        await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
+        const inventoryPayload = {
           product: toEbayInventoryProduct(product, { imageLimit: 12, title }),
           condition: "NEW",
-          availability: { shipToLocationAvailability: { quantity: qty } },
-        });
+        };
 
-        // Re-publish
+        if (hasVariations) {
+          inventoryPayload.variations = variationData.variations.map((v) => ({
+            sku: v.sku,
+            price: v.price ? { value: Number(v.price).toFixed(2), currency: "USD" } : undefined,
+            quantity: typeof v.quantity === "number" ? Math.max(0, v.quantity) : 0,
+            itemSpecifics: Object.entries(v.itemSpecifics).reduce((acc, [key, val]) => {
+              acc[key] = Array.isArray(val) ? val : [val];
+              return acc;
+            }, {}),
+          }));
+          inventoryPayload.product.aspects = variationData.itemSpecifics;
+        } else {
+          const qty = typeof product.quantity === "number" && product.quantity >= 0 ? product.quantity : 1;
+          inventoryPayload.availability = { shipToLocationAvailability: { quantity: qty } };
+        }
+
+        await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, inventoryPayload);
+
+        const offerPatchPayload = {
+          listingDescription: description,
+        };
+
+        if (hasVariations) {
+          offerPatchPayload.pricingSummary = {
+            priceType: "FIXED_PRICE",
+            minimumAdvertisedPrice: { value: basePrice.toFixed(2), currency: "USD" },
+          };
+          offerPatchPayload.variations = variationData.variations.map((v) => ({
+            sku: v.sku,
+            price: { value: (v.price ?? basePrice).toFixed(2), currency: "USD" },
+            availableQuantity: typeof v.quantity === "number" ? Math.max(0, v.quantity) : 0,
+          }));
+        } else {
+          const qty = typeof product.quantity === "number" && product.quantity >= 0 ? product.quantity : 1;
+          offerPatchPayload.availableQuantity = qty;
+          offerPatchPayload.pricingSummary = { price: { value: basePrice.toFixed(2), currency: "USD" } };
+        }
+
+        await ebayRequest(uid, "PATCH", `/sell/inventory/v1/offer/${offerId}`, offerPatchPayload);
+
+        // Re-publish existing offer to apply changes in-place
         await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`);
       } else {
         // Pull eBay version to Wonni
@@ -380,7 +416,6 @@ exports.ebaySyncListing = onCall(
         if (inventory?.availability?.shipToLocationAvailability?.quantity != null) {
           // Update variant quantities if multi-variant
           if (product.ebayHasVariations && Array.isArray(product.variants)) {
-            const totalQty = inventory.availability.shipToLocationAvailability.quantity;
             const batch = db.batch();
             product.variants.forEach((v, index) => {
               batch.update(docRef, {
@@ -409,7 +444,7 @@ exports.ebaySyncListing = onCall(
   }
 );
 
-// Update an eBay listing with current Wonni product data (title, description, price, images)
+// Update an eBay listing with current Wonni product data (title, description, price, images, variations/quantities)
 exports.ebayUpdateListing = onCall(
   { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME], timeoutSeconds: 60, memory: "256MiB" },
   async (request) => {
@@ -428,28 +463,65 @@ exports.ebayUpdateListing = onCall(
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
     const offerId = product.crossPostListingIds?.ebay;
     if (!offerId) throw new HttpsError("failed-precondition", "No eBay listing to update.");
+
+    const sku = productId;
     const title = (product.title ?? "").slice(0, 80);
     const description = canonicalDescription(product);
-    const price = product.listingPrice ?? computeEbaySellPrice(product);
+    const basePrice = product.listingPrice ?? computeEbaySellPrice(product);
+
+    // Check if product has variants
+    const variationData = buildEbayVariations(product);
+    const hasVariations = variationData !== null;
 
     try {
-      // eBay: Update offer with new title, description, pricing
-      // Note: inventory item updates are done via PUT (idempotent), not PATCH
-      await ebayRequest(uid, "PATCH", `/sell/inventory/v1/offer/${offerId}`, {
-        listingDescription: description,
-      });
+      // 1. Update inventory item in-place via idempotent PUT
+      const inventoryPayload = {
+        product: toEbayInventoryProduct(product, { imageLimit: 12, title }),
+        condition: "NEW",
+      };
 
-      // Update pricing in offer (note: this may vary by SKU for multi-variant listings)
-      const updatedOffer = await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${offerId}`);
-      if (updatedOffer?.pricingSummary) {
-        await ebayRequest(uid, "PATCH", `/sell/inventory/v1/offer/${offerId}`, {
-          pricingSummary: updatedOffer.pricingSummary.priceType === "FIXED_PRICE"
-            ? { price: { value: price.toFixed(2), currency: "USD" } }
-            : updatedOffer.pricingSummary,
-        });
+      if (hasVariations) {
+        inventoryPayload.variations = variationData.variations.map((v) => ({
+          sku: v.sku,
+          price: v.price ? { value: Number(v.price).toFixed(2), currency: "USD" } : undefined,
+          quantity: typeof v.quantity === "number" ? Math.max(0, v.quantity) : 0,
+          itemSpecifics: Object.entries(v.itemSpecifics).reduce((acc, [key, val]) => {
+            acc[key] = Array.isArray(val) ? val : [val];
+            return acc;
+          }, {}),
+        }));
+        inventoryPayload.product.aspects = variationData.itemSpecifics;
+      } else {
+        const qty = typeof product.quantity === "number" && product.quantity >= 0 ? product.quantity : 1;
+        inventoryPayload.availability = { shipToLocationAvailability: { quantity: qty } };
       }
 
-      // Re-publish to apply changes
+      await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, inventoryPayload);
+
+      // 2. Update the existing offer in-place (PATCH)
+      const offerPatchPayload = {
+        listingDescription: description,
+      };
+
+      if (hasVariations) {
+        offerPatchPayload.pricingSummary = {
+          priceType: "FIXED_PRICE",
+          minimumAdvertisedPrice: { value: basePrice.toFixed(2), currency: "USD" },
+        };
+        offerPatchPayload.variations = variationData.variations.map((v) => ({
+          sku: v.sku,
+          price: { value: (v.price ?? basePrice).toFixed(2), currency: "USD" },
+          availableQuantity: typeof v.quantity === "number" ? Math.max(0, v.quantity) : 0,
+        }));
+      } else {
+        const qty = typeof product.quantity === "number" && product.quantity >= 0 ? product.quantity : 1;
+        offerPatchPayload.availableQuantity = qty;
+        offerPatchPayload.pricingSummary = { price: { value: basePrice.toFixed(2), currency: "USD" } };
+      }
+
+      await ebayRequest(uid, "PATCH", `/sell/inventory/v1/offer/${offerId}`, offerPatchPayload);
+
+      // 3. Re-publish the existing offer to apply changes to the live listing without deleting/recreating
       await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`);
     } catch (e) {
       throw new HttpsError("internal", `Failed to update eBay listing: ${e.message}`);

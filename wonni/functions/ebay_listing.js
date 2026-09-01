@@ -1728,6 +1728,14 @@ exports.ebayUpdateListing = onCall(
       const widthIn = listing.shippingInfo?.packageDimensions?.widthIn || 6.0;
       const heightIn = listing.shippingInfo?.packageDimensions?.heightIn || 4.0;
 
+      const productSnap = await db.collection("products").doc(listingId).get();
+      const product = productSnap.exists ? productSnap.data() : {};
+      const brand = resolveBrand(product, listing);
+      const variations = (listing.variations && listing.variations.length > 0)
+        ? listing.variations
+        : (product.variants || []);
+      const hasVariations = variations.length > 1;
+
       const conditionMap = {
         new: "NEW", newWithoutTags: "USED_EXCELLENT", likeNew: "USED_EXCELLENT",
         good: "USED_GOOD", fair: "USED_ACCEPTABLE", poor: "USED_ACCEPTABLE",
@@ -1742,6 +1750,9 @@ exports.ebayUpdateListing = onCall(
         `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(path)}?alt=media`
       );
 
+      const options = listing.options || product.options || {};
+      const aspects = buildProductAspects([], brand, title, options);
+
       const itemBody = {
         availability: { shipToLocationAvailability: { quantity: quantity } },
         condition: condition,
@@ -1751,7 +1762,7 @@ exports.ebayUpdateListing = onCall(
           imageUrls: imageUrls.slice(0, 12),
           brand: brand,
           mpn: "Does Not Apply",
-          aspects: { Brand: [brand] }
+          aspects: aspects
         },
         packageWeightAndSize: {
           weight: { value: weightLbs, unit: "POUND" },
@@ -1760,6 +1771,41 @@ exports.ebayUpdateListing = onCall(
       };
       if (listing.conditionNotes) {
         itemBody.conditionDescription = listing.conditionNotes;
+      }
+
+      // If multi-variation, update individual variant inventory items
+      if (hasVariations) {
+        console.log(`[ebayUpdateListing] Updating ${variations.length} variant inventory items for listing ${listingId}`);
+        for (let idx = 0; idx < variations.length; idx++) {
+          const v = variations[idx];
+          const varSku = `wonni_${listingId}_${idx}`;
+          const varQty = (typeof v.quantity === "number" && v.quantity >= 0) ? v.quantity : 0;
+          const varOpts = {};
+          (v.attributes || []).forEach(a => { varOpts[a.name] = a.value; });
+          if (v.optionValues) Object.assign(varOpts, v.optionValues);
+          if (!Object.keys(varOpts).length && v.name) varOpts.Size = v.name;
+
+          const varAspects = buildProductAspects([], brand, title, varOpts, varOpts);
+          const varItemBody = {
+            ...itemBody,
+            availability: { shipToLocationAvailability: { quantity: varQty } },
+            product: {
+              ...itemBody.product,
+              aspects: varAspects
+            }
+          };
+
+          await makeHttpRequestWithRetry({
+            hostname: host,
+            path: `/sell/inventory/v1/inventory_item/${varSku}`,
+            method: "PUT",
+            headers: {
+              "Authorization": `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+              "Content-Language": "en-US"
+            }
+          }, varItemBody, "ebayUpdateListing:varInventoryItem");
+        }
       }
 
       console.log(`[ebayUpdateListing] Updating inventory item SKU=${sku}`);
@@ -1834,22 +1880,39 @@ exports.ebayUpdateListing = onCall(
       console.log(`[ebayUpdateListing] Offer update response: ${offerUpdateRes.statusCode}, body=${offerUpdateRes.body || '(empty)'}`);
 
       // 4. Use bulkUpdatePriceQuantity for a more reliable quantity + price sync
-      //    on published offers. eBay recommends this endpoint for live listings.
-      const bulkBody = {
-        requests: [
-          {
-            sku: sku,
-            shipToLocationAvailability: { quantity: quantity },
-            offers: [
-              {
-                offerId: offerId,
-                availableQuantity: quantity,
-                price: { value: price.toFixed(2), currency: "USD" }
-              }
-            ]
-          }
-        ]
-      };
+      //    on published offers (including each individual variant quantity).
+      const bulkRequests = hasVariations
+        ? variations.map((v, idx) => {
+            const varSku = `wonni_${listingId}_${idx}`;
+            const varQty = (typeof v.quantity === "number" && v.quantity >= 0) ? v.quantity : 0;
+            const varPrice = (typeof v.price === "number" && v.price > 0) ? v.price : price;
+            return {
+              sku: varSku,
+              shipToLocationAvailability: { quantity: varQty },
+              offers: [
+                {
+                  offerId: offerId,
+                  availableQuantity: varQty,
+                  price: { value: varPrice.toFixed(2), currency: "USD" }
+                }
+              ]
+            };
+          })
+        : [
+            {
+              sku: sku,
+              shipToLocationAvailability: { quantity: quantity },
+              offers: [
+                {
+                  offerId: offerId,
+                  availableQuantity: quantity,
+                  price: { value: price.toFixed(2), currency: "USD" }
+                }
+              ]
+            }
+          ];
+
+      const bulkBody = { requests: bulkRequests };
       const bulkRes = await makeHttpRequest({
         hostname: host,
         path: "/sell/inventory/v1/bulk_update_price_quantity",
