@@ -6110,17 +6110,13 @@ function ProductDetail() {
                   />
                   Buyer pays shipping
                 </label>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                <div style={{ display: "grid", gridTemplateColumns: !buyerPaysShipping ? "1fr 1fr" : "1fr", gap: 12 }}>
                   {!buyerPaysShipping && (
                     <div className="modal-field">
                       <label style={{ fontSize: 11 }}>Handling fee ($)</label>
                       <input className="input" type="number" min="0" step="0.01" value={handlingFee} onChange={(e) => handleHandlingFeeChange(e.target.value)} />
                     </div>
                   )}
-                  <div className="modal-field">
-                    <label style={{ fontSize: 11 }}>Est. shipping days</label>
-                    <input className="input" type="number" min="1" value={estimatedShippingDays} onChange={(e) => handleEstimatedShippingDaysChange(e.target.value)} />
-                  </div>
                   <div className="modal-field">
                     <label style={{ fontSize: 11 }}>Handling time</label>
                     <select
