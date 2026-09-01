@@ -1,6 +1,6 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
-const { ebayRequest, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME } = require("./ebay_auth");
+const { ebayRequest, ebayApiHost, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_ENV } = require("./ebay_auth");
 const { toEbayInventoryProduct, canonicalDescription, listingImagesFor, buildEbayVariations } = require("./platform_adapters");
 
 const MARKETPLACE_ID = "EBAY_US";
@@ -132,6 +132,7 @@ async function resolveEbayOffer(uid, product, productId) {
   }
 
   for (const querySku of candidateSkus) {
+    // 3a. Check by single SKU
     try {
       const result = await ebayRequest(
         uid,
@@ -145,7 +146,7 @@ async function resolveEbayOffer(uid, product, productId) {
           || offers[0];
 
         if (targetOffer?.offerId) {
-          console.log(`[resolveEbayOffer] Recovered offerId=${targetOffer.offerId} (listingId=${targetOffer.listingId}) for candidate SKU ${querySku}`);
+          console.log(`[resolveEbayOffer] Recovered offerId=${targetOffer.offerId} (listingId=${targetOffer.listingId}) for SKU ${querySku}`);
           const docRef = admin.firestore().collection("products").doc(productId);
           await docRef.update({
             "crossPostListingIds.ebay": targetOffer.offerId,
@@ -156,7 +157,35 @@ async function resolveEbayOffer(uid, product, productId) {
         }
       }
     } catch (skuErr) {
-      console.warn(`[resolveEbayOffer] Error querying offers for candidate SKU ${querySku}:`, skuErr.message);
+      console.warn(`[resolveEbayOffer] Error querying offers for SKU ${querySku}:`, skuErr.message);
+    }
+
+    // 3b. Check by inventory_item_group_key (for multi-variation listings)
+    try {
+      const groupResult = await ebayRequest(
+        uid,
+        "GET",
+        `/sell/inventory/v1/offer?inventory_item_group_key=${encodeURIComponent(querySku)}&marketplace_id=${MARKETPLACE_ID}`
+      );
+      const groupOffers = groupResult?.offers || [];
+      if (groupOffers.length > 0) {
+        const targetOffer = (storedId && groupOffers.find((o) => o.listingId === storedId || o.offerId === storedId))
+          || groupOffers.find((o) => o.status === "PUBLISHED")
+          || groupOffers[0];
+
+        if (targetOffer?.offerId) {
+          console.log(`[resolveEbayOffer] Recovered offerId=${targetOffer.offerId} (listingId=${targetOffer.listingId}) for inventory_item_group_key ${querySku}`);
+          const docRef = admin.firestore().collection("products").doc(productId);
+          await docRef.update({
+            "crossPostListingIds.ebay": targetOffer.offerId,
+            ebayListingId: targetOffer.listingId || (storedId && /^\d{12}$/.test(storedId) ? storedId : null),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          return { offer: targetOffer, offerId: targetOffer.offerId, sku: targetOffer.sku || querySku, inventoryItemGroupKey: querySku };
+        }
+      }
+    } catch (groupErr) {
+      console.warn(`[resolveEbayOffer] Error querying offers for groupKey ${querySku}:`, groupErr.message);
     }
   }
 
@@ -165,7 +194,7 @@ async function resolveEbayOffer(uid, product, productId) {
     const allOffersRes = await ebayRequest(
       uid,
       "GET",
-      `/sell/inventory/v1/offer?format=FIXED_PRICE&marketplace_id=${MARKETPLACE_ID}&limit=100`
+      `/sell/inventory/v1/offer?format=FIXED_PRICE&limit=100`
     );
     const allOffers = allOffersRes?.offers || [];
     if (allOffers.length > 0) {
@@ -194,14 +223,49 @@ async function resolveEbayOffer(uid, product, productId) {
   );
 }
 
-// Auto-pick a category from the title via the Taxonomy API
+// Fetch an application-level access token (Client Credentials grant).
+// The Taxonomy API is a public lookup API that only needs an app token —
+// it does NOT require a user-scoped OAuth token and has no dedicated user scope.
+async function getEbayAppToken() {
+  const creds = `${EBAY_CLIENT_ID.value()}:${EBAY_CLIENT_SECRET.value()}`;
+  const host = ebayApiHost();
+  const response = await fetch(`https://${host}/identity/v1/oauth2/token`, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${Buffer.from(creds).toString("base64")}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      scope: "https://api.ebay.com/oauth/api_scope",
+    }).toString(),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || !json.access_token) {
+    throw new Error(`eBay app token error (${response.status}): ${json.error_description ?? JSON.stringify(json)}`);
+  }
+  return json.access_token;
+}
+
+// Auto-pick a category from the title via the Taxonomy API (uses app token, no user scope needed)
 async function suggestCategoryId(uid, title) {
-  const tree = await ebayRequest(
-    uid, "GET", `/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=${MARKETPLACE_ID}`
-  );
+  const appToken = await getEbayAppToken();
+  const host = ebayApiHost();
+
+  async function taxonomyFetch(path) {
+    const res = await fetch(`https://${host}${path}`, {
+      headers: { Authorization: `Bearer ${appToken}`, Accept: "application/json" },
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(`eBay taxonomy ${path} failed (${res.status}): ${detail?.errors?.[0]?.message ?? JSON.stringify(detail)}`);
+    }
+    return res.json();
+  }
+
+  const tree = await taxonomyFetch(`/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=${MARKETPLACE_ID}`);
   const treeId = tree?.categoryTreeId ?? "0";
-  const suggestions = await ebayRequest(
-    uid, "GET",
+  const suggestions = await taxonomyFetch(
     `/commerce/taxonomy/v1/category_tree/${treeId}/get_category_suggestions?q=${encodeURIComponent(title.slice(0, 80))}`
   );
   const categoryId = suggestions?.categorySuggestions?.[0]?.category?.categoryId;
@@ -211,7 +275,7 @@ async function suggestCategoryId(uid, title) {
 
 // One-click list a product draft on eBay: inventory item → offer → publish
 exports.dropshipEbayCreateListing = onCall(
-  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME], timeoutSeconds: 120, memory: "512MiB" },
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 120, memory: "512MiB" },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
@@ -352,12 +416,12 @@ exports.dropshipEbayCreateListing = onCall(
 
 // Delete an eBay listing: withdraw offer and delete inventory item
 exports.ebayDeleteListing = onCall(
-  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME], timeoutSeconds: 60, memory: "256MiB" },
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 60, memory: "256MiB" },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
 
-    const { productId } = request.data;
+    const { productId, force } = request.data;
     if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
 
     const db = admin.firestore();
@@ -368,30 +432,56 @@ exports.ebayDeleteListing = onCall(
     const product = snap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
 
-    const offerId = product.crossPostListingIds?.ebay;
-    if (!offerId) {
+    const storedId = product.crossPostListingIds?.ebay;
+    if (!storedId) {
       throw new HttpsError("failed-precondition", "No eBay listing found.");
     }
 
-    try {
-      // End the listing on eBay (this deletes/withdraws it)
+    // force=true: user has confirmed they already ended the listing on eBay manually —
+    // skip the API call entirely and just clear the Firestore record.
+    if (!force) {
       try {
-        await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`, { status: "UNPUBLISHED" });
-      } catch (endErr) {
-        // 404 = listing doesn't exist (already deleted) — ok to continue
-        if (!endErr.ebayErrors?.some((err) => err.errorId === 404)) {
-          throw endErr;
+        // Resolve to a real offer ID (handles legacy listing IDs stored in crossPostListingIds.ebay)
+        let offerId;
+        try {
+          const resolved = await resolveEbayOffer(uid, product, productId);
+          offerId = resolved.offerId;
+        } catch (resolveErr) {
+          // Can't find an offer — surface this to the client so the UI can offer the manual fallback
+          throw new HttpsError(
+            "not-found",
+            `No eBay offer found for this listing (stored ID: ${storedId}). If you have already ended the listing manually on eBay, you can mark it as removed here.`
+          );
         }
-      }
-    } catch (e) {
-      const errorMsg = e.ebayErrors?.map((err) => `${err.errorId}: ${err.message}`).join("; ") || e.message;
-      throw new HttpsError("internal", `Failed to delete eBay listing: ${errorMsg}`);
-    }
 
-    // 3. Clear eBay fields from product
+        if (offerId) {
+          // Withdraw the offer — ends the live listing on eBay but keeps
+          // the offer record in Seller Hub so the seller has a history of it.
+          try {
+            await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/withdraw`);
+          } catch (withdrawErr) {
+            // 25702 = offer not published, nothing to withdraw — ok to continue
+            const code = withdrawErr.ebayErrors?.[0]?.errorId;
+            if (code !== 25702 && code !== 404) {
+              throw withdrawErr;
+            }
+          }
+        }
+      } catch (e) {
+        if (e instanceof HttpsError) throw e;
+        const errorMsg = e.ebayErrors?.map((err) => `${err.errorId}: ${err.message}`).join("; ") || e.message;
+        throw new HttpsError("internal", `Failed to delete eBay listing: ${errorMsg}`);
+      }
+    } // end if (!force)
+
+    // Clear all eBay fields from product
     await docRef.update({
       "crossPostStatus.ebay": admin.firestore.FieldValue.delete(),
       "crossPostListingIds.ebay": admin.firestore.FieldValue.delete(),
+      ebayListingId: admin.firestore.FieldValue.delete(),
+      ebayListingUrl: admin.firestore.FieldValue.delete(),
+      ebayHasVariations: admin.firestore.FieldValue.delete(),
+      ebayLastSyncedAt: admin.firestore.FieldValue.delete(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
@@ -401,6 +491,7 @@ exports.ebayDeleteListing = onCall(
       product.variants.forEach((v, index) => {
         batch.update(docRef, {
           [`variants.${index}.crossPostStatus.ebay`]: admin.firestore.FieldValue.delete(),
+          [`variants.${index}.ebayVariantSku`]: admin.firestore.FieldValue.delete(),
         });
       });
       await batch.commit();
@@ -412,7 +503,7 @@ exports.ebayDeleteListing = onCall(
 
 // Fetch current eBay listing details for comparison/sync
 exports.ebayGetListingDetails = onCall(
-  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME], timeoutSeconds: 30, memory: "256MiB" },
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 30, memory: "256MiB" },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
@@ -470,7 +561,7 @@ exports.ebayGetListingDetails = onCall(
 
 // Sync bidirectional: apply chosen version (wonni or ebay) to the other platform
 exports.ebaySyncListing = onCall(
-  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME], timeoutSeconds: 60, memory: "256MiB" },
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 60, memory: "256MiB" },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
@@ -602,7 +693,7 @@ exports.ebaySyncListing = onCall(
 
 // Update an eBay listing with current Wonni product data (title, description, price, images, variations/quantities, shipping)
 exports.ebayUpdateListing = onCall(
-  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME], timeoutSeconds: 60, memory: "256MiB" },
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 60, memory: "256MiB" },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
@@ -703,3 +794,121 @@ exports.ebayUpdateListing = onCall(
     }
   }
 );
+
+// Pull sync: check eBay listing drift against local Wonni product
+exports.ebayPullSync = onCall(
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 30, memory: "256MiB" },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+    const { productId } = request.data;
+    if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
+
+    const db = admin.firestore();
+    const snap = await db.collection("products").doc(productId).get();
+    if (!snap.exists) throw new HttpsError("not-found", "Product not found.");
+
+    const product = snap.data();
+    if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
+
+    try {
+      const { offer, sku } = await resolveEbayOffer(uid, product, productId);
+      let inventory = null;
+      if (sku) {
+        try {
+          inventory = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
+        } catch (_) {}
+      }
+
+      const ebayTitle = offer?.title || inventory?.product?.title || "";
+      const ebayPrice = offer?.pricingSummary?.price?.value
+        ? parseFloat(offer.pricingSummary.price.value)
+        : (offer?.pricingSummary?.minimumAdvertisedPrice?.value ? parseFloat(offer.pricingSummary.minimumAdvertisedPrice.value) : null);
+      const ebayQuantity = inventory?.availability?.shipToLocationAvailability?.quantity ?? (offer?.availableQuantity ?? 0);
+
+      const localTitle = product.title ?? "";
+      const localPrice = product.listingPrice ?? computeEbaySellPrice(product);
+      const localQuantity = product.variants?.reduce((sum, v) => sum + (v.quantity ?? 0), 0) ?? (product.quantity ?? 1);
+
+      const diff = [];
+      if (ebayTitle && ebayTitle !== localTitle) {
+        diff.push({ field: "title", local: localTitle, ebay: ebayTitle });
+      }
+      if (ebayPrice != null && Math.abs(ebayPrice - localPrice) > 0.01) {
+        diff.push({ field: "price", local: localPrice, ebay: ebayPrice });
+      }
+      if (ebayQuantity != null && ebayQuantity !== localQuantity) {
+        diff.push({ field: "quantity", local: localQuantity, ebay: ebayQuantity });
+      }
+
+      const hasDrift = diff.length > 0;
+
+      return {
+        hasDrift,
+        diff,
+        ebayData: {
+          title: ebayTitle,
+          price: ebayPrice,
+          quantity: ebayQuantity,
+          offerId: offer?.offerId,
+          listingId: offer?.listingId,
+        },
+        lastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+    } catch (e) {
+      console.warn("eBay pull sync check error:", e.message);
+      return { hasDrift: false, diff: [], error: e.message };
+    }
+  }
+);
+
+// Import pull sync changes into local Wonni product
+exports.ebayImportPullSync = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+  const { productId, fields } = request.data;
+  if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
+  if (!fields || typeof fields !== "object") throw new HttpsError("invalid-argument", "Missing fields to update.");
+
+  const db = admin.firestore();
+  const docRef = db.collection("products").doc(productId);
+  const snap = await docRef.get();
+  if (!snap.exists) throw new HttpsError("not-found", "Product not found.");
+
+  const product = snap.data();
+  if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
+
+  const updatePayload = {
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    ebayLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  if (fields.title) updatePayload.title = fields.title;
+  if (typeof fields.price === "number") updatePayload.listingPrice = fields.price;
+  if (typeof fields.quantity === "number") {
+    if (product.ebayHasVariations && Array.isArray(product.variants)) {
+      const batch = db.batch();
+      product.variants.forEach((v, index) => {
+        batch.update(docRef, { [`variants.${index}.quantity`]: Math.max(0, fields.quantity) });
+      });
+      await batch.commit();
+    } else {
+      updatePayload.quantity = fields.quantity;
+    }
+  }
+
+  await docRef.update(updatePayload);
+  return { success: true };
+});
+
+module.exports = {
+  dropshipEbayCreateListing: exports.dropshipEbayCreateListing,
+  ebayDeleteListing: exports.ebayDeleteListing,
+  ebayUpdateListing: exports.ebayUpdateListing,
+  ebayGetListingDetails: exports.ebayGetListingDetails,
+  ebaySyncListing: exports.ebaySyncListing,
+  ebayPullSync: exports.ebayPullSync,
+  ebayImportPullSync: exports.ebayImportPullSync,
+};

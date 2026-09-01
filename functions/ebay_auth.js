@@ -4,7 +4,7 @@ const admin = require("firebase-admin");
 
 const EBAY_CLIENT_ID = defineSecret("EBAY_CLIENT_ID");
 const EBAY_CLIENT_SECRET = defineSecret("EBAY_CLIENT_SECRET");
-const EBAY_RU_NAME = defineSecret("EBAY_RU_NAME"); // eBay "RuName" (redirect_uri value)
+const EBAY_RU_NAME = defineString("EBAY_RU_NAME"); // eBay "RuName" (redirect_uri value) — NOT secret, just config
 const EBAY_ENV = defineString("EBAY_ENV", { default: "sandbox" }); // "sandbox" | "production"
 
 // Scopes requested when *refreshing* an access token. eBay's refresh_token
@@ -68,7 +68,7 @@ async function tokenRequest(bodyParams) {
 
 // Exchange authorization code for access + refresh tokens
 exports.dropshipEbayExchangeToken = onCall(
-  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_RU_NAME] },
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET] },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");

@@ -10,7 +10,15 @@ const { identifyProductsInImage } = require("./identify_products");
 const { placeAliexpressOrder, confirmTiktokShipment, pollAliexpressTracking } = require("./aliexpress_order");
 const { tiktokExchangeToken } = require("./tiktok_auth");
 const { dropshipEbayExchangeToken } = require("./ebay_auth");
-const { dropshipEbayCreateListing, ebayDeleteListing, ebayUpdateListing, ebayGetListingDetails, ebaySyncListing } = require("./ebay_listing");
+const {
+  dropshipEbayCreateListing,
+  ebayDeleteListing,
+  ebayUpdateListing,
+  ebayGetListingDetails,
+  ebaySyncListing,
+  ebayPullSync,
+  ebayImportPullSync,
+} = require("./ebay_listing");
 const { recoverEbayOfferIds } = require("./recover_ebay_offer_ids");
 const { tiktokCreateListing, tiktokUpdateListing, tiktokDeleteListing, getTiktokCategories } = require("./tiktok_listing");
 const { etsyExchangeToken } = require("./etsy_auth");
@@ -26,6 +34,7 @@ module.exports = {
   aliexpressExchangeToken,
   tiktokExchangeToken,
   dropshipEbayExchangeToken,
+  ebayExchangeToken: dropshipEbayExchangeToken,
   etsyExchangeToken,
 
   // Products
@@ -42,6 +51,7 @@ module.exports = {
   tiktokCreateListing,
   tiktokUpdateListing,
   tiktokDeleteListing,
+  getTiktokCategories,
 
   // eBay listings
   dropshipEbayCreateListing,
@@ -51,6 +61,8 @@ module.exports = {
   ebayUpdateListing,
   ebayGetListingDetails,
   ebaySyncListing,
+  ebayPullSync,
+  ebayImportPullSync,
   recoverEbayOfferIds,
 
   // Etsy listings
