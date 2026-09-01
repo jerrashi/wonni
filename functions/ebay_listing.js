@@ -165,7 +165,7 @@ async function resolveEbayOffer(uid, product, productId) {
     const allOffersRes = await ebayRequest(
       uid,
       "GET",
-      `/sell/inventory/v1/offer?marketplace_id=${MARKETPLACE_ID}&limit=100`
+      `/sell/inventory/v1/offer?format=FIXED_PRICE&marketplace_id=${MARKETPLACE_ID}&limit=100`
     );
     const allOffers = allOffersRes?.offers || [];
     if (allOffers.length > 0) {
@@ -218,8 +218,6 @@ exports.dropshipEbayCreateListing = onCall(
 
     const { productId, sellPrice, quantity, credentialSet } = request.data;
     if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
-    // credentialSet is passed by web app but not used in the unified backend yet;
-    // both iOS and web currently route through the same eBay credentials
 
     const db = admin.firestore();
     const docRef = db.collection("products").doc(productId);
@@ -241,7 +239,7 @@ exports.dropshipEbayCreateListing = onCall(
 
     const [merchantLocationKey, listingPolicies, categoryId] = await Promise.all([
       getMerchantLocationKey(uid),
-      getListingPolicies(uid),
+      getListingPolicies(uid, product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays),
       suggestCategoryId(uid, title),
     ]);
 
@@ -259,56 +257,57 @@ exports.dropshipEbayCreateListing = onCall(
       // Multi-variant: include variations with individual SKUs and prices
       inventoryPayload.variations = variationData.variations.map((v) => ({
         sku: v.sku,
-        price: v.price ? { value: v.price.toFixed(2), currency: "USD" } : undefined,
-        quantity: v.quantity,
+        price: v.price ? { value: Number(v.price).toFixed(2), currency: "USD" } : undefined,
+        quantity: typeof v.quantity === "number" ? Math.max(0, v.quantity) : 0,
         itemSpecifics: Object.entries(v.itemSpecifics).reduce((acc, [key, val]) => {
-          acc[key] = [val]; // eBay expects array of strings
+          acc[key] = Array.isArray(val) ? val : [val];
           return acc;
         }, {}),
       }));
-      // Add item-specific names (aspect names) for variation dimensions
+      // Put item specifics (option names and possible values) into aspects
       inventoryPayload.product.aspects = variationData.itemSpecifics;
     } else {
-      // Single variant: use simple availability
-      const qty = Number.isInteger(quantity) && quantity > 0 ? quantity : 1;
-      inventoryPayload.availability = { shipToLocationAvailability: { quantity: qty } };
+      // Single-variant
+      const itemQty = typeof quantity === "number" && quantity > 0
+        ? quantity
+        : (typeof product.quantity === "number" && product.quantity > 0 ? product.quantity : 1);
+      inventoryPayload.availability = { shipToLocationAvailability: { quantity: itemQty } };
     }
 
     await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, inventoryPayload);
 
     // 2. Offer — reuse existing unpublished offer for this SKU if one exists
     let offerId;
-    try {
-      const offerPayload = {
-        sku,
-        marketplaceId: MARKETPLACE_ID,
-        format: "FIXED_PRICE",
-        categoryId,
-        listingDescription: description,
-        listingPolicies,
-        merchantLocationKey,
+    const offerPayload = {
+      sku,
+      marketplaceId: MARKETPLACE_ID,
+      format: "FIXED_PRICE",
+      availableQuantity: hasVariations ? 0 : (typeof quantity === "number" ? quantity : (product.quantity ?? 1)),
+      categoryId,
+      listingDescription: description,
+      listingPolicies,
+      merchantLocationKey,
+    };
+
+    if (hasVariations) {
+      // Multi-variant pricing: each SKU gets its own price from the variations data
+      offerPayload.pricingSummary = {
+        priceType: "FIXED_PRICE",
+        minimumAdvertisedPrice: { value: basePrice.toFixed(2), currency: "USD" },
       };
+      offerPayload.variations = variationData.variations.map((v) => ({
+        sku: v.sku,
+        price: { value: (v.price ?? basePrice).toFixed(2), currency: "USD" },
+        availableQuantity: typeof v.quantity === "number" ? Math.max(0, v.quantity) : 0,
+      }));
+    } else {
+      // Single-variant pricing
+      offerPayload.pricingSummary = { price: { value: basePrice.toFixed(2), currency: "USD" } };
+    }
 
-      if (hasVariations) {
-        // Multi-variant pricing: each SKU gets its own price from the variations data
-        offerPayload.pricingSummary = {
-          priceType: "FIXED_PRICE",
-          minimumAdvertisedPrice: { value: basePrice.toFixed(2), currency: "USD" },
-        };
-        offerPayload.variations = variationData.variations.map((v) => ({
-          sku: v.sku,
-          price: { value: (v.price ?? basePrice).toFixed(2), currency: "USD" },
-          availableQuantity: v.quantity,
-        }));
-      } else {
-        // Single variant
-        const qty = Number.isInteger(quantity) && quantity > 0 ? quantity : 1;
-        offerPayload.availableQuantity = qty;
-        offerPayload.pricingSummary = { price: { value: basePrice.toFixed(2), currency: "USD" } };
-      }
-
+    try {
       const created = await ebayRequest(uid, "POST", "/sell/inventory/v1/offer", offerPayload);
-      offerId = created?.offerId;
+      offerId = created.offerId;
     } catch (e) {
       // 25002 = offer already exists for this SKU/marketplace
       if (e.ebayErrors?.some((err) => err.errorId === 25002)) {
@@ -316,32 +315,30 @@ exports.dropshipEbayCreateListing = onCall(
           uid, "GET", `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}&marketplace_id=${MARKETPLACE_ID}`
         );
         offerId = existing?.offers?.[0]?.offerId;
+        if (!offerId) throw e;
       } else {
-        throw new HttpsError("internal", e.message);
+        throw e;
       }
     }
-    if (!offerId) throw new HttpsError("internal", "Could not create or find eBay offer.");
 
-    // 3. Publish
-    let listingId;
-    try {
-      const published = await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`);
-      listingId = published?.listingId;
-    } catch (e) {
-      throw new HttpsError("internal", e.message);
-    }
+    // 3. Publish offer → creates the live eBay listing
+    const published = await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`);
+    const listingId = published?.listingId ?? offerId;
 
+    // 4. Update Firestore product document
     const updatePayload = {
-      "crossPostListingIds.ebay": offerId ?? null,
       "crossPostStatus.ebay": "active",
+      "crossPostListingIds.ebay": offerId,
+      ebayListingId: listingId,
+      ebayHasVariations: hasVariations,
+      ebayLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
-    // If multi-variant, mark all active variants as posted
-    if (hasVariations) {
+    // If multi-variant, also tag variants with their eBay SKUs
+    if (hasVariations && Array.isArray(product.variants)) {
       const variantUpdates = {};
       variationData.variations.forEach((v, index) => {
-        variantUpdates[`variants.${index}.crossPostStatus.ebay`] = "active";
         variantUpdates[`variants.${index}.ebayVariantSku`] = v.sku;
       });
       Object.assign(updatePayload, variantUpdates);
@@ -349,7 +346,7 @@ exports.dropshipEbayCreateListing = onCall(
 
     await docRef.update(updatePayload);
 
-    return { listingId, offerId, price: basePrice, categoryId, hasVariations };
+    return { listingId, offerId, alreadyListed: false, hasVariations };
   }
 );
 
