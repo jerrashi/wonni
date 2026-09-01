@@ -60,12 +60,17 @@
     const statusText = document.getElementById("status-text");
     const subText = document.getElementById("sub-text");
 
+    // Where the dashboard that opened this popup is served. Target postMessage
+    // at this origin (not "*") so the one-time OAuth code can't leak to an
+    // unexpected opener, and ignore inbound messages from any other origin.
+    const TRUSTED_OPENER_ORIGIN = "https://wonni-app.web.app";
+
     if (error) {
       statusText.innerText = "Connection Failed";
       subText.innerText = error;
       if (window.opener) {
         try {
-          window.opener.postMessage({ type: "ETSY_AUTH_CALLBACK", error, state }, window.location.origin);
+          window.opener.postMessage({ type: "ETSY_AUTH_CALLBACK", error, state }, TRUSTED_OPENER_ORIGIN);
         } catch (_) {}
       } else {
         window.location.href = 'wonni://oauth/etsy?error=' + encodeURIComponent(error);
@@ -82,6 +87,7 @@
         subText.innerText = "Finalizing connection with your dashboard…";
 
         window.addEventListener("message", (event) => {
+          if (event.origin !== TRUSTED_OPENER_ORIGIN) return;
           if (event.data?.type === "ETSY_AUTH_SUCCESS") {
             statusText.innerText = "✓ Etsy Connected!";
             subText.innerText = event.data.shopName
@@ -95,7 +101,7 @@
         });
 
         try {
-          window.opener.postMessage({ type: "ETSY_AUTH_CALLBACK", code, state }, "*");
+          window.opener.postMessage({ type: "ETSY_AUTH_CALLBACK", code, state }, TRUSTED_OPENER_ORIGIN);
           notifiedOpener = true;
         } catch (_) {}
       }
