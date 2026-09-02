@@ -78,16 +78,26 @@ Cloud Function `ebayCreateListing` (= `dropshipEbayCreateListing`) in
   `bulk_migrate_listing`, hex offerId, SKU/group search); backfills
   `ebayOfferId`.
 
-**Aspect + condition fill (2026-09-02, pending deploy):** the create path now
-proactively fills eBay category-required item aspects (`getCategoryAspects` +
-`buildProductAspects` + `resolveBrand`/`KNOWN_BRANDS`) and resolves a
-category-valid condition from `product.condition`/`mercariCondition`
-(`getAllowedConditionIds` + `resolveCondition`, was hardcoded `"NEW"`).
-`publishWithRecovery` retries on missing-aspect / rejected-condition publish
-errors. Ported from the nested `wonni/functions/ebay_listing.js`. Next: the
-shared field-fill pipeline — `~/.claude/plans/ebay-listing-field-pipeline.md`
-(one batched Gemini call for what eBay can't supply, write-back caching,
-opt-in Gemini, web `condition` field).
+**Aspect + condition + value fill (2026-09-02, pending deploy):** the create
+path proactively fills eBay category-required item aspects
+(`getCategoryAspects` + `buildProductAspects` + `resolveBrand`/`KNOWN_BRANDS`),
+resolves a category-valid condition (`getAllowedConditionIds` +
+`resolveCondition`, was hardcoded `"NEW"`), and normalizes variation values
+against the category's live value list (`normalizeVariationValue` —
+"XXL"→"2XL" for apparel Size, which is FREE_TEXT but publish-enforced).
+`publishWithRecovery` retries missing-aspect / rejected-condition errors.
+Pre-flight fails cleanly for off-list `SELECTION_ONLY` values.
+
+**Shared field-fill pipeline (2026-09-02, pending deploy):**
+`functions/listing_fields.js` — `resolveListingFields(product)` makes ONE
+`gemini-flash-lite` call to fill blank shared fields (description, brand,
+tags, condition, category hint, itemSpecifics), persisted to the doc.
+`aiAutofillListing` callable = the "✨ AI autofill" button on ProductDetail;
+`fillBlankFieldsInline` = post-time gap-fill inside `dropshipEbayCreateListing`.
+Import-time auto Gemini call removed (now opt-in). Canonical `product.condition`
+field added to ProductDetail (mirrors `mercariCondition`). Plan:
+`~/.claude/plans/ebay-listing-field-pipeline.md`. Left: iOS onto the shared
+`ebayCreateListing` + autofill button (deferred).
 
 **Deferred:** `ebayUpdateListing` / `ebaySyncListing` (the "apply edits" /
 drift-sync path) still use the old malformed multi-variant `variations`
