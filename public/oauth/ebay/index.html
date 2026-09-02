@@ -137,10 +137,9 @@
           statusText.innerText = "Exchanging eBay Token…";
           subText.innerText = "Linking your eBay account…";
 
-          httpsCallable(functions, "dropshipEbayExchangeToken")({
+          httpsCallable(functions, "ebayExchangeToken")({
             code,
             state,
-            credentialSet: "web",
           }).then((res) => {
             statusText.innerText = "✓ eBay Connected!";
             const username = res.data?.connectedUsername || res.data?.username;
