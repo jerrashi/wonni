@@ -483,6 +483,32 @@ function fillValueForAspect(name, categoryAspects, brand, title = "", optionValu
   return [brand && brand !== "Generic" && brand !== "Unbranded" ? brand : "Unbranded"];
 }
 
+// Map a user's variation value (e.g. "XXL", "Small") to the category's
+// controlled value ("2XL", "S"). eBay rejects off-list values on
+// SELECTION_ONLY aspects with err 25129. Returns the input unchanged when the
+// category has no controlled list or nothing matches.
+const SIZE_ALIASES = {
+  xxs: "XXS", xs: "XS", s: "S", m: "M", l: "L", xl: "XL",
+  xxl: "2XL", xxxl: "3XL", xxxxl: "4XL", xxxxxl: "5XL",
+  "2xl": "2XL", "3xl": "3XL", "4xl": "4XL", "5xl": "5XL",
+  small: "S", medium: "M", large: "L", "extra large": "XL", "x-large": "XL",
+  "xx-large": "2XL", "xxx-large": "3XL", "one size": "One Size",
+};
+function normalizeVariationValue(rawValue, allowedValues) {
+  const v = String(rawValue ?? "").trim();
+  if (!allowedValues || !allowedValues.length || !v) return v || rawValue;
+  const ci = (s) => String(s).toLowerCase();
+  const exact = allowedValues.find((a) => ci(a) === ci(v));
+  if (exact) return exact;
+  const aliased = SIZE_ALIASES[ci(v)];
+  if (aliased) {
+    const hit = allowedValues.find((a) => ci(a) === ci(aliased));
+    if (hit) return hit;
+  }
+  const partial = allowedValues.find((a) => ci(a).includes(ci(v)) || ci(v).includes(ci(a)));
+  return partial || v;
+}
+
 // product.aspects satisfying every required aspect (+ Size Type / Department
 // when the category has them) so the publish validates.
 function buildProductAspects(categoryAspects, brand, title = "", optionValues = {}, customAspects = {}) {
@@ -496,18 +522,20 @@ function buildProductAspects(categoryAspects, brand, title = "", optionValues = 
   return aspects;
 }
 
-// Aspect name(s) eBay flagged missing/required in a failed publish. Handles
-// "The item specific X is missing." and "X (40001) is a required field.",
-// plus the aspect name echoed in parameter "3". Excludes grading fields —
-// those route to a condition retry, not a fabricated value.
+// Aspect name(s) eBay flagged as *missing/required* in a failed publish.
+// Only "is missing" / "is a required field" errors — NOT "is not a valid
+// value" (25129), whose parameters carry a rejected VALUE, not an aspect
+// name (that's handled proactively by normalizeVariationValue). Excludes
+// grading fields — those route to a condition retry, not a fabricated value.
 function extractMissingAspects(ebayErrors = []) {
   const names = new Set();
   for (const err of ebayErrors) {
-    const m1 = (err.message || "").match(/item specific (.+?) is missing/i);
+    const msg = err.message || "";
+    if (!/is missing|is a required field|required aspect/i.test(msg)) continue;
+    const m1 = msg.match(/item specific (.+?) is missing/i);
     if (m1?.[1]) names.add(m1[1].trim());
-    const m2 = (err.message || "").match(/^(.+?)\s*\(\d+\)\s*is a required field/i);
+    const m2 = msg.match(/\b([A-Z][\w /-]*?)\s*(?:\(\d+\))?\s*is a required field/i);
     if (m2?.[1] && !/^(professional grader|grade)$/i.test(m2[1].trim())) names.add(m2[1].trim());
-    for (const p of err.parameters || []) if (p.name === "3" && p.value) names.add(String(p.value).trim());
   }
   return [...names];
 }
@@ -642,10 +670,10 @@ async function postSingleVariant(ctx) {
   const itemQty = typeof product.quantity === "number" && product.quantity > 0 ? product.quantity : 1;
   const productAspects = buildProductAspects(categoryAspects, brand, title, {}, product.ebayAspects ?? {});
 
-  const putItem = ({ addedAspects = {}, condition = conditionEnum } = {}) =>
+  const putItem = ({ addedAspects = {}, condition } = {}) =>
     ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
       product: { ...toEbayInventoryProduct(product, { imageLimit: 12, title }), aspects: { ...productAspects, ...addedAspects } },
-      condition,
+      condition: condition || conditionEnum,
       packageWeightAndSize: ebayPackageWeightAndSize(product),
       availability: { shipToLocationAvailability: { quantity: itemQty } },
     });
@@ -710,16 +738,37 @@ async function postMultiVariant(ctx) {
     }
   }
 
+  // Per-variation-dimension: map user values to the category's controlled
+  // values ("XXL" → "2XL") so publish doesn't reject them (err 25129). Both
+  // variesBy.specifications and each variant's own value must use the mapped
+  // form and stay aligned.
+  const aspectByName = Object.fromEntries(categoryAspects.map((a) => [a.name.toLowerCase(), a]));
+  const mapOptionValue = (optName, val) => {
+    const meta = aspectByName[String(optName).toLowerCase()];
+    return meta && meta.mode === "SELECTION_ONLY" ? normalizeVariationValue(val, meta.values) : String(val);
+  };
+
   const perVariant = activeVariants.map(({ v, i }) => {
     const sku = v.ebayVariantSku || variantSkuFor(productId, v, i);
     const qty = typeof v.quantity === "number" && v.quantity >= 0 ? Math.floor(v.quantity) : 0;
-    // { "Size": ["M"], "Color": ["Red"] } — eBay wants aspect values as arrays.
+    // { "Size": ["2XL"], "Color": ["Red"] } — mapped + arrays.
     const aspects = Object.entries(v.optionValues ?? {}).reduce((acc, [k, val]) => {
-      acc[k] = Array.isArray(val) ? val : [String(val)];
+      const values = (Array.isArray(val) ? val : [val]).map((x) => mapOptionValue(k, x));
+      acc[k] = values;
       return acc;
     }, {});
     return { variantIndex: i, sku, qty, price: variantPriceOr(v, basePrice), aspects };
   });
+
+  // variesBy values = exactly the (mapped) values the variants actually use,
+  // deduped — so the group's dimension list and the per-variant values align.
+  const variesByValues = {};
+  for (const pv of perVariant) {
+    for (const [k, vals] of Object.entries(pv.aspects)) {
+      (variesByValues[k] ||= new Set());
+      vals.forEach((x) => variesByValues[k].add(x));
+    }
+  }
 
   const sharedProduct = toEbayInventoryProduct(product, { imageLimit: 12, title });
   const packageWeightAndSize = ebayPackageWeightAndSize(product);
@@ -730,10 +779,10 @@ async function postMultiVariant(ctx) {
   const productAspects = buildProductAspects(categoryAspects, brand, title, {}, product.ebayAspects ?? {});
   for (const opt of options) delete productAspects[opt.name];
 
-  const putAllItems = ({ addedAspects = {}, condition = conditionEnum } = {}) => Promise.all(
+  const putAllItems = ({ addedAspects = {}, condition } = {}) => Promise.all(
     perVariant.map((pv) => ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(pv.sku)}`, {
       product: { ...sharedProduct, aspects: { ...productAspects, ...addedAspects, ...pv.aspects } },
-      condition,
+      condition: condition || conditionEnum,
       packageWeightAndSize,
       availability: { shipToLocationAvailability: { quantity: pv.qty } },
     }))
@@ -744,7 +793,10 @@ async function postMultiVariant(ctx) {
     imageUrls: sharedProduct.imageUrls,
     aspects: { ...productAspects, ...addedAspects },
     variesBy: {
-      specifications: options.map((opt) => ({ name: opt.name, values: opt.values || [] })),
+      specifications: options.map((opt) => ({
+        name: opt.name,
+        values: [...(variesByValues[opt.name] || new Set())],
+      })),
     },
     variantSKUs: perVariant.map((pv) => pv.sku),
   });
