@@ -333,34 +333,230 @@ async function getEbayAppToken() {
   return json.access_token;
 }
 
-// Auto-pick a category from the title via the Taxonomy API (uses app token, no user scope needed)
-async function suggestCategoryId(uid, title) {
-  const appToken = await getEbayAppToken();
-  const host = ebayApiHost();
+// App token is valid ~2h; memoize so category + aspect lookups in one post
+// don't each mint a new one.
+let _appTokenCache = { token: null, exp: 0 };
+async function getEbayAppTokenCached() {
+  if (_appTokenCache.token && Date.now() < _appTokenCache.exp) return _appTokenCache.token;
+  const token = await getEbayAppToken();
+  _appTokenCache = { token, exp: Date.now() + 90 * 60 * 1000 };
+  return token;
+}
 
-  async function taxonomyFetch(path) {
-    const res = await fetch(`https://${host}${path}`, {
-      headers: {
-        Authorization: `Bearer ${appToken}`,
-        Accept: "application/json",
-        "Accept-Language": "en-US", // see ebayRestHeaders — undici's `*` default is rejected
-      },
-    });
-    if (!res.ok) {
-      const detail = await res.json().catch(() => ({}));
-      throw new Error(`eBay taxonomy ${path} failed (${res.status}): ${detail?.errors?.[0]?.message ?? JSON.stringify(detail)}`);
-    }
-    return res.json();
+// Taxonomy API is a public lookup — app token, no user scope.
+async function ebayTaxonomyFetch(path) {
+  const appToken = await getEbayAppTokenCached();
+  const res = await fetch(`https://${ebayApiHost()}${path}`, {
+    headers: {
+      Authorization: `Bearer ${appToken}`,
+      Accept: "application/json",
+      "Accept-Language": "en-US", // see ebayRestHeaders — undici's `*` default is rejected
+    },
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(`eBay taxonomy ${path} failed (${res.status}): ${detail?.errors?.[0]?.message ?? JSON.stringify(detail)}`);
   }
+  return res.json();
+}
 
-  const tree = await taxonomyFetch(`/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=${MARKETPLACE_ID}`);
+// Auto-pick a leaf category from the title (+ the Gemini category leaf as a
+// query hint when present — no extra Gemini call, just uses an existing field).
+async function suggestCategoryId(uid, title, geminiCategory) {
+  let query = title || "";
+  if (geminiCategory) {
+    const leaf = String(geminiCategory).split(">").pop().trim();
+    if (leaf && !query.toLowerCase().includes(leaf.toLowerCase())) query = `${leaf} ${query}`;
+  }
+  query = query.trim().slice(0, 80);
+
+  const tree = await ebayTaxonomyFetch(`/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=${MARKETPLACE_ID}`);
   const treeId = tree?.categoryTreeId ?? "0";
-  const suggestions = await taxonomyFetch(
-    `/commerce/taxonomy/v1/category_tree/${treeId}/get_category_suggestions?q=${encodeURIComponent(title.slice(0, 80))}`
+  const suggestions = await ebayTaxonomyFetch(
+    `/commerce/taxonomy/v1/category_tree/${treeId}/get_category_suggestions?q=${encodeURIComponent(query)}`
   );
   const categoryId = suggestions?.categorySuggestions?.[0]?.category?.categoryId;
   if (!categoryId) throw new HttpsError("not-found", "eBay could not suggest a category for this title.");
   return categoryId;
+}
+
+// All item aspects for a category: [{ name, mode, values, required }].
+// mode = FREE_TEXT | SELECTION_ONLY. Returns [] on failure (the reactive
+// publish-retry is the safety net).
+async function getCategoryAspects(categoryId) {
+  try {
+    const data = await ebayTaxonomyFetch(
+      `/commerce/taxonomy/v1/category_tree/0/get_item_aspects_for_category?category_id=${encodeURIComponent(categoryId)}`
+    );
+    return (data.aspects || []).map((a) => ({
+      name: a.localizedAspectName,
+      mode: a.aspectConstraint ? a.aspectConstraint.aspectMode : "FREE_TEXT",
+      values: (a.aspectValues || []).map((v) => v.localizedValue),
+      required: !!(a.aspectConstraint && a.aspectConstraint.aspectRequired),
+    }));
+  } catch (err) {
+    console.warn(`[getCategoryAspects] ${err.message}`);
+    return [];
+  }
+}
+
+// Condition IDs a category accepts (Sell Metadata API, user token).
+// null on failure → caller keeps its mapped condition.
+async function getAllowedConditionIds(uid, categoryId) {
+  try {
+    const filter = encodeURIComponent(`categoryIds:{${categoryId}}`);
+    const data = await ebayRequest(uid, "GET", `/sell/metadata/v1/marketplace/${MARKETPLACE_ID}/get_item_condition_policies?filter=${filter}`);
+    const policy = (data?.itemConditionPolicies || [])[0];
+    if (!policy) return null;
+    return (policy.itemConditions || []).map((c) => String(c.conditionId));
+  } catch (err) {
+    console.warn(`[getAllowedConditionIds] ${err.message}`);
+    return null;
+  }
+}
+
+// ---- item aspects: proactive fill + reactive publish-error recovery --------
+
+const KNOWN_BRANDS = [
+  "BTS", "BT21", "BLACKPINK", "NewJeans", "TWICE", "Stray Kids", "SEVENTEEN",
+  "TXT", "TOMORROW X TOGETHER", "ENHYPEN", "LE SSERAFIM", "IVE", "aespa",
+  "NCT", "NCT 127", "NCT DREAM", "ATEEZ", "ITZY", "(G)I-DLE", "Red Velvet",
+  "EXO", "SHINee", "IU", "ZEROBASEONE", "BOYNEXTDOOR", "RIIZE", "TWS",
+  "Sanrio", "Hello Kitty", "Kuromi", "Cinnamoroll", "My Melody", "Pochacco",
+  "Pokemon", "Nintendo", "Disney", "Line Friends", "Kakao Friends", "Pop Mart",
+  "Nike", "Adidas", "Jordan", "Supreme", "Stussy", "Fear of God", "Essentials",
+];
+
+function resolveBrand(product = {}) {
+  const explicit = (product.brand || "").trim();
+  if (explicit && explicit !== "Generic") return explicit;
+  if ((product.artistName || "").trim()) return product.artistName.trim();
+  const title = product.title || "";
+  for (const brand of KNOWN_BRANDS) {
+    const re = new RegExp(`\\b${brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    if (re.test(title)) return brand;
+  }
+  if ((product.aiSuggestedBrand || "").trim()) return product.aiSuggestedBrand.trim();
+  return "Unbranded";
+}
+
+function findMatchingAspectValue(aspectMeta, title = "", optionValues = {}) {
+  for (const [optName, optVal] of Object.entries(optionValues)) {
+    if (typeof optVal === "string" && optVal.trim()) {
+      if (optName.toLowerCase() === aspectMeta.name.toLowerCase()) return optVal.trim();
+      const match = (aspectMeta.values || []).find((v) => v.toLowerCase() === optVal.toLowerCase());
+      if (match) return match;
+    }
+  }
+  const a = aspectMeta.name.toLowerCase();
+  if (a === "size type") return "Regular";
+  if (a === "department") {
+    if (/\b(women|women's|womens|ladies)\b/i.test(title)) return "Women";
+    if (/\b(men|men's|mens)\b/i.test(title)) return "Men";
+    if (/\b(kids|youth|child)\b/i.test(title)) return "Kids";
+    return "Unisex Adults";
+  }
+  if (a === "size") {
+    const m = title.match(/\b(XS|S|M|L|XL|2XL|3XL|Small|Medium|Large|X-Large|XX-Large)\b/i);
+    if (m) {
+      const s = m[1].toUpperCase();
+      return { SMALL: "S", MEDIUM: "M", LARGE: "L", "X-LARGE": "XL", "XX-LARGE": "2XL" }[s] || s;
+    }
+  }
+  if (a === "color") {
+    const m = title.match(/\b(Black|White|Red|Blue|Navy|Green|Yellow|Pink|Purple|Orange|Grey|Gray|Brown|Beige|Gold|Silver)\b/i);
+    if (m) return m[1];
+  }
+  for (const val of aspectMeta.values || []) {
+    if (val.length >= 3 && new RegExp(`\\b${val.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(title)) return val;
+  }
+  return null;
+}
+
+function fillValueForAspect(name, categoryAspects, brand, title = "", optionValues = {}) {
+  const meta = categoryAspects.find((a) => a.name === name);
+  if (meta) {
+    const matched = findMatchingAspectValue(meta, title, optionValues);
+    if (matched) return [matched];
+    if (meta.mode === "SELECTION_ONLY" && meta.values.length > 0) return [meta.values[0]];
+  }
+  return [brand && brand !== "Generic" && brand !== "Unbranded" ? brand : "Unbranded"];
+}
+
+// product.aspects satisfying every required aspect (+ Size Type / Department
+// when the category has them) so the publish validates.
+function buildProductAspects(categoryAspects, brand, title = "", optionValues = {}, customAspects = {}) {
+  const aspects = { ...customAspects };
+  aspects.Brand = [brand && brand !== "Generic" ? brand : "Unbranded"];
+  for (const aspect of categoryAspects) {
+    if (aspects[aspect.name]) continue;
+    if (!aspect.required && aspect.name !== "Size Type" && aspect.name !== "Department") continue;
+    aspects[aspect.name] = fillValueForAspect(aspect.name, categoryAspects, brand, title, optionValues);
+  }
+  return aspects;
+}
+
+// Aspect name(s) eBay flagged missing/required in a failed publish. Handles
+// "The item specific X is missing." and "X (40001) is a required field.",
+// plus the aspect name echoed in parameter "3". Excludes grading fields —
+// those route to a condition retry, not a fabricated value.
+function extractMissingAspects(ebayErrors = []) {
+  const names = new Set();
+  for (const err of ebayErrors) {
+    const m1 = (err.message || "").match(/item specific (.+?) is missing/i);
+    if (m1?.[1]) names.add(m1[1].trim());
+    const m2 = (err.message || "").match(/^(.+?)\s*\(\d+\)\s*is a required field/i);
+    if (m2?.[1] && !/^(professional grader|grade)$/i.test(m2[1].trim())) names.add(m2[1].trim());
+    for (const p of err.parameters || []) if (p.name === "3" && p.value) names.add(String(p.value).trim());
+  }
+  return [...names];
+}
+
+// eBay Inventory API condition enum <-> numeric condition ID.
+const CONDITION_ENUM_TO_ID = {
+  NEW: "1000", NEW_OTHER: "1500", NEW_WITH_DEFECTS: "1750", LIKE_NEW: "2750",
+  USED_EXCELLENT: "3000", USED_VERY_GOOD: "4000", USED_GOOD: "5000",
+  USED_ACCEPTABLE: "6000", FOR_PARTS_OR_NOT_WORKING: "7000",
+};
+const CONDITION_ID_TO_ENUM = Object.fromEntries(Object.entries(CONDITION_ENUM_TO_ID).map(([k, v]) => [v, k]));
+
+function conditionPreferenceIds(enumName) {
+  switch (enumName) {
+    case "NEW": return ["1000", "1500", "3000"];
+    case "NEW_OTHER": return ["1500", "1000", "3000"];
+    case "LIKE_NEW": return ["2750", "1500", "3000", "4000"];
+    case "USED_EXCELLENT": return ["3000", "4000", "5000", "6000"];
+    case "USED_VERY_GOOD": return ["4000", "3000", "5000", "6000"];
+    case "USED_GOOD": return ["5000", "4000", "3000", "6000"];
+    case "USED_ACCEPTABLE": return ["6000", "5000", "3000", "7000"];
+    case "FOR_PARTS_OR_NOT_WORKING": return ["7000", "6000", "3000"];
+    default: return ["3000", "4000", "5000", "1000"];
+  }
+}
+
+// app/iOS condition value → eBay Inventory API condition enum.
+function productConditionToEbayEnum(product) {
+  const raw = String(product.condition ?? product.mercariCondition ?? "new")
+    .toLowerCase().replace(/[^a-z]/g, "");
+  return {
+    new: "NEW", newwithtags: "NEW", brandnew: "NEW",
+    newwithouttags: "NEW_OTHER", newother: "NEW_OTHER",
+    likenew: "LIKE_NEW", mint: "LIKE_NEW",
+    good: "USED_GOOD", used: "USED_GOOD",
+    fair: "USED_ACCEPTABLE",
+    poor: "FOR_PARTS_OR_NOT_WORKING", forparts: "FOR_PARTS_OR_NOT_WORKING",
+  }[raw] || "USED_GOOD";
+}
+
+// Pick a condition enum the category will accept.
+function resolveCondition(intendedEnum, allowedIds) {
+  if (!allowedIds || allowedIds.length === 0) return intendedEnum;
+  const intendedId = CONDITION_ENUM_TO_ID[intendedEnum];
+  if (intendedId && allowedIds.includes(intendedId)) return intendedEnum;
+  for (const id of conditionPreferenceIds(intendedEnum)) {
+    if (allowedIds.includes(id) && CONDITION_ID_TO_ENUM[id]) return CONDITION_ID_TO_ENUM[id];
+  }
+  return CONDITION_ID_TO_ENUM[allowedIds[0]] || intendedEnum;
 }
 
 // Resolve a reusable single-variant offerId for a product, or null to create
@@ -409,18 +605,51 @@ async function createOrAdoptOffer(uid, sku, offerBody) {
   }
 }
 
+// Publish, recovering from the two category-validation failures eBay only
+// surfaces at publish time: missing required item aspects (fill the named
+// aspect, retry) and a condition the category rejects (downgrade once to
+// generic Used, retry). `refresh({ addedAspects, condition })` re-PUTs the
+// inventory item(s)/group so the changes take effect before the next attempt.
+async function publishWithRecovery({ doPublish, refresh, categoryAspects, brand, title }) {
+  const addedAspects = {};
+  let conditionOverride = null;
+  let triedCondition = false;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      return await doPublish();
+    } catch (e) {
+      const errs = e.ebayErrors || [];
+      if (!triedCondition && errs.some((x) => [25021, 25059].includes(x.errorId))) {
+        triedCondition = true;
+        conditionOverride = "USED_EXCELLENT";
+        console.warn("[ebay publish] category rejected condition — retrying as USED_EXCELLENT");
+        await refresh({ addedAspects, condition: conditionOverride });
+        continue;
+      }
+      const missing = extractMissingAspects(errs).filter((n) => !addedAspects[n]);
+      if (!missing.length || attempt === 3) throw e;
+      for (const n of missing) addedAspects[n] = fillValueForAspect(n, categoryAspects, brand, title, {});
+      console.warn(`[ebay publish] filling missing aspects: ${missing.join(", ")}`);
+      await refresh({ addedAspects, condition: conditionOverride });
+    }
+  }
+}
+
 // Single-variation listing: one inventory item → one offer → publish.
 async function postSingleVariant(ctx) {
-  const { uid, product, productId, docRef, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description } = ctx;
+  const { uid, product, productId, docRef, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description, categoryAspects, brand, conditionEnum } = ctx;
   const sku = productId;
   const itemQty = typeof product.quantity === "number" && product.quantity > 0 ? product.quantity : 1;
+  const productAspects = buildProductAspects(categoryAspects, brand, title, {}, product.ebayAspects ?? {});
 
-  await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
-    product: toEbayInventoryProduct(product, { imageLimit: 12, title }),
-    condition: "NEW",
-    packageWeightAndSize: ebayPackageWeightAndSize(product),
-    availability: { shipToLocationAvailability: { quantity: itemQty } },
-  });
+  const putItem = ({ addedAspects = {}, condition = conditionEnum } = {}) =>
+    ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
+      product: { ...toEbayInventoryProduct(product, { imageLimit: 12, title }), aspects: { ...productAspects, ...addedAspects } },
+      condition,
+      packageWeightAndSize: ebayPackageWeightAndSize(product),
+      availability: { shipToLocationAvailability: { quantity: itemQty } },
+    });
+  await putItem();
 
   const offerArgs = { sku, price: basePrice, quantity: itemQty, categoryId, description, listingPolicies, merchantLocationKey };
   let offerId = await resolveSingleOfferId(uid, product, productId);
@@ -430,7 +659,11 @@ async function postSingleVariant(ctx) {
     offerId = await createOrAdoptOffer(uid, sku, buildEbayOfferPayload(offerArgs));
   }
 
-  const published = await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`);
+  const published = await publishWithRecovery({
+    doPublish: () => ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`),
+    refresh: putItem,
+    categoryAspects, brand, title,
+  });
   const listingId = published?.listingId ?? null;
 
   await docRef.update({
@@ -451,7 +684,7 @@ async function postSingleVariant(ctx) {
 // inventory item group → one offer per variant → publishOfferByInventoryItemGroup.
 // Result is ONE eBay listing with N selectable variations.
 async function postMultiVariant(ctx) {
-  const { uid, product, productId, docRef, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description } = ctx;
+  const { uid, product, productId, docRef, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description, categoryAspects, brand, conditionEnum } = ctx;
   const groupKey = productId;
   const options = Array.isArray(product.options) ? product.options : [];
   const activeVariants = (Array.isArray(product.variants) ? product.variants : [])
@@ -488,29 +721,37 @@ async function postMultiVariant(ctx) {
     return { variantIndex: i, sku, qty, price: variantPriceOr(v, basePrice), aspects };
   });
 
-  // 1. One inventory item per variant.
   const sharedProduct = toEbayInventoryProduct(product, { imageLimit: 12, title });
   const packageWeightAndSize = ebayPackageWeightAndSize(product);
-  for (const pv of perVariant) {
-    await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(pv.sku)}`, {
-      product: { ...sharedProduct, aspects: pv.aspects },
-      condition: "NEW",
+  // Non-varying required aspects (Brand/Type/…) live on the group; each
+  // variant item carries those + its own option values (Size/Color). Drop
+  // any aspect that IS a variation dimension — it belongs in variesBy, not
+  // as a fixed value.
+  const productAspects = buildProductAspects(categoryAspects, brand, title, {}, product.ebayAspects ?? {});
+  for (const opt of options) delete productAspects[opt.name];
+
+  const putAllItems = ({ addedAspects = {}, condition = conditionEnum } = {}) => Promise.all(
+    perVariant.map((pv) => ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(pv.sku)}`, {
+      product: { ...sharedProduct, aspects: { ...productAspects, ...addedAspects, ...pv.aspects } },
+      condition,
       packageWeightAndSize,
       availability: { shipToLocationAvailability: { quantity: pv.qty } },
-    });
-  }
-
-  // 2. Inventory item group — defines the variation dimensions + membership.
-  await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`, {
+    }))
+  );
+  const putGroup = ({ addedAspects = {} } = {}) => ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`, {
     title,
     description,
     imageUrls: sharedProduct.imageUrls,
-    aspects: product.ebayAspects ?? {},
+    aspects: { ...productAspects, ...addedAspects },
     variesBy: {
       specifications: options.map((opt) => ({ name: opt.name, values: opt.values || [] })),
     },
     variantSKUs: perVariant.map((pv) => pv.sku),
   });
+
+  // 1. Inventory items + 2. the group.
+  await putAllItems();
+  await putGroup();
 
   // 3. One offer per variant (reuse the group's existing offers where possible).
   for (const pv of perVariant) {
@@ -528,9 +769,16 @@ async function postMultiVariant(ctx) {
   }
 
   // 4. Publish the whole group as one multi-variation listing.
-  const published = await ebayRequest(uid, "POST", "/sell/inventory/v1/offer/publish_by_inventory_item_group", {
-    inventoryItemGroupKey: groupKey,
-    marketplaceId: MARKETPLACE_ID,
+  const published = await publishWithRecovery({
+    doPublish: () => ebayRequest(uid, "POST", "/sell/inventory/v1/offer/publish_by_inventory_item_group", {
+      inventoryItemGroupKey: groupKey,
+      marketplaceId: MARKETPLACE_ID,
+    }),
+    refresh: async ({ addedAspects, condition }) => {
+      await putAllItems({ addedAspects, condition });
+      await putGroup({ addedAspects });
+    },
+    categoryAspects, brand, title,
   });
   const listingId = published?.listingId ?? null;
 
@@ -582,10 +830,23 @@ exports.dropshipEbayCreateListing = onCall(
     const [merchantLocationKey, listingPolicies, categoryId] = await Promise.all([
       getMerchantLocationKey(uid),
       getListingPolicies(uid, product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays),
-      suggestCategoryId(uid, title),
+      suggestCategoryId(uid, title, product.geminiCategory || product.category),
     ]);
 
-    const ctx = { uid, product, productId, docRef, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description };
+    // Fill eBay's category-required fields the user left blank: item aspects
+    // (Brand/Type/…) from the title + known brands, and a category-valid
+    // condition. Both degrade gracefully — the publish retry loop is the net.
+    const [categoryAspects, allowedConditionIds] = await Promise.all([
+      getCategoryAspects(categoryId),
+      getAllowedConditionIds(uid, categoryId),
+    ]);
+    const brand = resolveBrand(product);
+    const conditionEnum = resolveCondition(productConditionToEbayEnum(product), allowedConditionIds);
+
+    const ctx = {
+      uid, product, productId, docRef, basePrice, categoryId, listingPolicies,
+      merchantLocationKey, title, description, categoryAspects, brand, conditionEnum,
+    };
     const hasVariations = buildEbayVariations(product) !== null;
     return hasVariations ? postMultiVariant(ctx) : postSingleVariant(ctx);
   }
