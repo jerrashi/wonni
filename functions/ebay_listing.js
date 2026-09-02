@@ -925,7 +925,7 @@ async function postMultiVariant(ctx) {
 
 // One-click list a product on eBay. Single- or multi-variation; re-posting a
 // previously-withdrawn product reuses its stable offer(s).
-exports.dropshipEbayCreateListing = onCall(
+exports.ebayCreateListing = onCall(
   { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, geminiApiKey], timeoutSeconds: 120, memory: "512MiB" },
   async (request) => {
     const uid = request.auth?.uid;
@@ -1586,7 +1586,7 @@ exports.ebayGetListing = onCall(
 );
 
 module.exports = {
-  dropshipEbayCreateListing: exports.dropshipEbayCreateListing,
+  ebayCreateListing: exports.ebayCreateListing,
   ebayDeleteListing: exports.ebayDeleteListing,
   ebayUpdateListing: exports.ebayUpdateListing,
   ebayGetListing: exports.ebayGetListing,
