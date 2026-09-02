@@ -60,13 +60,36 @@
     const statusText = document.getElementById("status-text");
     const subText = document.getElementById("sub-text");
 
+    // The dashboard window that opened this popup — wonni-app.web.app in
+    // production, a localhost origin during local dev. We can't read
+    // window.opener.location cross-origin, so relayToOpener() posts to every
+    // allowed origin (only the matching one is delivered) instead of "*".
+    // Inbound messages are validated against the same list.
+    const ALLOWED_OPENER_ORIGINS = [
+      "https://wonni-app.web.app",
+      "http://localhost:5173",
+      "http://localhost:5174",
+      "http://localhost:5175",
+      "http://127.0.0.1:5173",
+      "http://127.0.0.1:5174",
+    ];
+    function relayToOpener(message) {
+      if (!window.opener) return false;
+      let sent = false;
+      for (const origin of ALLOWED_OPENER_ORIGINS) {
+        try {
+          window.opener.postMessage(message, origin);
+          sent = true;
+        } catch (_) {}
+      }
+      return sent;
+    }
+
     if (error) {
       statusText.innerText = "Connection Failed";
       subText.innerText = error;
       if (window.opener) {
-        try {
-          window.opener.postMessage({ type: "ALIEXPRESS_AUTH_CALLBACK", error, state }, "*");
-        } catch (_) {}
+        relayToOpener({ type: "ALIEXPRESS_AUTH_CALLBACK", error, state });
       } else {
         window.location.href = 'wonni://oauth/aliexpress?error=' + encodeURIComponent(error);
       }
@@ -82,6 +105,7 @@
         subText.innerText = "Finalizing connection with your dashboard…";
 
         window.addEventListener("message", (event) => {
+          if (!ALLOWED_OPENER_ORIGINS.includes(event.origin)) return;
           if (event.data?.type === "ALIEXPRESS_AUTH_SUCCESS") {
             statusText.innerText = "✓ AliExpress Connected!";
             subText.innerText = event.data.username
@@ -94,10 +118,7 @@
           }
         });
 
-        try {
-          window.opener.postMessage({ type: "ALIEXPRESS_AUTH_CALLBACK", code, state }, "*");
-          notifiedOpener = true;
-        } catch (_) {}
+        notifiedOpener = relayToOpener({ type: "ALIEXPRESS_AUTH_CALLBACK", code, state });
       }
 
       // Standalone web fallback or iOS app redirect
