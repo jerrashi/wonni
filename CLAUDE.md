@@ -140,6 +140,26 @@ Offer-lifecycle design detail: `~/.claude/plans/ebay-offer-lifecycle-redesign.md
   cooldown per section, timestamp under `products.sourceRefresh.{section}`.
 - [ ] Phase 3 sales/orders dashboard (spec above).
 
+## eBay READ + gotchas (2026-09-02)
+
+- `ebayGetListing({ productId })` (`functions/ebay_listing.js`, registered,
+  NOT UI-wired) — live READ from the Inventory API via the doc's stable
+  pointers. Single: `getOffer(ebayOfferId)` + `getInventoryItem(productId)`.
+  Multi: `getInventoryItemGroup` + per-variant `getOffer(variants[i].ebayOfferId)`
+  + `getInventoryItem(variants[i].ebayVariantSku)`. Returns
+  listingId/status, group (title/variesBy/variantSKUs), per-variant
+  offer+item, totalSold. Tested against live listing 147545353525.
+- **NEVER `docRef.update({ "variants.0.x": y })`** — a dotted numeric field
+  path clobbers the `variants` ARRAY into a MAP and drops every other field
+  on each variant. Always read-modify-write the whole `variants` array.
+  (Corrupted two live products this way on 2026-09-02; recovered from eBay.)
+- eBay SKUs must be **alphanumeric, <= 50 chars** (err 25707). Variant SKU is
+  `${productId}${strippedVariantId}` (was `${productId}::${id}` — the `::`
+  also 400s the `?inventory_item_group_key=` offer query, so multi-variant
+  offer discovery uses the stored `variants[i].ebayOfferId` instead).
+- Variant `price` blank ⇒ follows the listing price; set ⇒ overrides. The
+  importers no longer seed it with the source cost (`sourcePrice` keeps that).
+
 ## Phase 1 notes (variations)
 
 - `MAX_VARIATION_DIMENSIONS` in `ProductDetail.jsx` caps variation structure
