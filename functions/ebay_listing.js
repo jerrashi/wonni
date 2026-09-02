@@ -49,9 +49,12 @@ function ebayPackageWeightAndSize(product) {
 
 // eBay stable SKU for a variant. `productId::variantId` — survives variant
 // reorder/delete (Firestore ids are ~20 chars, well under eBay's 64).
+// eBay SKUs must be alphanumeric and <= 50 chars (err 25707). Firestore doc
+// ids are a fixed 20 alphanumeric chars, so `productId` + a stripped variant
+// id can't collide across products and stays well under the limit.
 function variantSkuFor(productId, variant, index) {
-  const vid = variant?.id ?? variant?.sku ?? `v${index}`;
-  return `${productId}::${vid}`.slice(0, 64);
+  const vid = String(variant?.id ?? variant?.sku ?? `v${index}`).replace(/[^A-Za-z0-9]/g, "");
+  return `${productId}${vid}`.slice(0, 50);
 }
 
 // Build a `/sell/inventory/v1/offer` body. `forUpdate` omits the immutable
@@ -733,27 +736,23 @@ async function postMultiVariant(ctx) {
   const { uid, product, productId, docRef, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description, categoryAspects, brand, conditionEnum } = ctx;
   const groupKey = productId;
   const options = Array.isArray(product.options) ? product.options : [];
-  const activeVariants = (Array.isArray(product.variants) ? product.variants : [])
+  const productVariants = Array.isArray(product.variants)
+    ? product.variants
+    : Object.values(product.variants || {});
+  const activeVariants = productVariants
     .map((v, i) => ({ v, i }))
     .filter(({ v }) => v.active !== false);
   if (activeVariants.length === 0) {
     throw new HttpsError("failed-precondition", "This product has no active variants to post.");
   }
 
-  // Existing per-variant offers on eBay for this group, keyed by SKU.
+  // Per-variant offers we already have — from the doc's stored pointers, and
+  // (if the SKU is eBay-clean) a `getOffers?sku=` lookup. We do NOT use
+  // `?inventory_item_group_key=` — it 400s (25707) when any member SKU has a
+  // non-alphanumeric char.
   const offersBySku = {};
-  if (product.ebayInventoryItemGroupKey) {
-    try {
-      const res = await ebayRequest(
-        uid, "GET",
-        `/sell/inventory/v1/offer?inventory_item_group_key=${encodeURIComponent(groupKey)}&marketplace_id=${MARKETPLACE_ID}`
-      );
-      for (const o of res?.offers ?? []) if (o.sku && o.offerId) offersBySku[o.sku] = o.offerId;
-    } catch (e) {
-      const gone = e.status === 404 || e.ebayErrors?.some((x) => [25713, 25710].includes(x.errorId));
-      if (!gone) throw e;
-      await docRef.update({ ebayInventoryItemGroupKey: admin.firestore.FieldValue.delete() });
-    }
+  for (const { v } of activeVariants) {
+    if (v.ebayVariantSku && v.ebayOfferId) offersBySku[v.ebayVariantSku] = v.ebayOfferId;
   }
 
   // Per-variation-dimension: map user values to the category's controlled
@@ -897,21 +896,29 @@ async function postMultiVariant(ctx) {
   });
   const listingId = published?.listingId ?? null;
 
-  const updatePayload = {
+  // Rewrite the whole `variants` array — NEVER `update({ "variants.0.x": … })`:
+  // a dotted numeric field path clobbers the array into a map and drops every
+  // other variant field (price/quantity/optionValues/active).
+  const baseVariants = Array.isArray(product.variants)
+    ? product.variants
+    : Object.values(product.variants || {});
+  const nextVariants = baseVariants.map((v, i) => {
+    const pv = perVariant.find((p) => p.variantIndex === i);
+    return pv ? { ...v, ebayVariantSku: pv.sku, ebayOfferId: pv.offerId } : v;
+  });
+
+  await docRef.update({
     "crossPostStatus.ebay": "active",
     "crossPostListingIds.ebay": listingId,
     ebayInventoryItemGroupKey: groupKey,
+    ebayOfferId: admin.firestore.FieldValue.delete(), // single-variant only; clear any stale one
     ebayListingId: listingId,
     ebayListingUrl: listingId ? `https://www.ebay.com/itm/${listingId}` : null,
     ebayHasVariations: true,
+    variants: nextVariants,
     ebayLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  };
-  for (const pv of perVariant) {
-    updatePayload[`variants.${pv.variantIndex}.ebayVariantSku`] = pv.sku;
-    updatePayload[`variants.${pv.variantIndex}.ebayOfferId`] = pv.offerId;
-  }
-  await docRef.update(updatePayload);
+  });
 
   return { listingId, groupKey, alreadyListed: false, hasVariations: true, variantOfferIds: perVariant.map((pv) => pv.offerId) };
 }
@@ -1054,19 +1061,10 @@ exports.ebayDeleteListing = onCall(
       ebayListingUrl: admin.firestore.FieldValue.delete(),
       ebayLastSyncedAt: admin.firestore.FieldValue.delete(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      // KEPT: ebayHasVariations, ebayOfferId, ebayInventoryItemGroupKey
+      // KEPT: ebayHasVariations, ebayOfferId, ebayInventoryItemGroupKey, and
+      // every variants[i].* (ebayVariantSku / ebayOfferId included) so a
+      // re-post reuses them.
     });
-
-    if (isMultiVariant && Array.isArray(product.variants)) {
-      const batch = db.batch();
-      product.variants.forEach((v, index) => {
-        batch.update(docRef, {
-          [`variants.${index}.crossPostStatus.ebay`]: admin.firestore.FieldValue.delete(),
-          // KEPT: variants[i].ebayVariantSku, variants[i].ebayOfferId
-        });
-      });
-      await batch.commit();
-    }
 
     return { success: true };
   }
@@ -1232,18 +1230,9 @@ exports.ebaySyncListing = onCall(
             : product.listingPrice,
         };
 
-        if (inventory?.availability?.shipToLocationAvailability?.quantity != null) {
-          if (product.ebayHasVariations && Array.isArray(product.variants)) {
-            const batch = db.batch();
-            product.variants.forEach((v, index) => {
-              batch.update(docRef, {
-                [`variants.${index}.quantity`]: Math.max(0, v.quantity ?? 0),
-              });
-            });
-            await batch.commit();
-          } else {
-            updatePayload.quantity = inventory.availability.shipToLocationAvailability.quantity;
-          }
+        if (inventory?.availability?.shipToLocationAvailability?.quantity != null
+          && !(product.ebayHasVariations && Array.isArray(product.variants))) {
+          updatePayload.quantity = inventory.availability.shipToLocationAvailability.quantity;
         }
 
         await docRef.update(updatePayload);
@@ -1460,11 +1449,8 @@ exports.ebayImportPullSync = onCall(async (request) => {
   if (typeof fields.price === "number") updatePayload.listingPrice = fields.price;
   if (typeof fields.quantity === "number") {
     if (product.ebayHasVariations && Array.isArray(product.variants)) {
-      const batch = db.batch();
-      product.variants.forEach((v, index) => {
-        batch.update(docRef, { [`variants.${index}.quantity`]: Math.max(0, fields.quantity) });
-      });
-      await batch.commit();
+      // Rewrite the whole array — a dotted `variants.N.x` path clobbers it to a map.
+      updatePayload.variants = product.variants.map((v) => ({ ...v, quantity: Math.max(0, fields.quantity) }));
     } else {
       updatePayload.quantity = fields.quantity;
     }
@@ -1474,10 +1460,136 @@ exports.ebayImportPullSync = onCall(async (request) => {
   return { success: true };
 });
 
+// READ: the full current state of a product's eBay listing, pulled live from
+// the Inventory API. Single- or multi-variation. Uses the stable pointers on
+// the product doc (ebayOfferId / ebayInventoryItemGroupKey /
+// variants[i].ebayOfferId) — no reliance on the group-key offer query.
+async function readEbayInventoryItem(uid, sku) {
+  try {
+    return await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
+  } catch (e) {
+    if (e.status === 404) return null;
+    throw e;
+  }
+}
+
+function shapeOffer(o) {
+  if (!o) return null;
+  return {
+    offerId: o.offerId,
+    sku: o.sku,
+    status: o.status, // PUBLISHED | UNPUBLISHED
+    price: o.pricingSummary?.price?.value != null ? parseFloat(o.pricingSummary.price.value) : null,
+    availableQuantity: o.availableQuantity ?? null,
+    categoryId: o.categoryId ?? null,
+    listingId: o.listing?.listingId ?? null,
+    listingStatus: o.listing?.listingStatus ?? null, // ACTIVE | ENDED | ...
+    soldQuantity: o.listing?.soldQuantity ?? 0,
+  };
+}
+
+exports.ebayGetListing = onCall(
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 60, memory: "256MiB" },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+    const { productId } = request.data ?? {};
+    if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
+
+    const snap = await admin.firestore().collection("products").doc(productId).get();
+    if (!snap.exists) throw new HttpsError("not-found", "Product not found.");
+    const product = snap.data();
+    if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
+
+    const hasVariations = product.ebayHasVariations || !!product.ebayInventoryItemGroupKey;
+    const variants = Array.isArray(product.variants) ? product.variants : Object.values(product.variants || {});
+
+    try {
+      if (hasVariations) {
+        const groupKey = product.ebayInventoryItemGroupKey || productId;
+        let group = null;
+        try {
+          group = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`);
+        } catch (e) {
+          if (e.status !== 404) throw e;
+        }
+
+        const rows = await Promise.all(
+          variants
+            .filter((v) => v.ebayOfferId || v.ebayVariantSku)
+            .map(async (v) => {
+              const [offer, item] = await Promise.all([
+                v.ebayOfferId ? getOfferOrNull(uid, v.ebayOfferId) : null,
+                v.ebayVariantSku ? readEbayInventoryItem(uid, v.ebayVariantSku) : null,
+              ]);
+              return {
+                sku: v.ebayVariantSku ?? null,
+                optionValues: item?.product?.aspects ?? null,
+                quantity: item?.availability?.shipToLocationAvailability?.quantity ?? null,
+                condition: item?.condition ?? null,
+                packageWeightAndSize: item?.packageWeightAndSize ?? null,
+                offer: shapeOffer(offer),
+              };
+            })
+        );
+
+        const anyLive = rows.find((r) => r.offer?.listingStatus === "ACTIVE");
+        return {
+          productId,
+          hasVariations: true,
+          found: !!group || rows.some((r) => r.offer || r.optionValues),
+          listingId: anyLive?.offer?.listingId ?? product.ebayListingId ?? null,
+          listingStatus: anyLive ? "ACTIVE" : (rows.some((r) => r.offer) ? "NOT_PUBLISHED" : "GONE"),
+          listingUrl: product.ebayListingUrl ?? null,
+          inventoryItemGroupKey: groupKey,
+          group: group && {
+            title: group.title ?? null,
+            description: group.description ?? null,
+            imageCount: group.imageUrls?.length ?? 0,
+            variesBy: group.variesBy?.specifications ?? null,
+            variantSKUs: group.variantSKUs ?? [],
+          },
+          variants: rows,
+          totalSold: rows.reduce((s, r) => s + (r.offer?.soldQuantity ?? 0), 0),
+        };
+      }
+
+      // single-variant
+      const offerId = product.ebayOfferId
+        || (/^\d{12}$/.test(String(product.crossPostListingIds?.ebay || "")) ? null : product.crossPostListingIds?.ebay);
+      const [offer, item] = await Promise.all([
+        offerId ? getOfferOrNull(uid, offerId) : null,
+        readEbayInventoryItem(uid, productId),
+      ]);
+      return {
+        productId,
+        hasVariations: false,
+        found: !!(offer || item),
+        listingId: offer?.listing?.listingId ?? product.ebayListingId ?? null,
+        listingStatus: offer?.listing?.listingStatus ?? (offer ? "NOT_PUBLISHED" : "GONE"),
+        listingUrl: product.ebayListingUrl ?? null,
+        title: item?.product?.title ?? null,
+        description: offer?.listingDescription ?? null,
+        imageCount: item?.product?.imageUrls?.length ?? 0,
+        condition: item?.condition ?? null,
+        quantity: item?.availability?.shipToLocationAvailability?.quantity ?? null,
+        packageWeightAndSize: item?.packageWeightAndSize ?? null,
+        aspects: item?.product?.aspects ?? null,
+        offer: shapeOffer(offer),
+      };
+    } catch (e) {
+      if (e instanceof HttpsError) throw e;
+      const msg = e.ebayErrors?.map((x) => `${x.errorId}: ${x.message}`).join("; ") || e.message;
+      throw new HttpsError("internal", `Failed to read eBay listing: ${msg}`);
+    }
+  }
+);
+
 module.exports = {
   dropshipEbayCreateListing: exports.dropshipEbayCreateListing,
   ebayDeleteListing: exports.ebayDeleteListing,
   ebayUpdateListing: exports.ebayUpdateListing,
+  ebayGetListing: exports.ebayGetListing,
   ebayGetListingDetails: exports.ebayGetListingDetails,
   ebaySyncListing: exports.ebaySyncListing,
   ebayPullSync: exports.ebayPullSync,
