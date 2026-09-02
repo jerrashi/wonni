@@ -748,6 +748,38 @@ async function postMultiVariant(ctx) {
     return meta && meta.mode === "SELECTION_ONLY" ? normalizeVariationValue(val, meta.values) : String(val);
   };
 
+  // Pre-flight: every variation value on a SELECTION_ONLY dimension must
+  // resolve to one of eBay's controlled values for THIS category. Fail here
+  // with the accepted list, before creating anything on eBay — rather than
+  // orphaning inventory items on a publish rejection (25129).
+  {
+    const ci = (s) => String(s).toLowerCase();
+    const badValues = [];
+    for (const opt of options) {
+      const meta = aspectByName[ci(opt.name)];
+      if (!meta || meta.mode !== "SELECTION_ONLY" || !meta.values?.length) continue;
+      const seen = new Set();
+      for (const { v } of activeVariants) {
+        const raw = v.optionValues?.[opt.name];
+        for (const one of Array.isArray(raw) ? raw : [raw]) {
+          if (one == null || one === "" || seen.has(ci(one))) continue;
+          seen.add(ci(one));
+          const mapped = normalizeVariationValue(one, meta.values);
+          if (!meta.values.some((a) => ci(a) === ci(mapped))) {
+            badValues.push({ dimension: opt.name, value: one, accepted: meta.values });
+          }
+        }
+      }
+    }
+    if (badValues.length) {
+      const b = badValues[0];
+      throw new HttpsError(
+        "failed-precondition",
+        `"${b.value}" isn't a valid ${b.dimension} for this eBay category. Accepted values: ${b.accepted.slice(0, 25).join(", ")}${b.accepted.length > 25 ? ", …" : ""}.`
+      );
+    }
+  }
+
   const perVariant = activeVariants.map(({ v, i }) => {
     const sku = v.ebayVariantSku || variantSkuFor(productId, v, i);
     const qty = typeof v.quantity === "number" && v.quantity >= 0 ? Math.floor(v.quantity) : 0;
