@@ -90,23 +90,14 @@ export default function BulkPostModal({ products, onClose }) {
 
           try {
             if (platformId === "ebay") {
-              const ebayRes = await callFunction("ebayCreateListing")({
+              // ebayCreateListing owns all eBay fields on the product doc.
+              await callFunction("ebayCreateListing")({
                 listingId: product.id,
                 productId: product.id,
                 credentialSet: "web",
               });
-              const ebayOfferId = ebayRes.data?.offerId;
               if (!localStorage.getItem("hasSeenEbayEditingNotice")) {
                 setShowEbayNotice(true);
-              }
-              try {
-                await updateDoc(doc(db, "products", product.id), {
-                  "crossPostStatus.ebay": "active",
-                  "crossPostListingIds.ebay": ebayOfferId || null,
-                  updatedAt: serverTimestamp(),
-                });
-              } catch (syncErr) {
-                console.warn("Could not update product doc with ebay status:", syncErr);
               }
             } else if (platformId === "etsy") {
               const etsyRes = await callFunction("etsyCreateListing")({
