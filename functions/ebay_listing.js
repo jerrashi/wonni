@@ -5,14 +5,92 @@ const { toEbayInventoryProduct, canonicalDescription, listingImagesFor, buildEba
 
 const MARKETPLACE_ID = "EBAY_US";
 
-// Default sell price when the user doesn't override one in the UI.
-// Rough eBay economics: ~13.25% final value fee + $0.30 per order, plus you pay
-// Weverse price + Weverse shipping to you + shipping to the buyer.
-function computeEbaySellPrice(product) {
-  const cost = product.sourceCost ?? 0;
-  if (product.listingPrice) return product.listingPrice;
-  // markup covers fees (~13.5%), ~US shipping, and margin
-  return Math.ceil((cost * 1.35 + 8) * 100) / 100;
+// The one cross-platform price is `product.listingPrice` (set from the
+// ProductDetail / iOS price input, autosaved). We never invent a price from
+// `sourceCost` — that's optional and reserved for future profit tracking.
+// Missing / non-positive → block with a readable error rather than letting
+// eBay reject it as an opaque INTERNAL.
+function resolveListingPrice(product) {
+  const price = Number(product.listingPrice);
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Set a listing price before posting to eBay."
+    );
+  }
+  return price;
+}
+
+// Per-variant price: use the variant's own price if it's a positive number,
+// otherwise fall back to the listing's base price.
+function variantPriceOr(variant, basePrice) {
+  const p = Number(variant?.price);
+  return Number.isFinite(p) && p > 0 ? p : basePrice;
+}
+
+// eBay requires a package weight on every inventory item to publish an offer
+// (error 25020). Use the product's weight (lbs + oz, or a fractional lbs);
+// when unset, fall back to the app's own documented default — a 6 oz light
+// package, the same default ProductDetail shows in the shipping row.
+// Dimensions are included only when all three are present.
+function ebayPackageWeightAndSize(product) {
+  const lbs = Number(product.weightLbs);
+  const oz = Number(product.weightOz);
+  let totalLbs = (Number.isFinite(lbs) ? lbs : 0) + (Number.isFinite(oz) ? oz : 0) / 16;
+  if (!(totalLbs > 0)) totalLbs = 0.375; // 6 oz
+  const pkg = { weight: { value: Math.round(totalLbs * 1000) / 1000, unit: "POUND" } };
+  const [l, w, h] = [product.lengthIn, product.widthIn, product.heightIn].map(Number);
+  if ([l, w, h].every((n) => Number.isFinite(n) && n > 0)) {
+    pkg.dimensions = { length: l, width: w, height: h, unit: "INCH" };
+  }
+  return pkg;
+}
+
+// eBay stable SKU for a variant. `productId::variantId` — survives variant
+// reorder/delete (Firestore ids are ~20 chars, well under eBay's 64).
+function variantSkuFor(productId, variant, index) {
+  const vid = variant?.id ?? variant?.sku ?? `v${index}`;
+  return `${productId}::${vid}`.slice(0, 64);
+}
+
+// Build a `/sell/inventory/v1/offer` body. `forUpdate` omits the immutable
+// keys (sku/marketplaceId/format) that eBay's updateOffer (EbayOfferDetailsWithId)
+// rejects — only createOffer (EbayOfferDetailsWithKeys) accepts them.
+function buildEbayOfferPayload(
+  { sku, price, quantity, categoryId, description, listingPolicies, merchantLocationKey },
+  { forUpdate = false } = {}
+) {
+  const payload = {
+    availableQuantity: quantity,
+    categoryId,
+    listingDescription: description,
+    listingPolicies,
+    merchantLocationKey,
+    // Always the real sell price. NEVER minimumAdvertisedPrice — that's eBay's
+    // MAP-policy field, not a price, and setting it instead of `price` is why
+    // multi-variant publishes used to fail with error 25016.
+    pricingSummary: { price: { value: Number(price).toFixed(2), currency: "USD" } },
+  };
+  if (!forUpdate) {
+    payload.sku = sku;
+    payload.marketplaceId = MARKETPLACE_ID;
+    payload.format = "FIXED_PRICE";
+  }
+  return payload;
+}
+
+// GET an offer by id, returning null (instead of throwing) when eBay says it's
+// gone — the signal that the user deleted the listing on eBay directly, or
+// eBay purged a long-unpublished offer, so we should create a fresh one.
+async function getOfferOrNull(uid, offerId) {
+  try {
+    return await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${offerId}`);
+  } catch (e) {
+    const gone = e.status === 404
+      || e.ebayErrors?.some((x) => [25713, 25710].includes(x.errorId));
+    if (gone) return null;
+    throw e;
+  }
 }
 
 // First existing inventory location — eBay requires one to publish an offer.
@@ -79,7 +157,8 @@ async function resolveEbayOffer(uid, product, productId) {
         const offer = await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${migratedOfferId}`);
         const docRef = admin.firestore().collection("products").doc(productId);
         await docRef.update({
-          "crossPostListingIds.ebay": migratedOfferId,
+          ebayOfferId: migratedOfferId,
+          "crossPostListingIds.ebay": storedId,
           ebayListingId: storedId,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
@@ -148,9 +227,11 @@ async function resolveEbayOffer(uid, product, productId) {
         if (targetOffer?.offerId) {
           console.log(`[resolveEbayOffer] Recovered offerId=${targetOffer.offerId} (listingId=${targetOffer.listingId}) for SKU ${querySku}`);
           const docRef = admin.firestore().collection("products").doc(productId);
+          const resolvedListingId = targetOffer.listingId || (storedId && /^\d{12}$/.test(storedId) ? storedId : null);
           await docRef.update({
-            "crossPostListingIds.ebay": targetOffer.offerId,
-            ebayListingId: targetOffer.listingId || (storedId && /^\d{12}$/.test(storedId) ? storedId : null),
+            ebayOfferId: targetOffer.offerId,
+            "crossPostListingIds.ebay": resolvedListingId,
+            ebayListingId: resolvedListingId,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           });
           return { offer: targetOffer, offerId: targetOffer.offerId, sku: targetOffer.sku || querySku };
@@ -176,9 +257,12 @@ async function resolveEbayOffer(uid, product, productId) {
         if (targetOffer?.offerId) {
           console.log(`[resolveEbayOffer] Recovered offerId=${targetOffer.offerId} (listingId=${targetOffer.listingId}) for inventory_item_group_key ${querySku}`);
           const docRef = admin.firestore().collection("products").doc(productId);
+          const resolvedListingId = targetOffer.listingId || (storedId && /^\d{12}$/.test(storedId) ? storedId : null);
           await docRef.update({
-            "crossPostListingIds.ebay": targetOffer.offerId,
-            ebayListingId: targetOffer.listingId || (storedId && /^\d{12}$/.test(storedId) ? storedId : null),
+            ebayOfferId: targetOffer.offerId,
+            ebayInventoryItemGroupKey: querySku,
+            "crossPostListingIds.ebay": resolvedListingId,
+            ebayListingId: resolvedListingId,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           });
           return { offer: targetOffer, offerId: targetOffer.offerId, sku: targetOffer.sku || querySku, inventoryItemGroupKey: querySku };
@@ -205,9 +289,11 @@ async function resolveEbayOffer(uid, product, productId) {
       if (matchedOffer?.offerId) {
         console.log(`[resolveEbayOffer] Recovered offerId=${matchedOffer.offerId} (listingId=${matchedOffer.listingId}, SKU=${matchedOffer.sku}) from user offer list`);
         const docRef = admin.firestore().collection("products").doc(productId);
+        const resolvedListingId = matchedOffer.listingId || (storedId && /^\d{12}$/.test(storedId) ? storedId : null);
         await docRef.update({
-          "crossPostListingIds.ebay": matchedOffer.offerId,
-          ebayListingId: matchedOffer.listingId || (storedId && /^\d{12}$/.test(storedId) ? storedId : null),
+          ebayOfferId: matchedOffer.offerId,
+          "crossPostListingIds.ebay": resolvedListingId,
+          ebayListingId: resolvedListingId,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
         return { offer: matchedOffer, offerId: matchedOffer.offerId, sku: matchedOffer.sku || productId };
@@ -254,7 +340,11 @@ async function suggestCategoryId(uid, title) {
 
   async function taxonomyFetch(path) {
     const res = await fetch(`https://${host}${path}`, {
-      headers: { Authorization: `Bearer ${appToken}`, Accept: "application/json" },
+      headers: {
+        Authorization: `Bearer ${appToken}`,
+        Accept: "application/json",
+        "Accept-Language": "en-US", // see ebayRestHeaders — undici's `*` default is rejected
+      },
     });
     if (!res.ok) {
       const detail = await res.json().catch(() => ({}));
@@ -273,14 +363,205 @@ async function suggestCategoryId(uid, title) {
   return categoryId;
 }
 
-// One-click list a product draft on eBay: inventory item → offer → publish
+// Resolve a reusable single-variant offerId for a product, or null to create
+// fresh. Order: stored `ebayOfferId` (verified live) → legacy id via
+// resolveEbayOffer (lazy migration) → null.
+async function resolveSingleOfferId(uid, product, productId) {
+  if (product.ebayOfferId) {
+    const offer = await getOfferOrNull(uid, product.ebayOfferId);
+    if (offer?.offerId) return offer.offerId;
+    // eBay says it's gone — drop the stale pointer, fall through to create.
+    await admin.firestore().collection("products").doc(productId).update({
+      ebayOfferId: admin.firestore.FieldValue.delete(),
+    });
+  }
+  // Pre-`ebayOfferId` doc, or a legacy 12-digit listingId in
+  // crossPostListingIds.ebay — let resolveEbayOffer find + backfill it.
+  if (product.crossPostListingIds?.ebay || product.ebayListingId) {
+    try {
+      const resolved = await resolveEbayOffer(uid, product, productId);
+      if (resolved?.offerId) return resolved.offerId;
+    } catch (_) { /* nothing to reuse */ }
+  }
+  return null;
+}
+
+// createOffer, with recovery when eBay says an offer already exists (25002)
+// for this SKU — adopt it and push the current values.
+async function createOrAdoptOffer(uid, sku, offerBody) {
+  try {
+    const created = await ebayRequest(uid, "POST", "/sell/inventory/v1/offer", offerBody);
+    return created.offerId;
+  } catch (e) {
+    const dup = e.ebayErrors?.find((err) => err.errorId === 25002);
+    if (!dup) throw e;
+    let offerId = dup.parameters?.find((p) => p.name === "offerId")?.value;
+    if (!offerId) {
+      const existing = await ebayRequest(
+        uid, "GET", `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}&marketplace_id=${MARKETPLACE_ID}`
+      );
+      offerId = existing?.offers?.[0]?.offerId;
+    }
+    if (!offerId) throw e;
+    const { sku: _s, marketplaceId: _m, format: _f, ...updateBody } = offerBody;
+    await ebayRequest(uid, "PUT", `/sell/inventory/v1/offer/${offerId}`, updateBody);
+    return offerId;
+  }
+}
+
+// Single-variation listing: one inventory item → one offer → publish.
+async function postSingleVariant(ctx) {
+  const { uid, product, productId, docRef, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description } = ctx;
+  const sku = productId;
+  const itemQty = typeof product.quantity === "number" && product.quantity > 0 ? product.quantity : 1;
+
+  await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
+    product: toEbayInventoryProduct(product, { imageLimit: 12, title }),
+    condition: "NEW",
+    packageWeightAndSize: ebayPackageWeightAndSize(product),
+    availability: { shipToLocationAvailability: { quantity: itemQty } },
+  });
+
+  const offerArgs = { sku, price: basePrice, quantity: itemQty, categoryId, description, listingPolicies, merchantLocationKey };
+  let offerId = await resolveSingleOfferId(uid, product, productId);
+  if (offerId) {
+    await ebayRequest(uid, "PUT", `/sell/inventory/v1/offer/${offerId}`, buildEbayOfferPayload(offerArgs, { forUpdate: true }));
+  } else {
+    offerId = await createOrAdoptOffer(uid, sku, buildEbayOfferPayload(offerArgs));
+  }
+
+  const published = await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`);
+  const listingId = published?.listingId ?? null;
+
+  await docRef.update({
+    "crossPostStatus.ebay": "active",
+    "crossPostListingIds.ebay": listingId,
+    ebayOfferId: offerId,
+    ebayListingId: listingId,
+    ebayListingUrl: listingId ? `https://www.ebay.com/itm/${listingId}` : null,
+    ebayHasVariations: false,
+    ebayLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { listingId, offerId, alreadyListed: false, hasVariations: false };
+}
+
+// Multi-variation listing: one inventory item per active variant → an
+// inventory item group → one offer per variant → publishOfferByInventoryItemGroup.
+// Result is ONE eBay listing with N selectable variations.
+async function postMultiVariant(ctx) {
+  const { uid, product, productId, docRef, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description } = ctx;
+  const groupKey = productId;
+  const options = Array.isArray(product.options) ? product.options : [];
+  const activeVariants = (Array.isArray(product.variants) ? product.variants : [])
+    .map((v, i) => ({ v, i }))
+    .filter(({ v }) => v.active !== false);
+  if (activeVariants.length === 0) {
+    throw new HttpsError("failed-precondition", "This product has no active variants to post.");
+  }
+
+  // Existing per-variant offers on eBay for this group, keyed by SKU.
+  const offersBySku = {};
+  if (product.ebayInventoryItemGroupKey) {
+    try {
+      const res = await ebayRequest(
+        uid, "GET",
+        `/sell/inventory/v1/offer?inventory_item_group_key=${encodeURIComponent(groupKey)}&marketplace_id=${MARKETPLACE_ID}`
+      );
+      for (const o of res?.offers ?? []) if (o.sku && o.offerId) offersBySku[o.sku] = o.offerId;
+    } catch (e) {
+      const gone = e.status === 404 || e.ebayErrors?.some((x) => [25713, 25710].includes(x.errorId));
+      if (!gone) throw e;
+      await docRef.update({ ebayInventoryItemGroupKey: admin.firestore.FieldValue.delete() });
+    }
+  }
+
+  const perVariant = activeVariants.map(({ v, i }) => {
+    const sku = v.ebayVariantSku || variantSkuFor(productId, v, i);
+    const qty = typeof v.quantity === "number" && v.quantity >= 0 ? Math.floor(v.quantity) : 0;
+    // { "Size": ["M"], "Color": ["Red"] } — eBay wants aspect values as arrays.
+    const aspects = Object.entries(v.optionValues ?? {}).reduce((acc, [k, val]) => {
+      acc[k] = Array.isArray(val) ? val : [String(val)];
+      return acc;
+    }, {});
+    return { variantIndex: i, sku, qty, price: variantPriceOr(v, basePrice), aspects };
+  });
+
+  // 1. One inventory item per variant.
+  const sharedProduct = toEbayInventoryProduct(product, { imageLimit: 12, title });
+  const packageWeightAndSize = ebayPackageWeightAndSize(product);
+  for (const pv of perVariant) {
+    await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(pv.sku)}`, {
+      product: { ...sharedProduct, aspects: pv.aspects },
+      condition: "NEW",
+      packageWeightAndSize,
+      availability: { shipToLocationAvailability: { quantity: pv.qty } },
+    });
+  }
+
+  // 2. Inventory item group — defines the variation dimensions + membership.
+  await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`, {
+    title,
+    description,
+    imageUrls: sharedProduct.imageUrls,
+    aspects: product.ebayAspects ?? {},
+    variesBy: {
+      specifications: options.map((opt) => ({ name: opt.name, values: opt.values || [] })),
+    },
+    variantSKUs: perVariant.map((pv) => pv.sku),
+  });
+
+  // 3. One offer per variant (reuse the group's existing offers where possible).
+  for (const pv of perVariant) {
+    const offerArgs = {
+      sku: pv.sku, price: pv.price, quantity: pv.qty,
+      categoryId, description, listingPolicies, merchantLocationKey,
+    };
+    const existing = offersBySku[pv.sku];
+    if (existing) {
+      await ebayRequest(uid, "PUT", `/sell/inventory/v1/offer/${existing}`, buildEbayOfferPayload(offerArgs, { forUpdate: true }));
+      pv.offerId = existing;
+    } else {
+      pv.offerId = await createOrAdoptOffer(uid, pv.sku, buildEbayOfferPayload(offerArgs));
+    }
+  }
+
+  // 4. Publish the whole group as one multi-variation listing.
+  const published = await ebayRequest(uid, "POST", "/sell/inventory/v1/offer/publish_by_inventory_item_group", {
+    inventoryItemGroupKey: groupKey,
+    marketplaceId: MARKETPLACE_ID,
+  });
+  const listingId = published?.listingId ?? null;
+
+  const updatePayload = {
+    "crossPostStatus.ebay": "active",
+    "crossPostListingIds.ebay": listingId,
+    ebayInventoryItemGroupKey: groupKey,
+    ebayListingId: listingId,
+    ebayListingUrl: listingId ? `https://www.ebay.com/itm/${listingId}` : null,
+    ebayHasVariations: true,
+    ebayLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  for (const pv of perVariant) {
+    updatePayload[`variants.${pv.variantIndex}.ebayVariantSku`] = pv.sku;
+    updatePayload[`variants.${pv.variantIndex}.ebayOfferId`] = pv.offerId;
+  }
+  await docRef.update(updatePayload);
+
+  return { listingId, groupKey, alreadyListed: false, hasVariations: true, variantOfferIds: perVariant.map((pv) => pv.offerId) };
+}
+
+// One-click list a product on eBay. Single- or multi-variation; re-posting a
+// previously-withdrawn product reuses its stable offer(s).
 exports.dropshipEbayCreateListing = onCall(
   { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 120, memory: "512MiB" },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
 
-    const { productId, sellPrice, quantity, credentialSet } = request.data;
+    const { productId } = request.data;
     if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
 
     const db = admin.firestore();
@@ -294,12 +575,9 @@ exports.dropshipEbayCreateListing = onCall(
       return { listingId: product.crossPostListingIds?.ebay, alreadyListed: true };
     }
 
-    const sku = productId; // Firestore doc ID doubles as the parent eBay SKU
     const title = (product.title ?? "").slice(0, 80); // eBay title limit
     const description = canonicalDescription(product);
-    const basePrice = typeof sellPrice === "number" && sellPrice > 0
-      ? sellPrice
-      : computeEbaySellPrice(product);
+    const basePrice = resolveListingPrice(product);
 
     const [merchantLocationKey, listingPolicies, categoryId] = await Promise.all([
       getMerchantLocationKey(uid),
@@ -307,114 +585,16 @@ exports.dropshipEbayCreateListing = onCall(
       suggestCategoryId(uid, title),
     ]);
 
-    // Check if product has variants
-    const variationData = buildEbayVariations(product);
-    const hasVariations = variationData !== null;
-
-    // 1. Inventory item (idempotent PUT keyed by SKU)
-    const inventoryPayload = {
-      product: toEbayInventoryProduct(product, { imageLimit: 12, title }),
-      condition: "NEW",
-    };
-
-    if (hasVariations) {
-      // Multi-variant: include variations with individual SKUs and prices
-      inventoryPayload.variations = variationData.variations.map((v) => ({
-        sku: v.sku,
-        price: v.price ? { value: Number(v.price).toFixed(2), currency: "USD" } : undefined,
-        quantity: typeof v.quantity === "number" ? Math.max(0, v.quantity) : 0,
-        itemSpecifics: Object.entries(v.itemSpecifics).reduce((acc, [key, val]) => {
-          acc[key] = Array.isArray(val) ? val : [val];
-          return acc;
-        }, {}),
-      }));
-      // Put item specifics (option names and possible values) into aspects
-      inventoryPayload.product.aspects = variationData.itemSpecifics;
-    } else {
-      // Single-variant
-      const itemQty = typeof quantity === "number" && quantity > 0
-        ? quantity
-        : (typeof product.quantity === "number" && product.quantity > 0 ? product.quantity : 1);
-      inventoryPayload.availability = { shipToLocationAvailability: { quantity: itemQty } };
-    }
-
-    await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, inventoryPayload);
-
-    // 2. Offer — reuse existing unpublished offer for this SKU if one exists
-    let offerId;
-    const offerPayload = {
-      sku,
-      marketplaceId: MARKETPLACE_ID,
-      format: "FIXED_PRICE",
-      availableQuantity: hasVariations ? 0 : (typeof quantity === "number" ? quantity : (product.quantity ?? 1)),
-      categoryId,
-      listingDescription: description,
-      listingPolicies,
-      merchantLocationKey,
-    };
-
-    if (hasVariations) {
-      // Multi-variant pricing: each SKU gets its own price from the variations data
-      offerPayload.pricingSummary = {
-        priceType: "FIXED_PRICE",
-        minimumAdvertisedPrice: { value: basePrice.toFixed(2), currency: "USD" },
-      };
-      offerPayload.variations = variationData.variations.map((v) => ({
-        sku: v.sku,
-        price: { value: (v.price ?? basePrice).toFixed(2), currency: "USD" },
-        availableQuantity: typeof v.quantity === "number" ? Math.max(0, v.quantity) : 0,
-      }));
-    } else {
-      // Single-variant pricing
-      offerPayload.pricingSummary = { price: { value: basePrice.toFixed(2), currency: "USD" } };
-    }
-
-    try {
-      const created = await ebayRequest(uid, "POST", "/sell/inventory/v1/offer", offerPayload);
-      offerId = created.offerId;
-    } catch (e) {
-      // 25002 = offer already exists for this SKU/marketplace
-      if (e.ebayErrors?.some((err) => err.errorId === 25002)) {
-        const existing = await ebayRequest(
-          uid, "GET", `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}&marketplace_id=${MARKETPLACE_ID}`
-        );
-        offerId = existing?.offers?.[0]?.offerId;
-        if (!offerId) throw e;
-      } else {
-        throw e;
-      }
-    }
-
-    // 3. Publish offer → creates the live eBay listing
-    const published = await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`);
-    const listingId = published?.listingId ?? offerId;
-
-    // 4. Update Firestore product document
-    const updatePayload = {
-      "crossPostStatus.ebay": "active",
-      "crossPostListingIds.ebay": offerId,
-      ebayListingId: listingId,
-      ebayHasVariations: hasVariations,
-      ebayLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
-
-    // If multi-variant, also tag variants with their eBay SKUs
-    if (hasVariations && Array.isArray(product.variants)) {
-      const variantUpdates = {};
-      variationData.variations.forEach((v, index) => {
-        variantUpdates[`variants.${index}.ebayVariantSku`] = v.sku;
-      });
-      Object.assign(updatePayload, variantUpdates);
-    }
-
-    await docRef.update(updatePayload);
-
-    return { listingId, offerId, alreadyListed: false, hasVariations };
+    const ctx = { uid, product, productId, docRef, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description };
+    const hasVariations = buildEbayVariations(product) !== null;
+    return hasVariations ? postMultiVariant(ctx) : postSingleVariant(ctx);
   }
 );
 
-// Delete an eBay listing: withdraw offer and delete inventory item
+// Remove an eBay listing: withdraw the offer(s) so the item is no longer
+// purchasable, but KEEP the stable offer pointer(s) (`ebayOfferId` /
+// `ebayInventoryItemGroupKey` / `variants[i].ebayOfferId`) so a later re-post
+// reuses the same offer(s) rather than creating fresh ones.
 exports.ebayDeleteListing = onCall(
   { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 60, memory: "256MiB" },
   async (request) => {
@@ -432,66 +612,77 @@ exports.ebayDeleteListing = onCall(
     const product = snap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
 
-    const storedId = product.crossPostListingIds?.ebay;
-    if (!storedId) {
+    const hasEbay = product.crossPostStatus?.ebay === "active"
+      || product.crossPostListingIds?.ebay
+      || product.ebayOfferId
+      || product.ebayInventoryItemGroupKey;
+    if (!hasEbay) {
       throw new HttpsError("failed-precondition", "No eBay listing found.");
     }
 
-    // force=true: user has confirmed they already ended the listing on eBay manually —
-    // skip the API call entirely and just clear the Firestore record.
+    const isMultiVariant = product.ebayHasVariations || !!product.ebayInventoryItemGroupKey;
+
+    // force=true: user has confirmed they already ended the listing on eBay
+    // manually — skip the API call, just clear the Firestore record.
     if (!force) {
       try {
-        // Resolve to a real offer ID (handles legacy listing IDs stored in crossPostListingIds.ebay)
-        let offerId;
-        try {
-          const resolved = await resolveEbayOffer(uid, product, productId);
-          offerId = resolved.offerId;
-        } catch (resolveErr) {
-          // Can't find an offer — surface this to the client so the UI can offer the manual fallback
-          throw new HttpsError(
-            "not-found",
-            `No eBay offer found for this listing (stored ID: ${storedId}). If you have already ended the listing manually on eBay, you can mark it as removed here.`
-          );
-        }
-
-        if (offerId) {
-          // Withdraw the offer — ends the live listing on eBay but keeps
-          // the offer record in Seller Hub so the seller has a history of it.
+        if (isMultiVariant) {
+          const groupKey = product.ebayInventoryItemGroupKey || productId;
           try {
-            await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/withdraw`);
+            await ebayRequest(uid, "POST", "/sell/inventory/v1/offer/withdraw_by_inventory_item_group", {
+              inventoryItemGroupKey: groupKey,
+              marketplaceId: MARKETPLACE_ID,
+            });
           } catch (withdrawErr) {
-            // 25702 = offer not published, nothing to withdraw — ok to continue
+            // 25702 = nothing published to withdraw; 404 / 25713 = group already gone — all fine.
             const code = withdrawErr.ebayErrors?.[0]?.errorId;
-            if (code !== 25702 && code !== 404) {
-              throw withdrawErr;
+            if (code !== 25702 && code !== 25713 && withdrawErr.status !== 404) throw withdrawErr;
+          }
+        } else {
+          let offerId = product.ebayOfferId;
+          if (!offerId) {
+            try {
+              offerId = (await resolveEbayOffer(uid, product, productId))?.offerId;
+            } catch (_) {
+              throw new HttpsError(
+                "not-found",
+                "No eBay offer found for this listing. If you already ended it manually on eBay, you can mark it as removed here."
+              );
+            }
+          }
+          if (offerId) {
+            try {
+              await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/withdraw`);
+            } catch (withdrawErr) {
+              const code = withdrawErr.ebayErrors?.[0]?.errorId;
+              if (code !== 25702 && code !== 25713 && withdrawErr.status !== 404) throw withdrawErr;
             }
           }
         }
       } catch (e) {
         if (e instanceof HttpsError) throw e;
         const errorMsg = e.ebayErrors?.map((err) => `${err.errorId}: ${err.message}`).join("; ") || e.message;
-        throw new HttpsError("internal", `Failed to delete eBay listing: ${errorMsg}`);
+        throw new HttpsError("internal", `Failed to remove eBay listing: ${errorMsg}`);
       }
-    } // end if (!force)
+    }
 
-    // Clear all eBay fields from product
+    // Clear the live-listing fields; keep the offer pointer(s) for re-posting.
     await docRef.update({
       "crossPostStatus.ebay": admin.firestore.FieldValue.delete(),
       "crossPostListingIds.ebay": admin.firestore.FieldValue.delete(),
       ebayListingId: admin.firestore.FieldValue.delete(),
       ebayListingUrl: admin.firestore.FieldValue.delete(),
-      ebayHasVariations: admin.firestore.FieldValue.delete(),
       ebayLastSyncedAt: admin.firestore.FieldValue.delete(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      // KEPT: ebayHasVariations, ebayOfferId, ebayInventoryItemGroupKey
     });
 
-    // Also clear variant-level eBay fields if multi-variant
-    if (product.ebayHasVariations && Array.isArray(product.variants)) {
+    if (isMultiVariant && Array.isArray(product.variants)) {
       const batch = db.batch();
       product.variants.forEach((v, index) => {
         batch.update(docRef, {
           [`variants.${index}.crossPostStatus.ebay`]: admin.firestore.FieldValue.delete(),
-          [`variants.${index}.ebayVariantSku`]: admin.firestore.FieldValue.delete(),
+          // KEPT: variants[i].ebayVariantSku, variants[i].ebayOfferId
         });
       });
       await batch.commit();
@@ -536,7 +727,7 @@ exports.ebayGetListingDetails = onCall(
         wonni: {
           title: product.title ?? "",
           description: canonicalDescription(product),
-          price: product.listingPrice ?? computeEbaySellPrice(product),
+          price: Number.isFinite(Number(product.listingPrice)) ? Number(product.listingPrice) : null,
           quantity: product.variants?.reduce((sum, v) => sum + (v.quantity ?? 0), 0) ?? (product.quantity ?? 1),
           photoCount: wonniPhotos.length,
           handlingTimeDays: product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays ?? null,
@@ -585,7 +776,7 @@ exports.ebaySyncListing = onCall(
         // Push Wonni version to eBay (title, description, price, photos, shipping/handling time, variation quantities)
         const title = (product.title ?? "").slice(0, 80);
         const description = canonicalDescription(product);
-        const basePrice = product.listingPrice ?? computeEbaySellPrice(product);
+        const basePrice = resolveListingPrice(product);
 
         const variationData = buildEbayVariations(product);
         const hasVariations = variationData !== null;
@@ -714,7 +905,7 @@ exports.ebayUpdateListing = onCall(
 
       const title = (product.title ?? "").slice(0, 80);
       const description = canonicalDescription(product);
-      const basePrice = product.listingPrice ?? computeEbaySellPrice(product);
+      const basePrice = resolveListingPrice(product);
 
       // Check if product has variants
       const variationData = buildEbayVariations(product);
@@ -828,14 +1019,14 @@ exports.ebayPullSync = onCall(
       const ebayQuantity = inventory?.availability?.shipToLocationAvailability?.quantity ?? (offer?.availableQuantity ?? 0);
 
       const localTitle = product.title ?? "";
-      const localPrice = product.listingPrice ?? computeEbaySellPrice(product);
+      const localPrice = Number(product.listingPrice);
       const localQuantity = product.variants?.reduce((sum, v) => sum + (v.quantity ?? 0), 0) ?? (product.quantity ?? 1);
 
       const diff = [];
       if (ebayTitle && ebayTitle !== localTitle) {
         diff.push({ field: "title", local: localTitle, ebay: ebayTitle });
       }
-      if (ebayPrice != null && Math.abs(ebayPrice - localPrice) > 0.01) {
+      if (ebayPrice != null && Number.isFinite(localPrice) && Math.abs(ebayPrice - localPrice) > 0.01) {
         diff.push({ field: "price", local: localPrice, ebay: ebayPrice });
       }
       if (ebayQuantity != null && ebayQuantity !== localQuantity) {

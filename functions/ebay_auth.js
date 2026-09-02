@@ -36,6 +36,7 @@ async function fetchEbayUsername(accessToken) {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
+      "Accept-Language": "en-US", // see ebayRestHeaders — undici's `*` default is rejected
     },
   });
   const data = await response.json().catch(() => ({}));
@@ -152,26 +153,48 @@ async function refreshEbayToken(uid) {
   return tokens.access_token;
 }
 
+// Header set for every eBay REST call. One place to reason about eBay's
+// picky header validation:
+//   - Node's built-in fetch (undici) injects `Accept-Language: *` when we
+//     don't set it. eBay's Inventory API rejects that with error 25709
+//     ("Invalid value for header Accept-Language.") — pin it to en-US.
+//   - Content-Language is only valid alongside a request body; eBay returns
+//     25709 if it's sent on GET/DELETE.
+function ebayRestHeaders(authValue, hasBody) {
+  return {
+    Authorization: authValue,
+    Accept: "application/json",
+    "Accept-Language": "en-US",
+    "Content-Type": "application/json",
+    ...(hasBody ? { "Content-Language": "en-US" } : {}),
+  };
+}
+
 // Authenticated eBay REST call. Returns parsed JSON (or null for 204).
 async function ebayRequest(uid, method, path, body) {
   const accessToken = await refreshEbayToken(uid);
   const hasBody = body !== undefined && body !== null;
   const response = await fetch(`https://${ebayApiHost()}${path}`, {
     method,
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-      // Content-Language must only be sent when there is a request body —
-      // eBay returns error 25709 if it's included on GET/DELETE requests.
-      ...(hasBody ? { "Content-Language": "en-US" } : {}),
-    },
+    headers: ebayRestHeaders(`Bearer ${accessToken}`, hasBody),
     ...(hasBody && { body: JSON.stringify(body) }),
   });
 
   if (response.status === 204) return null;
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`eBay API error (${response.status}): ${text}`);
+    const err = new Error(`eBay API error (${response.status}): ${text}`);
+    err.status = response.status;
+    // eBay returns { "errors": [{ errorId, message, ... }] }. Callers rely on
+    // err.ebayErrors to recognise specific conditions (e.g. 25002 "offer
+    // already exists") and recover instead of failing the whole request.
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed?.errors)) err.ebayErrors = parsed.errors;
+    } catch {
+      /* non-JSON error body — leave err.ebayErrors undefined */
+    }
+    throw err;
   }
   return response.json();
 }
@@ -181,6 +204,7 @@ module.exports = {
   ebayExchangeToken: exports.dropshipEbayExchangeToken,
   refreshEbayToken,
   ebayRequest,
+  ebayRestHeaders,
   ebayApiHost,
   EBAY_CLIENT_ID,
   EBAY_CLIENT_SECRET,
