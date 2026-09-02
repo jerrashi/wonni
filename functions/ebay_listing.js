@@ -2,6 +2,7 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const { ebayRequest, ebayApiHost, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_ENV } = require("./ebay_auth");
 const { toEbayInventoryProduct, canonicalDescription, listingImagesFor, buildEbayVariations } = require("./platform_adapters");
+const { fillBlankFieldsInline, geminiApiKey } = require("./listing_fields");
 
 const MARKETPLACE_ID = "EBAY_US";
 
@@ -519,6 +520,15 @@ function normalizeVariationValue(rawValue, allowedValues) {
 
 // product.aspects satisfying every required aspect (+ Size Type / Department
 // when the category has them) so the publish validates.
+// { "Type": "Photo Card" } | { "Type": ["Photo Card"] } → { "Type": ["Photo Card"] }
+function toAspectArrays(obj = {}) {
+  return Object.fromEntries(
+    Object.entries(obj)
+      .filter(([, v]) => v != null && v !== "")
+      .map(([k, v]) => [k, (Array.isArray(v) ? v : [v]).map(String)])
+  );
+}
+
 function buildProductAspects(categoryAspects, brand, title = "", optionValues = {}, customAspects = {}) {
   const aspects = { ...customAspects };
   aspects.Brand = [brand && brand !== "Generic" ? brand : "Unbranded"];
@@ -676,7 +686,7 @@ async function postSingleVariant(ctx) {
   const { uid, product, productId, docRef, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description, categoryAspects, brand, conditionEnum } = ctx;
   const sku = productId;
   const itemQty = typeof product.quantity === "number" && product.quantity > 0 ? product.quantity : 1;
-  const productAspects = buildProductAspects(categoryAspects, brand, title, {}, product.ebayAspects ?? {});
+  const productAspects = buildProductAspects(categoryAspects, brand, title, {}, { ...toAspectArrays(product.geminiItemSpecifics), ...toAspectArrays(product.ebayAspects) });
 
   const putItem = ({ addedAspects = {}, condition } = {}) =>
     ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
@@ -829,7 +839,7 @@ async function postMultiVariant(ctx) {
   // variant item carries those + its own option values (Size/Color). Drop
   // any aspect that IS a variation dimension — it belongs in variesBy, not
   // as a fixed value.
-  const productAspects = buildProductAspects(categoryAspects, brand, title, {}, product.ebayAspects ?? {});
+  const productAspects = buildProductAspects(categoryAspects, brand, title, {}, { ...toAspectArrays(product.geminiItemSpecifics), ...toAspectArrays(product.ebayAspects) });
   for (const opt of options) delete productAspects[opt.name];
 
   const putAllItems = ({ addedAspects = {}, condition } = {}) => Promise.all(
@@ -909,7 +919,7 @@ async function postMultiVariant(ctx) {
 // One-click list a product on eBay. Single- or multi-variation; re-posting a
 // previously-withdrawn product reuses its stable offer(s).
 exports.dropshipEbayCreateListing = onCall(
-  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 120, memory: "512MiB" },
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, geminiApiKey], timeoutSeconds: 120, memory: "512MiB" },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
@@ -927,6 +937,10 @@ exports.dropshipEbayCreateListing = onCall(
     if (product.crossPostStatus?.ebay === "active") {
       return { listingId: product.crossPostListingIds?.ebay, alreadyListed: true };
     }
+
+    // Fill any blank shared fields (description/brand/condition/tags/category
+    // hint) with one Gemini call, persisted for later cross-posts. Best-effort.
+    await fillBlankFieldsInline(product, productId);
 
     const title = (product.title ?? "").slice(0, 80); // eBay title limit
     const description = canonicalDescription(product);

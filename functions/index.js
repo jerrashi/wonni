@@ -28,6 +28,7 @@ const { syncTiktokOrders, syncTiktokOrdersScheduled } = require("./tiktok_orders
 const { disconnectPlatform, updateSettings, generateOAuthState } = require("./user_settings");
 const { onProductDeleted } = require("./product_cleanup");
 const { generateProductDescription } = require("./generate_description");
+const { aiAutofillListing } = require("./listing_fields");
 
 module.exports = {
   // Auth
@@ -44,6 +45,7 @@ module.exports = {
   splitProductImage,
   identifyProductsInImage,
   generateProductDescription,
+  aiAutofillListing,
   onProductDeleted,
 
   // TikTok Shop listings

@@ -2,7 +2,7 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const https = require("https");
 const { callAliexpressApi } = require("./aliexpress_auth");
-const { importTimeGeminiFields, geminiApiKey } = require("./gemini_identify");
+const { geminiApiKey } = require("./gemini_identify");
 const { buildNewProductDoc } = require("./product_schema");
 
 const ALLOWED_IMAGE_HOSTS = [".alicdn.com", ".aliexpress-media.com"];
@@ -178,11 +178,8 @@ exports.aliexpressImportProduct = onCall(
     const finalImages = storedImages.length ? storedImages : product.images.slice(0, 5);
     const sourceImages = product.images.slice(0, 5); // Original AliExpress CDN URLs
 
-    const geminiFields = await importTimeGeminiFields({
-      title: product.title,
-      description: product.description ?? "",
-      images: finalImages,
-    });
+    // AI enrichment is opt-in now — the user runs "AI autofill" (or it happens
+    // as post-time gap-fill). No automatic Gemini call at import.
 
     // Build new schema product
     const newProduct = buildNewProductDoc({
@@ -200,7 +197,6 @@ exports.aliexpressImportProduct = onCall(
       variants,
       aliexpressProductId: product.productId,
       aliexpressUrl: product.productUrl ?? productUrl ?? "",
-      ...geminiFields,
       importedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
