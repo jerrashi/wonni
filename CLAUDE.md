@@ -78,7 +78,7 @@ Cloud Function `ebayCreateListing` (= `dropshipEbayCreateListing`) in
   `bulk_migrate_listing`, hex offerId, SKU/group search); backfills
   `ebayOfferId`.
 
-**Aspect + condition + value fill (2026-09-02, pending deploy):** the create
+**Aspect + condition + value fill (2026-09-02, deployed + posting verified):** the create
 path proactively fills eBay category-required item aspects
 (`getCategoryAspects` + `buildProductAspects` + `resolveBrand`/`KNOWN_BRANDS`),
 resolves a category-valid condition (`getAllowedConditionIds` +
@@ -88,7 +88,7 @@ against the category's live value list (`normalizeVariationValue` —
 `publishWithRecovery` retries missing-aspect / rejected-condition errors.
 Pre-flight fails cleanly for off-list `SELECTION_ONLY` values.
 
-**Shared field-fill pipeline (2026-09-02, pending deploy):**
+**Shared field-fill pipeline (2026-09-02, deployed):**
 `functions/listing_fields.js` — `resolveListingFields(product)` makes ONE
 `gemini-flash-lite` call to fill blank shared fields (description, brand,
 tags, condition, category hint, itemSpecifics), persisted to the doc.
