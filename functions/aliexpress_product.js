@@ -93,7 +93,8 @@ function mapAliexpressVariants(skus, productId) {
       id: `v${Date.now()}${i}`,
       optionValues,
       sku: `${productId}-${i + 1}`,
-      price: typeof s.price === "number" ? s.price : null,
+      // Blank by default — a blank variant price follows the listing price.
+      price: null,
       quantity: 1,
       sourcePrice: typeof s.price === "number" ? s.price : null,
       sourceVariantId: s.skuId ?? null,
