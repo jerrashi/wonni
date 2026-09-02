@@ -78,13 +78,16 @@ Cloud Function `ebayCreateListing` (= `dropshipEbayCreateListing`) in
   `bulk_migrate_listing`, hex offerId, SKU/group search); backfills
   `ebayOfferId`.
 
-**Known gap:** the create path does NOT fill eBay category-required item
-aspects (Brand/Type/etc) or resolve a category-valid condition — publish
-works today because the suggested categories haven't demanded them. The
-nested `wonni/functions/ebay_listing.js` already solves this
-(`getCategoryAspects`, `buildProductAspects`, `extractMissingAspects`,
-`getAllowedConditionIds`). Folding that in + a shared field-fill pipeline is
-the next plan: `~/.claude/plans/ebay-listing-field-pipeline.md`.
+**Aspect + condition fill (2026-09-02, pending deploy):** the create path now
+proactively fills eBay category-required item aspects (`getCategoryAspects` +
+`buildProductAspects` + `resolveBrand`/`KNOWN_BRANDS`) and resolves a
+category-valid condition from `product.condition`/`mercariCondition`
+(`getAllowedConditionIds` + `resolveCondition`, was hardcoded `"NEW"`).
+`publishWithRecovery` retries on missing-aspect / rejected-condition publish
+errors. Ported from the nested `wonni/functions/ebay_listing.js`. Next: the
+shared field-fill pipeline — `~/.claude/plans/ebay-listing-field-pipeline.md`
+(one batched Gemini call for what eBay can't supply, write-back caching,
+opt-in Gemini, web `condition` field).
 
 **Deferred:** `ebayUpdateListing` / `ebaySyncListing` (the "apply edits" /
 drift-sync path) still use the old malformed multi-variant `variations`
