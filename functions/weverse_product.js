@@ -2,7 +2,7 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 
 const { downloadBuffer, savePublicBuffer } = require("./product_media");
-const { importTimeGeminiFields, geminiApiKey } = require("./gemini_identify");
+const { geminiApiKey } = require("./gemini_identify");
 const { buildNewProductDoc, extractSourceImages } = require("./product_schema");
 
 const MAX_IMAGES = 24;
@@ -321,11 +321,7 @@ exports.weverseImportProduct = onCall(
     const finalImages = storedImages.length ? storedImages : product.images;
     const sourceImages = extractSourceImages(storedImageAssets, product.images);
 
-    const geminiFields = await importTimeGeminiFields({
-      title: product.title,
-      description: product.description,
-      images: finalImages,
-    });
+    // AI enrichment is opt-in now (see "AI autofill" / post-time gap-fill).
 
     const docRef = db.collection("products").doc();
 
@@ -350,7 +346,6 @@ exports.weverseImportProduct = onCall(
       artistName: product.artistName,
       saleStatus: product.saleStatus,
       preOrder: product.preOrder,
-      ...geminiFields,
       importedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
