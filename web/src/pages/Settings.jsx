@@ -343,24 +343,10 @@ export default function Settings() {
           if (code) {
             window.removeEventListener("message", handleEbayMessage);
             try {
-              let res;
-              try {
-                res = await callFunction("dropshipEbayExchangeToken")({
-                  code,
-                  state: returnedState || state,
-                  credentialSet: "web",
-                });
-              } catch (fnErr) {
-                if (fnErr.code === "not-found" || fnErr.message?.includes("NOT_FOUND") || fnErr.message?.includes("internal")) {
-                  res = await callFunction("ebayExchangeToken")({
-                    code,
-                    state: returnedState || state,
-                    credentialSet: "web",
-                  });
-                } else {
-                  throw fnErr;
-                }
-              }
+              const res = await callFunction("ebayExchangeToken")({
+                code,
+                state: returnedState || state,
+              });
 
               if (event.source) {
                 try {
