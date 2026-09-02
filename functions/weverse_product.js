@@ -196,9 +196,11 @@ function mapWeverseVariantsToOptions(rawVariants) {
       id: `v${Date.now()}${i}`,
       optionValues,
       sku: v.stockId ? `w-${v.stockId}` : `w-${i + 1}`,
-      price: typeof v.price === "number" ? v.price + (v.addPrice ?? 0) : null,
+      // Blank by default — a blank variant price follows the listing price.
+      // `sourcePrice` keeps the Weverse cost for profit tracking.
+      price: null,
       quantity: typeof v.maxOrderQuantity === "number" ? v.maxOrderQuantity : 1,
-      sourcePrice: typeof v.price === "number" ? v.price : null,
+      sourcePrice: typeof v.price === "number" ? v.price + (v.addPrice ?? 0) : null,
       sourceVariantId: v.stockId ?? null,
       active: !v.soldOut,
     };
