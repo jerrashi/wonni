@@ -28,9 +28,11 @@ data).
   hosting — editing `public/oauth/*/index.html` does nothing until
   `firebase deploy --only hosting`.
 - One eBay keyset for everything: `EBAY_CLIENT_ID` / `EBAY_CLIENT_SECRET` /
-  `EBAY_RU_NAME` secrets on `wonni-app`. Web + iOS use the same one. (The
-  `dropshipEbay*` function-name prefix and its `ebayCreateListing` alias are
-  legacy naming, not a second credential set.)
+  `EBAY_RU_NAME` secrets on `wonni-app`. Web + iOS call the same clean-named
+  functions — `ebayCreateListing`, `ebayExchangeToken`, `ebayGetListing`, … .
+  The old `dropshipEbay*` names/aliases were removed 2026-09-02; the orphaned
+  `dropshipEbayCreateListing` / `dropshipEbayExchangeToken` deployments need
+  `firebase functions:delete`.
 
 ## Roadmap (user priority order)
 
@@ -44,7 +46,7 @@ data).
 
 ## eBay posting — current model (2026-09-02, works)
 
-Cloud Function `ebayCreateListing` (= `dropshipEbayCreateListing`) in
+Cloud Function `ebayCreateListing` in
 `wonni/functions/ebay_listing.js`. Uses the Inventory API:
 
 - **Price:** `product.listingPrice` is the single cross-platform price.
@@ -93,7 +95,7 @@ Pre-flight fails cleanly for off-list `SELECTION_ONLY` values.
 `gemini-flash-lite` call to fill blank shared fields (description, brand,
 tags, condition, category hint, itemSpecifics), persisted to the doc.
 `aiAutofillListing` callable = the "✨ AI autofill" button on ProductDetail;
-`fillBlankFieldsInline` = post-time gap-fill inside `dropshipEbayCreateListing`.
+`fillBlankFieldsInline` = post-time gap-fill inside `ebayCreateListing`.
 Import-time auto Gemini call removed (now opt-in). Canonical `product.condition`
 field added to ProductDetail (mirrors `mercariCondition`). Plan:
 `~/.claude/plans/ebay-listing-field-pipeline.md`. Left: iOS onto the shared
