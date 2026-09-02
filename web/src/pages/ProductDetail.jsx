@@ -3412,6 +3412,7 @@ function ProductDetail() {
   const [applyingEbaySync, setApplyingEbaySync] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState(null);
   const [aiDescLoading, setAiDescLoading] = useState(false);
+  const [autofillLoading, setAutofillLoading] = useState(false);
   const [aiDescSuggestion, setAiDescSuggestion] = useState(null); // string | null
   const [aiDescError, setAiDescError] = useState("");
   // Import-time AI suggestions for title/price — the description one reuses
@@ -4081,6 +4082,32 @@ function ProductDetail() {
 
   // Calls Gemini to generate a suggested product description from the title
   // and first product image. Shows the result inline with Accept/Discard.
+  async function handleAiAutofill() {
+    setAutofillLoading(true);
+    setError("");
+    // Explicit action — re-enable the title/description suggestion chips even
+    // if the user dismissed a previous round.
+    dismissedAiTitleRef.current = false;
+    dismissedAiDescriptionRef.current = false;
+    try {
+      const res = await callFunction("aiAutofillListing")({ productId });
+      const d = res.data ?? {};
+      if (d.noop) {
+        setToast({ message: "Nothing to autofill — every field is already set." });
+      } else {
+        const bits = [];
+        if (d.filled?.length) bits.push(`filled ${d.filled.join(", ")}`);
+        if (d.suggestions?.title || d.suggestions?.description) bits.push("staged title/description suggestions");
+        setToast({ message: `AI autofill: ${bits.join("; ")}.` });
+      }
+      // Written fields + aiSuggested* chips arrive via the product onSnapshot.
+    } catch (e) {
+      setError(e.message ?? "AI autofill failed.");
+    } finally {
+      setAutofillLoading(false);
+    }
+  }
+
   async function generateAIDescription() {
     setAiDescLoading(true);
     setAiDescError("");
@@ -5670,7 +5697,20 @@ function ProductDetail() {
           {/* Title, Description & Shipping (Full Width) */}
           <div className="product-detail-panel" style={{ display: "contents" }}>
               <div className="detail-section">
-                <h2>Edit catalog text</h2>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <h2>Edit catalog text</h2>
+                  <button
+                    className="btn btn-ghost"
+                    style={{ fontSize: 12, padding: "4px 10px", display: "flex", alignItems: "center", gap: 4 }}
+                    onClick={handleAiAutofill}
+                    disabled={autofillLoading}
+                    title="Fill blank fields (brand, condition, tags, category, description) with one AI call"
+                  >
+                    {autofillLoading
+                      ? <><span style={{ display: "inline-block", width: 10, height: 10, border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />Autofilling…</>
+                      : <>✨ AI autofill</>}
+                  </button>
+                </div>
                 <div className="modal-field" style={{ marginBottom: 12 }}>
                   <label>Title</label>
                   {aiSuggestedTitle !== null && (
