@@ -372,12 +372,54 @@ Three bugs, all introduced by earlier churn, fixed together:
    authorized to call `getUser`. **Existing connected users must disconnect
    + reconnect eBay once** to re-consent to the new scope.
 
+**Follow-up (same day):** the first pass put `commerce.identity.readonly`
+into `EBAY_SCOPES` in `functions/ebay_auth.js`, which is also used for the
+`refresh_token` grant in `refreshEbayToken()`. eBay rejects a refresh whose
+scope isn't a subset of the original authorization, so every already-connected
+account got `invalid_scope` on refresh → uncaught error → **"✕ INTERNAL" on
+any eBay listing/post action**. Fixed by removing the identity scope from
+that constant — it's requested at authorize time (`Settings.jsx` /
+`ProfileView.swift`) and only needed once, at token exchange, for the
+username read. Posting to eBay works again in this version.
+
 Also fixed a deploy blocker in `functions/ebay_auth.js`: earlier reverts had
 stripped its `module.exports`, so `ebay_listing.js` / `recover_ebay_offer_ids.js`
 imported `undefined` for `EBAY_CLIENT_ID`/`EBAY_CLIENT_SECRET`/`EBAY_RU_NAME`
 and `firebase deploy` failed with `secrets/undefined`. Full export surface
 restored. Deleted stale duplicate `oauth/ebay/index.html` copies under the
 wonni-app repo's `wonni/public/`.
+
+## As of 2026-09-02 — OAuth popup hang on localhost: real root cause
+
+**Symptom:** eBay connect stuck forever on "Connecting eBay…", no error, no
+alert. (Would also have hit AliExpress/Etsy/TikTok once `25fca47` deployed.)
+
+**Root cause:** the deployed callback page (`public/oauth/*/index.html`)
+pinned its `postMessage` targetOrigin to `https://wonni-app.web.app`
+(commit `78bfbfb`, "security" hardening). During local dev the dashboard
+runs on `http://localhost:517x`, so the browser **silently drops** the
+relay message — no throw, no console warning, nothing. The dashboard never
+receives the OAuth code. In production it worked; only localhost broke.
+
+**Why it took ~10 commits to find:** a mismatched `postMessage` targetOrigin
+produces zero diagnostics. Every fix attempt (reflog: `62d525f`, `5ee4b90`,
+`6c56f89`, `c884da8`, `f043ae0`, plus `0eefb12` which was a no-op — it split
+`EBAY_SCOPES` then rejoined it at the only call site) was blind. What
+actually located it: one `console.log` on the *receiver* ("did the message
+arrive?"). It hadn't.
+
+**Also key:** the callback pages are only ever loaded from *deployed*
+hosting (eBay's RuName can't redirect to localhost). Editing
+`public/oauth/*/index.html` does nothing until `firebase deploy --only
+hosting`. Several earlier agents edited/reset this repo without redeploying.
+
+**Fix (`0af186e` + merge):** replaced the single hard-pinned origin with an
+`ALLOWED_OPENER_ORIGINS` allowlist (prod + localhost ports) and a
+`relayToOpener()` helper that posts to every allowed origin — only the
+match is delivered. Keeps the security intent (never `"*"`); works in dev
+and prod. Applied to all four callback pages. Backend
+(`dropshipEbayExchangeToken`) was never broken — verified returning
+`connectedUsername`.
 
 ## Phase 1 notes (variations)
 - `MAX_VARIATION_DIMENSIONS` in `ProductDetail.jsx` caps variation structure
