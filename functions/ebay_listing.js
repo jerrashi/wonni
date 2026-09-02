@@ -393,6 +393,9 @@ async function getCategoryAspects(categoryId) {
       mode: a.aspectConstraint ? a.aspectConstraint.aspectMode : "FREE_TEXT",
       values: (a.aspectValues || []).map((v) => v.localizedValue),
       required: !!(a.aspectConstraint && a.aspectConstraint.aspectRequired),
+      // eBay enforces its value list for variation-enabled aspects at publish
+      // time even when mode is FREE_TEXT (err 25129) — e.g. apparel "Size".
+      variationEnabled: !!(a.aspectConstraint && a.aspectConstraint.aspectEnabledForVariations),
     }));
   } catch (err) {
     console.warn(`[getCategoryAspects] ${err.message}`);
@@ -505,8 +508,13 @@ function normalizeVariationValue(rawValue, allowedValues) {
     const hit = allowedValues.find((a) => ci(a) === ci(aliased));
     if (hit) return hit;
   }
-  const partial = allowedValues.find((a) => ci(a).includes(ci(v)) || ci(v).includes(ci(a)));
-  return partial || v;
+  // Loose fallback: an allowed value that contains the user's input as a
+  // substring (min 3 chars so "S"/"XL" can't swallow "One Size").
+  if (v.length >= 3) {
+    const partial = allowedValues.find((a) => ci(a).includes(ci(v)));
+    if (partial) return partial;
+  }
+  return v;
 }
 
 // product.aspects satisfying every required aspect (+ Size Type / Department
@@ -743,21 +751,30 @@ async function postMultiVariant(ctx) {
   // variesBy.specifications and each variant's own value must use the mapped
   // form and stay aligned.
   const aspectByName = Object.fromEntries(categoryAspects.map((a) => [a.name.toLowerCase(), a]));
-  const mapOptionValue = (optName, val) => {
+  // A variation aspect whose value list eBay enforces (SELECTION_ONLY, or
+  // FREE_TEXT + variation-enabled — apparel "Size" is the latter).
+  const controlledAspect = (optName) => {
     const meta = aspectByName[String(optName).toLowerCase()];
-    return meta && meta.mode === "SELECTION_ONLY" ? normalizeVariationValue(val, meta.values) : String(val);
+    if (!meta || !meta.values?.length) return null;
+    return meta.mode === "SELECTION_ONLY" || meta.variationEnabled ? meta : null;
+  };
+  const mapOptionValue = (optName, val) => {
+    const meta = controlledAspect(optName);
+    return meta ? normalizeVariationValue(val, meta.values) : String(val);
   };
 
-  // Pre-flight: every variation value on a SELECTION_ONLY dimension must
-  // resolve to one of eBay's controlled values for THIS category. Fail here
-  // with the accepted list, before creating anything on eBay — rather than
-  // orphaning inventory items on a publish rejection (25129).
+  // Pre-flight: check every variation value resolves to one of eBay's values
+  // for THIS category. For a truly closed list (SELECTION_ONLY) fail here
+  // with the accepted list, before creating anything on eBay. For FREE_TEXT
+  // aspects that merely publish-enforce their list (Size) just warn and let
+  // eBay have the final say — some FREE_TEXT aspects genuinely take custom
+  // values (Color).
   {
     const ci = (s) => String(s).toLowerCase();
     const badValues = [];
     for (const opt of options) {
-      const meta = aspectByName[ci(opt.name)];
-      if (!meta || meta.mode !== "SELECTION_ONLY" || !meta.values?.length) continue;
+      const meta = controlledAspect(opt.name);
+      if (!meta) continue;
       const seen = new Set();
       for (const { v } of activeVariants) {
         const raw = v.optionValues?.[opt.name];
@@ -766,7 +783,11 @@ async function postMultiVariant(ctx) {
           seen.add(ci(one));
           const mapped = normalizeVariationValue(one, meta.values);
           if (!meta.values.some((a) => ci(a) === ci(mapped))) {
-            badValues.push({ dimension: opt.name, value: one, accepted: meta.values });
+            if (meta.mode === "SELECTION_ONLY") {
+              badValues.push({ dimension: opt.name, value: one, accepted: meta.values });
+            } else {
+              console.warn(`[ebay] ${opt.name} "${one}" not in eBay's list — sending as-is`);
+            }
           }
         }
       }
