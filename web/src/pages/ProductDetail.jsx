@@ -2349,8 +2349,8 @@ function MercariVariantTemplate({
             <label style={{ fontSize: 11 }}>Item Condition</label>
             <select
               className="input"
-              value={product.mercariCondition ?? "good"}
-              onChange={(e) => onSettingsChange({ mercariCondition: e.target.value })}
+              value={product.condition ?? product.mercariCondition ?? "good"}
+              onChange={(e) => onSettingsChange({ mercariCondition: e.target.value, condition: e.target.value })}
             >
               <option value="new">New (Unopened / Brand New)</option>
               <option value="likenew">Like New (Mint / Unused)</option>
@@ -3311,6 +3311,7 @@ function ProductDetail() {
   const [deletingProduct, setDeletingProduct] = useState(false);
   const [title, setTitle] = useState("");
   const [brand, setBrand] = useState("");
+  const [condition, setCondition] = useState("good");
   const [aiSuggestedBrand, setAiSuggestedBrand] = useState(null);
   const [description, setDescription] = useState("");
   const [listingPrice, setListingPrice] = useState(null);
@@ -3491,8 +3492,10 @@ function ProductDetail() {
         const nextTitle = effectiveFields.title ?? next.title ?? "";
         const nextBrand = effectiveFields.brand ?? next.brand ?? (next.artistName ?? "");
         const nextDescription = effectiveFields.description ?? next.description ?? "";
+        const nextCondition = effectiveFields.condition ?? next.condition ?? next.mercariCondition ?? "good";
         setTitle(nextTitle);
         setBrand(nextBrand);
+        setCondition(nextCondition);
         setDescription(nextDescription);
         const effListingPrice = "listingPrice" in effectiveFields ? effectiveFields.listingPrice : next.listingPrice;
         const nextListingPrice = typeof effListingPrice === "number" ? effListingPrice : null;
@@ -3782,6 +3785,13 @@ function ProductDetail() {
   function handleBrandChange(value) {
     setBrand(value);
     markFieldsDirty({ brand: value.trim() || null });
+  }
+
+  function handleConditionChange(value) {
+    setCondition(value);
+    // `condition` is the one canonical field (eBay/Mercari/Wonni each map from
+    // it). Mirror to `mercariCondition` until the Mercari read paths migrate.
+    markFieldsDirty({ condition: value, mercariCondition: value });
   }
 
   async function handleCheckEbaySync() {
@@ -4535,7 +4545,7 @@ function ProductDetail() {
       title,
       description: product.description ?? "",
       price,
-      condition: product.mercariCondition ?? "good",
+      condition: product.condition ?? product.mercariCondition ?? "good",
       brand: product.brand || product.artistName || "",
       suggestedCategory: product.category || product.artistName || product.title,
       images: photoUrls,
@@ -5697,6 +5707,16 @@ function ProductDetail() {
                     value={brand}
                     onChange={(e) => handleBrandChange(e.target.value)}
                   />
+                </div>
+                <div className="modal-field" style={{ marginBottom: 12 }}>
+                  <label>Condition</label>
+                  <select className="input" value={condition} onChange={(e) => handleConditionChange(e.target.value)}>
+                    <option value="new">New (unopened / brand new)</option>
+                    <option value="likenew">Like new (mint / unused)</option>
+                    <option value="good">Good (minor wear)</option>
+                    <option value="fair">Fair (visible wear)</option>
+                    <option value="poor">Poor (for parts / heavy wear)</option>
+                  </select>
                 </div>
                 <div className="modal-field">
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
