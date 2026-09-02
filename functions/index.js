@@ -9,9 +9,9 @@ const { splitProductImage } = require("./split_image");
 const { identifyProductsInImage } = require("./identify_products");
 const { placeAliexpressOrder, confirmTiktokShipment, pollAliexpressTracking } = require("./aliexpress_order");
 const { tiktokExchangeToken } = require("./tiktok_auth");
-const { dropshipEbayExchangeToken } = require("./ebay_auth");
+const { ebayExchangeToken } = require("./ebay_auth");
 const {
-  dropshipEbayCreateListing,
+  ebayCreateListing,
   ebayDeleteListing,
   ebayUpdateListing,
   ebayGetListing,
@@ -35,8 +35,7 @@ module.exports = {
   // Auth
   aliexpressExchangeToken,
   tiktokExchangeToken,
-  dropshipEbayExchangeToken,
-  ebayExchangeToken: dropshipEbayExchangeToken,
+  ebayExchangeToken,
   etsyExchangeToken,
 
   // Products
@@ -57,9 +56,7 @@ module.exports = {
   getTiktokCategories,
 
   // eBay listings
-  dropshipEbayCreateListing,
-  // Alias for web app compatibility (unified backend naming)
-  ebayCreateListing: dropshipEbayCreateListing,
+  ebayCreateListing,
   ebayDeleteListing,
   ebayUpdateListing,
   ebayGetListing,

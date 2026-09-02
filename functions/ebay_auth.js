@@ -68,7 +68,7 @@ async function tokenRequest(bodyParams) {
 }
 
 // Exchange authorization code for access + refresh tokens
-exports.dropshipEbayExchangeToken = onCall(
+exports.ebayExchangeToken = onCall(
   { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET] },
   async (request) => {
     const uid = request.auth?.uid;
@@ -200,8 +200,7 @@ async function ebayRequest(uid, method, path, body) {
 }
 
 module.exports = {
-  dropshipEbayExchangeToken: exports.dropshipEbayExchangeToken,
-  ebayExchangeToken: exports.dropshipEbayExchangeToken,
+  ebayExchangeToken: exports.ebayExchangeToken,
   refreshEbayToken,
   ebayRequest,
   ebayRestHeaders,
