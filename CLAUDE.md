@@ -107,11 +107,19 @@ Offer-lifecycle design detail: `~/.claude/plans/ebay-offer-lifecycle-redesign.md
 
 ## Open work
 
-- [ ] **eBay listing field-fill pipeline** — plan at
-  `~/.claude/plans/ebay-listing-field-pipeline.md`. Shared `ebayCreateListing`
-  for web + iOS; fill order user → eBay APIs → one batched Gemini call →
-  block; write fills back to the doc; add a `condition` field to the web
-  form; make Gemini opt-in (drop the auto import-time call).
+- [ ] **iOS onto the shared eBay/field-fill backend** (Step 5 of
+  `~/.claude/plans/ebay-listing-field-pipeline.md`; web + backend steps 1–4
+  done + deployed 2026-09-02). To do:
+  - point the iOS eBay-create call at the shared `ebayCreateListing` Cloud
+    Function (call sites not yet traced — start in
+    `~/Documents/GitHub/wonni/wonni/wonni/Data/`).
+  - add an "✨ AI autofill" button that calls `aiAutofillListing`.
+  - ensure iOS writes the canonical `product.condition` (it has
+    `ItemCondition`; make sure the field name/values line up with web's
+    `new|likenew|good|fair|poor` and `productConditionToEbayEnum`).
+  - delete the now-dead `importTimeGeminiFields` in
+    `wonni/functions/gemini_identify.js` (and its still-imported
+    `geminiApiKey` refs in the 3 import fns) once nothing needs it.
 - [ ] **`postToWonni` skip when a live Wonni listing exists.** Server-side
   early-return in `wonni/wonni/functions/wonni_listing.js` when
   `listings/{productId}` is `status:"active"` (keep the first-post-only
