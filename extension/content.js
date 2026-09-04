@@ -214,7 +214,10 @@
 
     // Set input values via DOM after insertion (keeps product data out of innerHTML)
     el.querySelector("#wonni-cost").value = product.price.toFixed(2);
-    el.querySelector("#wonni-sell").value = (product.price * 2.5).toFixed(2);
+    // Suggested list price: 2× cost grossed up for ~10% fees, nearest dollar.
+    // Matches the dashboard's "✨ Suggested" chip. The user can edit it, and
+    // whatever's in the box on import becomes the product's listingPrice.
+    el.querySelector("#wonni-sell").value = String(Math.round((2 * product.price) / 0.9));
 
     // Fee rate from extension storage (set by Settings page)
     let feeRate = 0.075;
@@ -256,13 +259,14 @@
     el.querySelector("#wonni-close").addEventListener("click", () => el.remove());
 
     el.querySelector("#wonni-import-btn").addEventListener("click", () => {
-      const sellPrice = parseFloat(document.getElementById("wonni-sell")?.value) || product.price * 2.5;
+      const sellInput = parseFloat(document.getElementById("wonni-sell")?.value);
+      const listingPrice = sellInput > 0 ? sellInput : null;
       const status = document.getElementById("wonni-status");
       status.textContent = "Importing…";
       status.style.color = "#888";
 
       chrome.runtime.sendMessage(
-        { type: "IMPORT_PRODUCT", data: { ...product, suggestedSellPrice: sellPrice } },
+        { type: "IMPORT_PRODUCT", data: { ...product, listingPrice } },
         (response) => {
           if (chrome.runtime.lastError || response?.error) {
             status.textContent = response?.error ?? "Import failed — are you signed in?";

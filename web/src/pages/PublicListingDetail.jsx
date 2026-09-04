@@ -153,7 +153,7 @@ export default function PublicListingDetail() {
   const isOwner = Boolean(user && listing.userId && user.uid === listing.userId);
   const title = listing.customTitle || listing.title || "Untitled Item";
   const description = listing.customDescription || listing.description || "";
-  const price = listing.price != null ? listing.price : (listing.listingPrice != null ? listing.listingPrice : listing.sourceCost);
+  const price = listing.price != null ? listing.price : listing.listingPrice;
   const conditionDisplay = CONDITION_MAP[listing.condition] || listing.condition || "Pre-owned";
   const sellerName = seller?.displayName || seller?.username || (listing.userId ? `Seller (${listing.userId.slice(0, 6)})` : "Verified Seller");
   const sellerInitial = (sellerName || "W")[0].toUpperCase();

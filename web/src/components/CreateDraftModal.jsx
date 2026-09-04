@@ -116,7 +116,7 @@ export default function CreateDraftModal({ onClose, onCreated }) {
       {
         id: `var-${Date.now()}-${prev.length}`,
         name: `Option ${prev.length + 1}`,
-        price: parseFloat(sellPrice) || 0,
+        price: "",
         costPrice: parseFloat(costPrice) || 0,
         imageId: filePreviews[0]?.id ?? "",
       },
@@ -708,7 +708,8 @@ export default function CreateDraftModal({ onClose, onCreated }) {
         const imageUrl = storedImages[assignedIdx] ?? storedImages[0];
         return {
           name: v.name,
-          price: parseFloat(v.price) || parseFloat(sellPrice) || 0,
+          // Per-variant price is an override only — blank ⇒ follows listingPrice.
+          price: parseFloat(v.price) > 0 ? parseFloat(v.price) : null,
           costPrice: parseFloat(v.costPrice) || parseFloat(costPrice) || 0,
           stockId: `SKU-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
           imageUrl,
@@ -717,7 +718,9 @@ export default function CreateDraftModal({ onClose, onCreated }) {
       });
 
       const parsedCost = parseFloat(costPrice) || 0;
-      const parsedSell = parseFloat(sellPrice) || (parsedCost ? parsedCost * 2 : 0);
+      // The "Sell price" the user typed at creation IS the list price. Left
+      // blank ⇒ null, and the ProductDetail "✨ Suggested" chip offers 2×cost.
+      const enteredListingPrice = parseFloat(sellPrice) > 0 ? parseFloat(sellPrice) : null;
 
       // 2. Save document in Firestore `products` collection matching standard schema
       const docRef = await addDoc(collection(db, "products"), {
@@ -728,8 +731,8 @@ export default function CreateDraftModal({ onClose, onCreated }) {
         description: description.trim(),
         images: storedImages,
         imageAssets: storedImageAssets,
-        sourceCost: parsedCost,
-        suggestedSellPrice: parsedSell,
+        sourcePrice: parsedCost || null,
+        listingPrice: enteredListingPrice,
         variants: mappedVariants,
         crossPostStatus: {
           tiktok: "draft",
@@ -802,7 +805,8 @@ export default function CreateDraftModal({ onClose, onCreated }) {
         const itemDetails = splitItemDetails[item.id] || {};
         const itemTitle = itemDetails.title || item.label || `Split Item #${i + 1}`;
         const itemCost = parseFloat(itemDetails.costPrice || batchBaseCost) || 0;
-        const itemSell = parseFloat(itemDetails.sellPrice || batchBaseSell) || (itemCost ? itemCost * 2 : 0);
+        const itemEnteredSell = parseFloat(itemDetails.sellPrice || batchBaseSell);
+        const itemListingPrice = itemEnteredSell > 0 ? itemEnteredSell : null;
 
         const docRef = await addDoc(collection(db, "products"), {
           userId: uid,
@@ -811,8 +815,8 @@ export default function CreateDraftModal({ onClose, onCreated }) {
           description: `Created from photo split (${activePhoto.file?.name ?? "Photo"}).`,
           images: [storedUrl],
           imageAssets: [{ id: `${storedUrl}-0`, url: storedUrl, sourceUrl: storedUrl, kind: "cover" }],
-          sourceCost: itemCost,
-          suggestedSellPrice: itemSell,
+          sourcePrice: itemCost || null,
+          listingPrice: itemListingPrice,
           variants: [],
           crossPostStatus: {
             tiktok: "draft",
@@ -1013,7 +1017,7 @@ export default function CreateDraftModal({ onClose, onCreated }) {
                   />
                 </div>
                 <div className="modal-field">
-                  <label>Listing Sell Price ($)</label>
+                  <label>Listing price ($)</label>
                   <input
                     className="input"
                     type="number"

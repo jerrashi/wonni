@@ -49,10 +49,45 @@ data).
 Cloud Function `ebayCreateListing` in
 `wonni/functions/ebay_listing.js`. Uses the Inventory API:
 
-- **Price:** `product.listingPrice` is the single cross-platform price.
-  `resolveListingPrice()` blocks with `failed-precondition` if it's
-  missing/≤0 — no invented prices, no `sourceCost` in pricing (that's
-  reserved for future profit tracking).
+- **Price model (2026-09-03):**
+  - `product.listingPrice` — the ONE required cross-platform list price
+    (eBay / TikTok / Mercari / Etsy / Wonni). No price ⇒ nothing posts.
+  - `variant.price` — optional per-variant override; blank/null ⇒ follows
+    `listingPrice`. Cleared inputs now write `null`, not a copy of the price.
+  - `product.sourcePrice` — the ONE optional cost field. `sourceCost` and
+    product-level `aliexpressPrice` are gone — `functions/scripts/
+    backfill_source_price.js` renamed them on every doc 2026-09-04 (verified:
+    0 docs left with the old keys) and both the read (`web/src/lib/
+    pricing.js productCost()`) and write (`product_schema.buildNewProductDoc`)
+    paths were simplified to `sourcePrice` only, no fallback chain. Cost
+    tracking + the suggested-price chip only; **never** a fallback for
+    `listingPrice`. Order-level `orders/{id}.aliexpressPrice` is a separate
+    per-order snapshot, untouched. (The standalone, not-deployed
+    `migrate_product_schema.js` — an old-schema→new-schema bridge, unrelated
+    to live traffic — still reads all 3 legacy keys; that's its actual job,
+    not a leftover.)
+  - Helpers: `functions/platform_adapters.js` — `resolveListingPrice(product)`
+    (throws `failed-precondition` if ≤0) + `variantPriceOr(variant, base)`;
+    mirrored in `web/src/lib/pricing.js` (`resolveListingPrice`,
+    `variantPrice`, `productCost`, `suggestedListingPrice`). If we ever add
+    per-platform markup it goes in a wrapper on `resolveListingPrice`, one
+    place.
+  - `tiktokCreateListing` no longer takes a `sellPrice` arg — it reads
+    `product.listingPrice`. Web callers pass nothing; Dashboard ListModal
+    writes `listingPrice` to the doc before calling.
+  - Suggested chip: `suggestedListingPrice(product)` = `round((2 × sourcePrice)
+    / 0.9)`, null once a price is set. Shown as `✨ suggested: $X [Use]` above
+    the Listing-price input (ProductDetail + Dashboard ListModal) and as the
+    prefill in the extension's AliExpress panel.
+  - Required-field UX: red `*` on the label, `📤 Post` / submit buttons greyed
+    when unset, click ⇒ "Required field: Price is empty" + scroll/focus the
+    input.
+- **Cross-backend caveat:** `tiktokCreateListing` / `ebayCreateListing` deploy
+  from top-level `functions/`. `etsyCreateListing` / `postToWonni` run from an
+  older deploy whose source is the *nested* `wonni/wonni/functions/` — the
+  price fixes there (`etsy_listing.js`, `wonni_listing.js`, `tiktok_listing.js`)
+  need that codebase redeployed. Nested 2255-line `ebay_listing.js` pull-sync
+  still has a `listing.price || 0` fallback — untouched (not deployed).
 - **Single-variant:** `PUT /inventory_item/{productId}` → offer → `publishOffer`.
 - **Multi-variant:** one `inventory_item` per active variant (SKU
   `${productId}::${variantId}`) → `inventory_item_group` with
@@ -102,8 +137,11 @@ field added to ProductDetail (mirrors `mercariCondition`). Plan:
 `ebayCreateListing` + autofill button (deferred).
 
 **Deferred:** `ebayUpdateListing` / `ebaySyncListing` (the "apply edits" /
-drift-sync path) still use the old malformed multi-variant `variations`
-payload — separately broken pre-existing, single-variant edit is fine.
+drift-sync path). Single-variant in-place edit works (price now via
+`resolveListingPrice`). Multi-variant now throws `unimplemented` ("delete and
+re-post") instead of firing the old malformed single-offer `variations` /
+`minimumAdvertisedPrice` payload — the real fix is porting these to the
+item-group flow `postMultiVariant` uses.
 
 Offer-lifecycle design detail: `~/.claude/plans/ebay-offer-lifecycle-redesign.md`.
 

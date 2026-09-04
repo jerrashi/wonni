@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { collection, doc, deleteDoc, query, where, orderBy, onSnapshot } from "firebase/firestore";
+import { collection, doc, deleteDoc, query, where, orderBy, onSnapshot, updateDoc, serverTimestamp } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import { db, callFunction } from "../firebase";
 import { auth } from "../firebase";
@@ -10,13 +10,15 @@ import BulkPostModal from "../components/BulkPostModal";
 import BulkTagModal from "../components/BulkTagModal";
 import OverflowMenu from "../components/OverflowMenu";
 import { getPlatformListingUrl } from "../lib/platformLinks";
+import { productCost, suggestedListingPrice } from "../lib/pricing";
 
 // ── List Modal ────────────────────────────────────────────────────────────────
 
 function ListModal({ product, onClose, onListed }) {
   const [title, setTitle] = useState(product.title.slice(0, 255));
+  // Prefill from the canonical list price only — never from cost fields.
   const [price, setPrice] = useState(
-    ((product.listingPrice ?? (product.sourceCost ?? product.aliexpressPrice ?? 0) * 2.5) || 0).toFixed(2)
+    Number(product.listingPrice) > 0 ? Number(product.listingPrice).toFixed(2) : ""
   );
   const [categories, setCategories] = useState([]);
   const [loadingCats, setLoadingCats] = useState(true);
@@ -25,6 +27,8 @@ function ListModal({ product, onClose, onListed }) {
   const [listing, setListing] = useState(false);
   const [error, setError] = useState("");
   const listRef = useRef(null);
+  const priceInputRef = useRef(null);
+  const priceValid = parseFloat(price) > 0;
 
   useEffect(() => {
     callFunction("getTiktokCategories")({})
@@ -39,13 +43,23 @@ function ListModal({ product, onClose, onListed }) {
 
   async function handleSubmit() {
     if (!selectedCat) { setError("Select a category to continue."); return; }
+    if (!(parseFloat(price) > 0)) {
+      setError("Required field: Price is empty");
+      priceInputRef.current?.focus();
+      return;
+    }
     setListing(true);
     setError("");
     try {
+      // `listingPrice` is the one cross-platform price — persist it, then the
+      // backend reads it (no per-call price argument any more).
+      await updateDoc(doc(db, "products", product.id), {
+        listingPrice: parseFloat(price),
+        updatedAt: serverTimestamp(),
+      });
       await callFunction("tiktokCreateListing")({
         productId: product.id,
         title: title.slice(0, 255),
-        sellPrice: parseFloat(price),
         categoryId: selectedCat.id,
       });
       onListed?.();
@@ -73,18 +87,27 @@ function ListModal({ product, onClose, onListed }) {
           </div>
 
           <div className="modal-field">
-            <label>Sell Price (USD)</label>
+            <label>Listing price (USD) <span style={{ color: "var(--danger)" }}>*</span></label>
+            {!priceValid && suggestedListingPrice(product) != null && (
+              <div style={{ marginBottom: 4, fontSize: 11, color: "var(--accent, #6366f1)", display: "flex", gap: 6, alignItems: "center" }}>
+                <span title="2× source price ÷ 0.9">✨ suggested: ${suggestedListingPrice(product)}</span>
+                <button className="btn btn-ghost" style={{ fontSize: 11, padding: "1px 6px" }} onClick={() => setPrice(String(suggestedListingPrice(product)))}>Use</button>
+              </div>
+            )}
             <input
+              ref={priceInputRef}
               className="input"
               type="number"
               step="0.01"
               min="0"
+              required
               value={price}
               onChange={(e) => setPrice(e.target.value)}
+              style={!priceValid && error ? { borderColor: "var(--danger)" } : undefined}
             />
-            {(product.sourceCost ?? product.aliexpressPrice) > 0 && (
+            {productCost(product) != null && (
               <span style={{ fontSize: 11, color: "var(--muted)" }}>
-                Cost: ${(product.sourceCost ?? product.aliexpressPrice).toFixed(2)} · Margin: ${(parseFloat(price || 0) * 0.925 - (product.sourceCost ?? product.aliexpressPrice)).toFixed(2)}
+                Cost: ${productCost(product).toFixed(2)} · Margin: ${(parseFloat(price || 0) * 0.925 - productCost(product)).toFixed(2)}
               </span>
             )}
           </div>
@@ -126,9 +149,13 @@ function ListModal({ product, onClose, onListed }) {
         </div>
 
         <div className="modal-footer">
+          {!priceValid && (
+            <span style={{ fontSize: 12, color: "var(--danger)", marginRight: "auto" }}>Required field: Price is empty</span>
+          )}
           <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
           <button
             className="btn btn-primary"
+            style={priceValid ? undefined : { opacity: 0.5 }}
             onClick={handleSubmit}
             disabled={listing || !selectedCat}
           >

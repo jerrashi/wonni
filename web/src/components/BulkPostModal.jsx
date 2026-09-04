@@ -3,6 +3,7 @@ import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { db, auth, callFunction } from "../firebase";
 import { EbayEditingNoticeModal } from "./EbayEditingNoticeModal";
 import { isPlatformAlreadyPosted } from "./PostModal";
+import { resolveListingPrice, variantPrice } from "../lib/pricing";
 
 const PLATFORMS = [
   { id: "wonni", name: "Wonni", locked: true },
@@ -60,6 +61,15 @@ export default function BulkPostModal({ products, onClose }) {
     try {
       for (const product of products) {
         allResults[product.id] = {};
+
+        // Listing price is required to post anywhere — skip this product if unset.
+        try {
+          resolveListingPrice(product);
+        } catch (e) {
+          allResults[product.id].wonni = { status: "error", message: e.message };
+          setResults({ ...allResults });
+          continue;
+        }
 
         // Always ensure product exists on Wonni first
         try {
@@ -123,7 +133,6 @@ export default function BulkPostModal({ products, onClose }) {
               await callFunction("tiktokCreateListing")({
                 productId: product.id,
                 title: product.title.slice(0, 255),
-                sellPrice: parseFloat(product.listingPrice || (product.sourceCost ?? product.aliexpressPrice ?? 0) * 2.5 || 0),
                 categoryId: null,
               });
             } else if (platformId === "mercari") {
@@ -140,7 +149,7 @@ export default function BulkPostModal({ products, onClose }) {
                     variantId: variant.id,
                     title: product.title,
                     description: product.description,
-                    price: parseFloat(product.listingPrice || variant.price || (product.sourceCost ?? product.aliexpressPrice ?? 0) * 2.2 || 15),
+                    price: variantPrice(variant, resolveListingPrice(product)),
                     condition: product.condition || "good",
                     brand: product.brand || "",
                     suggestedCategory: product.category || "",
@@ -176,7 +185,7 @@ export default function BulkPostModal({ products, onClose }) {
                   productId: product.id,
                   title: product.title,
                   description: product.description,
-                  price: parseFloat(product.listingPrice || (product.sourceCost ?? product.aliexpressPrice ?? 0) * 2.2 || 15),
+                  price: resolveListingPrice(product),
                   condition: product.condition || "good",
                   brand: product.brand || "",
                   suggestedCategory: product.category || "",
