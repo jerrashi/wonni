@@ -190,7 +190,7 @@ exports.aliexpressImportProduct = onCall(
       sourceUrl: product.productUrl ?? productUrl ?? "",
       title: product.title,
       description: product.description ?? "",
-      sourceCost: product.price,
+      sourcePrice: product.price,
       listingPrice: typeof product.listingPrice === "number" ? product.listingPrice : null,
       sourceImages,
       images: finalImages,

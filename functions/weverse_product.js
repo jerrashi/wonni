@@ -335,7 +335,7 @@ exports.weverseImportProduct = onCall(
       sourceUrl: product.sourceUrl,
       title: product.title,
       description: product.description,
-      sourceCost: product.price,
+      sourcePrice: product.price,
       listingPrice: null,
       sourceImages,
       images: finalImages,

@@ -30,8 +30,9 @@ function buildNewProductDoc(rawData) {
     saleStatus: rawData.saleStatus || "active",
     isDraft: rawData.isDraft !== false,
 
-    // Pricing (unified)
-    sourceCost: rawData.sourceCost ?? rawData.sourcePrice ?? rawData.aliexpressPrice,
+    // Pricing (unified). `sourcePrice` = the one optional cost field.
+    // `listingPrice` = the required cross-platform list price.
+    sourcePrice: rawData.sourcePrice || null,
     listingPrice: rawData.listingPrice || null,
 
     // Images
@@ -45,7 +46,7 @@ function buildNewProductDoc(rawData) {
       id: v.id,
       optionValues: v.optionValues || {},
       sku: v.sku || null,
-      sourceCost: v.sourceCost ?? v.sourcePrice,
+      sourcePrice: v.sourcePrice || null,
       price: v.price || null,
       quantity: v.quantity || 1,
       active: v.active !== false,

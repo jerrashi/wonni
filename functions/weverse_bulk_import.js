@@ -123,7 +123,7 @@ exports.weverseBulkImportProducts = onCall(
               sourceUrl: parsed.url,
               title: product.title,
               description: product.description,
-              sourceCost: product.price,
+              sourcePrice: product.price,
               sourceImages,
               images: finalImages,
               imageAssets: storedImageAssets.length ? storedImageAssets : product.imageAssets,

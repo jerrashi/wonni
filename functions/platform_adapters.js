@@ -1,5 +1,27 @@
+const { HttpsError } = require("firebase-functions/v2/https");
+
 function cleanText(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+// ─── Canonical listing price ────────────────────────────────────────────────
+// `product.listingPrice` is THE cross-platform list price used for every
+// channel (eBay / TikTok / Mercari / Etsy). It is never derived from the cost
+// fields (`sourceCost` / `sourcePrice` / `aliexpressPrice`) or an invented
+// markup — those are cost-tracking only. Posting is blocked until it is set.
+function resolveListingPrice(product) {
+  const price = Number(product?.listingPrice);
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new HttpsError("failed-precondition", "Set a listing price before posting.");
+  }
+  return price;
+}
+
+// Per-variant price: the variant's own `price` only when it's a positive
+// number (a deliberate override); otherwise the product-level list price.
+function variantPriceOr(variant, basePrice) {
+  const p = Number(variant?.price);
+  return Number.isFinite(p) && p > 0 ? p : basePrice;
 }
 
 function listingImagesFor(product, limit) {
@@ -84,7 +106,7 @@ function buildEbayVariations(product) {
     .filter((v) => v.active !== false)
     .map((variant, index) => {
       const variantSku = variant.sku || `${product.id}-${index}`;
-      const variantPrice = variant.price ?? product.listingPrice ?? null;
+      const variantPrice = variantPriceOr(variant, product.listingPrice ?? null);
       const variantQty = typeof variant.quantity === "number" && variant.quantity >= 0
         ? variant.quantity
         : (variant.quantity != null && !isNaN(variant.quantity) ? Math.max(0, Number(variant.quantity)) : 0);
@@ -101,6 +123,8 @@ function buildEbayVariations(product) {
 }
 
 module.exports = {
+  resolveListingPrice,
+  variantPriceOr,
   listingImagesFor,
   canonicalDescription,
   toEbayInventoryProduct,
