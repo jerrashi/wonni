@@ -11,6 +11,18 @@ const https = require("https");
 const http = require("http");
 const { refreshEtsyToken, getEtsyCredentials } = require("./etsy_auth");
 
+// `product.listingPrice` is the single cross-platform list price. Never derived
+// from cost fields or an invented markup — blocked until the user sets it.
+// (Mirror of functions/platform_adapters.resolveListingPrice on the deployed
+// backend — kept inline here to avoid a cross-file dependency.)
+function resolveListingPrice(product) {
+  const price = Number(product?.listingPrice);
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new HttpsError("failed-precondition", "Set a listing price before posting.");
+  }
+  return price;
+}
+
 if (admin.apps.length === 0) admin.initializeApp();
 
 // Module-level taxonomy cache (lives for the function instance lifetime ~15 min)
@@ -541,7 +553,7 @@ exports.etsyCreateListing = onCall(
         who_made = "someone_else";
       }
 
-      const rawPrice = typeof product.listingPrice === "number" ? product.listingPrice : (listing.price ?? 0);
+      const rawPrice = resolveListingPrice(product);
       const priceAmount = Math.max(0.20, Math.round(rawPrice * 100) / 100);
       const quantity = typeof listing.quantity === "number" ? listing.quantity : (typeof product.quantity === "number" ? product.quantity : 1);
 
@@ -661,7 +673,7 @@ exports.etsyUpdateListing = onCall(
 
     const title = (listing.customTitle || product.title || "").slice(0, 140);
     const description = listing.customDescription || product.description || "";
-    const rawPrice = typeof product.listingPrice === "number" ? product.listingPrice : (listing.price ?? 0);
+    const rawPrice = resolveListingPrice(product);
     const priceAmount = Math.max(0.20, Math.round(rawPrice * 100) / 100);
     const quantity = typeof listing.quantity === "number" ? listing.quantity : (typeof product.quantity === "number" ? product.quantity : 1);
 

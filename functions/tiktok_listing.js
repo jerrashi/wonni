@@ -3,7 +3,7 @@ const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const https = require("https");
 const { refreshTiktokToken, tiktokHeaders, makeHttpsRequest, TT_APP_KEY, TT_APP_SECRET } = require("./tiktok_auth");
-const { listingImagesFor, toTiktokProductPayload } = require("./platform_adapters");
+const { listingImagesFor, toTiktokProductPayload, resolveListingPrice } = require("./platform_adapters");
 
 const TT_API_HOST = "open-api.tiktokglobalshop.com";
 
@@ -70,7 +70,7 @@ exports.tiktokCreateListing = onCall(
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
 
-    const { productId, title: titleOverride, sellPrice, categoryId } = request.data;
+    const { productId, title: titleOverride, categoryId } = request.data;
     if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
     if (!categoryId) throw new HttpsError("invalid-argument", "Missing categoryId.");
 
@@ -91,9 +91,10 @@ exports.tiktokCreateListing = onCall(
     }
     if (!imgIds.length) throw new HttpsError("internal", "No images could be uploaded to TikTok.");
 
-    const finalPrice = sellPrice
-      ?? product.listingPrice
-      ?? (product.sourceCost ?? 0) * 2.5;
+    // `product.listingPrice` is the single cross-platform list price. If we
+    // ever add platform-specific pricing (e.g. a fee markup for TikTok),
+    // it belongs in one place — resolveListingPrice / a wrapper on it.
+    const finalPrice = resolveListingPrice(product);
 
     const { images: _ignoredImages, ...basePayload } = toTiktokProductPayload(product, {
       titleOverride,

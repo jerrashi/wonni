@@ -27,6 +27,12 @@ exports.postToWonni = onCall(
     const product = productSnap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
 
+    // `product.listingPrice` is the one cross-platform list price — required to
+    // publish anywhere, Wonni included.
+    if (!(Number(product.listingPrice) > 0)) {
+      throw new HttpsError("failed-precondition", "Set a listing price before posting.");
+    }
+
     const listingRef = db.collection("listings").doc(productId);
     const listingSnap = await listingRef.get();
     const alreadyPosted = listingSnap.exists;

@@ -70,7 +70,7 @@ exports.tiktokCreateListing = onCall(
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
 
-    const { productId, title: titleOverride, sellPrice, categoryId } = request.data;
+    const { productId, title: titleOverride, categoryId } = request.data;
     if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
     if (!categoryId) throw new HttpsError("invalid-argument", "Missing categoryId.");
 
@@ -91,9 +91,11 @@ exports.tiktokCreateListing = onCall(
     }
     if (!imgIds.length) throw new HttpsError("internal", "No images could be uploaded to TikTok.");
 
-    const finalPrice = sellPrice
-      ?? product.listingPrice
-      ?? product.aliexpressPrice * 2.5;
+    // `product.listingPrice` is the single cross-platform list price.
+    if (!(Number(product.listingPrice) > 0)) {
+      throw new HttpsError("failed-precondition", "Set a listing price before posting.");
+    }
+    const finalPrice = Number(product.listingPrice);
 
     const { images: _ignoredImages, ...basePayload } = toTiktokProductPayload(product, {
       titleOverride,

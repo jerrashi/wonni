@@ -45,7 +45,7 @@ function transformProduct(oldProduct, docId) {
       condition: oldProduct.condition,
       saleStatus: oldProduct.saleStatus,
       isDraft: oldProduct.isDraft !== false,
-      sourceCost: oldProduct.sourceCost ?? oldProduct.sourcePrice ?? oldProduct.aliexpressPrice,
+      sourcePrice: oldProduct.sourcePrice ?? oldProduct.sourceCost ?? oldProduct.aliexpressPrice ?? null,
       listingPrice: oldProduct.listingPrice,
       sourceImages,
       images: oldProduct.images || oldProduct.listingImages || [],

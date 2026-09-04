@@ -1,33 +1,18 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const { ebayRequest, ebayApiHost, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_ENV } = require("./ebay_auth");
-const { toEbayInventoryProduct, canonicalDescription, listingImagesFor, buildEbayVariations } = require("./platform_adapters");
+const {
+  toEbayInventoryProduct, canonicalDescription, listingImagesFor, buildEbayVariations,
+  resolveListingPrice, variantPriceOr,
+} = require("./platform_adapters");
 const { fillBlankFieldsInline, geminiApiKey } = require("./listing_fields");
 
 const MARKETPLACE_ID = "EBAY_US";
 
-// The one cross-platform price is `product.listingPrice` (set from the
-// ProductDetail / iOS price input, autosaved). We never invent a price from
-// `sourceCost` — that's optional and reserved for future profit tracking.
-// Missing / non-positive → block with a readable error rather than letting
-// eBay reject it as an opaque INTERNAL.
-function resolveListingPrice(product) {
-  const price = Number(product.listingPrice);
-  if (!Number.isFinite(price) || price <= 0) {
-    throw new HttpsError(
-      "failed-precondition",
-      "Set a listing price before posting to eBay."
-    );
-  }
-  return price;
-}
-
-// Per-variant price: use the variant's own price if it's a positive number,
-// otherwise fall back to the listing's base price.
-function variantPriceOr(variant, basePrice) {
-  const p = Number(variant?.price);
-  return Number.isFinite(p) && p > 0 ? p : basePrice;
-}
+// Price model: `product.listingPrice` is the single cross-platform list price
+// (see platform_adapters.resolveListingPrice). A variant's own `price` is a
+// deliberate per-variant override; blank ⇒ it follows `listingPrice`. Cost
+// fields (`sourceCost` / `sourcePrice`) are never part of pricing.
 
 // eBay requires a package weight on every inventory item to publish an offer
 // (error 25020). Use the product's weight (lbs + oz, or a fractional lbs);
@@ -1156,29 +1141,22 @@ exports.ebaySyncListing = onCall(
         const description = canonicalDescription(product);
         const basePrice = resolveListingPrice(product);
 
-        const variationData = buildEbayVariations(product);
-        const hasVariations = variationData !== null;
+        // Multi-variation in-place edit isn't wired to the Inventory API's
+        // item-group flow yet — a single-offer PATCH can't express N variations.
+        // Until that path is built, re-posting (delete + create) is the route.
+        if (buildEbayVariations(product) !== null) {
+          throw new HttpsError(
+            "unimplemented",
+            "Editing a multi-variation eBay listing in place isn't supported yet — delete the listing and re-post it to apply changes.",
+          );
+        }
 
+        const qty = typeof product.quantity === "number" && product.quantity >= 0 ? product.quantity : 1;
         const inventoryPayload = {
           product: toEbayInventoryProduct(product, { imageLimit: 12, title }),
           condition: "NEW",
+          availability: { shipToLocationAvailability: { quantity: qty } },
         };
-
-        if (hasVariations) {
-          inventoryPayload.variations = variationData.variations.map((v) => ({
-            sku: v.sku,
-            price: v.price ? { value: Number(v.price).toFixed(2), currency: "USD" } : undefined,
-            quantity: typeof v.quantity === "number" ? Math.max(0, v.quantity) : 0,
-            itemSpecifics: Object.entries(v.itemSpecifics).reduce((acc, [key, val]) => {
-              acc[key] = Array.isArray(val) ? val : [val];
-              return acc;
-            }, {}),
-          }));
-          inventoryPayload.product.aspects = variationData.itemSpecifics;
-        } else {
-          const qty = typeof product.quantity === "number" && product.quantity >= 0 ? product.quantity : 1;
-          inventoryPayload.availability = { shipToLocationAvailability: { quantity: qty } };
-        }
 
         await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, inventoryPayload);
 
@@ -1198,21 +1176,8 @@ exports.ebaySyncListing = onCall(
           offerPatchPayload.listingPolicies = listingPolicies;
         }
 
-        if (hasVariations) {
-          offerPatchPayload.pricingSummary = {
-            priceType: "FIXED_PRICE",
-            minimumAdvertisedPrice: { value: basePrice.toFixed(2), currency: "USD" },
-          };
-          offerPatchPayload.variations = variationData.variations.map((v) => ({
-            sku: v.sku,
-            price: { value: (v.price ?? basePrice).toFixed(2), currency: "USD" },
-            availableQuantity: typeof v.quantity === "number" ? Math.max(0, v.quantity) : 0,
-          }));
-        } else {
-          const qty = typeof product.quantity === "number" && product.quantity >= 0 ? product.quantity : 1;
-          offerPatchPayload.availableQuantity = qty;
-          offerPatchPayload.pricingSummary = { price: { value: basePrice.toFixed(2), currency: "USD" } };
-        }
+        offerPatchPayload.availableQuantity = qty;
+        offerPatchPayload.pricingSummary = { price: { value: basePrice.toFixed(2), currency: "USD" } };
 
         await ebayRequest(uid, "PATCH", `/sell/inventory/v1/offer/${offerId}`, offerPatchPayload);
 
@@ -1276,31 +1241,23 @@ exports.ebayUpdateListing = onCall(
       const description = canonicalDescription(product);
       const basePrice = resolveListingPrice(product);
 
-      // Check if product has variants
-      const variationData = buildEbayVariations(product);
-      const hasVariations = variationData !== null;
+      // Multi-variation in-place edit isn't wired to the Inventory API's
+      // item-group flow yet (a single-offer PATCH can't express N variations).
+      if (buildEbayVariations(product) !== null) {
+        throw new HttpsError(
+          "unimplemented",
+          "Editing a multi-variation eBay listing in place isn't supported yet — delete the listing and re-post it to apply changes.",
+        );
+      }
+
+      const qty = typeof product.quantity === "number" && product.quantity >= 0 ? product.quantity : 1;
 
       // 1. Update inventory item in-place via idempotent PUT
       const inventoryPayload = {
         product: toEbayInventoryProduct(product, { imageLimit: 12, title }),
         condition: "NEW",
+        availability: { shipToLocationAvailability: { quantity: qty } },
       };
-
-      if (hasVariations) {
-        inventoryPayload.variations = variationData.variations.map((v) => ({
-          sku: v.sku,
-          price: v.price ? { value: Number(v.price).toFixed(2), currency: "USD" } : undefined,
-          quantity: typeof v.quantity === "number" ? Math.max(0, v.quantity) : 0,
-          itemSpecifics: Object.entries(v.itemSpecifics).reduce((acc, [key, val]) => {
-            acc[key] = Array.isArray(val) ? val : [val];
-            return acc;
-          }, {}),
-        }));
-        inventoryPayload.product.aspects = variationData.itemSpecifics;
-      } else {
-        const qty = typeof product.quantity === "number" && product.quantity >= 0 ? product.quantity : 1;
-        inventoryPayload.availability = { shipToLocationAvailability: { quantity: qty } };
-      }
 
       await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, inventoryPayload);
 
@@ -1321,21 +1278,8 @@ exports.ebayUpdateListing = onCall(
         offerPatchPayload.listingPolicies = listingPolicies;
       }
 
-      if (hasVariations) {
-        offerPatchPayload.pricingSummary = {
-          priceType: "FIXED_PRICE",
-          minimumAdvertisedPrice: { value: basePrice.toFixed(2), currency: "USD" },
-        };
-        offerPatchPayload.variations = variationData.variations.map((v) => ({
-          sku: v.sku,
-          price: { value: (v.price ?? basePrice).toFixed(2), currency: "USD" },
-          availableQuantity: typeof v.quantity === "number" ? Math.max(0, v.quantity) : 0,
-        }));
-      } else {
-        const qty = typeof product.quantity === "number" && product.quantity >= 0 ? product.quantity : 1;
-        offerPatchPayload.availableQuantity = qty;
-        offerPatchPayload.pricingSummary = { price: { value: basePrice.toFixed(2), currency: "USD" } };
-      }
+      offerPatchPayload.availableQuantity = qty;
+      offerPatchPayload.pricingSummary = { price: { value: basePrice.toFixed(2), currency: "USD" } };
 
       await ebayRequest(uid, "PATCH", `/sell/inventory/v1/offer/${offerId}`, offerPatchPayload);
 
