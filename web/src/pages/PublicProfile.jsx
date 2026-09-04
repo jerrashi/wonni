@@ -179,7 +179,7 @@ export default function PublicProfile() {
             <div className="public-listings-grid">
               {listings.map((item) => {
                 const title = item.customTitle || item.title || "Untitled Item";
-                const price = item.price != null ? item.price : (item.listingPrice != null ? item.listingPrice : item.sourceCost);
+                const price = item.price != null ? item.price : item.listingPrice;
                 const condition = CONDITION_MAP[item.condition] || item.condition || "Pre-owned";
 
                 return (

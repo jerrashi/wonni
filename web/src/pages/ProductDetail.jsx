@@ -12,6 +12,7 @@ import { useDebouncedCallback } from "../hooks/useDebouncedCallback";
 import { normalizeImageAssets, buildImagePayload } from "../lib/media";
 import { useMediaJobQueue } from "../lib/mediaJobQueue";
 import { getPlatformListingUrl } from "../lib/platformLinks";
+import { resolveListingPrice, variantPrice, suggestedListingPrice, productCost } from "../lib/pricing";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -150,7 +151,7 @@ function migrateLegacyVariants(rawVariants) {
     id: v.id ?? `v${Date.now()}${i}`,
     optionValues: { Option: v.name || "Default" },
     sku: v.sku ?? (v.stockId ? `w-${v.stockId}` : `w-${i + 1}`),
-    price: typeof v.price === "number" ? v.price + (v.addPrice ?? 0) : (typeof v.costPrice === "number" ? v.costPrice * 2 : null),
+    price: typeof v.price === "number" ? v.price + (v.addPrice ?? 0) : null,
     quantity: typeof v.maxOrderQuantity === "number" ? v.maxOrderQuantity : 1,
     sourcePrice: typeof v.costPrice === "number" ? v.costPrice : (typeof v.price === "number" ? v.price : null),
     sourceVariantId: v.stockId ?? null,
@@ -2675,8 +2676,8 @@ function VariantsEditor({
           type="number"
           step="0.01"
           placeholder="listing price"
-          value={v.price === listingPrice ? "" : v.price ?? ""}
-          onChange={(e) => onVariantFieldChange(v.id, "price", e.target.value === "" ? listingPrice ?? null : Number(e.target.value))}
+          value={v.price == null || v.price === listingPrice ? "" : v.price}
+          onChange={(e) => onVariantFieldChange(v.id, "price", e.target.value === "" ? null : Number(e.target.value))}
           onBlur={onCommit}
         />
         <input
@@ -2749,9 +2750,9 @@ function VariantsEditor({
           type="number"
           step="0.01"
           placeholder="listing price"
-          defaultValue={first.price === listingPrice ? "" : first.price ?? ""}
+          defaultValue={first.price == null || first.price === listingPrice ? "" : first.price}
           onBlur={(e) => {
-            const value = e.target.value === "" ? listingPrice ?? null : Number(e.target.value);
+            const value = e.target.value === "" ? null : Number(e.target.value);
             if (value !== (first.price ?? null)) commitPrimaryFieldEdit(key, "price", value);
           }}
         />
@@ -3053,14 +3054,17 @@ function MercariModal({
   const singleVariant = inStockVariants.length === 1 ? inStockVariants[0] : null;
   const showVariantFlow = product.hasVariants && inStockVariants.length > 1;
 
-  const [price, setPrice] = useState(
-    singleVariant
-      // listingPrice (the deliberate resale price) wins — a variant's own
-      // `price` is the scraped source price at import time, not a real
-      // per-variant override.
-      ? String((typeof product.listingPrice === "number" ? product.listingPrice : singleVariant.price) ?? 15)
-      : (product.listingPrice ?? product.suggestedSellPrice ?? product.sourceCost ?? product.aliexpressPrice * 2.2 ?? 15).toFixed(2)
-  );
+  // Prefill from the canonical list price (`product.listingPrice`), or a
+  // positive per-variant override when posting a single variant. Never from
+  // cost fields — an empty box is correct if no price is set yet.
+  const [price, setPrice] = useState(() => {
+    const base = Number(product.listingPrice);
+    const override = Number(singleVariant?.price);
+    const prefill = Number.isFinite(override) && override > 0
+      ? override
+      : (Number.isFinite(base) && base > 0 ? base : null);
+    return prefill == null ? "" : String(prefill);
+  });
   const [condition, setCondition] = useState(product.mercariCondition ?? product.condition ?? "good");
   const [buyerPaysShipping, setBuyerPaysShipping] = useState(product.mercariBuyerPaysShipping ?? true);
   const [shipOnOwn, setShipOnOwn] = useState(product.mercariShipOnOwn ?? false);
@@ -3070,6 +3074,10 @@ function MercariModal({
   async function handleLaunch() {
     if (hasPendingMediaJobs) {
       setError("A photo change is still saving — wait for it to finish before cross-posting.");
+      return;
+    }
+    if (!(parseFloat(price) > 0)) {
+      setError("Set a listing price before cross-posting.");
       return;
     }
     setPosting(true);
@@ -3100,7 +3108,7 @@ function MercariModal({
       productId: product.id,
       title: product.title,
       description: product.description,
-      price: parseFloat(price) || product.sourceCost || product.aliexpressPrice * 2.2 || 15,
+      price: parseFloat(price),
       condition,
       brand: product.brand || product.artistName || "",
       suggestedCategory: product.category || product.artistName || product.title,
@@ -3243,9 +3251,9 @@ function MercariModal({
               value={price}
               onChange={(e) => setPrice(e.target.value)}
             />
-            {(product.sourceCost ?? product.aliexpressPrice) > 0 && (
+            {productCost(product) != null && (
               <span style={{ fontSize: 11, color: "var(--muted)" }}>
-                Cost: ${(product.sourceCost ?? product.aliexpressPrice).toFixed(2)} · Est Proceeds: ${(parseFloat(price || 0) * 0.9).toFixed(2)}
+                Cost: ${productCost(product).toFixed(2)} · Est Proceeds: ${(parseFloat(price || 0) * 0.9).toFixed(2)}
               </span>
             )}
           </div>
@@ -3362,6 +3370,8 @@ function ProductDetail() {
   const mediaSaveChainRef = useRef(Promise.resolve());
   const pendingMediaSavesRef = useRef(0);
   const postButtonRef = useRef(null);
+  const priceInputRef = useRef(null);
+  const [showPriceRequired, setShowPriceRequired] = useState(false);
   const [options, setOptions] = useState([]);
   const [variants, setVariants] = useState([]);
   // Mirrors `variants` for use inside the sequential Mercari-posting loop,
@@ -3531,7 +3541,7 @@ function ProductDetail() {
         {
           const effSourcePrice = "sourcePrice" in effectiveFields
             ? effectiveFields.sourcePrice
-            : (typeof next.sourcePrice === "number" ? next.sourcePrice : next.aliexpressPrice);
+            : (next.sourcePrice ?? next.sourceCost ?? next.aliexpressPrice);
           const sp = typeof effSourcePrice === "number" ? effSourcePrice : null;
           setSourcePrice(sp);
           setSourcePriceInput(sp != null ? String(sp) : "");
@@ -3899,7 +3909,20 @@ function ProductDetail() {
     const nextVariants = variants.map((v) => (v.price === prevPrice ? { ...v, price: nextPrice } : v));
     setListingPrice(nextPrice);
     setVariants(nextVariants);
+    if (Number(nextPrice) > 0) setShowPriceRequired(false);
     markFieldsDirty({ listingPrice: nextPrice, variants: nextVariants });
+  }
+
+  const listingPriceValid = Number(listingPrice) > 0;
+
+  // Gate for the "📤 Post" button + Mercari launch: if there's no list price,
+  // flag the field (red text + scroll/focus) instead of opening the flow.
+  function requireListingPrice() {
+    if (listingPriceValid) return true;
+    setShowPriceRequired(true);
+    priceInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    priceInputRef.current?.focus({ preventScroll: true });
+    return false;
   }
 
   function handleWeightLbsChange(raw) {
@@ -4008,8 +4031,7 @@ function ProductDetail() {
     const title = resolveMercariTitle(mercariTitleTokens, mercariTitleGaps, product, variant);
     if (title !== (variant.mercariSyncedTitle ?? "")) diff.title = title;
 
-    const price = typeof product.listingPrice === "number" ? product.listingPrice
-      : (typeof variant.price === "number" ? variant.price : null);
+    const price = variantPrice(variant, Number(product.listingPrice) > 0 ? Number(product.listingPrice) : null);
     if (price != null && price !== variant.mercariSyncedPrice) diff.price = price;
 
     const photoUrls = resolveMercariPhotos(mercariPhotoTemplate, variant, images);
@@ -4451,6 +4473,14 @@ function ProductDetail() {
       return;
     }
 
+    let syncPrice;
+    try {
+      syncPrice = resolveListingPrice(product);
+    } catch (e) {
+      setMercariSyncMessage(e.message);
+      return;
+    }
+
     setSyncingMercari(true);
     setMercariSyncMessage("");
     try {
@@ -4464,7 +4494,7 @@ function ProductDetail() {
         mercariItemId,
         title: product.title ?? "",
         description: product.description ?? "",
-        price: typeof product.listingPrice === "number" ? product.listingPrice : null,
+        price: syncPrice,
         images: product.images ?? [],
         diff,
       };
@@ -4554,11 +4584,10 @@ function ProductDetail() {
   async function postVariantToMercari(variant, { priceOverride } = {}) {
     if (!product) throw new Error("Product not loaded.");
     const title = resolveMercariTitle(mercariTitleTokens, mercariTitleGaps, product, variant);
-    // listingPrice (the deliberate resale price) wins — variant.price is
-    // populated at import time from the scraped *source* price, not a real
-    // per-variant sell-price override, so it can't be trusted as authoritative.
-    const price = priceOverride ?? (typeof product.listingPrice === "number" ? product.listingPrice
-      : (typeof variant.price === "number" ? variant.price : null));
+    // Canonical price: an explicit `priceOverride` from the form, else the
+    // variant's own price when set as a deliberate override, else the
+    // product-level list price. Never a cost field.
+    const price = priceOverride ?? variantPrice(variant, resolveListingPrice(product));
     const photoUrls = resolveMercariPhotos(mercariPhotoTemplate, variant, images);
 
     await updateDoc(doc(db, "products", product.id), {
@@ -4618,6 +4647,12 @@ function ProductDetail() {
   }
 
   async function postAllRemainingVariants() {
+    try {
+      resolveListingPrice(product);
+    } catch (e) {
+      alert(e.message);
+      return;
+    }
     setPostingAllVariants(true);
     try {
       const remaining = variants.filter(
@@ -4643,8 +4678,7 @@ function ProductDetail() {
   async function syncVariantToMercari(variant) {
     if (!product || !variant.mercariListingId) return;
     const title = resolveMercariTitle(mercariTitleTokens, mercariTitleGaps, product, variant);
-    const price = typeof product.listingPrice === "number" ? product.listingPrice
-      : (typeof variant.price === "number" ? variant.price : null);
+    const price = variantPrice(variant, Number(product.listingPrice) > 0 ? Number(product.listingPrice) : null);
     const photoUrls = resolveMercariPhotos(mercariPhotoTemplate, variant, images);
 
     const diff = {};
@@ -5057,7 +5091,13 @@ function ProductDetail() {
           {saving && <span style={{ fontSize: 12, color: "var(--muted)" }}>Saving…</span>}
           {!saving && lastSaveTime && <span style={{ fontSize: 12, color: "var(--muted)" }}>Saved</span>}
           {product && (
-            <button ref={postButtonRef} className="btn btn-primary" onClick={() => setShowPostModal(true)}>
+            <button
+              ref={postButtonRef}
+              className="btn btn-primary"
+              style={listingPriceValid ? undefined : { opacity: 0.5 }}
+              title={listingPriceValid ? undefined : "Set a listing price first"}
+              onClick={() => { if (requireListingPrice()) setShowPostModal(true); }}
+            >
               📤 Post
             </button>
           )}
@@ -6088,7 +6128,22 @@ function ProductDetail() {
               )}
 
               <div className="modal-field" style={{ marginTop: 8, marginBottom: 8, maxWidth: 200 }}>
-                <label>Listing price</label>
+                <label>Listing price <span style={{ color: "var(--danger)" }}>*</span></label>
+                {aiSuggestedPrice === null && !listingPriceValid && suggestedListingPrice(product) !== null && (
+                  <div style={{
+                    marginBottom: 6, display: "flex", alignItems: "center", gap: 6,
+                    fontSize: 11, color: "var(--accent, #6366f1)",
+                  }}>
+                    <span title="2× source price ÷ 0.9">✨ suggested: ${suggestedListingPrice(product)}</span>
+                    <button
+                      className="btn btn-ghost"
+                      style={{ fontSize: 11, padding: "1px 6px" }}
+                      onClick={() => handleListingPriceChange(String(suggestedListingPrice(product)))}
+                    >
+                      Use
+                    </button>
+                  </div>
+                )}
                 {aiSuggestedPrice !== null && (
                   <div style={{
                     marginBottom: 6,
@@ -6119,14 +6174,23 @@ function ProductDetail() {
                   </div>
                 )}
                 <input
+                  ref={priceInputRef}
                   className="input"
                   type="number"
                   step="0.01"
                   min="0"
-                  placeholder="(not set)"
+                  required
+                  aria-required="true"
+                  placeholder="(required)"
                   value={listingPrice ?? ""}
                   onChange={(e) => handleListingPriceChange(e.target.value)}
+                  style={showPriceRequired && !listingPriceValid ? { borderColor: "var(--danger)" } : undefined}
                 />
+                {showPriceRequired && !listingPriceValid && (
+                  <div style={{ fontSize: 11, color: "var(--danger)", marginTop: 4 }}>
+                    Required field: Price is empty
+                  </div>
+                )}
               </div>
 
               <div style={{ marginBottom: 8 }}>

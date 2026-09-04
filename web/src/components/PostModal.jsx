@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { db, auth, callFunction } from "../firebase";
 import { EbayEditingNoticeModal } from "./EbayEditingNoticeModal";
+import { resolveListingPrice, variantPrice } from "../lib/pricing";
 
 const PLATFORMS = [
   { id: "wonni", name: "Wonni", requiresConnected: false, locked: true },
@@ -39,6 +40,9 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
   const popoverRef = useRef(null);
 
   const uid = auth.currentUser?.uid;
+  // Listing price is required to post anywhere. Grey the Post button (still
+  // clickable, so the error is discoverable) when it's missing.
+  const listingPriceMissing = !(Number(product?.listingPrice) > 0);
 
   // Track button position for popover mode
   useEffect(() => {
@@ -199,6 +203,12 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
       }
     }
 
+    // Listing price is required to post anywhere.
+    if (!(Number(product?.listingPrice) > 0)) {
+      setError("Required field: Price is empty. Set a listing price on the product before posting.");
+      return;
+    }
+
     setPosting(true);
     setError("");
     setResults({});
@@ -240,7 +250,6 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
             await callFunction("tiktokCreateListing")({
               productId: product.id,
               title: product.title.slice(0, 255),
-              sellPrice: parseFloat(product.listingPrice || (product.sourceCost ?? product.aliexpressPrice ?? 0) * 2.5 || 0),
               categoryId: null,
             });
           } else if (platformId === "ebay") {
@@ -292,7 +301,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                   variantId: variant.id,
                   title: product.title,
                   description: product.description,
-                  price: parseFloat(product.listingPrice || variant.price || (product.sourceCost ?? product.aliexpressPrice ?? 0) * 2.2 || 15),
+                  price: variantPrice(variant, resolveListingPrice(product)),
                   condition: product.condition || "good",
                   brand: product.brand || "",
                   suggestedCategory: product.category || "",
@@ -328,7 +337,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                 productId: product.id,
                 title: product.title,
                 description: product.description,
-                price: parseFloat(product.listingPrice || (product.sourceCost ?? product.aliexpressPrice ?? 0) * 2.2 || 15),
+                price: resolveListingPrice(product),
                 condition: product.condition || "good",
                 brand: product.brand || "",
                 suggestedCategory: product.category || "",
@@ -653,17 +662,23 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
             })}
           </div>
 
-          <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)", display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)", display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
+            {listingPriceMissing && (
+              <span style={{ fontSize: 12, color: "var(--danger)", marginRight: "auto" }}>
+                Required field: Price is empty
+              </span>
+            )}
             <button className="btn btn-ghost" onClick={onClose}>
               Cancel
             </button>
             <button
               className="btn btn-primary"
+              style={listingPriceMissing ? { opacity: 0.5 } : undefined}
               onClick={handleSubmit}
               disabled={posting || selected.size <= 1}
             >
-              {posting ? "Posting…" : "Post"}
-            </button>
+                {posting ? "Posting…" : "Post"}
+              </button>
           </div>
         </div>
       </>
@@ -870,16 +885,22 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
         </div>
 
         <div className="modal-footer">
+          {listingPriceMissing && (
+            <span style={{ fontSize: 12, color: "var(--danger)", marginRight: "auto" }}>
+              Required field: Price is empty
+            </span>
+          )}
           <button className="btn btn-ghost" onClick={onClose}>
             Cancel
           </button>
           <button
             className="btn btn-primary"
+            style={listingPriceMissing ? { opacity: 0.5 } : undefined}
             onClick={handleSubmit}
             disabled={posting || selected.size <= 1}
           >
-            {posting ? "Posting…" : "Post"}
-          </button>
+              {posting ? "Posting…" : "Post"}
+            </button>
         </div>
       </div>
 
