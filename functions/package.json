@@ -6,11 +6,17 @@
   "engines": {
     "node": "22"
   },
+  "scripts": {
+    "contracts:gen": "node scripts/gen-swift-contracts.js",
+    "contracts:check": "node -e \"require('./contracts')\" && echo contracts OK"
+  },
   "dependencies": {
     "@google-cloud/secret-manager": "^5.0.0",
     "@google/generative-ai": "^0.21.0",
     "firebase-admin": "^12.0.0",
     "firebase-functions": "^6.0.0",
-    "jimp": "^0.22.12"
+    "jimp": "^0.22.12",
+    "zod": "^3.25.76",
+    "zod-to-json-schema": "^3.25.2"
   }
 }
