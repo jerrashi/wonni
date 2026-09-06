@@ -1,0 +1,2396 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "WonniBackendContracts",
+  "description": "Generated from functions/contracts/. Do not edit by hand.",
+  "type": "object",
+  "properties": {
+    "RecordSaleRequest": {
+      "$ref": "#/definitions/RecordSaleRequest"
+    },
+    "RecordSaleResponse": {
+      "$ref": "#/definitions/RecordSaleResponse"
+    },
+    "DecrementAndCascadeRequest": {
+      "$ref": "#/definitions/DecrementAndCascadeRequest"
+    },
+    "DecrementAndCascadeResponse": {
+      "$ref": "#/definitions/DecrementAndCascadeResponse"
+    },
+    "RestockAndCascadeRequest": {
+      "$ref": "#/definitions/RestockAndCascadeRequest"
+    },
+    "RestockAndCascadeResponse": {
+      "$ref": "#/definitions/RestockAndCascadeResponse"
+    },
+    "MarkSoldOutAndCascadeRequest": {
+      "$ref": "#/definitions/MarkSoldOutAndCascadeRequest"
+    },
+    "MarkSoldOutAndCascadeResponse": {
+      "$ref": "#/definitions/MarkSoldOutAndCascadeResponse"
+    },
+    "SyncSalesRequest": {
+      "$ref": "#/definitions/SyncSalesRequest"
+    },
+    "SyncSalesResponse": {
+      "$ref": "#/definitions/SyncSalesResponse"
+    },
+    "GetOrderTakeHomeRequest": {
+      "$ref": "#/definitions/GetOrderTakeHomeRequest"
+    },
+    "GetOrderTakeHomeResponse": {
+      "$ref": "#/definitions/GetOrderTakeHomeResponse"
+    },
+    "RecordMercariSalesBatchRequest": {
+      "$ref": "#/definitions/RecordMercariSalesBatchRequest"
+    },
+    "RecordMercariSalesBatchResponse": {
+      "$ref": "#/definitions/RecordMercariSalesBatchResponse"
+    },
+    "DetectMercariPullSyncDiffRequest": {
+      "$ref": "#/definitions/DetectMercariPullSyncDiffRequest"
+    },
+    "DetectMercariPullSyncDiffResponse": {
+      "$ref": "#/definitions/DetectMercariPullSyncDiffResponse"
+    },
+    "ImportMercariPullSyncRequest": {
+      "$ref": "#/definitions/ImportMercariPullSyncRequest"
+    },
+    "ImportMercariPullSyncResponse": {
+      "$ref": "#/definitions/ImportMercariPullSyncResponse"
+    },
+    "UpdateMercariListingStatusRequest": {
+      "$ref": "#/definitions/UpdateMercariListingStatusRequest"
+    },
+    "UpdateMercariListingStatusResponse": {
+      "$ref": "#/definitions/UpdateMercariListingStatusResponse"
+    },
+    "EbayCreateListingRequest": {
+      "$ref": "#/definitions/EbayCreateListingRequest"
+    },
+    "EbayCreateListingResponse": {
+      "$ref": "#/definitions/EbayCreateListingResponse"
+    },
+    "EbayDeleteListingRequest": {
+      "$ref": "#/definitions/EbayDeleteListingRequest"
+    },
+    "EbayDeleteListingResponse": {
+      "$ref": "#/definitions/EbayDeleteListingResponse"
+    },
+    "EbayGetListingRequest": {
+      "$ref": "#/definitions/EbayGetListingRequest"
+    },
+    "EbayGetListingResponse": {
+      "$ref": "#/definitions/EbayGetListingResponse"
+    },
+    "EbayUpdateListingRequest": {
+      "$ref": "#/definitions/EbayUpdateListingRequest"
+    },
+    "EbayUpdateListingResponse": {
+      "$ref": "#/definitions/EbayUpdateListingResponse"
+    },
+    "EbayImportListingRequest": {
+      "$ref": "#/definitions/EbayImportListingRequest"
+    },
+    "EbayImportListingResponse": {
+      "$ref": "#/definitions/EbayImportListingResponse"
+    },
+    "EbayCheckDriftRequest": {
+      "$ref": "#/definitions/EbayCheckDriftRequest"
+    },
+    "EbayCheckDriftResponse": {
+      "$ref": "#/definitions/EbayCheckDriftResponse"
+    },
+    "EbayApplyDriftRequest": {
+      "$ref": "#/definitions/EbayApplyDriftRequest"
+    },
+    "EbayApplyDriftResponse": {
+      "$ref": "#/definitions/EbayApplyDriftResponse"
+    },
+    "EnrichListingRequest": {
+      "$ref": "#/definitions/EnrichListingRequest"
+    },
+    "EnrichListingResponse": {
+      "$ref": "#/definitions/EnrichListingResponse"
+    },
+    "SaleDoc": {
+      "$ref": "#/definitions/SaleDoc"
+    },
+    "MercariScrapeItem": {
+      "$ref": "#/definitions/MercariScrapeItem"
+    },
+    "ListingFields": {
+      "$ref": "#/definitions/ListingFields"
+    }
+  },
+  "definitions": {
+    "RecordSaleRequest": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string",
+          "enum": [
+            "ebay",
+            "mercari",
+            "etsy",
+            "tiktok",
+            "wonni",
+            "manual"
+          ]
+        },
+        "productId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "variantSku": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "soldPrice": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "shippingRevenue": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shippingLabelCost": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "takeHome": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "quantity": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "default": 1
+        },
+        "soldAt": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "platformOrderId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "platformItemId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "buyerName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "buyerAddress": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "line1": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "line2": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "city": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "state": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "zip": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "country": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trackingNumber": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "carrier": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "USPS",
+                "UPS",
+                "FedEx",
+                "DHL",
+                "other"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "externalUrl": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uri"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cascade": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "platform",
+        "soldPrice"
+      ],
+      "additionalProperties": false
+    },
+    "RecordSaleResponse": {
+      "type": "object",
+      "properties": {
+        "saleId": {
+          "type": "string"
+        },
+        "created": {
+          "type": "boolean"
+        },
+        "cascade": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "productId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "previousQuantity": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "newQuantity": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "soldOut": {
+                  "type": "boolean"
+                },
+                "platforms": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "enum": [
+                      "updated",
+                      "skipped",
+                      "failed",
+                      "pending-manual"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "productId",
+                "previousQuantity",
+                "newQuantity",
+                "soldOut",
+                "platforms"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "saleId",
+        "created",
+        "cascade"
+      ],
+      "additionalProperties": false
+    },
+    "DecrementAndCascadeRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "ebay",
+            "mercari",
+            "etsy",
+            "tiktok",
+            "wonni",
+            "manual"
+          ]
+        }
+      },
+      "required": [
+        "productId",
+        "platform"
+      ],
+      "additionalProperties": false
+    },
+    "DecrementAndCascadeResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "const": true
+        },
+        "cascade": {
+          "type": "object",
+          "properties": {
+            "productId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "previousQuantity": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "newQuantity": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "soldOut": {
+              "type": "boolean"
+            },
+            "platforms": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "enum": [
+                  "updated",
+                  "skipped",
+                  "failed",
+                  "pending-manual"
+                ]
+              }
+            }
+          },
+          "required": [
+            "productId",
+            "previousQuantity",
+            "newQuantity",
+            "soldOut",
+            "platforms"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "success",
+        "cascade"
+      ],
+      "additionalProperties": false
+    },
+    "RestockAndCascadeRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quantity": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        }
+      },
+      "required": [
+        "productId",
+        "quantity"
+      ],
+      "additionalProperties": false
+    },
+    "RestockAndCascadeResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": false
+    },
+    "MarkSoldOutAndCascadeRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "productId"
+      ],
+      "additionalProperties": false
+    },
+    "MarkSoldOutAndCascadeResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": false
+    },
+    "SyncSalesRequest": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "ebay",
+                "etsy"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "since": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SyncSalesResponse": {
+      "type": "object",
+      "properties": {
+        "imported": {
+          "type": "integer"
+        },
+        "skipped": {
+          "type": "integer"
+        },
+        "saleIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "platform": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "platform",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "imported",
+        "skipped",
+        "saleIds",
+        "errors"
+      ],
+      "additionalProperties": false
+    },
+    "GetOrderTakeHomeRequest": {
+      "type": "object",
+      "properties": {
+        "saleId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "saleId"
+      ],
+      "additionalProperties": false
+    },
+    "GetOrderTakeHomeResponse": {
+      "type": "object",
+      "properties": {
+        "takeHome": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "fees": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "shippingLabelCost": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "provisional": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "takeHome",
+        "fees",
+        "shippingLabelCost",
+        "provisional"
+      ],
+      "additionalProperties": false
+    },
+    "RecordMercariSalesBatchRequest": {
+      "type": "object",
+      "properties": {
+        "rawItems": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mercariItemId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "mercariOrderId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "priceText": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "priceValue": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "statusText": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "soldDateText": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "thumbnailUrl": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "rawJson": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "mercariItemId"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 200
+        },
+        "stopBefore": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "rawItems"
+      ],
+      "additionalProperties": false
+    },
+    "RecordMercariSalesBatchResponse": {
+      "type": "object",
+      "properties": {
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mercariItemId": {
+                "type": "string"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "recorded",
+                  "duplicate",
+                  "no-match",
+                  "parse-failed"
+                ]
+              },
+              "saleId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "productId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "warning": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "mercariItemId",
+              "outcome"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "recorded": {
+          "type": "integer"
+        },
+        "duplicates": {
+          "type": "integer"
+        },
+        "unmatched": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "results",
+        "recorded",
+        "duplicates",
+        "unmatched"
+      ],
+      "additionalProperties": false
+    },
+    "DetectMercariPullSyncDiffRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scraped": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "price": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "photoUrls": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "productId",
+        "scraped"
+      ],
+      "additionalProperties": false
+    },
+    "DetectMercariPullSyncDiffResponse": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "diffs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string",
+                "enum": [
+                  "title",
+                  "description",
+                  "price",
+                  "photos",
+                  "status"
+                ]
+              },
+              "productValue": {},
+              "mercariValue": {}
+            },
+            "required": [
+              "field"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "inSync": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "productId",
+        "diffs",
+        "inSync"
+      ],
+      "additionalProperties": false
+    },
+    "ImportMercariPullSyncRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "title",
+              "description",
+              "price",
+              "photos",
+              "status"
+            ]
+          },
+          "minItems": 1
+        },
+        "scraped": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "price": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "photoUrls": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "productId",
+        "fields",
+        "scraped"
+      ],
+      "additionalProperties": false
+    },
+    "ImportMercariPullSyncResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "const": true
+        },
+        "updated": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "updated"
+      ],
+      "additionalProperties": false
+    },
+    "UpdateMercariListingStatusRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "variantId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "inactive",
+            "sold",
+            "error",
+            "draft"
+          ]
+        },
+        "listingId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uri"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "syncedTitle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "syncedDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "syncedPrice": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "syncedImages": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "productId",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "UpdateMercariListingStatusResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "ok"
+      ],
+      "additionalProperties": false
+    },
+    "EbayCreateListingRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "titleOverride": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 80
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "skipAutofill": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "productId"
+      ],
+      "additionalProperties": false
+    },
+    "EbayCreateListingResponse": {
+      "type": "object",
+      "properties": {
+        "listingId": {
+          "type": "string"
+        },
+        "offerId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inventoryItemGroupKey": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "variantOfferIds": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "listingUrl": {
+          "type": "string",
+          "format": "uri"
+        }
+      },
+      "required": [
+        "listingId",
+        "listingUrl"
+      ],
+      "additionalProperties": false
+    },
+    "EbayDeleteListingRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "productId"
+      ],
+      "additionalProperties": false
+    },
+    "EbayDeleteListingResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "ok"
+      ],
+      "additionalProperties": false
+    },
+    "EbayGetListingRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "productId"
+      ],
+      "additionalProperties": false
+    },
+    "EbayGetListingResponse": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "listingId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "totalSold": {
+          "type": "integer"
+        },
+        "group": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "variesBy": {
+                  "anyOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "variantSkus": {
+                  "anyOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "productId",
+        "listingId",
+        "status",
+        "totalSold"
+      ],
+      "additionalProperties": false
+    },
+    "EbayUpdateListingRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "productId"
+      ],
+      "additionalProperties": false
+    },
+    "EbayUpdateListingResponse": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "ebay",
+            "mercari",
+            "etsy",
+            "tiktok",
+            "wonni"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "inactive",
+            "sold",
+            "error",
+            "none"
+          ]
+        },
+        "listingId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "productId",
+        "platform",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "EbayImportListingRequest": {
+      "type": "object",
+      "properties": {
+        "itemId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "itemId"
+      ],
+      "additionalProperties": false
+    },
+    "EbayImportListingResponse": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "price": {
+          "type": "number",
+          "minimum": 0
+        },
+        "description": {
+          "type": "string"
+        },
+        "imageUrls": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "condition": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "price",
+        "description",
+        "imageUrls",
+        "condition"
+      ],
+      "additionalProperties": false
+    },
+    "EbayCheckDriftRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "productId"
+      ],
+      "additionalProperties": false
+    },
+    "EbayCheckDriftResponse": {
+      "type": "object",
+      "properties": {
+        "hasDrift": {
+          "type": "boolean"
+        },
+        "diff": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "key": {
+                "type": "string",
+                "enum": [
+                  "title",
+                  "price",
+                  "quantity"
+                ]
+              },
+              "wonni": {
+                "type": "string"
+              },
+              "external": {
+                "type": "string"
+              },
+              "value": {
+                "type": [
+                  "string",
+                  "number"
+                ]
+              }
+            },
+            "required": [
+              "field",
+              "key",
+              "wonni",
+              "external",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "ebayData": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "price": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "quantity": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "listingId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "title",
+            "price",
+            "quantity",
+            "status",
+            "listingId"
+          ],
+          "additionalProperties": false
+        },
+        "wonniData": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "price": {
+              "type": "number"
+            },
+            "quantity": {
+              "type": "number"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "price",
+            "quantity",
+            "status"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "hasDrift",
+        "diff",
+        "ebayData",
+        "wonniData"
+      ],
+      "additionalProperties": false
+    },
+    "EbayApplyDriftRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fields": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "price": {
+              "type": "number"
+            },
+            "quantity": {
+              "type": "integer"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "productId",
+        "fields"
+      ],
+      "additionalProperties": false
+    },
+    "EbayApplyDriftResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "const": true
+        },
+        "applied": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "applied"
+      ],
+      "additionalProperties": false
+    },
+    "EnrichListingRequest": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "draft"
+            },
+            "images": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "maxItems": 8
+            },
+            "hints": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "price": {
+                  "type": "number"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "mode",
+            "images"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "product"
+            },
+            "productId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "fillBlanksOnly": {
+              "type": "boolean",
+              "default": true
+            },
+            "persist": {
+              "type": "boolean",
+              "default": true
+            }
+          },
+          "required": [
+            "mode",
+            "productId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "EnrichListingResponse": {
+      "type": "object",
+      "properties": {
+        "suggested": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 140
+            },
+            "shortTitle": {
+              "type": "string",
+              "maxLength": 80
+            },
+            "description": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "brand": {
+              "type": "string",
+              "maxLength": 60
+            },
+            "category": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "condition": {
+              "type": "string",
+              "enum": [
+                "new",
+                "likenew",
+                "good",
+                "fair",
+                "poor"
+              ]
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 8
+            },
+            "suggestedPrice": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "weightOz": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "lengthIn": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "widthIn": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "heightIn": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "itemSpecifics": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "writes": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 140
+            },
+            "shortTitle": {
+              "type": "string",
+              "maxLength": 80
+            },
+            "description": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "brand": {
+              "type": "string",
+              "maxLength": 60
+            },
+            "category": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "condition": {
+              "type": "string",
+              "enum": [
+                "new",
+                "likenew",
+                "good",
+                "fair",
+                "poor"
+              ]
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 8
+            },
+            "suggestedPrice": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "weightOz": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "lengthIn": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "widthIn": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "heightIn": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "itemSpecifics": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "proposals": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "applied": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "aiModel": {
+          "type": "string"
+        },
+        "aiPromptVersion": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "suggested",
+        "writes",
+        "proposals",
+        "applied",
+        "aiModel",
+        "aiPromptVersion"
+      ],
+      "additionalProperties": false
+    },
+    "SaleDoc": {
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "productId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "variantSku": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "variantOptionValues": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "listingTitle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thumbnailUrl": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uri"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "coverPhotoPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "ebay",
+            "mercari",
+            "etsy",
+            "tiktok",
+            "wonni",
+            "manual"
+          ]
+        },
+        "platformOrderId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "platformItemId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priceSoldFor": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "shippingRevenue": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shippingLabelCost": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "takeHome": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "quantity": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "default": 1
+        },
+        "buyerName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "buyerAddress": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "line1": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "line2": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "city": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "state": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "zip": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "country": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trackingNumber": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "carrier": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "USPS",
+                "UPS",
+                "FedEx",
+                "DHL",
+                "other"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "shipped",
+            "delivered",
+            "complete",
+            "cancelled",
+            "returned"
+          ]
+        },
+        "soldAt": {
+          "type": "object",
+          "properties": {
+            "_seconds": {
+              "type": "integer"
+            },
+            "_nanoseconds": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "_seconds",
+            "_nanoseconds"
+          ],
+          "additionalProperties": false
+        },
+        "shippedAt": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "_seconds": {
+                  "type": "integer"
+                },
+                "_nanoseconds": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "_seconds",
+                "_nanoseconds"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "type": "object",
+          "properties": {
+            "_seconds": {
+              "type": "integer"
+            },
+            "_nanoseconds": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "_seconds",
+            "_nanoseconds"
+          ],
+          "additionalProperties": false
+        },
+        "updatedAt": {
+          "type": "object",
+          "properties": {
+            "_seconds": {
+              "type": "integer"
+            },
+            "_nanoseconds": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "_seconds",
+            "_nanoseconds"
+          ],
+          "additionalProperties": false
+        },
+        "notes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "externalUrl": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uri"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "isDeleted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "deletedAt": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "_seconds": {
+                  "type": "integer"
+                },
+                "_nanoseconds": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "_seconds",
+                "_nanoseconds"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "manual",
+                "mercari-scan",
+                "ebay-poll",
+                "etsy-poll",
+                "cross-post-drift"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "userId",
+        "productId",
+        "platform",
+        "priceSoldFor",
+        "status",
+        "soldAt",
+        "createdAt",
+        "updatedAt"
+      ],
+      "additionalProperties": false
+    },
+    "MercariScrapeItem": {
+      "type": "object",
+      "properties": {
+        "mercariItemId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mercariOrderId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priceText": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priceValue": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "statusText": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "soldDateText": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thumbnailUrl": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uri"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rawJson": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "mercariItemId"
+      ],
+      "additionalProperties": false
+    },
+    "ListingFields": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 140
+        },
+        "shortTitle": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "brand": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "condition": {
+          "type": "string",
+          "enum": [
+            "new",
+            "likenew",
+            "good",
+            "fair",
+            "poor"
+          ]
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8
+        },
+        "suggestedPrice": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "weightOz": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "lengthIn": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "widthIn": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "heightIn": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "itemSpecifics": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
