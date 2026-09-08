@@ -37,6 +37,7 @@ const {
   restockAndCascade,
   markSoldOutAndCascade,
 } = require("./sales");
+const { recordMercariSalesBatch } = require("./mercari_sales");
 
 module.exports = {
   // Auth
@@ -99,4 +100,5 @@ module.exports = {
   decrementAndCascade,
   restockAndCascade,
   markSoldOutAndCascade,
+  recordMercariSalesBatch,
 };

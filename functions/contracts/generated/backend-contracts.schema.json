@@ -725,6 +725,23 @@
     "RecordMercariSalesBatchRequest": {
       "type": "object",
       "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mercariItemId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "mercariItemId"
+            ],
+            "additionalProperties": true
+          },
+          "maxItems": 200
+        },
         "rawItems": {
           "type": "array",
           "items": {
@@ -733,92 +750,16 @@
               "mercariItemId": {
                 "type": "string",
                 "minLength": 1
-              },
-              "mercariOrderId": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "title": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "priceText": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "priceValue": {
-                "type": [
-                  "number",
-                  "null"
-                ]
-              },
-              "statusText": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "soldDateText": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "thumbnailUrl": {
-                "anyOf": [
-                  {
-                    "type": "string",
-                    "format": "uri"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "rawJson": {
-                "type": [
-                  "string",
-                  "null"
-                ]
               }
             },
             "required": [
               "mercariItemId"
             ],
-            "additionalProperties": false
+            "additionalProperties": true
           },
-          "minItems": 1,
           "maxItems": 200
-        },
-        "stopBefore": {
-          "anyOf": [
-            {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "format": "date-time"
-                },
-                {
-                  "type": "integer",
-                  "exclusiveMinimum": 0
-                }
-              ]
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
-      "required": [
-        "rawItems"
-      ],
       "additionalProperties": false
     },
     "RecordMercariSalesBatchResponse": {
@@ -2307,30 +2248,6 @@
             "null"
           ]
         },
-        "priceText": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "priceValue": {
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "statusText": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "soldDateText": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "thumbnailUrl": {
           "anyOf": [
             {
@@ -2342,7 +2259,54 @@
             }
           ]
         },
-        "rawJson": {
+        "priceSoldFor": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "takeHome": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "shippingRevenue": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "soldAt": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "soldDateText": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "buyerName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "trackingNumber": {
           "type": [
             "string",
             "null"
@@ -2350,7 +2314,8 @@
         }
       },
       "required": [
-        "mercariItemId"
+        "mercariItemId",
+        "priceSoldFor"
       ],
       "additionalProperties": false
     },

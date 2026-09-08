@@ -25,7 +25,6 @@ const { getValidEtsyToken, getEtsyClientId } = require("./etsy_auth");
 const { variantSkuFor } = require("./ebay_listing");
 
 const EBAY_SECRETS = [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET];
-const CASCADE_PLATFORMS = ["ebay", "etsy", "mercari", "tiktok"];
 
 // ── quantity model ─────────────────────────────────────────────────────────
 
@@ -168,29 +167,35 @@ async function cascade(db, uid, product, productId, { variantSku, newQuantity, s
   const platforms = {};
   const productUpdate = {};
 
-  for (const p of CASCADE_PLATFORMS) {
+  // API platforms (eBay/Etsy/TikTok): push the new quantity — UNLESS the sale
+  // came from that platform, which already decremented itself.
+  for (const p of ["ebay", "etsy", "tiktok"]) {
     if (p === soldOnPlatform) { platforms[p] = "skipped"; continue; }
-    const isActive = product.crossPostStatus?.[p] === "active";
-    if (!isActive) { platforms[p] = "skipped"; continue; }
-
+    if (product.crossPostStatus?.[p] !== "active") { platforms[p] = "skipped"; continue; }
     try {
       if (p === "ebay") {
         platforms.ebay = await pushEbayQuantity(uid, product, productId, variantSku, newQuantity ?? 0);
       } else if (p === "etsy") {
         platforms.etsy = await pushEtsyQuantity(uid, product, newQuantity ?? 0);
-      } else if (p === "mercari") {
-        // Mercari has no API — leave a flag the client's headless-browser flow picks up.
-        if (soldOut) productUpdate.pendingMercariDeactivation = true;
-        else if (soldOnPlatform === "mercari") productUpdate.pendingMercariRelist = true;
-        platforms.mercari = "pending-manual";
-      } else if (p === "tiktok") {
-        // TODO: wire tiktokUpdateListing quantity once its consolidation lands.
+      } else {
+        // TODO: tiktokUpdateListing quantity once its consolidation lands.
         platforms.tiktok = "pending-manual";
       }
     } catch (e) {
       console.error(`[cascade] ${p} failed for ${productId}:`, e.message);
       platforms[p] = "failed";
     }
+  }
+
+  // Mercari has no API — always resolved by a client-side headless flow, so
+  // it's handled even when the sale itself came from Mercari (a multi-qty
+  // Mercari listing auto-ends on each sale and must be re-listed).
+  if (product.crossPostStatus?.mercari === "active") {
+    if (soldOut) productUpdate.pendingMercariDeactivation = true;
+    else if (soldOnPlatform === "mercari") productUpdate.pendingMercariRelist = true;
+    platforms.mercari = Object.keys(productUpdate).length ? "pending-manual" : "skipped";
+  } else {
+    platforms.mercari = "skipped";
   }
 
   if (Object.keys(productUpdate).length) {
@@ -215,28 +220,29 @@ function toTimestamp(input) {
   return admin.firestore.Timestamp.fromDate(new Date(input));
 }
 
-exports.recordSale = onCall({ secrets: EBAY_SECRETS, timeoutSeconds: 60 }, validated("recordSale", async (data, request) => {
-  const uid = request.auth?.uid;
-  if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+/**
+ * Core sale-write + cascade. Shared by `recordSale` (one sale) and
+ * `recordMercariSalesBatch` (many). `fields` uses the canonical SaleDoc names.
+ * `product` is the already-fetched + ownership-checked product doc (or null).
+ * Returns { saleId, created, cascade }.
+ */
+async function recordSaleCore(db, uid, fields, product) {
+  const {
+    platform, productId = null, variantSku = null, soldPrice,
+    shippingRevenue = null, shippingLabelCost = null, takeHome = null,
+    quantity = 1, soldAt = null, platformOrderId = null, platformItemId = null,
+    buyerName = null, buyerAddress = null, trackingNumber = null, carrier = null,
+    listingTitle = null, thumbnailUrl = null, notes = null, externalUrl = null,
+    cascade: doCascade = true, source = null,
+  } = fields;
 
-  const db = admin.firestore();
-
-  // Snapshot product fields for the sale row (survives edit/delete of the product).
-  let product = null;
-  if (data.productId) {
-    const snap = await db.collection("products").doc(data.productId).get();
-    if (snap.exists) {
-      product = snap.data();
-      if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
-    }
-  }
-  const variant = product && data.variantSku && Array.isArray(product.variants)
-    ? product.variants.find((v) => v && v.sku === data.variantSku)
+  const variant = product && variantSku && Array.isArray(product.variants)
+    ? product.variants.find((v) => v && v.sku === variantSku)
     : null;
 
-  // Dedupe key: platform + platformOrderId when present (auto-imported sales).
-  const saleId = data.platformOrderId
-    ? `${data.platform}_${data.platformOrderId}`
+  // Dedupe key: platform + order id when present (auto-imported sales).
+  const saleId = platformOrderId
+    ? `${platform}_${platformOrderId}`
     : db.collection("sales").doc().id;
   const saleRef = db.collection("sales").doc(saleId);
   const existing = await saleRef.get();
@@ -244,58 +250,94 @@ exports.recordSale = onCall({ secrets: EBAY_SECRETS, timeoutSeconds: 60 }, valid
   const now = admin.firestore.FieldValue.serverTimestamp();
   const saleDoc = {
     userId: uid,
-    productId: data.productId ?? null,
-    variantSku: data.variantSku ?? null,
+    productId,
+    variantSku,
     variantOptionValues: variant?.optionValues ?? null,
-    listingTitle: product?.title ?? data.listingTitle ?? null,
-    thumbnailUrl: (Array.isArray(product?.images) && product.images[0]) || null,
+    listingTitle: product?.title ?? listingTitle ?? null,
+    thumbnailUrl: thumbnailUrl ?? ((Array.isArray(product?.images) && product.images[0]) || null),
     coverPhotoPath: null,
     productTags: Array.isArray(product?.tags) ? product.tags : null,
-    platform: data.platform,
-    platformOrderId: data.platformOrderId ?? null,
-    platformItemId: data.platformItemId ?? null,
-    priceSoldFor: data.soldPrice,
-    shippingRevenue: data.shippingRevenue ?? null,
-    shippingLabelCost: data.shippingLabelCost ?? null,
-    takeHome: data.takeHome ?? null,
-    quantity: data.quantity ?? 1,
-    buyerName: data.buyerName ?? null,
-    buyerAddress: data.buyerAddress ?? null,
-    trackingNumber: data.trackingNumber ?? null,
-    carrier: data.carrier ?? null,
-    soldAt: toTimestamp(data.soldAt),
+    platform,
+    platformOrderId,
+    platformItemId,
+    priceSoldFor: soldPrice,
+    shippingRevenue,
+    shippingLabelCost,
+    takeHome,
+    quantity,
+    buyerName,
+    buyerAddress,
+    trackingNumber,
+    carrier,
+    soldAt: toTimestamp(soldAt),
     updatedAt: now,
-    notes: data.notes ?? null,
-    externalUrl: data.externalUrl ?? null,
+    notes,
+    externalUrl,
   };
   if (!existing.exists) {
-    // Lifecycle fields — set once at creation; a re-record (same platformOrderId)
-    // must not stomp a status that has since advanced to shipped/complete.
+    // Lifecycle fields — set once; a re-record must not stomp a status that has
+    // since advanced to shipped/complete.
     saleDoc.status = "pending";
     saleDoc.createdAt = now;
-    saleDoc.source = data.platform === "manual" ? "manual" : "cross-post-drift";
+    saleDoc.source = source ?? (platform === "manual" ? "manual" : "cross-post-drift");
   }
 
   await saleRef.set(saleDoc, { merge: true });
 
-  // Cascade — skip when the caller opted out or there's no product to decrement.
   let cascadeResult = null;
-  if (data.cascade && data.productId && product && !existing.exists) {
-    const applied = await applyQuantityDelta(db, data.productId, uid, data.variantSku ?? null, -(data.quantity ?? 1));
+  if (doCascade && productId && product && !existing.exists) {
+    const applied = await applyQuantityDelta(db, productId, uid, variantSku, -(quantity || 1));
     if (applied.skipped) {
-      cascadeResult = { productId: data.productId, previousQuantity: null, newQuantity: null, soldOut: false, platforms: {} };
+      cascadeResult = { productId, previousQuantity: null, newQuantity: null, soldOut: false, platforms: {} };
     } else {
-      cascadeResult = await cascade(db, uid, applied.product, data.productId, {
-        variantSku: data.variantSku ?? null,
-        newQuantity: applied.newQuantity,
-        soldOut: applied.soldOut,
-        soldOnPlatform: data.platform,
+      cascadeResult = await cascade(db, uid, applied.product, productId, {
+        variantSku, newQuantity: applied.newQuantity, soldOut: applied.soldOut, soldOnPlatform: platform,
       });
       cascadeResult.previousQuantity = applied.previousQuantity;
     }
   }
 
   return { saleId, created: !existing.exists, cascade: cascadeResult };
+}
+
+/** Fetch + ownership-check a product; throws permission-denied on mismatch. */
+async function loadOwnedProduct(db, uid, productId) {
+  if (!productId) return null;
+  const snap = await db.collection("products").doc(productId).get();
+  if (!snap.exists) return null;
+  const product = snap.data();
+  if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
+  return product;
+}
+
+exports.recordSale = onCall({ secrets: EBAY_SECRETS, timeoutSeconds: 60 }, validated("recordSale", async (data, request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+  const db = admin.firestore();
+  const product = await loadOwnedProduct(db, uid, data.productId);
+
+  return recordSaleCore(db, uid, {
+    platform: data.platform,
+    productId: data.productId ?? null,
+    variantSku: data.variantSku ?? null,
+    soldPrice: data.soldPrice,
+    shippingRevenue: data.shippingRevenue,
+    shippingLabelCost: data.shippingLabelCost,
+    takeHome: data.takeHome,
+    quantity: data.quantity ?? 1,
+    soldAt: data.soldAt ?? null,
+    platformOrderId: data.platformOrderId ?? null,
+    platformItemId: data.platformItemId ?? null,
+    buyerName: data.buyerName,
+    buyerAddress: data.buyerAddress,
+    trackingNumber: data.trackingNumber,
+    carrier: data.carrier,
+    listingTitle: data.listingTitle ?? null,
+    notes: data.notes ?? null,
+    externalUrl: data.externalUrl ?? null,
+    cascade: data.cascade,
+  }, product);
 }));
 
 // ── decrementAndCascade / restockAndCascade / markSoldOutAndCascade ────────
@@ -355,5 +397,6 @@ exports.markSoldOutAndCascade = onCall({ secrets: EBAY_SECRETS }, validated("mar
   return { success: true };
 }));
 
-// Internal — reused by mercari.js recordMercariSalesBatch.
-exports._internal = { applyQuantityDelta, cascade, resolveStock, toTimestamp };
+// Internal — reused by mercari_sales.js recordMercariSalesBatch.
+exports._internal = { applyQuantityDelta, cascade, resolveStock, toTimestamp, recordSaleCore, loadOwnedProduct };
+exports.EBAY_SECRETS = EBAY_SECRETS;
