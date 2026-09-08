@@ -46,7 +46,19 @@ export default function Sales() {
     const unsubSales = onSnapshot(
       salesQ,
       (snap) => {
-        const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        const items = snap.docs.map((d) => {
+          const x = { id: d.id, ...d.data() };
+          // Canonical SaleDoc (functions/contracts/sales.js) renamed a few
+          // fields; keep the old names populated so this view works for both
+          // pre-migration docs and new recordSale-written ones.
+          return {
+            ...x,
+            salePrice: typeof x.priceSoldFor === "number" ? x.priceSoldFor : x.salePrice,
+            productTitle: x.listingTitle ?? x.productTitle,
+            productImageUrl: x.thumbnailUrl ?? x.productImageUrl,
+            isDeleted: x.isDeleted === true,
+          };
+        }).filter((s) => !s.isDeleted);
         // Sort in memory by soldAt or createdAt
         items.sort((a, b) => {
           const tA = a.soldAt?.toDate?.()?.getTime() || a.createdAt?.toDate?.()?.getTime() || 0;

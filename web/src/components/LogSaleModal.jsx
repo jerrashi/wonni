@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
-import { collection, addDoc, doc, updateDoc, serverTimestamp, Timestamp } from "firebase/firestore";
-import { db, auth } from "../firebase";
+import { auth, callFunction } from "../firebase";
 
 const PLATFORMS = [
   { id: "mercari", label: "Mercari", icon: "🔴" },
@@ -86,50 +85,23 @@ export default function LogSaleModal({ products = [], onClose, onSaleLogged }) {
     setError("");
 
     try {
-      const selectedVariant = variants.find((v) => v.sku === selectedVariantSku);
-      const productTags = Array.isArray(selectedProduct?.tags) ? selectedProduct.tags : [];
-      const imageUrl =
-        (Array.isArray(selectedProduct?.images) && selectedProduct.images[0]) ||
-        (Array.isArray(selectedProduct?.imageAssets) && selectedProduct.imageAssets[0]?.url) ||
-        "";
-
       const soldDateObj = new Date(soldDate + "T12:00:00");
 
-      const saleData = {
-        userId: uid,
+      // Single server-owned write path — persists the canonical sales/{id} doc
+      // and (when decrementStock) fires the cross-platform quantity cascade in
+      // the same call. See functions/sales.js + functions/contracts/sales.js.
+      await callFunction("recordSale")({
         platform,
         productId: selectedProductId || null,
-        productTitle: selectedProduct?.title || productSearch.trim() || "Manual Sale",
-        productImageUrl: imageUrl,
-        productTags,
         variantSku: selectedVariantSku || null,
-        variantOptionValues: selectedVariant?.optionValues || null,
-        salePrice: priceNum,
+        listingTitle: selectedProductId ? null : (productSearch.trim() || "Manual Sale"),
+        soldPrice: priceNum,
         quantity: parseInt(quantity, 10) || 1,
+        soldAt: soldDateObj.toISOString(),
         externalUrl: urlInput.trim() || null,
         notes: notes.trim() || null,
-        soldAt: Timestamp.fromDate(soldDateObj),
-        createdAt: serverTimestamp(),
-      };
-
-      await addDoc(collection(db, "sales"), saleData);
-
-      // Decrement stock in Firestore if requested
-      if (decrementStock && selectedProduct) {
-        if (variants.length > 0 && selectedVariantSku) {
-          const updatedVariants = variants.map((v) => {
-            if (v.sku === selectedVariantSku) {
-              const currentQty = v.quantity ?? 1;
-              return { ...v, quantity: Math.max(0, currentQty - (parseInt(quantity, 10) || 1)) };
-            }
-            return v;
-          });
-          await updateDoc(doc(db, "products", selectedProduct.id), {
-            variants: updatedVariants,
-            updatedAt: serverTimestamp(),
-          });
-        }
-      }
+        cascade: Boolean(decrementStock && selectedProductId),
+      });
 
       onSaleLogged?.();
       onClose();
