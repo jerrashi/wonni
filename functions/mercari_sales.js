@@ -85,7 +85,7 @@ exports.recordMercariSalesBatch = onCall(
           continue;
         }
 
-        const soldAt = item.soldAt ?? looseDate(item.soldDateText);
+        const soldAt = item.soldAt ?? looseDate(item.soldDateText ?? item.soldDate);
         const { saleId, created } = await recordSaleCore(db, uid, {
           platform: "mercari",
           productId: match.productId,

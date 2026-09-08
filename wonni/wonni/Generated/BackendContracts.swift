@@ -2517,6 +2517,7 @@ struct MercariScrapeItem: Codable, Sendable {
     let priceSoldFor: Double
     let shippingRevenue: Double?
     let soldAt: SoldAtUnion?
+    let soldDate: String?
     let soldDateText: String?
     let takeHome: Double?
     let thumbnailUrl: String?
@@ -2530,6 +2531,7 @@ struct MercariScrapeItem: Codable, Sendable {
         case priceSoldFor = "priceSoldFor"
         case shippingRevenue = "shippingRevenue"
         case soldAt = "soldAt"
+        case soldDate = "soldDate"
         case soldDateText = "soldDateText"
         case takeHome = "takeHome"
         case thumbnailUrl = "thumbnailUrl"
@@ -2563,6 +2565,7 @@ extension MercariScrapeItem {
         priceSoldFor: Double? = nil,
         shippingRevenue: Double?? = nil,
         soldAt: SoldAtUnion?? = nil,
+        soldDate: String?? = nil,
         soldDateText: String?? = nil,
         takeHome: Double?? = nil,
         thumbnailUrl: String?? = nil,
@@ -2576,6 +2579,7 @@ extension MercariScrapeItem {
             priceSoldFor: priceSoldFor ?? self.priceSoldFor,
             shippingRevenue: shippingRevenue ?? self.shippingRevenue,
             soldAt: soldAt ?? self.soldAt,
+            soldDate: soldDate ?? self.soldDate,
             soldDateText: soldDateText ?? self.soldDateText,
             takeHome: takeHome ?? self.takeHome,
             thumbnailUrl: thumbnailUrl ?? self.thumbnailUrl,

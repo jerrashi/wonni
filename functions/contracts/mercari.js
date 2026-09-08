@@ -33,9 +33,11 @@ const MercariScrapeItemSchema = z.object({
   shippingRevenue: z.number().nullish(),
 
   /** Sale time — ISO/epoch if the client parsed it, else raw text for the
-   *  server to best-effort parse, else neither (server falls back to now). */
+   *  server to best-effort parse, else neither (server falls back to now).
+   *  `soldDate` is the current extension's field name — accepted as an alias. */
   soldAt: TimestampInputSchema.nullish(),
   soldDateText: z.string().nullish(),
+  soldDate: z.string().nullish(),
 
   buyerName: z.string().nullish(),
   trackingNumber: z.string().nullish(),
