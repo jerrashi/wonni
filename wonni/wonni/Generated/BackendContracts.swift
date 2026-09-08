@@ -206,10 +206,12 @@ extension BackendContracts {
 struct DecrementAndCascadeRequest: Codable, Sendable {
     let platform: DecrementAndCascadeRequestPlatform
     let productId: String
+    let variantSku: String?
 
     enum CodingKeys: String, CodingKey {
         case platform = "platform"
         case productId = "productId"
+        case variantSku = "variantSku"
     }
 }
 
@@ -233,11 +235,13 @@ extension DecrementAndCascadeRequest {
 
     func with(
         platform: DecrementAndCascadeRequestPlatform? = nil,
-        productId: String? = nil
+        productId: String? = nil,
+        variantSku: String?? = nil
     ) -> DecrementAndCascadeRequest {
         return DecrementAndCascadeRequest(
             platform: platform ?? self.platform,
-            productId: productId ?? self.productId
+            productId: productId ?? self.productId,
+            variantSku: variantSku ?? self.variantSku
         )
     }
 
@@ -3171,10 +3175,12 @@ extension RecordSaleResponseCascade {
 struct RestockAndCascadeRequest: Codable, Sendable {
     let productId: String
     let quantity: Int
+    let variantSku: String?
 
     enum CodingKeys: String, CodingKey {
         case productId = "productId"
         case quantity = "quantity"
+        case variantSku = "variantSku"
     }
 }
 
@@ -3198,11 +3204,13 @@ extension RestockAndCascadeRequest {
 
     func with(
         productId: String? = nil,
-        quantity: Int? = nil
+        quantity: Int? = nil,
+        variantSku: String?? = nil
     ) -> RestockAndCascadeRequest {
         return RestockAndCascadeRequest(
             productId: productId ?? self.productId,
-            quantity: quantity ?? self.quantity
+            quantity: quantity ?? self.quantity,
+            variantSku: variantSku ?? self.variantSku
         )
     }
 
