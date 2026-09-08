@@ -154,6 +154,17 @@
             "null"
           ]
         },
+        "listingTitle": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "soldPrice": {
           "type": "number",
           "exclusiveMinimum": 0
@@ -1948,6 +1959,19 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "productTags": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "platform": {

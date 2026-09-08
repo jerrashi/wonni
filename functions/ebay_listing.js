@@ -1538,4 +1538,7 @@ module.exports = {
   ebaySyncListing: exports.ebaySyncListing,
   ebayPullSync: exports.ebayPullSync,
   ebayImportPullSync: exports.ebayImportPullSync,
+  // shared helpers (used by sales.js cascade)
+  variantSkuFor,
+  ebayPackageWeightAndSize,
 };

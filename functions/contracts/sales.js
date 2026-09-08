@@ -37,6 +37,8 @@ const SaleDocSchema = z.object({
   listingTitle: z.string().nullish(),
   thumbnailUrl: z.string().url().nullish(),   // platform CDN image — preferred, no Storage cost
   coverPhotoPath: z.string().nullish(),       // Firebase Storage path — fallback
+  /** Product tags copied at sale time — drives the sales dashboard's tag filter. */
+  productTags: z.array(z.string()).nullish(),
 
   platform: PlatformSchema,
   /** Platform order / transaction id. The dedupe key for auto-imported sales. */
@@ -84,6 +86,8 @@ const RecordSaleRequestSchema = z.object({
   platform: PlatformSchema,
   productId: ProductIdSchema.nullish(),
   variantSku: z.string().nullish(),
+  /** Title for a manual sale with no linked product. Ignored when productId is set. */
+  listingTitle: z.string().max(200).nullish(),
 
   soldPrice: PositiveMoneySchema,
   shippingRevenue: MoneySchema.nullish(),

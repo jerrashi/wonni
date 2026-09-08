@@ -106,4 +106,12 @@ async function getValidEtsyToken(uid) {
   throw new Error("Etsy token expired. Please reconnect your Etsy account.");
 }
 
-module.exports = { etsyExchangeToken: exports.etsyExchangeToken, getValidEtsyToken };
+// Etsy v3 requires the app's keystring as `x-api-key` on every call.
+let _etsyClientId = null;
+async function getEtsyClientId() {
+  if (_etsyClientId) return _etsyClientId;
+  _etsyClientId = await getSecret("ETSY_CLIENT_ID");
+  return _etsyClientId;
+}
+
+module.exports = { etsyExchangeToken: exports.etsyExchangeToken, getValidEtsyToken, getEtsyClientId };

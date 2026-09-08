@@ -2870,6 +2870,7 @@ struct RecordSaleRequest: Codable, Sendable {
     let carrier: Carrier?
     let cascade: Bool?
     let externalUrl: String?
+    let listingTitle: String?
     let notes: String?
     let platform: DecrementAndCascadeRequestPlatform
     let platformItemId: String?
@@ -2890,6 +2891,7 @@ struct RecordSaleRequest: Codable, Sendable {
         case carrier = "carrier"
         case cascade = "cascade"
         case externalUrl = "externalUrl"
+        case listingTitle = "listingTitle"
         case notes = "notes"
         case platform = "platform"
         case platformItemId = "platformItemId"
@@ -2930,6 +2932,7 @@ extension RecordSaleRequest {
         carrier: Carrier?? = nil,
         cascade: Bool?? = nil,
         externalUrl: String?? = nil,
+        listingTitle: String?? = nil,
         notes: String?? = nil,
         platform: DecrementAndCascadeRequestPlatform? = nil,
         platformItemId: String?? = nil,
@@ -2950,6 +2953,7 @@ extension RecordSaleRequest {
             carrier: carrier ?? self.carrier,
             cascade: cascade ?? self.cascade,
             externalUrl: externalUrl ?? self.externalUrl,
+            listingTitle: listingTitle ?? self.listingTitle,
             notes: notes ?? self.notes,
             platform: platform ?? self.platform,
             platformItemId: platformItemId ?? self.platformItemId,
@@ -3272,6 +3276,7 @@ struct SaleDoc: Codable, Sendable {
     let platformOrderId: String?
     let priceSoldFor: Double
     let productId: String?
+    let productTags: [String]?
     let quantity: Int?
     let shippedAt: ShippedAt?
     let shippingLabelCost: Double?
@@ -3303,6 +3308,7 @@ struct SaleDoc: Codable, Sendable {
         case platformOrderId = "platformOrderId"
         case priceSoldFor = "priceSoldFor"
         case productId = "productId"
+        case productTags = "productTags"
         case quantity = "quantity"
         case shippedAt = "shippedAt"
         case shippingLabelCost = "shippingLabelCost"
@@ -3354,6 +3360,7 @@ extension SaleDoc {
         platformOrderId: String?? = nil,
         priceSoldFor: Double? = nil,
         productId: String?? = nil,
+        productTags: [String]?? = nil,
         quantity: Int?? = nil,
         shippedAt: ShippedAt?? = nil,
         shippingLabelCost: Double?? = nil,
@@ -3385,6 +3392,7 @@ extension SaleDoc {
             platformOrderId: platformOrderId ?? self.platformOrderId,
             priceSoldFor: priceSoldFor ?? self.priceSoldFor,
             productId: productId ?? self.productId,
+            productTags: productTags ?? self.productTags,
             quantity: quantity ?? self.quantity,
             shippedAt: shippedAt ?? self.shippedAt,
             shippingLabelCost: shippingLabelCost ?? self.shippingLabelCost,
