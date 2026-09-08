@@ -66,7 +66,8 @@ TikTok is stubbed `pending-manual` until `tiktokUpdateListing` consolidation.
 
 | Function | Status | Notes / action |
 |---|---|---|
-| `recordMercariSalesBatch` | **dead** (extension) | Rewrite: client sends **raw scraped rows** (`rawItems`), server does parse + dedupe + `recordSale` + cascade. Collapses `extension/mercari_sold_content.js` and iOS `MercariSaleParsing.swift` into one impl. Port base from nested `mercari_sale.js`. |
+| `recordMercariSalesBatch` | ✅ **built + deployed** (`functions/mercari_sales.js`) | Client scrapes + sends rows (`items` or `rawItems`); server matches `mercariItemId`→`products/{id}` (+ variant, current + legacy keys), dedupes, writes canonical sale + cascade via shared `recordSaleCore`. Loose envelope + per-row `safeParse` → one bad scrape row = `parse-failed`, not a 400. Accepts the current extension shape (`soldDate` alias). Extension response-handling updated. Still TODO: iOS side. |
+| `recordSaleCore` (internal) | ✅ | Extracted from `recordSale`; shared write+cascade path. |
 | `detectMercariPullSyncDiff` | **dead** (web calls it) | Port from nested `mercari_pull_sync.js` onto `products/`. |
 | `importMercariPullSync` | **dead** (web) | same |
 | `updateMercariListingStatus` | **live** | Reconcile the two impls: top-level uses `crossPostStatus.mercari`; nested adds per-variant + `listings.variations[]` mirror. Keep top-level namespace, keep the per-variant handling, drop the `listings` mirror. |
