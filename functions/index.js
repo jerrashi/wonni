@@ -30,6 +30,13 @@ const { disconnectPlatform, updateSettings, generateOAuthState } = require("./us
 const { onProductDeleted } = require("./product_cleanup");
 const { generateProductDescription } = require("./generate_description");
 const { aiAutofillListing } = require("./listing_fields");
+const { publishStorageObject } = require("./publish_storage_object");
+const {
+  recordSale,
+  decrementAndCascade,
+  restockAndCascade,
+  markSoldOutAndCascade,
+} = require("./sales");
 
 module.exports = {
   // Auth
@@ -47,6 +54,7 @@ module.exports = {
   generateProductDescription,
   aiAutofillListing,
   onProductDeleted,
+  publishStorageObject,
 
   // TikTok Shop listings
   getTiktokCategories,
@@ -85,4 +93,10 @@ module.exports = {
   placeAliexpressOrder,
   confirmTiktokShipment,
   pollAliexpressTracking,
+
+  // Sales + quantity cascade
+  recordSale,
+  decrementAndCascade,
+  restockAndCascade,
+  markSoldOutAndCascade,
 };
