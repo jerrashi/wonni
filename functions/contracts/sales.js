@@ -137,11 +137,15 @@ const RecordSaleResponseSchema = z.object({
 const CascadeRequestSchema = z.object({
   productId: ProductIdSchema,
   platform: PlatformSchema,
+  /** Required when the product has variants. */
+  variantSku: z.string().nullish(),
 });
 
 const RestockRequestSchema = z.object({
   productId: ProductIdSchema,
   quantity: z.number().int().positive(),
+  /** Required when the product has variants. */
+  variantSku: z.string().nullish(),
 });
 
 // ── syncSales — on-demand poll of eBay + Etsy for new orders ────────────────

@@ -52,7 +52,7 @@ function resolveStock(product, variantSku) {
  * array into a map). Runs in a transaction. Returns
  * { previousQuantity, newQuantity, soldOut, variantSku }.
  */
-async function applyQuantityDelta(db, productId, uid, variantSku, delta, { force } = {}) {
+async function applyQuantityDelta(db, productId, uid, variantSku, delta, { force, zeroAll } = {}) {
   const ref = db.collection("products").doc(productId);
   return db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
@@ -60,24 +60,40 @@ async function applyQuantityDelta(db, productId, uid, variantSku, delta, { force
     const product = snap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
 
+    const variants = Array.isArray(product.variants) ? product.variants : [];
+    const isVariantProduct = product.hasVariants === true || variants.length > 0;
+    const update = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+
+    // zeroAll: force every active variant (or the product) to 0. Used by
+    // markSoldOutAndCascade, which is unambiguous even without a variant sku.
+    if (zeroAll) {
+      if (isVariantProduct) {
+        update.variants = variants.map((v) => (v.active !== false ? { ...v, quantity: 0 } : v));
+      } else {
+        update.quantity = 0;
+      }
+      update.saleStatus = "sold";
+      tx.update(ref, update);
+      return { previousQuantity: null, newQuantity: 0, soldOut: true, variantSku, product: { ...product, ...update } };
+    }
+
     const { scope, qty, variantIndex } = resolveStock(product, variantSku);
     if (qty === null) {
-      // Variant product but no / unknown variant sku — can't safely decrement.
+      // Variant product but no / unknown variant sku — caller must disambiguate.
       return { previousQuantity: null, newQuantity: null, soldOut: false, variantSku, product, skipped: "no-variant-match" };
     }
 
     const previousQuantity = qty;
-    const newQuantity = force != null ? force : Math.max(0, qty + delta);
+    const newQuantity = force != null ? Math.max(0, force) : Math.max(0, qty + delta);
     const soldOut = newQuantity <= 0;
 
-    const update = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
     if (scope === "variant") {
-      const variants = product.variants.map((v, i) =>
+      const nextVariants = variants.map((v, i) =>
         i === variantIndex ? { ...v, quantity: newQuantity } : v
       );
-      update.variants = variants;
+      update.variants = nextVariants;
       // Product goes sold-out only when every active variant is at 0.
-      const anyLeft = variants.some((v) => v.active !== false && Number(v.quantity) > 0);
+      const anyLeft = nextVariants.some((v) => v.active !== false && Number(v.quantity) > 0);
       if (!anyLeft) update.saleStatus = "sold";
       else if (product.saleStatus === "sold") update.saleStatus = "active";
     } else {
@@ -247,14 +263,18 @@ exports.recordSale = onCall({ secrets: EBAY_SECRETS, timeoutSeconds: 60 }, valid
     buyerAddress: data.buyerAddress ?? null,
     trackingNumber: data.trackingNumber ?? null,
     carrier: data.carrier ?? null,
-    status: "pending",
     soldAt: toTimestamp(data.soldAt),
     updatedAt: now,
     notes: data.notes ?? null,
     externalUrl: data.externalUrl ?? null,
-    source: data.platform === "manual" ? "manual" : "cross-post-drift",
   };
-  if (!existing.exists) saleDoc.createdAt = now;
+  if (!existing.exists) {
+    // Lifecycle fields — set once at creation; a re-record (same platformOrderId)
+    // must not stomp a status that has since advanced to shipped/complete.
+    saleDoc.status = "pending";
+    saleDoc.createdAt = now;
+    saleDoc.source = data.platform === "manual" ? "manual" : "cross-post-drift";
+  }
 
   await saleRef.set(saleDoc, { merge: true });
 
@@ -282,13 +302,17 @@ exports.recordSale = onCall({ secrets: EBAY_SECRETS, timeoutSeconds: 60 }, valid
 // Drift-correction callables for when a listing is found sold/changed on a
 // platform without a `recordSale` having run.
 
+const VARIANT_NEEDS_SKU =
+  "This product has variants — the sale must name which variant (variantSku).";
+
 exports.decrementAndCascade = onCall({ secrets: EBAY_SECRETS }, validated("decrementAndCascade", async (data, request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
   const db = admin.firestore();
-  const applied = await applyQuantityDelta(db, data.productId, uid, null, -1);
+  const applied = await applyQuantityDelta(db, data.productId, uid, data.variantSku ?? null, -1);
+  if (applied.skipped) throw new HttpsError("failed-precondition", VARIANT_NEEDS_SKU);
   const cascadeResult = await cascade(db, uid, applied.product, data.productId, {
-    variantSku: null,
+    variantSku: data.variantSku ?? null,
     newQuantity: applied.newQuantity,
     soldOut: applied.soldOut,
     soldOnPlatform: data.platform,
@@ -301,9 +325,10 @@ exports.restockAndCascade = onCall({ secrets: EBAY_SECRETS }, validated("restock
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
   const db = admin.firestore();
-  const applied = await applyQuantityDelta(db, data.productId, uid, null, 0, { force: data.quantity });
+  const applied = await applyQuantityDelta(db, data.productId, uid, data.variantSku ?? null, 0, { force: data.quantity });
+  if (applied.skipped) throw new HttpsError("failed-precondition", VARIANT_NEEDS_SKU);
   await cascade(db, uid, applied.product, data.productId, {
-    variantSku: null,
+    variantSku: data.variantSku ?? null,
     newQuantity: applied.newQuantity,
     soldOut: false,
     soldOnPlatform: null,
@@ -319,7 +344,8 @@ exports.markSoldOutAndCascade = onCall({ secrets: EBAY_SECRETS }, validated("mar
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
   const db = admin.firestore();
-  const applied = await applyQuantityDelta(db, data.productId, uid, null, 0, { force: 0 });
+  // zeroAll — unambiguous even for a variant product (every active variant → 0).
+  const applied = await applyQuantityDelta(db, data.productId, uid, null, 0, { zeroAll: true });
   await cascade(db, uid, applied.product, data.productId, {
     variantSku: null,
     newQuantity: 0,

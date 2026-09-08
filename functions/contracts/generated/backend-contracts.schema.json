@@ -445,6 +445,12 @@
             "wonni",
             "manual"
           ]
+        },
+        "variantSku": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -536,6 +542,12 @@
         "quantity": {
           "type": "integer",
           "exclusiveMinimum": 0
+        },
+        "variantSku": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
