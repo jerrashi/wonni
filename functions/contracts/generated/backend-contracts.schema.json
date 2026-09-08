@@ -2300,6 +2300,12 @@
             "null"
           ]
         },
+        "soldDate": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "buyerName": {
           "type": [
             "string",
