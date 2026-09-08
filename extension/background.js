@@ -397,8 +397,13 @@ async function handleMercariSoldCheckResult(soldItems) {
 
     if (response.ok) {
       const result = await response.json();
-      const successCount = result.result?.results?.filter((r) => r.success).length ?? 0;
-      console.log(`[Wonni Drop] Recorded ${successCount} sale(s)`);
+      const r = result.result ?? {};
+      console.log(
+        `[Wonni Drop] recordMercariSalesBatch: ${r.recorded ?? 0} recorded, ` +
+        `${r.duplicates ?? 0} already logged, ${r.unmatched ?? 0} no matching listing`
+      );
+      const failed = (r.results ?? []).filter((x) => x.outcome === "parse-failed");
+      if (failed.length) console.warn("[Wonni Drop] parse-failed rows:", failed);
     } else {
       const error = await response.text();
       console.error("[Wonni Drop] recordMercariSalesBatch failed:", error);
