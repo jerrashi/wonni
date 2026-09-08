@@ -51,12 +51,16 @@ it but it is *not deployed* · **new** = to be built during consolidation.
 
 | Function | Status | Notes / action |
 |---|---|---|
-| `recordSale` | **new** | THE sale-write path. Replaces web `LogSaleModal` bare `addDoc` + iOS `SaleRepository.addSale`. Writes canonical `sales/{id}` + fires cascade. |
-| `decrementAndCascade` | **dead** (iOS calls it) | Port from nested `sale_sync.js`; rewrite `listings.quantity` → `products.variants[].quantity`, SKU `wonni_${id}` → `${productId}`, status `"posted"` → `"active"`. Request key `listingId` → `productId`. |
-| `restockAndCascade` | **dead** (iOS) | same port |
-| `markSoldOutAndCascade` | **dead** (iOS) | same port |
+| `recordSale` | ✅ **built** (`functions/sales.js`, wired, not deployed) | THE sale-write path. Web `LogSaleModal` migrated. iOS `SaleRepository` still to repoint. |
+| `decrementAndCascade` | ✅ **built** | On `products/` model. **iOS call site still passes `{listingId}` → change to `{productId}`.** |
+| `restockAndCascade` | ✅ **built** | `{productId, quantity}` (was `{listingId, quantity}`) |
+| `markSoldOutAndCascade` | ✅ **built** | `{productId}` (was `{listingId}`) |
 | `syncSales` | **dead** (iOS) | Port from nested `sale_poller.js` (719 L). Poll eBay + Etsy, import each via `recordSale`. |
 | `getOrderTakeHome` | **dead** (iOS calls `ebayGetOrderTakeHome` / `etsyGetReceiptTakeHome`) | Merge the two into one function keyed by the sale's `platform`. Port from nested `sale_fetch.js`. |
+
+**Cascade coverage today:** eBay (via `bulk_update_price_quantity` on the stored
+offer pointer), Etsy (`listings` PATCH), Mercari (`pendingMercari*` flags).
+TikTok is stubbed `pending-manual` until `tiktokUpdateListing` consolidation.
 
 ### Mercari  → `contracts/mercari.js`
 
@@ -115,7 +119,7 @@ it but it is *not deployed* · **new** = to be built during consolidation.
 | `aiAutofillListing` | **live** | Remove — replaced by `enrichListing` mode:"product". Keep as an alias through the web migration. |
 | `generateProductDescription` | **live** | keep (single-purpose "✨ AI Suggest" description button) |
 | `splitProductImage` | **live** | keep |
-| `publishStorageObject` | **dead** (web `firebase.js` — every image upload) | **Port urgently** from nested — web uploads currently depend on it. |
+| `publishStorageObject` | ✅ **built** (`functions/publish_storage_object.js`, wired, not deployed) | Copied verbatim from nested. Deploy unblocks web image uploads. |
 | `refreshSourceData` | **orphan** (web uses it, works) | move source into canonical tree |
 | `onProductDeleted` | **live** | keep |
 | `postToWonni` | **orphan** (web uses it, works) | move `wonni_listing.js` into canonical tree; add the "skip when live listing exists" guard (open roadmap item) |
@@ -160,21 +164,33 @@ sites (names + payloads).
 
 ## Sequenced work
 
-1. **Contract scaffold** — ✅ `functions/contracts/` (sales, mercari, listings).
-   Add `etsy.js`, `tiktok.js`, `products.js`.
-2. **Port the dead-but-needed functions** onto the canonical tree + schema, in
-   priority order: `publishStorageObject` → `recordSale` + cascade family →
-   `recordMercariSalesBatch` → Etsy CRUD → account deletion / webhook.
-3. **Wire `validated(...)`** into every ported + existing shared function.
-4. **Merge repos** — `web/` + `extension/` into this repo; one `firebase.json`,
+1. **Contract scaffold** — ✅ `functions/contracts/` (sales, mercari, listings,
+   ebay, enrichment). Add `etsy.js`, `tiktok.js`, `products.js`.
+2. **Port the dead-but-needed functions** onto the canonical tree + schema:
+   ✅ `publishStorageObject`, ✅ `recordSale` + cascade family (eBay/Etsy/Mercari).
+   Next: `recordMercariSalesBatch` → `syncSales` + `getOrderTakeHome` →
+   Etsy CRUD → account deletion / webhook.
+3. **Deploy `functions/` from the canonical tree** so the built functions
+   actually run (nothing above is live yet). Verify with a real recordSale
+   from web, then the Mercari + iOS pieces.
+5. **Wire `validated(...)`** into the remaining pre-existing shared functions.
+6. **Merge repos** — `web/` + `extension/` into this repo; one `firebase.json`,
    one `firestore.rules`, one `storage.rules`.
-5. **One `index.js`**; delete `wonni/wonni/functions/`; delete the empty
+7. **One `index.js`**; delete `wonni/wonni/functions/`; delete the empty
    `wonni_dropship` functions stub.
-6. **Migrate the 2–3 iOS users'** `listings` → `products`.
-7. **Repoint iOS** call sites at the canonical names/payloads; add the generated
+8. **Migrate the 2–3 iOS users'** `listings` → `products`.
+9. **Repoint iOS** call sites at the canonical names/payloads; add the generated
    `BackendContracts.swift` to the Xcode project.
-8. **Deploy once**; `firebase functions:delete dropshipEtsyCreateListing` and
-   any other confirmed-dead orphan. Smoke-test from web + iOS + extension.
+10. **Deploy once**; `firebase functions:delete dropshipEtsyCreateListing` and
+    any other confirmed-dead orphan. Smoke-test from web + iOS + extension.
+
+## Backfill (before or with the deploy)
+
+Existing `sales/{id}` docs written by the old web `LogSaleModal`:
+`salePrice` → `priceSoldFor`, `productTitle` → `listingTitle`,
+`productImageUrl` → `thumbnailUrl`, add `status: "complete"`, `quantity` default 1.
+Only a few dozen docs — a one-shot `functions/scripts/backfill_sales_schema.js`.
+`Sales.jsx` already reads both names, so this is not release-blocking.
 
 ---
 
