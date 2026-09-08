@@ -184,13 +184,18 @@ sites (names + payloads).
 10. **Deploy once**; `firebase functions:delete dropshipEtsyCreateListing` and
     any other confirmed-dead orphan. Smoke-test from web + iOS + extension.
 
-## Backfill (before or with the deploy)
+## Backfill — not needed
 
-Existing `sales/{id}` docs written by the old web `LogSaleModal`:
-`salePrice` → `priceSoldFor`, `productTitle` → `listingTitle`,
-`productImageUrl` → `thumbnailUrl`, add `status: "complete"`, `quantity` default 1.
-Only a few dozen docs — a one-shot `functions/scripts/backfill_sales_schema.js`.
-`Sales.jsx` already reads both names, so this is not release-blocking.
+Queried prod `sales` on 2026-09-08: all ~19 docs are iOS-written and already
+use the canonical field names (`priceSoldFor` / `listingTitle` / `thumbnailUrl`
+/ `status` / `isDeleted`). There are **zero** old web-format docs — the web
+`LogSaleModal` was never used in production. The `Sales.jsx` compat mapping
+shipped in `sales-shared-backend` actually *fixes* the web Sales page, which
+had been rendering $0 / no title for every iOS sale.
+
+Remaining gap: old docs carry `listingId` (an iOS `listings/{uuid}` ref), not
+`productId`. That is resolved by the listings→products migration (step 8), not
+a separate sales backfill.
 
 ---
 
