@@ -11,32 +11,49 @@
 const { z } = require("zod");
 const { ProductIdSchema, MoneySchema, TimestampInputSchema } = require("./_shared");
 
-// ── Raw scrape row — exactly what a client pulls out of Mercari's
-//    __NEXT_DATA__ / DOM, with no interpretation applied ────────────────────
+// ── One scraped Mercari sale ────────────────────────────────────────────────
+// Mercari has no API, so the client (extension / iOS WKWebView) does the DOM
+// scrape *and* the order-status page fetch — only it has the logged-in session.
+// It parses the $-strings and dates where it can (that's where the DOM is) and
+// passes raw text through where it can't. The SERVER owns everything after
+// that: product-matching, dedupe, canonical sale-doc shape, quantity cascade.
 
 const MercariScrapeItemSchema = z.object({
-  /** Mercari item id, e.g. "m12345678901". Required — it's the dedupe key. */
+  /** Mercari item id, e.g. "m12345678901". Required. */
   mercariItemId: z.string().min(1),
-  /** Mercari order/transaction id when the sold page exposes it. */
+  /** Mercari order/transaction id — the dedupe key when the client has it. */
   mercariOrderId: z.string().nullish(),
   title: z.string().nullish(),
-  /** Raw price string as shown ("$24", "¥2400") — server parses. */
-  priceText: z.string().nullish(),
-  /** Numeric price if the client already has it cleanly. */
-  priceValue: z.number().nullish(),
-  statusText: z.string().nullish(),   // "Sold", "Shipped", "In progress" …
-  soldDateText: z.string().nullish(),
   thumbnailUrl: z.string().url().nullish(),
-  /** Anything else the scrape saw, as a JSON string — passed through for
-   *  server-side heuristics without widening the typed contract. */
-  rawJson: z.string().nullish(),
+
+  /** Item price the buyer paid, parsed by the client from the sold page. */
+  priceSoldFor: z.number().positive(),
+  /** Net payout after Mercari fees + shipping, if the client scraped it. */
+  takeHome: z.number().nullish(),
+  shippingRevenue: z.number().nullish(),
+
+  /** Sale time — ISO/epoch if the client parsed it, else raw text for the
+   *  server to best-effort parse, else neither (server falls back to now). */
+  soldAt: TimestampInputSchema.nullish(),
+  soldDateText: z.string().nullish(),
+
+  buyerName: z.string().nullish(),
+  trackingNumber: z.string().nullish(),
 });
 
+// Envelope is validated loosely so one malformed scrape row can't 400 a batch
+// of 50 — the function re-checks each row against MercariScrapeItemSchema and
+// reports "parse-failed" per row.
+const MercariRowLooseSchema = z.object({ mercariItemId: z.string().min(1) }).passthrough();
+
 const RecordMercariSalesBatchRequestSchema = z.object({
-  rawItems: z.array(MercariScrapeItemSchema).min(1).max(200),
-  /** Stop importing once an item older than this is hit (incremental sync). */
-  stopBefore: TimestampInputSchema.nullish(),
-});
+  /** Accepts `items` (current extension field) or `rawItems` — same shape. */
+  items: z.array(MercariRowLooseSchema).max(200).optional(),
+  rawItems: z.array(MercariRowLooseSchema).max(200).optional(),
+}).refine(
+  (o) => (o.items?.length || 0) + (o.rawItems?.length || 0) > 0,
+  "Provide at least one item in `items` or `rawItems`.",
+);
 
 const MercariBatchResultSchema = z.object({
   mercariItemId: z.string(),

@@ -2511,26 +2511,30 @@ extension MarkSoldOutAndCascadeResponse {
 
 // MARK: - MercariScrapeItem
 struct MercariScrapeItem: Codable, Sendable {
+    let buyerName: String?
     let mercariItemId: String
     let mercariOrderId: String?
-    let priceText: String?
-    let priceValue: Double?
-    let rawJson: String?
+    let priceSoldFor: Double
+    let shippingRevenue: Double?
+    let soldAt: SoldAtUnion?
     let soldDateText: String?
-    let statusText: String?
+    let takeHome: Double?
     let thumbnailUrl: String?
     let title: String?
+    let trackingNumber: String?
 
     enum CodingKeys: String, CodingKey {
+        case buyerName = "buyerName"
         case mercariItemId = "mercariItemId"
         case mercariOrderId = "mercariOrderId"
-        case priceText = "priceText"
-        case priceValue = "priceValue"
-        case rawJson = "rawJson"
+        case priceSoldFor = "priceSoldFor"
+        case shippingRevenue = "shippingRevenue"
+        case soldAt = "soldAt"
         case soldDateText = "soldDateText"
-        case statusText = "statusText"
+        case takeHome = "takeHome"
         case thumbnailUrl = "thumbnailUrl"
         case title = "title"
+        case trackingNumber = "trackingNumber"
     }
 }
 
@@ -2553,26 +2557,30 @@ extension MercariScrapeItem {
     }
 
     func with(
+        buyerName: String?? = nil,
         mercariItemId: String? = nil,
         mercariOrderId: String?? = nil,
-        priceText: String?? = nil,
-        priceValue: Double?? = nil,
-        rawJson: String?? = nil,
+        priceSoldFor: Double? = nil,
+        shippingRevenue: Double?? = nil,
+        soldAt: SoldAtUnion?? = nil,
         soldDateText: String?? = nil,
-        statusText: String?? = nil,
+        takeHome: Double?? = nil,
         thumbnailUrl: String?? = nil,
-        title: String?? = nil
+        title: String?? = nil,
+        trackingNumber: String?? = nil
     ) -> MercariScrapeItem {
         return MercariScrapeItem(
+            buyerName: buyerName ?? self.buyerName,
             mercariItemId: mercariItemId ?? self.mercariItemId,
             mercariOrderId: mercariOrderId ?? self.mercariOrderId,
-            priceText: priceText ?? self.priceText,
-            priceValue: priceValue ?? self.priceValue,
-            rawJson: rawJson ?? self.rawJson,
+            priceSoldFor: priceSoldFor ?? self.priceSoldFor,
+            shippingRevenue: shippingRevenue ?? self.shippingRevenue,
+            soldAt: soldAt ?? self.soldAt,
             soldDateText: soldDateText ?? self.soldDateText,
-            statusText: statusText ?? self.statusText,
+            takeHome: takeHome ?? self.takeHome,
             thumbnailUrl: thumbnailUrl ?? self.thumbnailUrl,
-            title: title ?? self.title
+            title: title ?? self.title,
+            trackingNumber: trackingNumber ?? self.trackingNumber
         )
     }
 
@@ -2585,14 +2593,49 @@ extension MercariScrapeItem {
     }
 }
 
+enum SoldAtUnion: Codable, Sendable {
+    case dateTime(Date)
+    case integer(Int)
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let x = try? container.decode(Int.self) {
+            self = .integer(x)
+            return
+        }
+        if let x = try? container.decode(Date.self) {
+            self = .dateTime(x)
+            return
+        }
+        if container.decodeNil() {
+            self = .null
+            return
+        }
+        throw DecodingError.typeMismatch(SoldAtUnion.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Wrong type for SoldAtUnion"))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .dateTime(let x):
+            try container.encode(x)
+        case .integer(let x):
+            try container.encode(x)
+        case .null:
+            try container.encodeNil()
+        }
+    }
+}
+
 // MARK: - RecordMercariSalesBatchRequest
 struct RecordMercariSalesBatchRequest: Codable, Sendable {
-    let rawItems: [RawItem]
-    let stopBefore: StopBefore?
+    let items: [Item]?
+    let rawItems: [RawItem]?
 
     enum CodingKeys: String, CodingKey {
+        case items = "items"
         case rawItems = "rawItems"
-        case stopBefore = "stopBefore"
     }
 }
 
@@ -2615,12 +2658,56 @@ extension RecordMercariSalesBatchRequest {
     }
 
     func with(
-        rawItems: [RawItem]? = nil,
-        stopBefore: StopBefore?? = nil
+        items: [Item]?? = nil,
+        rawItems: [RawItem]?? = nil
     ) -> RecordMercariSalesBatchRequest {
         return RecordMercariSalesBatchRequest(
-            rawItems: rawItems ?? self.rawItems,
-            stopBefore: stopBefore ?? self.stopBefore
+            items: items ?? self.items,
+            rawItems: rawItems ?? self.rawItems
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - Item
+struct Item: Codable, Sendable {
+    let mercariItemId: String
+
+    enum CodingKeys: String, CodingKey {
+        case mercariItemId = "mercariItemId"
+    }
+}
+
+// MARK: Item convenience initializers and mutators
+
+extension Item {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(Item.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        mercariItemId: String? = nil
+    ) -> Item {
+        return Item(
+            mercariItemId: mercariItemId ?? self.mercariItemId
         )
     }
 
@@ -2636,25 +2723,9 @@ extension RecordMercariSalesBatchRequest {
 // MARK: - RawItem
 struct RawItem: Codable, Sendable {
     let mercariItemId: String
-    let mercariOrderId: String?
-    let priceText: String?
-    let priceValue: Double?
-    let rawJson: String?
-    let soldDateText: String?
-    let statusText: String?
-    let thumbnailUrl: String?
-    let title: String?
 
     enum CodingKeys: String, CodingKey {
         case mercariItemId = "mercariItemId"
-        case mercariOrderId = "mercariOrderId"
-        case priceText = "priceText"
-        case priceValue = "priceValue"
-        case rawJson = "rawJson"
-        case soldDateText = "soldDateText"
-        case statusText = "statusText"
-        case thumbnailUrl = "thumbnailUrl"
-        case title = "title"
     }
 }
 
@@ -2677,26 +2748,10 @@ extension RawItem {
     }
 
     func with(
-        mercariItemId: String? = nil,
-        mercariOrderId: String?? = nil,
-        priceText: String?? = nil,
-        priceValue: Double?? = nil,
-        rawJson: String?? = nil,
-        soldDateText: String?? = nil,
-        statusText: String?? = nil,
-        thumbnailUrl: String?? = nil,
-        title: String?? = nil
+        mercariItemId: String? = nil
     ) -> RawItem {
         return RawItem(
-            mercariItemId: mercariItemId ?? self.mercariItemId,
-            mercariOrderId: mercariOrderId ?? self.mercariOrderId,
-            priceText: priceText ?? self.priceText,
-            priceValue: priceValue ?? self.priceValue,
-            rawJson: rawJson ?? self.rawJson,
-            soldDateText: soldDateText ?? self.soldDateText,
-            statusText: statusText ?? self.statusText,
-            thumbnailUrl: thumbnailUrl ?? self.thumbnailUrl,
-            title: title ?? self.title
+            mercariItemId: mercariItemId ?? self.mercariItemId
         )
     }
 
@@ -2706,41 +2761,6 @@ extension RawItem {
 
     func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
         return String(data: try self.jsonData(), encoding: encoding)
-    }
-}
-
-enum StopBefore: Codable, Sendable {
-    case dateTime(Date)
-    case integer(Int)
-    case null
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if let x = try? container.decode(Int.self) {
-            self = .integer(x)
-            return
-        }
-        if let x = try? container.decode(Date.self) {
-            self = .dateTime(x)
-            return
-        }
-        if container.decodeNil() {
-            self = .null
-            return
-        }
-        throw DecodingError.typeMismatch(StopBefore.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Wrong type for StopBefore"))
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        switch self {
-        case .dateTime(let x):
-            try container.encode(x)
-        case .integer(let x):
-            try container.encode(x)
-        case .null:
-            try container.encodeNil()
-        }
     }
 }
 
@@ -2883,7 +2903,7 @@ struct RecordSaleRequest: Codable, Sendable {
     let quantity: Int?
     let shippingLabelCost: Double?
     let shippingRevenue: Double?
-    let soldAt: StopBefore?
+    let soldAt: SoldAtUnion?
     let soldPrice: Double
     let takeHome: Double?
     let trackingNumber: String?
@@ -2945,7 +2965,7 @@ extension RecordSaleRequest {
         quantity: Int?? = nil,
         shippingLabelCost: Double?? = nil,
         shippingRevenue: Double?? = nil,
-        soldAt: StopBefore?? = nil,
+        soldAt: SoldAtUnion?? = nil,
         soldPrice: Double? = nil,
         takeHome: Double?? = nil,
         trackingNumber: String?? = nil,
@@ -3755,7 +3775,7 @@ extension UpdatedAt {
 // MARK: - SyncSalesRequest
 struct SyncSalesRequest: Codable, Sendable {
     let platform: SyncSalesRequestPlatform?
-    let since: StopBefore?
+    let since: SoldAtUnion?
 
     enum CodingKeys: String, CodingKey {
         case platform = "platform"
@@ -3783,7 +3803,7 @@ extension SyncSalesRequest {
 
     func with(
         platform: SyncSalesRequestPlatform?? = nil,
-        since: StopBefore?? = nil
+        since: SoldAtUnion?? = nil
     ) -> SyncSalesRequest {
         return SyncSalesRequest(
             platform: platform ?? self.platform,
