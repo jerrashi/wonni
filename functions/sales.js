@@ -158,6 +158,66 @@ async function pushEtsyQuantity(uid, product, newQty) {
   return res.ok ? "updated" : "failed";
 }
 
+/** Does this product / variant have a Mercari listing to act on? */
+function productHasMercari(p) {
+  return p?.crossPostStatus?.mercari === "active" || !!p?.crossPostListingIds?.mercari || !!p?.mercariListingId;
+}
+function variantHasMercari(v) {
+  return !!(v?.crossPostListingIds?.mercari || v?.mercariListingId);
+}
+
+/**
+ * Mercari has no API and — because a Mercari listing maps to exactly one item,
+ * one size — a variant product has ONE Mercari listing PER VARIATION. So the
+ * `pendingMercari*` flags the client-side headless flow reads must live on the
+ * affected `variants[i]`, not just the product.
+ *
+ * Rules (confirmed 2026-09-09, see BACKEND.md § Quantity model):
+ *   - a variant hitting 0            → pendingMercariDeactivation on that variant
+ *   - a sale ON Mercari, qty still >0 → pendingMercariRelist    on that variant
+ *   - GUI mark-out-of-stock (soldOut, no variantSku) → deactivate EVERY variant
+ *     listing + the product-level listing
+ *
+ * Mutates `productUpdate` in place. Returns the `platforms.mercari` outcome.
+ */
+function applyMercariFlags(product, productUpdate, { variantSku, soldOut, soldOnPlatform }) {
+  const variants = Array.isArray(product.variants) ? product.variants : [];
+  const isVariantProduct = product.hasVariants === true || variants.length > 0;
+
+  const flagName = (qtyZero) =>
+    qtyZero ? "pendingMercariDeactivation"
+      : soldOnPlatform === "mercari" ? "pendingMercariRelist"
+        : null;
+
+  if (!isVariantProduct) {
+    if (!productHasMercari(product)) return "skipped";
+    const flag = flagName(soldOut);
+    if (!flag) return "skipped";
+    productUpdate[flag] = true;
+    return "pending-manual";
+  }
+
+  let touched = false;
+  const nextVariants = variants.map((v) => {
+    if (!variantHasMercari(v)) return v;
+    const affected = variantSku == null ? true : v.sku === variantSku;
+    if (!affected) return v;
+    const qtyZero = variantSku == null ? true : Number(v.quantity) <= 0;
+    const flag = flagName(qtyZero);
+    if (!flag) return v;
+    touched = true;
+    return { ...v, [flag]: true };
+  });
+  if (touched) productUpdate.variants = nextVariants;
+
+  // Whole product out of stock and there's also a product-level Mercari listing.
+  if (soldOut && productHasMercari(product)) {
+    productUpdate.pendingMercariDeactivation = true;
+    touched = true;
+  }
+  return touched ? "pending-manual" : "skipped";
+}
+
 /**
  * Propagate a post-sale quantity to every OTHER connected platform, plus set
  * the Mercari manual-action flags. Best-effort: a platform failure is recorded,
@@ -187,16 +247,9 @@ async function cascade(db, uid, product, productId, { variantSku, newQuantity, s
     }
   }
 
-  // Mercari has no API — always resolved by a client-side headless flow, so
-  // it's handled even when the sale itself came from Mercari (a multi-qty
-  // Mercari listing auto-ends on each sale and must be re-listed).
-  if (product.crossPostStatus?.mercari === "active") {
-    if (soldOut) productUpdate.pendingMercariDeactivation = true;
-    else if (soldOnPlatform === "mercari") productUpdate.pendingMercariRelist = true;
-    platforms.mercari = Object.keys(productUpdate).length ? "pending-manual" : "skipped";
-  } else {
-    platforms.mercari = "skipped";
-  }
+  // Mercari has no API — resolved by a client-side headless flow. Set the
+  // per-variation / per-product flags it reads.
+  platforms.mercari = applyMercariFlags(product, productUpdate, { variantSku, soldOut, soldOnPlatform });
 
   if (Object.keys(productUpdate).length) {
     productUpdate.updatedAt = admin.firestore.FieldValue.serverTimestamp();
@@ -220,6 +273,29 @@ function toTimestamp(input) {
   return admin.firestore.Timestamp.fromDate(new Date(input));
 }
 
+// Sale lifecycle. `pending → shipped → delivered → complete` is forward-only;
+// `cancelled` / `returned` are terminal and can override any non-terminal state.
+const SALE_STATUS_ORDER = ["pending", "shipped", "delivered", "complete"];
+const SALE_STATUS_TERMINAL = ["cancelled", "returned"];
+
+function isSaleStatus(s) {
+  return SALE_STATUS_ORDER.includes(s) || SALE_STATUS_TERMINAL.includes(s);
+}
+
+/**
+ * On a re-record (poller / repeat scrape re-seeing the same order), may the
+ * stored status move to `next`? Forward-only; terminal states win over
+ * non-terminal; never un-terminalize here.
+ */
+function shouldAdvanceStatus(current, next) {
+  if (!isSaleStatus(next) || next === current) return false;
+  if (SALE_STATUS_TERMINAL.includes(current)) return false;
+  if (SALE_STATUS_TERMINAL.includes(next)) return true;
+  const ci = SALE_STATUS_ORDER.indexOf(current);
+  const ni = SALE_STATUS_ORDER.indexOf(next);
+  return ci === -1 || ni > ci;
+}
+
 /**
  * Core sale-write + cascade. Shared by `recordSale` (one sale) and
  * `recordMercariSalesBatch` (many). `fields` uses the canonical SaleDoc names.
@@ -233,7 +309,7 @@ async function recordSaleCore(db, uid, fields, product) {
     quantity = 1, soldAt = null, platformOrderId = null, platformItemId = null,
     buyerName = null, buyerAddress = null, trackingNumber = null, carrier = null,
     listingTitle = null, thumbnailUrl = null, notes = null, externalUrl = null,
-    cascade: doCascade = true, source = null,
+    cascade: doCascade = true, source = null, status: statusIn = null,
   } = fields;
 
   const variant = product && variantSku && Array.isArray(product.variants)
@@ -248,41 +324,71 @@ async function recordSaleCore(db, uid, fields, product) {
   const existing = await saleRef.get();
 
   const now = admin.firestore.FieldValue.serverTimestamp();
-  const saleDoc = {
-    userId: uid,
-    productId,
-    variantSku,
+
+  // Snapshot fields — copied from the product at sale time so the row survives
+  // the product being edited/deleted. On a re-record they are BACKFILLED only
+  // (filled if still absent), never refreshed or nulled.
+  const snapshotFields = {
     variantOptionValues: variant?.optionValues ?? null,
     listingTitle: product?.title ?? listingTitle ?? null,
     thumbnailUrl: thumbnailUrl ?? ((Array.isArray(product?.images) && product.images[0]) || null),
-    coverPhotoPath: null,
     productTags: Array.isArray(product?.tags) ? product.tags : null,
-    platform,
-    platformOrderId,
     platformItemId,
+  };
+  // Mutable fields — a later pass (poller re-seeing the order) may have better
+  // data. On a re-record these OVERWRITE, but only when this pass carries a
+  // value; a blank pass never nulls stored data.
+  const mutableFields = {
     priceSoldFor: soldPrice,
     shippingRevenue,
     shippingLabelCost,
     takeHome,
-    quantity,
     buyerName,
     buyerAddress,
     trackingNumber,
     carrier,
-    soldAt: toTimestamp(soldAt),
-    updatedAt: now,
     notes,
     externalUrl,
   };
-  if (!existing.exists) {
-    // Lifecycle fields — set once; a re-record must not stomp a status that has
-    // since advanced to shipped/complete.
-    saleDoc.status = "pending";
-    saleDoc.createdAt = now;
-    saleDoc.source = source ?? (platform === "manual" ? "manual" : "cross-post-drift");
-  }
 
-  await saleRef.set(saleDoc, { merge: true });
+  if (!existing.exists) {
+    await saleRef.set({
+      userId: uid,
+      productId,
+      variantSku,
+      coverPhotoPath: null,
+      platform,
+      platformOrderId,
+      quantity,
+      ...snapshotFields,
+      ...mutableFields,
+      soldAt: toTimestamp(soldAt),
+      createdAt: now,
+      updatedAt: now,
+      status: isSaleStatus(statusIn) ? statusIn : "pending",
+      source: source ?? (platform === "manual" ? "manual" : "cross-post-drift"),
+    }, { merge: true });
+  } else {
+    // Re-record: merge-ADD only. Never touch userId/productId/platform/
+    // platformOrderId (identity), createdAt/source (provenance), or quantity.
+    const cur = existing.data();
+    const patch = { updatedAt: now };
+    for (const [k, v] of Object.entries(snapshotFields)) {
+      if (v != null && cur[k] == null) patch[k] = v;
+    }
+    for (const [k, v] of Object.entries(mutableFields)) {
+      if (v != null) patch[k] = v;
+    }
+    if (soldAt != null) patch.soldAt = toTimestamp(soldAt);
+    if (shouldAdvanceStatus(cur.status, statusIn)) patch.status = statusIn;
+    // A soft-deleted sale that reappeared through sync is un-deleted (unless
+    // this pass is telling us it's cancelled/returned).
+    if (cur.isDeleted === true && !SALE_STATUS_TERMINAL.includes(statusIn)) {
+      patch.isDeleted = admin.firestore.FieldValue.delete();
+      patch.deletedAt = admin.firestore.FieldValue.delete();
+    }
+    await saleRef.set(patch, { merge: true });
+  }
 
   let cascadeResult = null;
   if (doCascade && productId && product && !existing.exists) {
@@ -375,10 +481,19 @@ exports.restockAndCascade = onCall({ secrets: EBAY_SECRETS }, validated("restock
     soldOut: false,
     soldOnPlatform: null,
   });
-  await db.collection("products").doc(data.productId).set({
-    pendingMercariDeactivation: admin.firestore.FieldValue.delete(),
-    pendingMercariRelist: admin.firestore.FieldValue.delete(),
-  }, { merge: true });
+  // Restock clears the "needs a manual Mercari action" flags — product-level
+  // and per-variation (one Mercari listing per variant).
+  const del = admin.firestore.FieldValue.delete();
+  const clear = { pendingMercariDeactivation: del, pendingMercariRelist: del };
+  const vs = Array.isArray(applied.product?.variants) ? applied.product.variants : [];
+  if (vs.length) {
+    clear.variants = vs.map((v) => {
+      if (!v.pendingMercariDeactivation && !v.pendingMercariRelist) return v;
+      const { pendingMercariDeactivation, pendingMercariRelist, ...rest } = v;
+      return rest;
+    });
+  }
+  await db.collection("products").doc(data.productId).set(clear, { merge: true });
   return { success: true };
 }));
 
@@ -398,5 +513,8 @@ exports.markSoldOutAndCascade = onCall({ secrets: EBAY_SECRETS }, validated("mar
 }));
 
 // Internal — reused by mercari_sales.js recordMercariSalesBatch.
-exports._internal = { applyQuantityDelta, cascade, resolveStock, toTimestamp, recordSaleCore, loadOwnedProduct };
+exports._internal = {
+  applyQuantityDelta, cascade, resolveStock, toTimestamp, recordSaleCore,
+  loadOwnedProduct, shouldAdvanceStatus, applyMercariFlags,
+};
 exports.EBAY_SECRETS = EBAY_SECRETS;

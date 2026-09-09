@@ -15,7 +15,10 @@ const assert = require("node:assert/strict");
 const { FakeFirestore } = require("./helpers/fake-firestore");
 const { _internal } = require("../sales");
 
-const { applyQuantityDelta, cascade, resolveStock, recordSaleCore, toTimestamp } = _internal;
+const {
+  applyQuantityDelta, cascade, resolveStock, recordSaleCore, toTimestamp,
+  shouldAdvanceStatus, applyMercariFlags,
+} = _internal;
 
 const UID = "user_1";
 
@@ -178,6 +181,72 @@ test("cascade: a Mercari listing that sold out gets pendingMercariDeactivation",
   assert.equal(db.peek("products", "p1").pendingMercariDeactivation, true);
 });
 
+// ── per-variation Mercari flags (one Mercari listing per size) ───────────────
+
+/** Variant product where each variant is its own Mercari listing. */
+function mercariVariantProduct(overrides = {}) {
+  return {
+    userId: UID, title: "Mercari Variant Tee", hasVariants: true,
+    variants: [
+      { id: "vS", sku: "TEE-S", quantity: 2, active: true, crossPostListingIds: { mercari: "m_s" } },
+      { id: "vM", sku: "TEE-M", quantity: 4, active: true, crossPostListingIds: { mercari: "m_m" } },
+    ],
+    crossPostStatus: {}, saleStatus: "active", ...overrides,
+  };
+}
+
+test("cascade: one variant selling out flags only that variant's Mercari listing", async () => {
+  const product = mercariVariantProduct({ variants: [
+    { id: "vS", sku: "TEE-S", quantity: 0, active: true, crossPostListingIds: { mercari: "m_s" } },
+    { id: "vM", sku: "TEE-M", quantity: 4, active: true, crossPostListingIds: { mercari: "m_m" } },
+  ] });
+  const db = new FakeFirestore({ products: { p1: product } });
+  const r = await cascade(db, UID, product, "p1", {
+    variantSku: "TEE-S", newQuantity: 0, soldOut: false, soldOnPlatform: "ebay",
+  });
+  assert.equal(r.platforms.mercari, "pending-manual");
+  const v = db.peek("products", "p1").variants;
+  assert.equal(v[0].pendingMercariDeactivation, true);
+  assert.equal(v[1].pendingMercariDeactivation, undefined, "in-stock variant untouched");
+  assert.equal(db.peek("products", "p1").pendingMercariDeactivation, undefined, "not a whole-product flag");
+});
+
+test("cascade: a Mercari-origin variant sale with stock left flags that variant for relist", async () => {
+  const product = mercariVariantProduct();
+  const db = new FakeFirestore({ products: { p1: product } });
+  await cascade(db, UID, product, "p1", {
+    variantSku: "TEE-M", newQuantity: 3, soldOut: false, soldOnPlatform: "mercari",
+  });
+  const v = db.peek("products", "p1").variants;
+  assert.equal(v[1].pendingMercariRelist, true);
+  assert.equal(v[0].pendingMercariRelist, undefined);
+});
+
+test("regression: GUI mark-out-of-stock deactivates EVERY per-variation Mercari listing", async () => {
+  // The user flow: "mark out of stock" in the Wonni GUI on a product that's on
+  // Mercari must end all of its per-size listings, not just one.
+  const product = mercariVariantProduct({ variants: [
+    { id: "vS", sku: "TEE-S", quantity: 0, active: true, crossPostListingIds: { mercari: "m_s" } },
+    { id: "vM", sku: "TEE-M", quantity: 0, active: true, crossPostListingIds: { mercari: "m_m" } },
+  ] });
+  const db = new FakeFirestore({ products: { p1: product } });
+  await cascade(db, UID, product, "p1", {
+    variantSku: null, newQuantity: 0, soldOut: true, soldOnPlatform: null,
+  });
+  const v = db.peek("products", "p1").variants;
+  assert.equal(v[0].pendingMercariDeactivation, true);
+  assert.equal(v[1].pendingMercariDeactivation, true);
+});
+
+test("applyMercariFlags: no-op when the product/variant has no Mercari listing", () => {
+  const upd = {};
+  assert.equal(
+    applyMercariFlags(variantProduct(), upd, { variantSku: "TEE-S", soldOut: false, soldOnPlatform: "ebay" }),
+    "skipped",
+  );
+  assert.deepEqual(upd, {});
+});
+
 // ── recordSaleCore ──────────────────────────────────────────────────────────
 
 test("recordSaleCore: new sale writes the canonical doc + decrements stock", async () => {
@@ -222,17 +291,19 @@ test("recordSaleCore: dedupes on platform + platformOrderId", async () => {
   assert.equal(db.peek("products", "p1").quantity, 2, "second call must NOT decrement again");
 });
 
-test("regression: re-recording a sale does not stomp an advanced status", async () => {
-  // Bug 2026-09-08: lifecycle fields were written unconditionally, so a poller
-  // re-seeing an order reset status:"shipped" back to "pending".
+test("regression: re-recording a sale is merge-ADD only", async () => {
+  // Bug 2026-09-08: lifecycle fields written unconditionally reset shipped→pending.
+  // Fix 2026-09-09: a re-record backfills snapshots, overwrites mutable fields
+  // only when it carries a value, and never nulls stored data.
   const product = plainProduct({ quantity: 3 });
   const db = new FakeFirestore({
     products: { p1: product },
     sales: {
       mercari_ORD1: {
         userId: UID, productId: "p1", platform: "mercari", platformOrderId: "ORD1",
-        priceSoldFor: 20, status: "shipped", source: "mercari-scan",
-        trackingNumber: "1Z-EXISTING",
+        priceSoldFor: 20, quantity: 1, status: "shipped", source: "mercari-scan",
+        createdAt: "T0", trackingNumber: "1Z-EXISTING", carrier: "USPS",
+        listingTitle: "Frozen Title",
       },
     },
   });
@@ -242,13 +313,87 @@ test("regression: re-recording a sale does not stomp an advanced status", async 
 
   assert.equal(res.created, false);
   const sale = db.peek("sales", "mercari_ORD1");
-  assert.equal(sale.status, "shipped", "lifecycle status must be preserved on re-record");
-  assert.equal(sale.source, "mercari-scan", "source is a lifecycle field — preserved");
-  assert.equal(sale.priceSoldFor, 22, "mutable fields still update");
-  // NOTE (flagged 2026-09-09): a re-record DOES currently overwrite non-lifecycle
-  // fields the caller left blank — e.g. trackingNumber → null. Only `status`,
-  // `createdAt`, `source` are guarded. See BACKEND.md "re-record field policy".
-  assert.equal(sale.trackingNumber, null);
+  assert.equal(sale.status, "shipped", "lifecycle status preserved");
+  assert.equal(sale.source, "mercari-scan", "source preserved");
+  assert.equal(sale.createdAt, "T0", "createdAt preserved");
+  assert.equal(sale.trackingNumber, "1Z-EXISTING", "blank pass does NOT null stored tracking");
+  assert.equal(sale.carrier, "USPS");
+  assert.equal(sale.listingTitle, "Frozen Title", "snapshot fields are not refreshed once set");
+  assert.equal(sale.priceSoldFor, 22, "a value the pass carries still overwrites");
+});
+
+test("re-record: a pass WITH a value overwrites; forward status advances; backfills fill gaps", async () => {
+  const db = new FakeFirestore({
+    sales: {
+      ebay_A1: {
+        userId: UID, productId: "p1", platform: "ebay", platformOrderId: "A1",
+        priceSoldFor: 40, quantity: 1, status: "pending", source: "ebay-poll", createdAt: "T0",
+      },
+    },
+  });
+  await recordSaleCore(db, UID, {
+    platform: "ebay", productId: "p1", soldPrice: 40, platformOrderId: "A1",
+    trackingNumber: "1Z999", carrier: "UPS", takeHome: 33.5, status: "shipped",
+    listingTitle: "Backfilled Title",
+  }, null);
+
+  const sale = db.peek("sales", "ebay_A1");
+  assert.equal(sale.status, "shipped", "pending → shipped advances");
+  assert.equal(sale.trackingNumber, "1Z999");
+  assert.equal(sale.takeHome, 33.5);
+  assert.equal(sale.listingTitle, "Backfilled Title", "snapshot backfilled because it was absent");
+});
+
+test("re-record: status never moves backward or out of a terminal state", async () => {
+  const db = new FakeFirestore({
+    sales: {
+      ebay_A1: { userId: UID, platform: "ebay", platformOrderId: "A1", priceSoldFor: 10, status: "complete" },
+      ebay_A2: { userId: UID, platform: "ebay", platformOrderId: "A2", priceSoldFor: 10, status: "cancelled" },
+    },
+  });
+  await recordSaleCore(db, UID, { platform: "ebay", soldPrice: 10, platformOrderId: "A1", status: "shipped" }, null);
+  await recordSaleCore(db, UID, { platform: "ebay", soldPrice: 10, platformOrderId: "A2", status: "shipped" }, null);
+  assert.equal(db.peek("sales", "ebay_A1").status, "complete", "no backward move");
+  assert.equal(db.peek("sales", "ebay_A2").status, "cancelled", "terminal state sticks");
+});
+
+test("re-record: a sale that reappears through sync is un-deleted", async () => {
+  const db = new FakeFirestore({
+    sales: {
+      ebay_A1: {
+        userId: UID, platform: "ebay", platformOrderId: "A1", priceSoldFor: 10,
+        status: "pending", isDeleted: true, deletedAt: "T0",
+      },
+    },
+  });
+  await recordSaleCore(db, UID, { platform: "ebay", soldPrice: 10, platformOrderId: "A1" }, null);
+  const sale = db.peek("sales", "ebay_A1");
+  assert.equal(sale.isDeleted, undefined);
+  assert.equal(sale.deletedAt, undefined);
+});
+
+test("re-record: soldAt is not overwritten by a pass that omits it", async () => {
+  const original = toTimestamp("2026-01-01T00:00:00.000Z");
+  const db = new FakeFirestore({
+    sales: {
+      ebay_A1: {
+        userId: UID, platform: "ebay", platformOrderId: "A1", priceSoldFor: 10,
+        status: "pending", soldAt: { _seconds: original.seconds, _nanoseconds: 0 },
+      },
+    },
+  });
+  await recordSaleCore(db, UID, { platform: "ebay", soldPrice: 10, platformOrderId: "A1" }, null);
+  assert.equal(db.peek("sales", "ebay_A1").soldAt._seconds, original.seconds, "original sold time kept");
+});
+
+test("shouldAdvanceStatus: forward-only, terminal-wins", () => {
+  assert.equal(shouldAdvanceStatus("pending", "shipped"), true);
+  assert.equal(shouldAdvanceStatus("shipped", "pending"), false);
+  assert.equal(shouldAdvanceStatus("pending", "cancelled"), true);
+  assert.equal(shouldAdvanceStatus("complete", "shipped"), false);
+  assert.equal(shouldAdvanceStatus("cancelled", "shipped"), false);
+  assert.equal(shouldAdvanceStatus("pending", null), false);
+  assert.equal(shouldAdvanceStatus("pending", "bogus"), false);
 });
 
 test("regression: recordSaleCore on a variant product with no sku records the sale but skips the cascade", async () => {
