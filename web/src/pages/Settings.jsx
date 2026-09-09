@@ -21,6 +21,10 @@ const EBAY_AUTH_HOST = import.meta.env.VITE_EBAY_ENV === "production"
 const EBAY_SCOPES = [
   "https://api.ebay.com/oauth/api_scope/sell.inventory",
   "https://api.ebay.com/oauth/api_scope/sell.account",
+  // Order reads (syncSales) + net-payout reads (getOrderTakeHome). Added
+  // 2026-09-09 — existing connections must reconnect once to gain these.
+  "https://api.ebay.com/oauth/api_scope/sell.fulfillment",
+  "https://api.ebay.com/oauth/api_scope/sell.finances",
   "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
 ].join(" ");
 const ETSY_CLIENT_ID = import.meta.env.VITE_ETSY_CLIENT_ID ?? "REPLACE_ME";
@@ -302,7 +306,7 @@ export default function Settings() {
         response_type: "code",
         client_id: ETSY_CLIENT_ID,
         redirect_uri: "https://wonni-app.web.app/web/oauth/etsy",
-        scope: "listings_w listings_r shops_r",
+        scope: "listings_w listings_r shops_r transactions_r",
         state,
         code_challenge: codeChallenge,
         code_challenge_method: "S256",
@@ -346,6 +350,7 @@ export default function Settings() {
               const res = await callFunction("ebayExchangeToken")({
                 code,
                 state: returnedState || state,
+                scopes: EBAY_SCOPES, // recorded as grantedScopes if eBay omits `scope` on the token response
               });
 
               if (event.source) {
