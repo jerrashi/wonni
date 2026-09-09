@@ -15,6 +15,9 @@ export default function LogSaleModal({ products = [], onClose, onSaleLogged }) {
   const [selectedProductId, setSelectedProductId] = useState("");
   const [selectedVariantSku, setSelectedVariantSku] = useState("");
   const [salePrice, setSalePrice] = useState("");
+  const [platformOrderId, setPlatformOrderId] = useState("");
+  const [takeHome, setTakeHome] = useState("");
+  const [fetchingTakeHome, setFetchingTakeHome] = useState(false);
   const [quantity, setQuantity] = useState(1);
   const [soldDate, setSoldDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState("");
@@ -67,6 +70,28 @@ export default function LogSaleModal({ products = [], onClose, onSaleLogged }) {
     (p.tags || []).some((t) => t.toLowerCase().includes(productSearch.toLowerCase()))
   );
 
+  const canFetchTakeHome = (platform === "ebay" || platform === "etsy") && platformOrderId.trim();
+
+  async function handleFetchTakeHome() {
+    setFetchingTakeHome(true);
+    setError("");
+    try {
+      const res = await callFunction("getOrderTakeHome")({
+        platform,
+        platformOrderId: platformOrderId.trim(),
+      });
+      if (typeof res.data?.takeHome === "number") {
+        setTakeHome(String(res.data.takeHome));
+      } else {
+        setError("No net payout found yet for that order id (it can take a day or two to post).");
+      }
+    } catch (e) {
+      setError("Could not fetch take-home: " + (e?.message ?? e));
+    } finally {
+      setFetchingTakeHome(false);
+    }
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     const uid = auth.currentUser?.uid;
@@ -98,6 +123,8 @@ export default function LogSaleModal({ products = [], onClose, onSaleLogged }) {
         soldPrice: priceNum,
         quantity: parseInt(quantity, 10) || 1,
         soldAt: soldDateObj.toISOString(),
+        platformOrderId: platformOrderId.trim() || null,
+        takeHome: takeHome.trim() ? parseFloat(takeHome) : null,
         externalUrl: urlInput.trim() || null,
         notes: notes.trim() || null,
         cascade: Boolean(decrementStock && selectedProductId),
@@ -279,6 +306,48 @@ export default function LogSaleModal({ products = [], onClose, onSaleLogged }) {
                 />
               </div>
             </div>
+
+            {/* eBay / Etsy: order id + net payout fetch */}
+            {(platform === "ebay" || platform === "etsy") && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 4 }}>
+                    {platform === "ebay" ? "eBay Order ID" : "Etsy Receipt ID"} (Optional)
+                  </label>
+                  <input
+                    className="input"
+                    type="text"
+                    placeholder={platform === "ebay" ? "05-12345-67890" : "1234567890"}
+                    value={platformOrderId}
+                    onChange={(e) => setPlatformOrderId(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 4 }}>
+                    Net Payout ($)
+                  </label>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input
+                      className="input"
+                      type="number"
+                      step="0.01"
+                      placeholder="after fees"
+                      value={takeHome}
+                      onChange={(e) => setTakeHome(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      style={{ fontSize: 12, whiteSpace: "nowrap" }}
+                      disabled={!canFetchTakeHome || fetchingTakeHome}
+                      onClick={handleFetchTakeHome}
+                    >
+                      {fetchingTakeHome ? "…" : "Fetch"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Date Sold */}
             <div>

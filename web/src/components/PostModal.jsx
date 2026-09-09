@@ -111,9 +111,9 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
       setEtsyError("");
       try {
         const [categoriesRes, shippingRes, returnRes] = await Promise.all([
-          callFunction("getEtsyCategories")({ credentialSet: "web" }),
-          callFunction("getEtsyShippingProfiles")({ credentialSet: "web" }),
-          callFunction("getEtsyReturnPolicies")({ credentialSet: "web" }),
+          callFunction("getEtsyCategories")({}),
+          callFunction("getEtsyShippingProfiles")({}),
+          callFunction("getEtsyReturnPolicies")({}),
         ]);
 
         setEtsyCategories(categoriesRes.data.categories || []);
@@ -145,7 +145,6 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
         const res = await callFunction("suggestEtsyCategory")({
           title: product?.title,
           category: product?.category,
-          credentialSet: "web",
         });
         setEtsyCategory({
           id: res.data.taxonomyId,
@@ -256,23 +255,16 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
             // ebayCreateListing owns all eBay fields on the product doc
             // (crossPostStatus.ebay, crossPostListingIds.ebay = listingId,
             // ebayOfferId, …) — don't write them here.
-            await callFunction("ebayCreateListing")({
-              listingId: listingId || product.id,
-              productId: product.id,
-              credentialSet: "web",
-            });
+            await callFunction("ebayCreateListing")({ productId: product.id });
             if (!localStorage.getItem("hasSeenEbayEditingNotice")) {
               setShowEbayNotice(true);
             }
           } else if (platformId === "etsy") {
             const etsyRes = await callFunction("etsyCreateListing")({
               productId: product.id,
-              listingId: listingId || product.id,
-              credentialSet: "web",
               taxonomyId: etsyCategory?.id || product.etsyTaxonomyId,
               shippingProfileId: etsyShippingId || product.etsyShippingProfileId,
               returnPolicyId: etsyReturnId || product.etsyReturnPolicyId,
-              handlingTimeDays: product.handlingTimeDays,
             });
             const etsyListingId = etsyRes.data?.listingId;
             const etsyUrl = etsyRes.data?.url || (etsyListingId ? `https://www.etsy.com/listing/${etsyListingId}` : null);
