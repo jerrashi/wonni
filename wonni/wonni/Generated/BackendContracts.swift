@@ -54,6 +54,8 @@ struct BackendContracts: Codable, Sendable {
     let markSoldOutAndCascadeRequest: MarkSoldOutAndCascadeRequest?
     let markSoldOutAndCascadeResponse: MarkSoldOutAndCascadeResponse?
     let mercariScrapeItem: MercariScrapeItem?
+    let postToWonniRequest: PostToWonniRequest?
+    let postToWonniResponse: PostToWonniResponse?
     let recordMercariSalesBatchRequest: RecordMercariSalesBatchRequest?
     let recordMercariSalesBatchResponse: RecordMercariSalesBatchResponse?
     let recordSaleRequest: RecordSaleRequest?
@@ -115,6 +117,8 @@ struct BackendContracts: Codable, Sendable {
         case markSoldOutAndCascadeRequest = "MarkSoldOutAndCascadeRequest"
         case markSoldOutAndCascadeResponse = "MarkSoldOutAndCascadeResponse"
         case mercariScrapeItem = "MercariScrapeItem"
+        case postToWonniRequest = "PostToWonniRequest"
+        case postToWonniResponse = "PostToWonniResponse"
         case recordMercariSalesBatchRequest = "RecordMercariSalesBatchRequest"
         case recordMercariSalesBatchResponse = "RecordMercariSalesBatchResponse"
         case recordSaleRequest = "RecordSaleRequest"
@@ -196,6 +200,8 @@ extension BackendContracts {
         markSoldOutAndCascadeRequest: MarkSoldOutAndCascadeRequest?? = nil,
         markSoldOutAndCascadeResponse: MarkSoldOutAndCascadeResponse?? = nil,
         mercariScrapeItem: MercariScrapeItem?? = nil,
+        postToWonniRequest: PostToWonniRequest?? = nil,
+        postToWonniResponse: PostToWonniResponse?? = nil,
         recordMercariSalesBatchRequest: RecordMercariSalesBatchRequest?? = nil,
         recordMercariSalesBatchResponse: RecordMercariSalesBatchResponse?? = nil,
         recordSaleRequest: RecordSaleRequest?? = nil,
@@ -257,6 +263,8 @@ extension BackendContracts {
             markSoldOutAndCascadeRequest: markSoldOutAndCascadeRequest ?? self.markSoldOutAndCascadeRequest,
             markSoldOutAndCascadeResponse: markSoldOutAndCascadeResponse ?? self.markSoldOutAndCascadeResponse,
             mercariScrapeItem: mercariScrapeItem ?? self.mercariScrapeItem,
+            postToWonniRequest: postToWonniRequest ?? self.postToWonniRequest,
+            postToWonniResponse: postToWonniResponse ?? self.postToWonniResponse,
             recordMercariSalesBatchRequest: recordMercariSalesBatchRequest ?? self.recordMercariSalesBatchRequest,
             recordMercariSalesBatchResponse: recordMercariSalesBatchResponse ?? self.recordMercariSalesBatchResponse,
             recordSaleRequest: recordSaleRequest ?? self.recordSaleRequest,
@@ -3964,6 +3972,102 @@ enum SoldAtUnion: Codable, Sendable {
         case .null:
             try container.encodeNil()
         }
+    }
+}
+
+// MARK: - PostToWonniRequest
+struct PostToWonniRequest: Codable, Sendable {
+    let productId: String
+
+    enum CodingKeys: String, CodingKey {
+        case productId = "productId"
+    }
+}
+
+// MARK: PostToWonniRequest convenience initializers and mutators
+
+extension PostToWonniRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(PostToWonniRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        productId: String? = nil
+    ) -> PostToWonniRequest {
+        return PostToWonniRequest(
+            productId: productId ?? self.productId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - PostToWonniResponse
+struct PostToWonniResponse: Codable, Sendable {
+    let alreadyPosted: Bool
+    let listingId: String
+    let skipped: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case alreadyPosted = "alreadyPosted"
+        case listingId = "listingId"
+        case skipped = "skipped"
+    }
+}
+
+// MARK: PostToWonniResponse convenience initializers and mutators
+
+extension PostToWonniResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(PostToWonniResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        alreadyPosted: Bool? = nil,
+        listingId: String? = nil,
+        skipped: Bool?? = nil
+    ) -> PostToWonniResponse {
+        return PostToWonniResponse(
+            alreadyPosted: alreadyPosted ?? self.alreadyPosted,
+            listingId: listingId ?? self.listingId,
+            skipped: skipped ?? self.skipped
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
     }
 }
 

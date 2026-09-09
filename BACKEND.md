@@ -207,7 +207,7 @@ it. Remove on the next web pass.
 | `publishStorageObject` | ✅ **built** (`functions/publish_storage_object.js`, wired, not deployed) | Copied verbatim from nested. Deploy unblocks web image uploads. |
 | `refreshSourceData` | **orphan** (web uses it, works) | move source into canonical tree |
 | `onProductDeleted` | **live** | keep |
-| `postToWonni` | **orphan** (web uses it, works) | move `wonni_listing.js` into canonical tree; add the "skip when live listing exists" guard (open roadmap item) |
+| `postToWonni` | ✅ **built** (`functions/wonni_listing.js` + `listing_shape.js`, wired) | Publishes `products/{id}` → the Wonni **marketplace** feed `listings/{id}` (`UserListing` shape, `status:"active"`). Now has the roadmap guard: if a live `listings/{id}` (`status:"active"`) exists it only syncs the product's published flags and returns `skipped:true` instead of re-mapping/clobbering. 8 tests. **This was the ONLY deployed function still coming from the nested tree** — deleted 2026-09-09. |
 
 ### Auth / settings / account
 
@@ -216,10 +216,34 @@ it. Remove on the next web pass.
 | `generateOAuthState` | **live** | add `"etsy"` to the platform allowlist (nested has it) |
 | `disconnectPlatform` / `updateSettings` | **live** | add `"etsy"` to allowlists |
 | `aliexpressExchangeToken` / `tiktokExchangeToken` | **live** | reconcile integration-doc field shape (`platform`, `connectedAt` vs token-only) |
-| `requestAccountDeletion` / `cancelAccountDeletion` / `purgeDeletedAccounts` | **dead** (nested `account_deletion.js`, iOS #62) | port into canonical tree |
-| `notifySavedSearchMatches` | **dead** (nested) | port (Wonni-marketplace feature) |
-| `ebayWebhook` / `setupEbayNotifications` | **dead** (nested `ebay_webhook.js`) | port — eBay platform-notification subscription |
+| `requestAccountDeletion` / `cancelAccountDeletion` / `purgeDeletedAccounts` | **not deployed** — deferred port | see below |
+| `notifySavedSearchMatches` | **not deployed** — deferred port | see below |
+| `ebayWebhook` / `setupEbayNotifications` | **not deployed** — deferred port | see below |
 | `placeAliexpressOrder` / `confirmTiktokShipment` / `pollAliexpressTracking` | **live** | keep |
+
+---
+
+## Deferred ports (nested tree deleted 2026-09-09)
+
+The nested `wonni/functions/` tree (a full parallel backend, ~40 files) was
+**deleted at commit `3a13f55`**. Verified first that only `postToWonni` was
+actually deployed from it — everything below was dead code (not deployed
+anywhere), so deleting it is not a regression. Retrieve any file with
+`git show 3a13f55:wonni/functions/<file>`.
+
+These are genuine features that need a proper port onto `products/` + the
+shared keysets + `validated()` when picked up — they are **not** blockers for
+the consolidation:
+
+| Feature | Source (at `3a13f55`) | Notes |
+|---|---|---|
+| `ebayImportListing` | `ebay_import.js` | Fetch ANY eBay listing by item id (Browse API, app token, no ownership) to seed a new product. Distinct from drift-sync. iOS calls it. |
+| `ebayWebhook` + `setupEbayNotifications` | `ebay_webhook.js` (346 L) | eBay marketplace-account-deletion notification endpoint (eBay compliance) + order push. Was never deployed → **eBay compliance gap predates this work.** |
+| `requestAccountDeletion` / `cancelAccountDeletion` / `purgeDeletedAccounts` | `account_deletion.js` (191 L) | App Store account-deletion requirement (iOS #62). Never deployed → also a pre-existing gap. |
+| `notifySavedSearchMatches` | `saved_search_notify.js` | Wonni marketplace saved-search alerts. |
+| `ebayRedirect` (onRequest) | `index.js` L174 | `?code=` → `wonni://oauth/ebay?code=` deep link for the iOS eBay OAuth flow. Port if/when iOS eBay OAuth is re-enabled. |
+| `identifyItem` | `index.js` L13 | superseded by `enrichListing` mode:"draft"; iOS repoint = step 9. |
+| `ebayGetOrderTakeHome` / `etsyGetReceiptTakeHome` | `sale_fetch.js` | superseded by `getOrderTakeHome({saleId})`; iOS repoint = step 9. |
 
 ---
 
@@ -281,25 +305,28 @@ new feature, tracked in § Stretch goals, not part of consolidation.
 
 ## Sequenced work
 
-1. **Contract scaffold** — ✅ `functions/contracts/` (sales, mercari, listings,
-   ebay, enrichment). Add `etsy.js`, `tiktok.js`, `products.js`.
-2. **Port the dead-but-needed functions** onto the canonical tree + schema:
-   ✅ `publishStorageObject`, ✅ `recordSale` + cascade family (eBay/Etsy/Mercari).
-   Next: `recordMercariSalesBatch` → `syncSales` + `getOrderTakeHome` →
-   Etsy CRUD → account deletion / webhook.
-3. **Deploy `functions/` from the canonical tree** so the built functions
-   actually run (nothing above is live yet). Verify with a real recordSale
-   from web, then the Mercari + iOS pieces.
-5. **Wire `validated(...)`** into the remaining pre-existing shared functions.
-6. **Merge repos** — `web/` + `extension/` into this repo; one `firebase.json`,
-   one `firestore.rules`, one `storage.rules`.
-7. **One `index.js`**; delete `wonni/wonni/functions/`; delete the empty
-   `wonni_dropship` functions stub.
-8. **Migrate the 2–3 iOS users'** `listings` → `products`.
-9. **Repoint iOS** call sites at the canonical names/payloads; add the generated
-   `BackendContracts.swift` to the Xcode project.
-10. **Deploy once**; `firebase functions:delete dropshipEtsyCreateListing` and
-    any other confirmed-dead orphan. Smoke-test from web + iOS + extension.
+1. ✅ **Contract scaffold** — `functions/contracts/` (sales, mercari, listings,
+   ebay, etsy, enrichment).
+2. ✅ **Port the dead-but-needed functions** onto the canonical tree + schema:
+   `publishStorageObject`, `recordSale` + cascade family, `recordMercariSalesBatch`,
+   `syncSales` + `getOrderTakeHome`, Etsy CRUD (10), `enrichListing`, `postToWonni`.
+   Deferred (dead, not blockers): eBay webhook, account deletion, `ebayImportListing`,
+   saved-search notify — see § Deferred ports.
+3. ✅ **Deployed** the canonical `functions/` tree (2026-09-09). Verified new
+   functions ACTIVE; contract layer enforcing in prod.
+4. ✅ **Nested tree deleted** (`3a13f55`) — was a full parallel backend; only
+   `postToWonni` was live from it, now ported. `dropshipEtsyCreateListing`
+   orphan already gone.
+5. **Wire `validated(...)`** into the remaining pre-existing shared functions
+   (ebay_listing, tiktok_listing, user_settings, imports) — incremental.
+6. **Merge repos** — `wonni_dropship/web` + `extension` into this repo; one
+   `firebase.json`, `firestore.rules`, `storage.rules`. ← NEXT
+7. **Migrate the 2–3 iOS users'** `listings` (old per-user model) → `products/`.
+8. **Repoint iOS** call sites: `{listingId}`→`{productId}`, `identifyItem`→
+   `enrichListing`, `ebayGetOrderTakeHome`/`etsyGetReceiptTakeHome`→
+   `getOrderTakeHome`, the per-variation Mercari flags (spec above); add the
+   generated `BackendContracts.swift` to the Xcode project.
+9. **Deploy**; smoke-test web + iOS + extension.
 
 ## Backfill — not needed
 
@@ -324,7 +351,7 @@ a separate sales backfill.
 
 <!-- Generated by `npm run contracts:gen` from functions/contracts/*.js — do not edit by hand. -->
 
-**28 callables** validated by `validated(name, handler)`. Request payloads are
+**29 callables** validated by `validated(name, handler)`. Request payloads are
 parsed against these schemas before the handler runs; bad payloads are rejected
 with `HttpsError("invalid-argument", ...)`. Swift types: `contracts/generated/`.
 
@@ -356,6 +383,7 @@ with `HttpsError("invalid-argument", ...)`. Swift types: `contracts/generated/`.
 | `ebayDeleteListing` | Withdraw the eBay offer(s); keep the stable offer pointers for a later re-post. |
 | `ebayGetListing` | Live READ from the eBay Inventory API via the doc's stable pointers. |
 | `ebayUpdateListing` | Apply product-doc edits to the live eBay listing (single-variant only for now). |
+| `postToWonni` | Publish a products/{id} to the Wonni marketplace feed (listings/{id}, status:active). Skips a re-write when a live listing already exists. |
 
 ### `ebay`
 
