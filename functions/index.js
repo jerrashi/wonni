@@ -34,6 +34,7 @@ const { disconnectPlatform, updateSettings, generateOAuthState } = require("./us
 const { onProductDeleted } = require("./product_cleanup");
 const { generateProductDescription } = require("./generate_description");
 const { aiAutofillListing } = require("./listing_fields");
+const { enrichListing } = require("./enrichment");
 const { publishStorageObject } = require("./publish_storage_object");
 const {
   recordSale,
@@ -59,6 +60,7 @@ module.exports = {
   identifyProductsInImage,
   generateProductDescription,
   aiAutofillListing,
+  enrichListing,
   onProductDeleted,
   publishStorageObject,
 
