@@ -102,11 +102,11 @@ class SaleRepository: ObservableObject {
         try await db.collection(col).document().setData(from: s)
         print("[SaleRepository.addSale] Sale saved successfully")
 
-        if s.platform == "mercari", let listingId = s.listingId, !listingId.isEmpty {
+        if s.platform == "mercari", let productId = s.linkedProductId, !productId.isEmpty {
             do {
                 _ = try await Functions.functions()
                     .httpsCallable("decrementAndCascade")
-                    .call(["productId": listingId, "platform": "mercari"])
+                    .call(["productId": productId, "platform": "mercari"])
             } catch {
                 print("[SaleRepository.addSale] decrementAndCascade failed: \(error)")
                 // Sale doc already persisted — don't fail the caller over a cascade error.
@@ -119,9 +119,11 @@ class SaleRepository: ObservableObject {
     /// `SoldOnMercariHandlerSheet` should skip their own "subtract 1?" prompt.
     func hasSale(listingId: String, platform: String) async -> Bool {
         guard let userId = Auth.auth().currentUser?.uid else { return false }
+        // Canonical field is `productId`; the backfill copied it onto every old
+        // `listingId`-only doc, and backend-created sales only ever have it.
         let snap = try? await db.collection(col)
             .whereField("userId", isEqualTo: userId)
-            .whereField("listingId", isEqualTo: listingId)
+            .whereField("productId", isEqualTo: listingId)
             .whereField("platform", isEqualTo: platform)
             .limit(to: 1)
             .getDocuments()
