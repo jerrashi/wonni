@@ -218,23 +218,15 @@ struct RecordSaleSheet: View {
         isFetchingTakeHome = true
         fetchError = nil
         do {
-            let functions = Functions.functions()
-            if platform == "ebay" {
-                let result = try await functions
-                    .httpsCallable("ebayGetOrderTakeHome")
-                    .call(["orderId": platformOrderId])
-                if let dict = result.data as? [String: Any],
-                   let value = dict["takeHome"] as? Double {
-                    takeHome = value
-                }
-            } else if platform == "etsy" {
-                let result = try await functions
-                    .httpsCallable("etsyGetReceiptTakeHome")
-                    .call(["receiptId": platformOrderId])
-                if let dict = result.data as? [String: Any],
-                   let value = dict["takeHome"] as? Double {
-                    takeHome = value
-                }
+            // Unified: getOrderTakeHome takes either {saleId} or, pre-save,
+            // {platform, platformOrderId}. Replaces ebayGetOrderTakeHome /
+            // etsyGetReceiptTakeHome.
+            let result = try await Functions.functions()
+                .httpsCallable("getOrderTakeHome")
+                .call(["platform": platform, "platformOrderId": platformOrderId])
+            if let dict = result.data as? [String: Any],
+               let value = dict["takeHome"] as? Double {
+                takeHome = value
             }
         } catch {
             fetchError = "Could not fetch take-home: \(error.localizedDescription)"
@@ -278,7 +270,7 @@ struct RecordSaleSheet: View {
             let _ = try await SaleRepository.shared.recordSale(sale)
 
             if let listingId = listing.id {
-                _ = try? await callCloudFunction("decrementAndCascade", ["listingId": listingId, "platform": platform])
+                _ = try? await callCloudFunction("decrementAndCascade", ["productId": listingId, "platform": platform])
             }
 
             let currentQty = listing.quantity ?? 1

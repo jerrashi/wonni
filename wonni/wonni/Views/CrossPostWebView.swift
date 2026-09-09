@@ -3041,7 +3041,7 @@ struct MercariSyncSheet: View {
         guard let listingId = listing.id else { return }
         isApplying = true; applyError = nil
         do {
-            _ = try await callCloudFunction("markSoldOutAndCascade", ["listingId": listingId])
+            _ = try await callCloudFunction("markSoldOutAndCascade", ["productId": listingId])
             // markSoldOutAndCascade re-flags Mercari for deactivation, but Mercari is already
             // inactive here, so clear that flag to avoid a phantom "Action needed" entry.
             try? await Firestore.firestore().collection("listings").document(listingId)
@@ -3065,7 +3065,7 @@ struct MercariSyncSheet: View {
             // Cascade any field changes to eBay in one call
             let anyFieldChanged = priceDiffers || titleDiffers || descriptionDiffers
             if anyFieldChanged && listing.crossPostStatus?["ebay"] == "posted" {
-                Task { _ = try? await callCloudFunction("ebayUpdateListing", ["listingId": listingId]) }
+                Task { _ = try? await callCloudFunction("ebayUpdateListing", ["productId": listingId]) }
             }
             if soldDiffers {
                 // Enrich before recording so the sale is written complete on the common path
@@ -3101,7 +3101,7 @@ struct MercariSyncSheet: View {
 
                 // Cascade quantity decrement
                 _ = try? await callCloudFunction("decrementAndCascade", [
-                    "listingId": listingId,
+                    "productId": listingId,
                     "platform": "mercari"
                 ])
 
@@ -3120,7 +3120,7 @@ struct MercariSyncSheet: View {
                                  "updatedAt": Timestamp(date: Date())])
                 if listing.crossPostStatus?["ebay"] == "posted" {
                     _ = try? await callCloudFunction("decrementAndCascade", [
-                        "listingId": listingId,
+                        "productId": listingId,
                         "platform": "mercari"
                     ])
                 }
@@ -4823,12 +4823,12 @@ class MercariSyncManager: ObservableObject {
             }
 
             if applyPrice && priceDiff && ebayIsPosted {
-                _ = try? await callCloudFunction("ebayUpdateListing", ["listingId": listingId])
+                _ = try? await callCloudFunction("ebayUpdateListing", ["productId": listingId])
             }
 
             if applyStatus && mercariIsSold {
                 if ebayIsPosted {
-                    _ = try? await callCloudFunction("decrementAndCascade", ["listingId": listingId, "platform": "mercari"])
+                    _ = try? await callCloudFunction("decrementAndCascade", ["productId": listingId, "platform": "mercari"])
                 }
                 if soldDiff {
                     // Enrich before recording (github issue #24) — unlike the single-listing

@@ -499,7 +499,7 @@ struct BulkEditSheet: View {
                     if !markOutOfStock {
                         for id in ebayIds {
                             Task {
-                                _ = try? await callCloudFunction("ebayUpdateListing", ["listingId": id])
+                                _ = try? await callCloudFunction("ebayUpdateListing", ["productId": id])
                             }
                         }
                     }
@@ -544,7 +544,7 @@ struct BulkEditSheet: View {
             var lastError: Error?
             for attempt in 1...3 {
                 do {
-                    _ = try await callCloudFunction("markSoldOutAndCascade", ["listingId": id])
+                    _ = try await callCloudFunction("markSoldOutAndCascade", ["productId": id])
                     lastError = nil
                     break
                 } catch {
