@@ -333,10 +333,24 @@ new feature, tracked in § Stretch goals, not part of consolidation.
    old-ref compat). Idempotent re-run = 0 creates. Script:
    `functions/scripts/migrate_listings_to_products.js` (+ census). Reversal:
    delete `products/` where `migratedFromListing == true`.
-8. **Repoint iOS** call sites: `{listingId}`→`{productId}`, `identifyItem`→
-   `enrichListing`, `ebayGetOrderTakeHome`/`etsyGetReceiptTakeHome`→
-   `getOrderTakeHome`, the per-variation Mercari flags (spec above); add the
-   generated `BackendContracts.swift` to the Xcode project.
+8. **Repoint iOS** — 🔄 in progress.
+   - ✅ **Done** (iOS `** BUILD SUCCEEDED **`): 22 callable payloads
+     `{listingId}`→`{productId}`; `identifyItem`→`enrichListing` mode:"draft"
+     (GeminiService, same public signature); `ebayGetOrderTakeHome`/
+     `etsyGetReceiptTakeHome`→`getOrderTakeHome` (RecordSaleSheet — contract
+     widened to also accept `{platform, platformOrderId}` for the pre-save
+     fetch). `BackendContracts.swift` already in the Xcode target.
+   - **Left (needs a design pass, not mechanical):**
+     - `ListingRepository` (467 L) reads/writes `listings/{uuid}` — but it
+       mixes the seller's draft CRUD with the buyer-facing **marketplace feed**
+       (`fetchFeedPage`, `fetchSuggestedListings` across all users). Only the
+       seller side moves to `products/` (via `postToWonni` to publish);
+       `listings/` stays the marketplace. `ProductRepository` already does the
+       cross-client draft half.
+     - `CrossPostWebView` per-variation Mercari flags — read
+       `products/{id}.variants[i].pendingMercari*` (spec § Data-model migration).
+     - `Sale.listingId` → `productId` — a field rename on the live `sales/`
+       collection (19 docs) + backfill; `whereField("listingId")` too.
 9. **Deploy**; smoke-test web + iOS + extension.
 10. **Wire `validated(...)`** into the remaining pre-existing shared functions
     (ebay_listing, tiktok_listing, user_settings, imports) — incremental,
