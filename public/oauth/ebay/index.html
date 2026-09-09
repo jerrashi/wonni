@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connecting eBay…</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      background: #f5f5f7;
+      color: #1d1d1f;
+      text-align: center;
+    }
+    .card {
+      background: #fff;
+      padding: 32px 40px;
+      border-radius: 12px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+      max-width: 360px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    p { font-size: 16px; margin: 0; }
+    .status { font-weight: 600; margin-bottom: 8px; font-size: 18px; }
+    .sub { font-size: 13px; color: #86868b; line-height: 1.4; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <p id="status-text" class="status">Connecting eBay…</p>
+    <p id="sub-text" class="sub">Please wait while we complete the connection.</p>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+    import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyCrroW6RXSl15a4j9FPeAUOqkiNCx3g2Lk",
+      authDomain: "wonni-app.firebaseapp.com",
+      projectId: "wonni-app",
+      storageBucket: "wonni-app.firebasestorage.app",
+      messagingSenderId: "840012373819",
+      appId: "1:840012373819:web:c5081552e35940d578a11e",
+    };
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const functions = getFunctions(app);
+
+    // The dashboard window that opens this popup. In production it is served
+    // from wonni-app.web.app; during local dev it is a localhost origin. We
+    // can't read window.opener.location cross-origin, so we post the relay
+    // message to every allowed origin — only the matching one is delivered,
+    // the rest are silently dropped by the browser. Inbound messages from the
+    // opener are validated against the same list.
+    const ALLOWED_OPENER_ORIGINS = [
+      "https://wonni-app.web.app",
+      "http://localhost:5173",
+      "http://localhost:5174",
+      "http://localhost:5175",
+      "http://127.0.0.1:5173",
+      "http://127.0.0.1:5174",
+    ];
+    function relayToOpener(message) {
+      if (!window.opener) return false;
+      let sent = false;
+      for (const origin of ALLOWED_OPENER_ORIGINS) {
+        try {
+          window.opener.postMessage(message, origin);
+          sent = true;
+        } catch (_) {}
+      }
+      return sent;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const state = params.get("state");
+    const error = params.get("error") || params.get("error_description");
+    const statusText = document.getElementById("status-text");
+    const subText = document.getElementById("sub-text");
+
+    if (error) {
+      statusText.innerText = "Connection Failed";
+      subText.innerText = error;
+      if (window.opener) {
+        relayToOpener({ type: "EBAY_AUTH_CALLBACK", error, state });
+      } else {
+        window.location.href = 'wonni://oauth/ebay?error=' + encodeURIComponent(error);
+      }
+    } else if (!code) {
+      statusText.innerText = "No Code Received";
+      subText.innerText = "Please close this window and try connecting again.";
+    } else {
+      let notifiedOpener = false;
+
+      // Web popup flow: hand the code back to the dashboard window, which is
+      // signed in and will call the exchange function itself. The popup does
+      // NOT need its own Firebase session — that was the old bug that left
+      // this page stuck on "Waiting for authentication…".
+      if (window.opener) {
+        statusText.innerText = "Connecting eBay…";
+        subText.innerText = "Finalizing connection with your dashboard…";
+
+        window.addEventListener("message", (event) => {
+          if (!ALLOWED_OPENER_ORIGINS.includes(event.origin)) return;
+          if (event.data?.type === "EBAY_AUTH_SUCCESS") {
+            statusText.innerText = "✓ eBay Connected!";
+            subText.innerText = event.data.username
+              ? `Connected as ${event.data.username}. Closing window…`
+              : "You can close this window.";
+            setTimeout(() => window.close(), 1500);
+          } else if (event.data?.type === "EBAY_AUTH_ERROR") {
+            statusText.innerText = "Connection Failed";
+            subText.innerText = event.data.error || "Failed to exchange token.";
+          }
+        });
+
+        notifiedOpener = relayToOpener({ type: "EBAY_AUTH_CALLBACK", code, state });
+      }
+
+      // Standalone web fallback (page opened directly, no dashboard window).
+      if (!notifiedOpener) {
+        function handleExchange(user) {
+          if (!user) {
+            statusText.innerText = "Not signed in";
+            subText.innerText = "Please sign in to Wonni in your main window first, then try again.";
+            return;
+          }
+
+          statusText.innerText = "Exchanging eBay Token…";
+          subText.innerText = "Linking your eBay account…";
+
+          httpsCallable(functions, "ebayExchangeToken")({
+            code,
+            state,
+          }).then((res) => {
+            statusText.innerText = "✓ eBay Connected!";
+            const username = res.data?.connectedUsername || res.data?.username;
+            subText.innerText = username ? `Connected as ${username}. Closing window…` : "You can close this window.";
+            setTimeout(() => window.close(), 1800);
+          }).catch((e) => {
+            console.error("eBay exchange error:", e);
+            statusText.innerText = "Error Connecting eBay";
+            subText.innerText = e.message || "Failed to exchange token.";
+          });
+        }
+
+        if (auth.currentUser) {
+          handleExchange(auth.currentUser);
+        } else {
+          const unsub = onAuthStateChanged(auth, (user) => {
+            unsub();
+            handleExchange(user);
+          });
+        }
+      }
+    }
+  </script>
+</body>
+</html>
