@@ -7,8 +7,10 @@
     "node": "22"
   },
   "scripts": {
-    "contracts:gen": "node scripts/gen-swift-contracts.js",
-    "contracts:check": "node -e \"require('./contracts')\" && echo contracts OK"
+    "test": "node --test",
+    "contracts:gen": "node scripts/gen-swift-contracts.js && node scripts/gen-backend-md.js",
+    "contracts:check": "node scripts/check-contracts.js",
+    "verify": "npm run contracts:check && npm test"
   },
   "dependencies": {
     "@google-cloud/secret-manager": "^5.0.0",
