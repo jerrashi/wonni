@@ -64,7 +64,13 @@ Secrets.xcconfig
 
 # Node / Firebase Functions
 node_modules/
-wonni/functions/node_modules/
+
+# Web app (Vite) — build output lands in public/ alongside the committed
+# oauth/ + privacy/ static pages
+web/dist/
+functions/lib/
+public/index.html
+public/assets/
 
 # Claude Code local settings
 .claude/settings.local.json
@@ -74,9 +80,13 @@ wonni/functions/node_modules/
 **/.DS_Store
 
 # Build logs and Firebase cache
-wonni/*.log
-wonni/firebase-debug*.log
-wonni/.firebase/
+*.log
+firebase-debug*.log
+firestore-debug.log
+.firebase/
+.env
+.env.local
+*.local
 
 # Design system — generated artifacts (re-created by /design-sync re-run)
 .ds-sync/
