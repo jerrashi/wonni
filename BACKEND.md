@@ -199,9 +199,9 @@ it. Remove on the next web pass.
 |---|---|---|
 | `aliexpressImportProduct` / `weverseImportProduct` / `weverseBulkImportProducts` | **live** | keep top-level (opt-in Gemini path). |
 | `identifyProductsInImage` | **live** | keep |
-| `enrichListing` | **new** (→ `contracts/enrichment.js`) | **Merges `identifyItem` + `aiAutofillListing`** into one function, one Gemini call, one output shape (`ListingFields`). `mode:"draft"` = photos+hints in, all fields out, persists nothing (iOS pre-product identify). `mode:"product"` = `{productId}` in, blank fields filled + optionally persisted (web autofill button). Core is the existing `resolveListingFields()`, extended to take raw images. |
-| `identifyItem` | **dead** (iOS) | Remove — replaced by `enrichListing` mode:"draft". |
-| `aiAutofillListing` | **live** | Remove — replaced by `enrichListing` mode:"product". Keep as an alias through the web migration. |
+| `enrichListing` | ✅ **built** (`functions/enrichment.js`, wired, not deployed) | Merges `identifyItem` + `aiAutofillListing`. `mode:"draft"` `{images[], hints?}` → `identifyDraft` (base64 / data: / https images, `DRAFT_SYSTEM_PROMPT`), persists nothing. `mode:"product"` `{productId, fillBlanksOnly, persist}` → wraps the existing `resolveListingFields()`; writes blank fields when `persist`. Response: `{suggested, writes, proposals, applied, aiModel, aiPromptVersion}` (contract shape — `geminiCategory`→`category`, `weightLbs`→`weightOz`, iOS 7-value condition → canonical 5 via `normalizeCondition`). 7 tests. |
+| `identifyItem` | **dead** (iOS) | Superseded by `enrichListing` mode:"draft". iOS `GeminiService.swift` still calls it — repoint in step 9. |
+| `aiAutofillListing` | **live** | Kept as-is (web "✨ AI autofill" button) until web migrates to `enrichListing` mode:"product". Both now route through the same `resolveListingFields()` core. |
 | `generateProductDescription` | **live** | keep (single-purpose "✨ AI Suggest" description button) |
 | `splitProductImage` | **live** | keep |
 | `publishStorageObject` | ✅ **built** (`functions/publish_storage_object.js`, wired, not deployed) | Copied verbatim from nested. Deploy unblocks web image uploads. |
