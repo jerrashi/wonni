@@ -1,17 +1,18 @@
 # Backend contract & consolidation plan
 
 Single reference for the Cloud Functions surface shared by the **web app**
-(`wonni_dropship/web`), the **iOS app** (`wonni/wonni`), and the **Chrome
-extension** (`wonni_dropship/extension`). All three call the same project:
-**`wonni-app`**.
+(`web/`), the **iOS app** (`wonni/`), and the **Chrome extension**
+(`extension/`) — all now in this monorepo, all on project **`wonni-app`**.
 
+- **Monorepo since 2026-09-09** — `web/` + `extension/` folded in from the
+  (now-archived) `wonni_dropship` repo. One root `firebase.json` + rules.
 - **Canonical data model:** the web app's. `products/{id}` (with an inline
   `variants[]` array) is the listing record. The iOS `listings/{id}` +
   `inventory/{unitId}` collections are being retired — see
-  [§ Data-model migration](#data-model-migration).
-- **Canonical function tree:** top-level `functions/`. The nested
-  `wonni/wonni/functions/` tree is harvested for its newer sales/variation
-  work, then deleted.
+  [§ Data-model migration](#data-model-migration). (`listings/{productId}` also
+  serves as the Wonni **marketplace** feed via `postToWonni` — that use stays.)
+- **Function tree:** `functions/` (the only one — the nested parallel backend
+  was deleted, see § Deferred ports).
 - **Contract source of truth:** [`functions/contracts/`](functions/contracts/)
   (zod). Run `npm run contracts:gen` to regenerate
   `functions/contracts/generated/backend-contracts.schema.json` and the Swift
@@ -319,14 +320,22 @@ new feature, tracked in § Stretch goals, not part of consolidation.
    orphan already gone.
 5. **Wire `validated(...)`** into the remaining pre-existing shared functions
    (ebay_listing, tiktok_listing, user_settings, imports) — incremental.
-6. **Merge repos** — `wonni_dropship/web` + `extension` into this repo; one
-   `firebase.json`, `firestore.rules`, `storage.rules`. ← NEXT
+6. ✅ **Monorepo** (`12c906a`, 2026-09-09) — `web/` + `extension/` subtree-merged
+   into this repo (history preserved). One root `firebase.json` (hosting from
+   wonni_dropship + functions from here), `firestore.rules` / `storage.rules` /
+   `firestore.indexes.json` moved up from `wonni/`. `wonni_dropship` is now a
+   read-only archive. **Left:** `firebase deploy --only storage` needs Console
+   Playground validation first (storage.rules has an undeployed "dropship
+   images" block); `firestore.rules` already matches live.
 7. **Migrate the 2–3 iOS users'** `listings` (old per-user model) → `products/`.
 8. **Repoint iOS** call sites: `{listingId}`→`{productId}`, `identifyItem`→
    `enrichListing`, `ebayGetOrderTakeHome`/`etsyGetReceiptTakeHome`→
    `getOrderTakeHome`, the per-variation Mercari flags (spec above); add the
    generated `BackendContracts.swift` to the Xcode project.
 9. **Deploy**; smoke-test web + iOS + extension.
+10. **Wire `validated(...)`** into the remaining pre-existing shared functions
+    (ebay_listing, tiktok_listing, user_settings, imports) — incremental,
+    non-blocking.
 
 ## Backfill — not needed
 
