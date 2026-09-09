@@ -43,6 +43,10 @@ data).
    `~/.claude/plans/sales-dashboard-spec.md`. `orders/{orderId}` already
    carries `userId`; web + iOS should share one implementation, not build
    parallel ones.
+   - **Stretch goal:** email-triggered Mercari sale import (parse Mercari's
+     "item sold" emails → `recordMercariSalesBatch`) so the manual extension
+     scrape becomes optional, plus sale-alert push/email on any platform sale.
+     Tracked in `~/Documents/GitHub/wonni/BACKEND.md` § Stretch goals.
 
 ## eBay posting — current model (2026-09-02, works)
 
