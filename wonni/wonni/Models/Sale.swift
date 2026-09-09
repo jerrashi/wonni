@@ -37,7 +37,12 @@ struct SaleAddress: Codable, Equatable {
 struct Sale: Identifiable, Codable {
     @DocumentID var id: String?
     var userId: String
+    /// Legacy field name — old iOS-written sale docs use `listingId`. The
+    /// consolidated backend (`recordSaleCore`) writes `productId` instead.
     var listingId: String?
+    /// Canonical `products/{id}` reference. Written by the backend and, going
+    /// forward, by `SaleRepository`. Read via `linkedProductId`.
+    var productId: String?
     var listingTitle: String?          // snapshot at time of sale
     var coverPhotoPath: String?        // Firebase Storage path snapshot — fallback, costs Storage bandwidth to load
     var thumbnailUrl: String?          // platform CDN thumbnail (eBay/Mercari) — preferred display source, no Storage cost
@@ -65,10 +70,14 @@ struct Sale: Identifiable, Codable {
 
     // MARK: - Init
 
+    /// The `products/{id}` this sale is for, from whichever field name is set.
+    var linkedProductId: String? { productId ?? listingId }
+
     init(
         id: String? = nil,
         userId: String = "",
         listingId: String? = nil,
+        productId: String? = nil,
         listingTitle: String? = nil,
         coverPhotoPath: String? = nil,
         thumbnailUrl: String? = nil,
@@ -90,6 +99,7 @@ struct Sale: Identifiable, Codable {
         self.id = id
         self.userId = userId
         self.listingId = listingId
+        self.productId = productId ?? listingId
         self.listingTitle = listingTitle
         self.coverPhotoPath = coverPhotoPath
         self.thumbnailUrl = thumbnailUrl

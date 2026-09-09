@@ -349,8 +349,10 @@ new feature, tracked in § Stretch goals, not part of consolidation.
        cross-client draft half.
      - `CrossPostWebView` per-variation Mercari flags — read
        `products/{id}.variants[i].pendingMercari*` (spec § Data-model migration).
-     - `Sale.listingId` → `productId` — a field rename on the live `sales/`
-       collection (19 docs) + backfill; `whereField("listingId")` too.
+     - ✅ `Sale` — added `productId` (canonical) alongside legacy `listingId`,
+       `linkedProductId` accessor, init mirrors the two; `SaleRepository`
+       writes + queries `productId`. Backfilled prod (`backfill_sale_product_id.js`
+       — 8 of 18 `sales/` docs). Full `listingId` removal deferred.
 9. **Deploy**; smoke-test web + iOS + extension.
 10. **Wire `validated(...)`** into the remaining pre-existing shared functions
     (ebay_listing, tiktok_listing, user_settings, imports) — incremental,
