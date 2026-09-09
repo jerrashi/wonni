@@ -70,10 +70,12 @@ exports.etsyExchangeToken = onCall(async (request) => {
       isConnected: true,
       connectedUsername: shop.shop_name,
       connectedAt: admin.firestore.FieldValue.serverTimestamp(),
-      // Web-specific OAuth token storage
       accessToken: tokenData.access_token,
+      // Etsy DOES return a refresh_token — storing it is what lets
+      // getActiveEtsyToken keep the connection alive past the 1h access token.
+      refreshToken: tokenData.refresh_token ?? null,
       tokenExpiresAt: Date.now() + (tokenData.expires_in ?? 3600) * 1000,
-      shopId: shop.shop_id,
+      shopId: String(shop.shop_id),
       shopName: shop.shop_name,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
@@ -85,25 +87,99 @@ exports.etsyExchangeToken = onCall(async (request) => {
   }
 });
 
-// Helper: Get valid access token, refreshing if needed
+/**
+ * Exchange an Etsy refresh_token for a fresh access token.
+ * Etsy: POST api.etsy.com/v3/public/oauth/token, PKCE clients omit the secret.
+ */
+async function refreshEtsyToken(refreshToken) {
+  if (!refreshToken) throw new Error("No Etsy refresh token on record — reconnect Etsy.");
+  const clientId = await getEtsyClientId();
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    client_id: clientId,
+    refresh_token: refreshToken,
+  });
+  try {
+    const secret = await getSecret("ETSY_SHARED_SECRET");
+    if (secret) body.set("client_secret", secret);
+  } catch { /* PKCE-only app — no secret */ }
+
+  const res = await fetch("https://api.etsy.com/v3/public/oauth/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+  if (!res.ok) {
+    throw new Error(`Etsy token refresh failed (${res.status}): ${await res.text()}`);
+  }
+  return res.json();
+}
+
+/**
+ * Valid Etsy access token, refreshing (and persisting the new token) when it's
+ * within 5 min of expiry. Just the token string — use getActiveEtsyToken for
+ * the token + shopId + clientId bundle the listing functions need.
+ */
 async function getValidEtsyToken(uid) {
+  return (await getActiveEtsyToken(uid)).accessToken;
+}
+
+/**
+ * The full Etsy auth bundle for a user: { accessToken, shopId, clientId }.
+ * Refreshes the token if near expiry, and auto-recovers a missing shopId from
+ * the /users/{id}/shops endpoint. Throws failed-precondition (reconnect) when
+ * the account isn't usable.
+ */
+async function getActiveEtsyToken(uid) {
   const db = admin.firestore();
   const ref = db.doc(`users/${uid}/integrations/etsy`);
-  const snap = await ref.get();
-  const data = snap.data();
-
+  const data = (await ref.get()).data();
   if (!data?.isConnected) {
-    throw new Error("Etsy not connected.");
+    throw new HttpsError("failed-precondition", "Etsy not connected. Reconnect in Settings.");
   }
 
-  // Token is still valid
-  if (data.tokenExpiresAt - Date.now() > 5 * 60 * 1000) {
-    return data.accessToken;
+  const clientId = await getEtsyClientId();
+  let accessToken = data.accessToken;
+
+  const expiresAt = typeof data.tokenExpiresAt === "number"
+    ? data.tokenExpiresAt
+    : data.tokenExpiresAt?.toMillis?.() ?? 0;
+  if (Date.now() > expiresAt - 5 * 60 * 1000) {
+    if (!data.refreshToken) {
+      throw new HttpsError("failed-precondition", "Etsy session expired — reconnect Etsy in Settings.");
+    }
+    const t = await refreshEtsyToken(data.refreshToken);
+    accessToken = t.access_token;
+    await ref.update({
+      accessToken: t.access_token,
+      refreshToken: t.refresh_token ?? data.refreshToken,
+      tokenExpiresAt: Date.now() + (t.expires_in ?? 3600) * 1000,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
   }
 
-  // Token expired or expiring soon — Etsy doesn't provide refresh tokens in standard OAuth
-  // User must re-authorize
-  throw new Error("Etsy token expired. Please reconnect your Etsy account.");
+  let shopId = data.shopId ? String(data.shopId) : null;
+  if (!shopId) {
+    // The Etsy user id is the prefix of the access token ("<userId>.<random>").
+    const etsyUserId = accessToken.split(".")[0];
+    const res = await fetch(`https://openapi.etsy.com/v3/application/users/${etsyUserId}/shops`, {
+      headers: { "x-api-key": clientId, Authorization: `Bearer ${accessToken}` },
+    });
+    if (res.ok) {
+      const shop = (await res.json()).results?.[0];
+      if (shop) {
+        shopId = String(shop.shop_id);
+        await ref.update({ shopId, shopName: shop.shop_name ?? data.shopName ?? null });
+      }
+    }
+  }
+  if (!shopId) {
+    throw new HttpsError(
+      "failed-precondition",
+      "No Etsy seller shop found. Make sure your shop is open (etsy.com/sell) and reconnect Etsy.",
+    );
+  }
+  return { accessToken, shopId, clientId };
 }
 
 // Etsy v3 requires the app's keystring as `x-api-key` on every call.
@@ -114,4 +190,10 @@ async function getEtsyClientId() {
   return _etsyClientId;
 }
 
-module.exports = { etsyExchangeToken: exports.etsyExchangeToken, getValidEtsyToken, getEtsyClientId };
+module.exports = {
+  etsyExchangeToken: exports.etsyExchangeToken,
+  getValidEtsyToken,
+  getActiveEtsyToken,
+  refreshEtsyToken,
+  getEtsyClientId,
+};
