@@ -1,0 +1,83 @@
+{
+  "manifest_version": 3,
+  "name": "Wonni Drop",
+  "version": "1.0.0",
+  "description": "Import Weverse Shop and AliExpress products to Wonni Drop with one click.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://www.aliexpress.com/*",
+    "https://aliexpress.com/*",
+    "https://us.aliexpress.com/*",
+    "https://shop.weverse.io/*",
+    "https://www.mercari.com/*",
+    "https://mercari.com/*",
+    "https://storage.googleapis.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.aliexpress.com/item/*",
+        "https://aliexpress.com/item/*",
+        "https://us.aliexpress.com/item/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://shop.weverse.io/*"],
+      "js": ["weverse_content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.mercari.com/sell/*", "https://mercari.com/sell/*"],
+      "js": ["mercari_content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.mercari.com/mypage/listings/in_progress*", "https://mercari.com/mypage/listings/in_progress*"],
+      "js": ["mercari_sold_content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.mercari.com/us/item/m*", "https://mercari.com/us/item/m*"],
+      "js": ["mercari_pull_sync_content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "externally_connectable": {
+    "matches": [
+      "https://wonni-app.web.app/*",
+      "http://localhost:5173/*",
+      "http://localhost:5174/*",
+      "http://localhost:5175/*",
+      "http://localhost:5176/*"
+    ]
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["popup.html", "popup.js", "icons/icon16.png", "icons/icon48.png", "icons/icon128.png"],
+      "matches": ["https://shop.weverse.io/*"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

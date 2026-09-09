@@ -1,26 +1,44 @@
 {
   "hosting": {
-    "public": "/Users/jerryshi/Documents/GitHub/wonni_dropship/public",
+    "public": "public",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [
       { "source": "/privacy", "destination": "/privacy/index.html" },
+      { "source": "/privacy-policy", "destination": "/privacy-policy/index.html" },
+      { "source": "/oauth/aliexpress", "destination": "/oauth/aliexpress/index.html" },
+      { "source": "/oauth/tiktok", "destination": "/oauth/tiktok/index.html" },
+      { "source": "/oauth/ebay", "destination": "/oauth/ebay/index.html" },
+      { "source": "/oauth/etsy", "destination": "/oauth/etsy/index.html" },
       { "source": "/web/oauth/aliexpress", "destination": "/oauth/aliexpress/index.html" },
       { "source": "/web/oauth/tiktok", "destination": "/oauth/tiktok/index.html" },
       { "source": "/web/oauth/ebay", "destination": "/oauth/ebay/index.html" },
       { "source": "/web/oauth/etsy", "destination": "/oauth/etsy/index.html" },
-      { "source": "/web/**", "destination": "/index.html" }
+      { "source": "/sell/oauth/aliexpress", "destination": "/oauth/aliexpress/index.html" },
+      { "source": "/sell/oauth/tiktok", "destination": "/oauth/tiktok/index.html" },
+      { "source": "/sell/oauth/ebay", "destination": "/oauth/ebay/index.html" },
+      { "source": "/sell/oauth/etsy", "destination": "/oauth/etsy/index.html" },
+      { "source": "**", "destination": "/index.html" }
     ]
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
   },
   "functions": [
     {
       "source": "functions",
       "codebase": "default",
-      "ignore": [
-        "node_modules",
-        ".git",
-        "firebase-debug.log",
-        "**/node_modules/**"
-      ]
+      "ignore": ["node_modules", ".git", "firebase-debug.log", "**/node_modules/**"]
     }
-  ]
+  ],
+  "emulators": {
+    "auth": { "port": 9099 },
+    "firestore": { "port": 8080 },
+    "storage": { "port": 9199 },
+    "ui": { "enabled": true, "port": 4000 },
+    "singleProjectMode": true
+  }
 }
