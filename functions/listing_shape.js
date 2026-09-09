@@ -153,10 +153,118 @@ function toListingFields({
   };
 }
 
+// ── listings/{id} (UserListing) → products/{id} — one-shot migration mapper ──
+// (BACKEND.md step 7 — retire the iOS per-user `listings/{uuid}` model). Pure;
+// unit-tested. The Cloud Functions runtime never calls this — only
+// scripts/migrate_listings_to_products.js does.
+
+// iOS ListingStatus / crossPostStatus "posted" → canonical values.
+const CROSSPOST_STATUS_MAP = { posted: "active", active: "active", failed: "failed", draft: "draft", inactive: "inactive", sold: "sold" };
+function normalizeCrossPostStatus(map) {
+  const out = {};
+  for (const [k, v] of Object.entries(map || {})) {
+    if (v == null) continue;
+    out[k] = CROSSPOST_STATUS_MAP[String(v).toLowerCase()] || String(v);
+  }
+  return out;
+}
+
+// iOS ItemCondition (7-value) / keyword → canonical new|likenew|good|fair|poor.
+const CONDITION_MAP = {
+  new: "new", newwithtags: "new", newwithouttags: "new", sealed: "new",
+  likenew: "likenew", like_new: "likenew", mint: "likenew",
+  good: "good", used: "good", preowned: "good",
+  fair: "fair", poor: "poor", forparts: "poor", for_parts: "poor",
+};
+function normalizeCondition(raw) {
+  if (typeof raw !== "string") return null;
+  return CONDITION_MAP[raw.toLowerCase().replace(/[\s-]/g, "")] || null;
+}
+
+/**
+ * Build the `products/{id}` doc for a `listings/{id}` (UserListing). `id` is
+ * reused verbatim so the marketplace `listings/{id}` doc and everything keyed
+ * off it (Sale.listingId, eBay SKU `wonni_${id}`) still line up.
+ * Returns a plain object — the script stamps server timestamps + merges.
+ */
+function listingDocToProduct(listing, id) {
+  const status = listing.status || "active";           // "active" | "sold" | "draft"
+  const isDraft = status === "draft";
+  const variations = Array.isArray(listing.variations) ? listing.variations : [];
+  const ship = listing.shippingInfo || {};
+  const dims = ship.packageDimensions || {};
+
+  const crossPostStatus = normalizeCrossPostStatus(listing.crossPostStatus);
+  const crossPostListingIds = { ...(listing.crossPostListingIds || {}) };
+  // The listing IS the live Wonni marketplace entry.
+  if (!isDraft) {
+    crossPostStatus.wonni = status === "sold" ? "sold" : "active";
+    crossPostListingIds.wonni = id;
+  }
+
+  return {
+    userId: listing.userId,
+    source: "ios-listing",
+    sourceId: id,
+
+    title: listing.customTitle || "",
+    description: listing.customDescription || "",
+    category: listing.category || null,
+    brand: listing.brand || null,
+    condition: normalizeCondition(listing.condition) || "good",
+    saleStatus: status === "sold" ? "sold" : "active",
+    isDraft,
+
+    listingPrice: typeof listing.price === "number" ? listing.price : null,
+    quantity: typeof listing.quantity === "number" ? listing.quantity : 1,
+
+    images: Array.isArray(listing.photoPaths) ? listing.photoPaths : [],
+    options: Array.isArray(listing.options) ? listing.options : [],
+    variants: variations.map((v) => {
+      const mapped = variationToVariant(v);
+      return {
+        id: mapped.id,
+        optionValues: mapped.optionValues,
+        sku: mapped.sku,
+        price: mapped.price,
+        quantity: typeof mapped.quantity === "number" ? mapped.quantity : 1,
+        active: true,
+        crossPostStatus: normalizeCrossPostStatus(v.crossPostStatus),
+        crossPostListingIds: { ...(v.crossPostListingIds || {}) },
+      };
+    }),
+
+    crossPostStatus,
+    crossPostListingIds,
+
+    // Flat shipping fields (dropship product shape — read by
+    // ebayPackageWeightAndSize / listing_shape.toShippingInfo).
+    ...(typeof ship.weightLbs === "number" && ship.weightLbs > 0 ? { weightLbs: ship.weightLbs } : {}),
+    ...(typeof ship.handlingFee === "number" ? { handlingFee: ship.handlingFee } : {}),
+    ...(typeof ship.estimatedShippingDays === "number" ? { estimatedShippingDays: ship.estimatedShippingDays } : {}),
+    ...(typeof ship.buyerPaysShipping === "boolean" ? { buyerPaysShipping: ship.buyerPaysShipping } : {}),
+    ...(typeof dims.lengthIn === "number" ? { lengthIn: dims.lengthIn } : {}),
+    ...(typeof dims.widthIn === "number" ? { widthIn: dims.widthIn } : {}),
+    ...(typeof dims.heightIn === "number" ? { heightIn: dims.heightIn } : {}),
+
+    ...(Array.isArray(listing.tags) && listing.tags.length ? { tags: listing.tags } : {}),
+    ...(listing.personalNote ? { personalNote: listing.personalNote } : {}),
+    ...(listing.pendingMercariDeactivation ? { pendingMercariDeactivation: true } : {}),
+    ...(listing.pendingMercariRelist ? { pendingMercariRelist: true } : {}),
+    ...(listing.aiSuggestedTitle ? { aiSuggestedTitle: listing.aiSuggestedTitle } : {}),
+    ...(listing.aiSuggestedDescription ? { aiSuggestedDescription: listing.aiSuggestedDescription } : {}),
+
+    migratedFromListing: true,
+  };
+}
+
 module.exports = {
   optionValuesToAttributes,
   attributesToOptionValues,
   variantToVariation,
   variationToVariant,
   toListingFields,
+  listingDocToProduct,
+  normalizeCondition,
+  normalizeCrossPostStatus,
 };
