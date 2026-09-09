@@ -24,7 +24,7 @@ const { validated } = require("./contracts");
 const {
   ebayRequest, hasOrderReadScopes, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET,
 } = require("./ebay_auth");
-const { getEtsyClientId } = require("./etsy_auth");
+const { getActiveEtsyToken } = require("./etsy_auth");
 const { variantSkuFor } = require("./ebay_listing");
 const { _internal } = require("./sales");
 
@@ -275,20 +275,17 @@ async function syncEbay(db, uid, productDocs, productById, sinceMs) {
 
 async function syncEtsy(db, uid, productDocs, productById, sinceMs) {
   const integ = (await db.doc(`users/${uid}/integrations/etsy`).get()).data();
-  if (!integ?.isConnected || !integ.shopId) return { imported: 0, skipped: 0, saleIds: [] };
-  // Canonical etsy_auth has no refresh-token path yet — use the stored token
-  // while it's valid and ask the user to reconnect otherwise (matches
-  // getValidEtsyToken). Etsy refresh is a separate pre-existing gap.
-  if (!integ.accessToken || (integ.tokenExpiresAt ?? 0) - Date.now() < 5 * 60 * 1000) {
-    throw new Error("Etsy token expired — reconnect Etsy in Settings.");
-  }
+  if (!integ?.isConnected) return { imported: 0, skipped: 0, saleIds: [] };
+  // getActiveEtsyToken refreshes the token (added with the Etsy CRUD port) and
+  // recovers a missing shopId; throws failed-precondition -> caught as an error.
+  const { accessToken, shopId, clientId } = await getActiveEtsyToken(uid);
+  const etsyAuth = { accessToken, shopId, clientId };
 
   const listingMap = buildEtsyListingMap(productDocs);
-  const clientId = await getEtsyClientId();
   const minCreated = Math.floor(sinceMs / 1000);
   const receiptsRes = await fetch(
-    `https://openapi.etsy.com/v3/application/shops/${integ.shopId}/receipts?was_paid=true&min_created=${minCreated}&limit=100`,
-    { headers: { "x-api-key": clientId, Authorization: `Bearer ${integ.accessToken}` } },
+    `https://openapi.etsy.com/v3/application/shops/${shopId}/receipts?was_paid=true&min_created=${minCreated}&limit=100`,
+    { headers: { "x-api-key": clientId, Authorization: `Bearer ${accessToken}` } },
   );
   if (!receiptsRes.ok) throw new Error(`Etsy receipts ${receiptsRes.status}`);
   const receipts = (await receiptsRes.json()).results ?? [];
@@ -300,7 +297,7 @@ async function syncEtsy(db, uid, productDocs, productById, sinceMs) {
   for (const receipt of receipts) {
     const etsyListingId = receipt.transactions?.[0]?.listing_id;
     const match = etsyListingId != null ? listingMap.get(String(etsyListingId)) : null;
-    const takeHome = await etsyReceiptTakeHome(integ, clientId, receipt.receipt_id).catch(() => null);
+    const takeHome = await etsyReceiptTakeHome(etsyAuth, receipt.receipt_id).catch(() => null);
     const fields = etsyReceiptToSaleFields(receipt, match, takeHome);
     const { saleId, created } = await recordSaleCore(
       db, uid, fields, match ? productById.get(match.productId) ?? null : null,
@@ -315,10 +312,10 @@ async function syncEtsy(db, uid, productDocs, productById, sinceMs) {
   return { imported, skipped, saleIds };
 }
 
-async function etsyReceiptTakeHome(integ, clientId, receiptId) {
+async function etsyReceiptTakeHome({ shopId, accessToken, clientId }, receiptId) {
   const res = await fetch(
-    `https://openapi.etsy.com/v3/application/shops/${integ.shopId}/payments?receipt_id=${encodeURIComponent(receiptId)}`,
-    { headers: { "x-api-key": clientId, Authorization: `Bearer ${integ.accessToken}` } },
+    `https://openapi.etsy.com/v3/application/shops/${shopId}/payments?receipt_id=${encodeURIComponent(receiptId)}`,
+    { headers: { "x-api-key": clientId, Authorization: `Bearer ${accessToken}` } },
   );
   if (!res.ok) return null;
   let net = 0;
@@ -387,12 +384,7 @@ exports.getOrderTakeHome = onCall(
       const f = await ebayFetchFinance(uid, sale.platformOrderId);
       if (f) out = { takeHome: f.takeHome, fees: f.fees, shippingLabelCost: f.labelCost, provisional: false };
     } else if (sale.platform === "etsy") {
-      const integ = (await db.doc(`users/${uid}/integrations/etsy`).get()).data();
-      if (!integ?.shopId || !integ.accessToken) {
-        throw new HttpsError("failed-precondition", "Etsy account not connected.");
-      }
-      const clientId = await getEtsyClientId();
-      const takeHome = await etsyReceiptTakeHome(integ, clientId, sale.platformOrderId);
+      const takeHome = await etsyReceiptTakeHome(await getActiveEtsyToken(uid), sale.platformOrderId);
       out = { takeHome, fees: null, shippingLabelCost: null, provisional: takeHome == null };
     } else {
       throw new HttpsError("failed-precondition", `Take-home is not available for ${sale.platform}.`);

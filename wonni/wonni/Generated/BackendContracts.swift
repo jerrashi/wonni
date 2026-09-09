@@ -28,6 +28,24 @@ struct BackendContracts: Codable, Sendable {
     let ebayUpdateListingResponse: EbayUpdateListingResponse?
     let enrichListingRequest: EnrichListingRequest?
     let enrichListingResponse: EnrichListingResponse?
+    let etsyCheckShopSetupRequest: EtsyCheckShopSetupRequest?
+    let etsyCheckShopSetupResponse: EtsyCheckShopSetupResponse?
+    let etsyCreateListingRequest: EtsyCreateListingRequest?
+    let etsyCreateListingResponse: EtsyCreateListingResponse?
+    let etsyDeleteListingRequest: EtsyDeleteListingRequest?
+    let etsyDeleteListingResponse: EtsyDeleteListingResponse?
+    let etsyImportPullSyncRequest: EtsyImportPullSyncRequest?
+    let etsyImportPullSyncResponse: EtsyImportPullSyncResponse?
+    let etsyPullSyncRequest: EtsyPullSyncRequest?
+    let etsyPullSyncResponse: EtsyPullSyncResponse?
+    let etsyUpdateListingRequest: EtsyUpdateListingRequest?
+    let etsyUpdateListingResponse: EtsyUpdateListingResponse?
+    let getEtsyCategoriesRequest: GetEtsyCategoriesRequest?
+    let getEtsyCategoriesResponse: GetEtsyCategoriesResponse?
+    let getEtsyReturnPoliciesRequest: GetEtsyReturnPoliciesRequest?
+    let getEtsyReturnPoliciesResponse: GetEtsyReturnPoliciesResponse?
+    let getEtsyShippingProfilesRequest: GetEtsyShippingProfilesRequest?
+    let getEtsyShippingProfilesResponse: GetEtsyShippingProfilesResponse?
     let getOrderTakeHomeRequest: GetOrderTakeHomeRequest?
     let getOrderTakeHomeResponse: GetOrderTakeHomeResponse?
     let importMercariPullSyncRequest: ImportMercariPullSyncRequest?
@@ -43,6 +61,8 @@ struct BackendContracts: Codable, Sendable {
     let restockAndCascadeRequest: RestockAndCascadeRequest?
     let restockAndCascadeResponse: RestockAndCascadeResponse?
     let saleDoc: SaleDoc?
+    let suggestEtsyCategoryRequest: SuggestEtsyCategoryRequest?
+    let suggestEtsyCategoryResponse: SuggestEtsyCategoryResponse?
     let syncSalesRequest: SyncSalesRequest?
     let syncSalesResponse: SyncSalesResponse?
     let updateMercariListingStatusRequest: UpdateMercariListingStatusRequest?
@@ -69,6 +89,24 @@ struct BackendContracts: Codable, Sendable {
         case ebayUpdateListingResponse = "EbayUpdateListingResponse"
         case enrichListingRequest = "EnrichListingRequest"
         case enrichListingResponse = "EnrichListingResponse"
+        case etsyCheckShopSetupRequest = "EtsyCheckShopSetupRequest"
+        case etsyCheckShopSetupResponse = "EtsyCheckShopSetupResponse"
+        case etsyCreateListingRequest = "EtsyCreateListingRequest"
+        case etsyCreateListingResponse = "EtsyCreateListingResponse"
+        case etsyDeleteListingRequest = "EtsyDeleteListingRequest"
+        case etsyDeleteListingResponse = "EtsyDeleteListingResponse"
+        case etsyImportPullSyncRequest = "EtsyImportPullSyncRequest"
+        case etsyImportPullSyncResponse = "EtsyImportPullSyncResponse"
+        case etsyPullSyncRequest = "EtsyPullSyncRequest"
+        case etsyPullSyncResponse = "EtsyPullSyncResponse"
+        case etsyUpdateListingRequest = "EtsyUpdateListingRequest"
+        case etsyUpdateListingResponse = "EtsyUpdateListingResponse"
+        case getEtsyCategoriesRequest = "GetEtsyCategoriesRequest"
+        case getEtsyCategoriesResponse = "GetEtsyCategoriesResponse"
+        case getEtsyReturnPoliciesRequest = "GetEtsyReturnPoliciesRequest"
+        case getEtsyReturnPoliciesResponse = "GetEtsyReturnPoliciesResponse"
+        case getEtsyShippingProfilesRequest = "GetEtsyShippingProfilesRequest"
+        case getEtsyShippingProfilesResponse = "GetEtsyShippingProfilesResponse"
         case getOrderTakeHomeRequest = "GetOrderTakeHomeRequest"
         case getOrderTakeHomeResponse = "GetOrderTakeHomeResponse"
         case importMercariPullSyncRequest = "ImportMercariPullSyncRequest"
@@ -84,6 +122,8 @@ struct BackendContracts: Codable, Sendable {
         case restockAndCascadeRequest = "RestockAndCascadeRequest"
         case restockAndCascadeResponse = "RestockAndCascadeResponse"
         case saleDoc = "SaleDoc"
+        case suggestEtsyCategoryRequest = "SuggestEtsyCategoryRequest"
+        case suggestEtsyCategoryResponse = "SuggestEtsyCategoryResponse"
         case syncSalesRequest = "SyncSalesRequest"
         case syncSalesResponse = "SyncSalesResponse"
         case updateMercariListingStatusRequest = "UpdateMercariListingStatusRequest"
@@ -130,6 +170,24 @@ extension BackendContracts {
         ebayUpdateListingResponse: EbayUpdateListingResponse?? = nil,
         enrichListingRequest: EnrichListingRequest?? = nil,
         enrichListingResponse: EnrichListingResponse?? = nil,
+        etsyCheckShopSetupRequest: EtsyCheckShopSetupRequest?? = nil,
+        etsyCheckShopSetupResponse: EtsyCheckShopSetupResponse?? = nil,
+        etsyCreateListingRequest: EtsyCreateListingRequest?? = nil,
+        etsyCreateListingResponse: EtsyCreateListingResponse?? = nil,
+        etsyDeleteListingRequest: EtsyDeleteListingRequest?? = nil,
+        etsyDeleteListingResponse: EtsyDeleteListingResponse?? = nil,
+        etsyImportPullSyncRequest: EtsyImportPullSyncRequest?? = nil,
+        etsyImportPullSyncResponse: EtsyImportPullSyncResponse?? = nil,
+        etsyPullSyncRequest: EtsyPullSyncRequest?? = nil,
+        etsyPullSyncResponse: EtsyPullSyncResponse?? = nil,
+        etsyUpdateListingRequest: EtsyUpdateListingRequest?? = nil,
+        etsyUpdateListingResponse: EtsyUpdateListingResponse?? = nil,
+        getEtsyCategoriesRequest: GetEtsyCategoriesRequest?? = nil,
+        getEtsyCategoriesResponse: GetEtsyCategoriesResponse?? = nil,
+        getEtsyReturnPoliciesRequest: GetEtsyReturnPoliciesRequest?? = nil,
+        getEtsyReturnPoliciesResponse: GetEtsyReturnPoliciesResponse?? = nil,
+        getEtsyShippingProfilesRequest: GetEtsyShippingProfilesRequest?? = nil,
+        getEtsyShippingProfilesResponse: GetEtsyShippingProfilesResponse?? = nil,
         getOrderTakeHomeRequest: GetOrderTakeHomeRequest?? = nil,
         getOrderTakeHomeResponse: GetOrderTakeHomeResponse?? = nil,
         importMercariPullSyncRequest: ImportMercariPullSyncRequest?? = nil,
@@ -145,6 +203,8 @@ extension BackendContracts {
         restockAndCascadeRequest: RestockAndCascadeRequest?? = nil,
         restockAndCascadeResponse: RestockAndCascadeResponse?? = nil,
         saleDoc: SaleDoc?? = nil,
+        suggestEtsyCategoryRequest: SuggestEtsyCategoryRequest?? = nil,
+        suggestEtsyCategoryResponse: SuggestEtsyCategoryResponse?? = nil,
         syncSalesRequest: SyncSalesRequest?? = nil,
         syncSalesResponse: SyncSalesResponse?? = nil,
         updateMercariListingStatusRequest: UpdateMercariListingStatusRequest?? = nil,
@@ -171,6 +231,24 @@ extension BackendContracts {
             ebayUpdateListingResponse: ebayUpdateListingResponse ?? self.ebayUpdateListingResponse,
             enrichListingRequest: enrichListingRequest ?? self.enrichListingRequest,
             enrichListingResponse: enrichListingResponse ?? self.enrichListingResponse,
+            etsyCheckShopSetupRequest: etsyCheckShopSetupRequest ?? self.etsyCheckShopSetupRequest,
+            etsyCheckShopSetupResponse: etsyCheckShopSetupResponse ?? self.etsyCheckShopSetupResponse,
+            etsyCreateListingRequest: etsyCreateListingRequest ?? self.etsyCreateListingRequest,
+            etsyCreateListingResponse: etsyCreateListingResponse ?? self.etsyCreateListingResponse,
+            etsyDeleteListingRequest: etsyDeleteListingRequest ?? self.etsyDeleteListingRequest,
+            etsyDeleteListingResponse: etsyDeleteListingResponse ?? self.etsyDeleteListingResponse,
+            etsyImportPullSyncRequest: etsyImportPullSyncRequest ?? self.etsyImportPullSyncRequest,
+            etsyImportPullSyncResponse: etsyImportPullSyncResponse ?? self.etsyImportPullSyncResponse,
+            etsyPullSyncRequest: etsyPullSyncRequest ?? self.etsyPullSyncRequest,
+            etsyPullSyncResponse: etsyPullSyncResponse ?? self.etsyPullSyncResponse,
+            etsyUpdateListingRequest: etsyUpdateListingRequest ?? self.etsyUpdateListingRequest,
+            etsyUpdateListingResponse: etsyUpdateListingResponse ?? self.etsyUpdateListingResponse,
+            getEtsyCategoriesRequest: getEtsyCategoriesRequest ?? self.getEtsyCategoriesRequest,
+            getEtsyCategoriesResponse: getEtsyCategoriesResponse ?? self.getEtsyCategoriesResponse,
+            getEtsyReturnPoliciesRequest: getEtsyReturnPoliciesRequest ?? self.getEtsyReturnPoliciesRequest,
+            getEtsyReturnPoliciesResponse: getEtsyReturnPoliciesResponse ?? self.getEtsyReturnPoliciesResponse,
+            getEtsyShippingProfilesRequest: getEtsyShippingProfilesRequest ?? self.getEtsyShippingProfilesRequest,
+            getEtsyShippingProfilesResponse: getEtsyShippingProfilesResponse ?? self.getEtsyShippingProfilesResponse,
             getOrderTakeHomeRequest: getOrderTakeHomeRequest ?? self.getOrderTakeHomeRequest,
             getOrderTakeHomeResponse: getOrderTakeHomeResponse ?? self.getOrderTakeHomeResponse,
             importMercariPullSyncRequest: importMercariPullSyncRequest ?? self.importMercariPullSyncRequest,
@@ -186,6 +264,8 @@ extension BackendContracts {
             restockAndCascadeRequest: restockAndCascadeRequest ?? self.restockAndCascadeRequest,
             restockAndCascadeResponse: restockAndCascadeResponse ?? self.restockAndCascadeResponse,
             saleDoc: saleDoc ?? self.saleDoc,
+            suggestEtsyCategoryRequest: suggestEtsyCategoryRequest ?? self.suggestEtsyCategoryRequest,
+            suggestEtsyCategoryResponse: suggestEtsyCategoryResponse ?? self.suggestEtsyCategoryResponse,
             syncSalesRequest: syncSalesRequest ?? self.syncSalesRequest,
             syncSalesResponse: syncSalesResponse ?? self.syncSalesResponse,
             updateMercariListingStatusRequest: updateMercariListingStatusRequest ?? self.updateMercariListingStatusRequest,
@@ -600,7 +680,7 @@ enum Field: String, Codable, Sendable {
 
 // MARK: - EbayApplyDriftRequest
 struct EbayApplyDriftRequest: Codable, Sendable {
-    let fields: Fields
+    let fields: EbayApplyDriftRequestFields
     let productId: String
 
     enum CodingKeys: String, CodingKey {
@@ -628,7 +708,7 @@ extension EbayApplyDriftRequest {
     }
 
     func with(
-        fields: Fields? = nil,
+        fields: EbayApplyDriftRequestFields? = nil,
         productId: String? = nil
     ) -> EbayApplyDriftRequest {
         return EbayApplyDriftRequest(
@@ -646,8 +726,8 @@ extension EbayApplyDriftRequest {
     }
 }
 
-// MARK: - Fields
-struct Fields: Codable, Sendable {
+// MARK: - EbayApplyDriftRequestFields
+struct EbayApplyDriftRequestFields: Codable, Sendable {
     let price: Double?
     let quantity: Int?
     let title: String?
@@ -659,11 +739,11 @@ struct Fields: Codable, Sendable {
     }
 }
 
-// MARK: Fields convenience initializers and mutators
+// MARK: EbayApplyDriftRequestFields convenience initializers and mutators
 
-extension Fields {
+extension EbayApplyDriftRequestFields {
     init(data: Data) throws {
-        self = try newJSONDecoder().decode(Fields.self, from: data)
+        self = try newJSONDecoder().decode(EbayApplyDriftRequestFields.self, from: data)
     }
 
     init(_ json: String, using encoding: String.Encoding = .utf8) throws {
@@ -681,8 +761,8 @@ extension Fields {
         price: Double?? = nil,
         quantity: Int?? = nil,
         title: String?? = nil
-    ) -> Fields {
-        return Fields(
+    ) -> EbayApplyDriftRequestFields {
+        return EbayApplyDriftRequestFields(
             price: price ?? self.price,
             quantity: quantity ?? self.quantity,
             title: title ?? self.title
@@ -795,7 +875,7 @@ struct EbayCheckDriftResponse: Codable, Sendable {
     let diff: [EbayCheckDriftResponseDiff]
     let ebayData: EbayData
     let hasDrift: Bool
-    let wonniData: WonniData
+    let wonniData: EbayCheckDriftResponseWonniData
 
     enum CodingKeys: String, CodingKey {
         case diff = "diff"
@@ -827,7 +907,7 @@ extension EbayCheckDriftResponse {
         diff: [EbayCheckDriftResponseDiff]? = nil,
         ebayData: EbayData? = nil,
         hasDrift: Bool? = nil,
-        wonniData: WonniData? = nil
+        wonniData: EbayCheckDriftResponseWonniData? = nil
     ) -> EbayCheckDriftResponse {
         return EbayCheckDriftResponse(
             diff: diff ?? self.diff,
@@ -1000,8 +1080,8 @@ extension EbayData {
     }
 }
 
-// MARK: - WonniData
-struct WonniData: Codable, Sendable {
+// MARK: - EbayCheckDriftResponseWonniData
+struct EbayCheckDriftResponseWonniData: Codable, Sendable {
     let price: Double
     let quantity: Double
     let status: String
@@ -1015,11 +1095,11 @@ struct WonniData: Codable, Sendable {
     }
 }
 
-// MARK: WonniData convenience initializers and mutators
+// MARK: EbayCheckDriftResponseWonniData convenience initializers and mutators
 
-extension WonniData {
+extension EbayCheckDriftResponseWonniData {
     init(data: Data) throws {
-        self = try newJSONDecoder().decode(WonniData.self, from: data)
+        self = try newJSONDecoder().decode(EbayCheckDriftResponseWonniData.self, from: data)
     }
 
     init(_ json: String, using encoding: String.Encoding = .utf8) throws {
@@ -1038,8 +1118,8 @@ extension WonniData {
         quantity: Double? = nil,
         status: String? = nil,
         title: String? = nil
-    ) -> WonniData {
-        return WonniData(
+    ) -> EbayCheckDriftResponseWonniData {
+        return EbayCheckDriftResponseWonniData(
             price: price ?? self.price,
             quantity: quantity ?? self.quantity,
             status: status ?? self.status,
@@ -2053,6 +2133,1261 @@ extension Writes {
             title: title ?? self.title,
             weightOz: weightOz ?? self.weightOz,
             widthIn: widthIn ?? self.widthIn
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - EtsyCheckShopSetupRequest
+struct EtsyCheckShopSetupRequest: Codable, Sendable {
+    let credentialSet: String?
+
+    enum CodingKeys: String, CodingKey {
+        case credentialSet = "credentialSet"
+    }
+}
+
+// MARK: EtsyCheckShopSetupRequest convenience initializers and mutators
+
+extension EtsyCheckShopSetupRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(EtsyCheckShopSetupRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        credentialSet: String?? = nil
+    ) -> EtsyCheckShopSetupRequest {
+        return EtsyCheckShopSetupRequest(
+            credentialSet: credentialSet ?? self.credentialSet
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - EtsyCheckShopSetupResponse
+struct EtsyCheckShopSetupResponse: Codable, Sendable {
+    let hasReturnPolicy: Bool
+    let hasShippingProfile: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case hasReturnPolicy = "hasReturnPolicy"
+        case hasShippingProfile = "hasShippingProfile"
+    }
+}
+
+// MARK: EtsyCheckShopSetupResponse convenience initializers and mutators
+
+extension EtsyCheckShopSetupResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(EtsyCheckShopSetupResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        hasReturnPolicy: Bool? = nil,
+        hasShippingProfile: Bool? = nil
+    ) -> EtsyCheckShopSetupResponse {
+        return EtsyCheckShopSetupResponse(
+            hasReturnPolicy: hasReturnPolicy ?? self.hasReturnPolicy,
+            hasShippingProfile: hasShippingProfile ?? self.hasShippingProfile
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - EtsyCreateListingRequest
+struct EtsyCreateListingRequest: Codable, Sendable {
+    let credentialSet: String?
+    let productId: String
+    let returnPolicyId: ReturnPolicyId?
+    let shippingProfileId: ReturnPolicyId?
+    let taxonomyId: ReturnPolicyId?
+
+    enum CodingKeys: String, CodingKey {
+        case credentialSet = "credentialSet"
+        case productId = "productId"
+        case returnPolicyId = "returnPolicyId"
+        case shippingProfileId = "shippingProfileId"
+        case taxonomyId = "taxonomyId"
+    }
+}
+
+// MARK: EtsyCreateListingRequest convenience initializers and mutators
+
+extension EtsyCreateListingRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(EtsyCreateListingRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        credentialSet: String?? = nil,
+        productId: String? = nil,
+        returnPolicyId: ReturnPolicyId?? = nil,
+        shippingProfileId: ReturnPolicyId?? = nil,
+        taxonomyId: ReturnPolicyId?? = nil
+    ) -> EtsyCreateListingRequest {
+        return EtsyCreateListingRequest(
+            credentialSet: credentialSet ?? self.credentialSet,
+            productId: productId ?? self.productId,
+            returnPolicyId: returnPolicyId ?? self.returnPolicyId,
+            shippingProfileId: shippingProfileId ?? self.shippingProfileId,
+            taxonomyId: taxonomyId ?? self.taxonomyId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+enum ReturnPolicyId: Codable, Sendable {
+    case double(Double)
+    case string(String)
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let x = try? container.decode(Double.self) {
+            self = .double(x)
+            return
+        }
+        if let x = try? container.decode(String.self) {
+            self = .string(x)
+            return
+        }
+        if container.decodeNil() {
+            self = .null
+            return
+        }
+        throw DecodingError.typeMismatch(ReturnPolicyId.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Wrong type for ReturnPolicyId"))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .double(let x):
+            try container.encode(x)
+        case .string(let x):
+            try container.encode(x)
+        case .null:
+            try container.encodeNil()
+        }
+    }
+}
+
+// MARK: - EtsyCreateListingResponse
+struct EtsyCreateListingResponse: Codable, Sendable {
+    let listingId: String
+    let success: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case listingId = "listingId"
+        case success = "success"
+    }
+}
+
+// MARK: EtsyCreateListingResponse convenience initializers and mutators
+
+extension EtsyCreateListingResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(EtsyCreateListingResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        listingId: String? = nil,
+        success: Bool? = nil
+    ) -> EtsyCreateListingResponse {
+        return EtsyCreateListingResponse(
+            listingId: listingId ?? self.listingId,
+            success: success ?? self.success
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - EtsyDeleteListingRequest
+struct EtsyDeleteListingRequest: Codable, Sendable {
+    let credentialSet: String?
+    let productId: String
+
+    enum CodingKeys: String, CodingKey {
+        case credentialSet = "credentialSet"
+        case productId = "productId"
+    }
+}
+
+// MARK: EtsyDeleteListingRequest convenience initializers and mutators
+
+extension EtsyDeleteListingRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(EtsyDeleteListingRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        credentialSet: String?? = nil,
+        productId: String? = nil
+    ) -> EtsyDeleteListingRequest {
+        return EtsyDeleteListingRequest(
+            credentialSet: credentialSet ?? self.credentialSet,
+            productId: productId ?? self.productId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - EtsyDeleteListingResponse
+struct EtsyDeleteListingResponse: Codable, Sendable {
+    let success: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case success = "success"
+    }
+}
+
+// MARK: EtsyDeleteListingResponse convenience initializers and mutators
+
+extension EtsyDeleteListingResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(EtsyDeleteListingResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        success: Bool? = nil
+    ) -> EtsyDeleteListingResponse {
+        return EtsyDeleteListingResponse(
+            success: success ?? self.success
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - EtsyImportPullSyncRequest
+struct EtsyImportPullSyncRequest: Codable, Sendable {
+    let credentialSet: String?
+    let fields: EtsyImportPullSyncRequestFields
+    let productId: String
+
+    enum CodingKeys: String, CodingKey {
+        case credentialSet = "credentialSet"
+        case fields = "fields"
+        case productId = "productId"
+    }
+}
+
+// MARK: EtsyImportPullSyncRequest convenience initializers and mutators
+
+extension EtsyImportPullSyncRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(EtsyImportPullSyncRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        credentialSet: String?? = nil,
+        fields: EtsyImportPullSyncRequestFields? = nil,
+        productId: String? = nil
+    ) -> EtsyImportPullSyncRequest {
+        return EtsyImportPullSyncRequest(
+            credentialSet: credentialSet ?? self.credentialSet,
+            fields: fields ?? self.fields,
+            productId: productId ?? self.productId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - EtsyImportPullSyncRequestFields
+struct EtsyImportPullSyncRequestFields: Codable, Sendable {
+    let price: Double?
+    let quantity: Int?
+    let title: String?
+
+    enum CodingKeys: String, CodingKey {
+        case price = "price"
+        case quantity = "quantity"
+        case title = "title"
+    }
+}
+
+// MARK: EtsyImportPullSyncRequestFields convenience initializers and mutators
+
+extension EtsyImportPullSyncRequestFields {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(EtsyImportPullSyncRequestFields.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        price: Double?? = nil,
+        quantity: Int?? = nil,
+        title: String?? = nil
+    ) -> EtsyImportPullSyncRequestFields {
+        return EtsyImportPullSyncRequestFields(
+            price: price ?? self.price,
+            quantity: quantity ?? self.quantity,
+            title: title ?? self.title
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - EtsyImportPullSyncResponse
+struct EtsyImportPullSyncResponse: Codable, Sendable {
+    let success: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case success = "success"
+    }
+}
+
+// MARK: EtsyImportPullSyncResponse convenience initializers and mutators
+
+extension EtsyImportPullSyncResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(EtsyImportPullSyncResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        success: Bool? = nil
+    ) -> EtsyImportPullSyncResponse {
+        return EtsyImportPullSyncResponse(
+            success: success ?? self.success
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - EtsyPullSyncRequest
+struct EtsyPullSyncRequest: Codable, Sendable {
+    let credentialSet: String?
+    let productId: String
+
+    enum CodingKeys: String, CodingKey {
+        case credentialSet = "credentialSet"
+        case productId = "productId"
+    }
+}
+
+// MARK: EtsyPullSyncRequest convenience initializers and mutators
+
+extension EtsyPullSyncRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(EtsyPullSyncRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        credentialSet: String?? = nil,
+        productId: String? = nil
+    ) -> EtsyPullSyncRequest {
+        return EtsyPullSyncRequest(
+            credentialSet: credentialSet ?? self.credentialSet,
+            productId: productId ?? self.productId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - EtsyPullSyncResponse
+struct EtsyPullSyncResponse: Codable, Sendable {
+    let diff: [EtsyPullSyncResponseDiff]
+    let etsyData: EtsyData
+    let hasDrift: Bool
+    let wonniData: EtsyPullSyncResponseWonniData
+
+    enum CodingKeys: String, CodingKey {
+        case diff = "diff"
+        case etsyData = "etsyData"
+        case hasDrift = "hasDrift"
+        case wonniData = "wonniData"
+    }
+}
+
+// MARK: EtsyPullSyncResponse convenience initializers and mutators
+
+extension EtsyPullSyncResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(EtsyPullSyncResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        diff: [EtsyPullSyncResponseDiff]? = nil,
+        etsyData: EtsyData? = nil,
+        hasDrift: Bool? = nil,
+        wonniData: EtsyPullSyncResponseWonniData? = nil
+    ) -> EtsyPullSyncResponse {
+        return EtsyPullSyncResponse(
+            diff: diff ?? self.diff,
+            etsyData: etsyData ?? self.etsyData,
+            hasDrift: hasDrift ?? self.hasDrift,
+            wonniData: wonniData ?? self.wonniData
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - EtsyPullSyncResponseDiff
+struct EtsyPullSyncResponseDiff: Codable, Sendable {
+    let external: String
+    let field: String
+    let key: Key
+    let value: Value
+    let wonni: String
+
+    enum CodingKeys: String, CodingKey {
+        case external = "external"
+        case field = "field"
+        case key = "key"
+        case value = "value"
+        case wonni = "wonni"
+    }
+}
+
+// MARK: EtsyPullSyncResponseDiff convenience initializers and mutators
+
+extension EtsyPullSyncResponseDiff {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(EtsyPullSyncResponseDiff.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        external: String? = nil,
+        field: String? = nil,
+        key: Key? = nil,
+        value: Value? = nil,
+        wonni: String? = nil
+    ) -> EtsyPullSyncResponseDiff {
+        return EtsyPullSyncResponseDiff(
+            external: external ?? self.external,
+            field: field ?? self.field,
+            key: key ?? self.key,
+            value: value ?? self.value,
+            wonni: wonni ?? self.wonni
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - EtsyData
+struct EtsyData: Codable, Sendable {
+    let listingId: String
+    let price: Double?
+    let quantity: Double?
+    let status: String
+    let title: String?
+
+    enum CodingKeys: String, CodingKey {
+        case listingId = "listingId"
+        case price = "price"
+        case quantity = "quantity"
+        case status = "status"
+        case title = "title"
+    }
+}
+
+// MARK: EtsyData convenience initializers and mutators
+
+extension EtsyData {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(EtsyData.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        listingId: String? = nil,
+        price: Double?? = nil,
+        quantity: Double?? = nil,
+        status: String? = nil,
+        title: String?? = nil
+    ) -> EtsyData {
+        return EtsyData(
+            listingId: listingId ?? self.listingId,
+            price: price ?? self.price,
+            quantity: quantity ?? self.quantity,
+            status: status ?? self.status,
+            title: title ?? self.title
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - EtsyPullSyncResponseWonniData
+struct EtsyPullSyncResponseWonniData: Codable, Sendable {
+    let price: Double
+    let quantity: Double
+    let status: String
+    let title: String
+
+    enum CodingKeys: String, CodingKey {
+        case price = "price"
+        case quantity = "quantity"
+        case status = "status"
+        case title = "title"
+    }
+}
+
+// MARK: EtsyPullSyncResponseWonniData convenience initializers and mutators
+
+extension EtsyPullSyncResponseWonniData {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(EtsyPullSyncResponseWonniData.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        price: Double? = nil,
+        quantity: Double? = nil,
+        status: String? = nil,
+        title: String? = nil
+    ) -> EtsyPullSyncResponseWonniData {
+        return EtsyPullSyncResponseWonniData(
+            price: price ?? self.price,
+            quantity: quantity ?? self.quantity,
+            status: status ?? self.status,
+            title: title ?? self.title
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - EtsyUpdateListingRequest
+struct EtsyUpdateListingRequest: Codable, Sendable {
+    let credentialSet: String?
+    let productId: String
+
+    enum CodingKeys: String, CodingKey {
+        case credentialSet = "credentialSet"
+        case productId = "productId"
+    }
+}
+
+// MARK: EtsyUpdateListingRequest convenience initializers and mutators
+
+extension EtsyUpdateListingRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(EtsyUpdateListingRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        credentialSet: String?? = nil,
+        productId: String? = nil
+    ) -> EtsyUpdateListingRequest {
+        return EtsyUpdateListingRequest(
+            credentialSet: credentialSet ?? self.credentialSet,
+            productId: productId ?? self.productId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - EtsyUpdateListingResponse
+struct EtsyUpdateListingResponse: Codable, Sendable {
+    let success: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case success = "success"
+    }
+}
+
+// MARK: EtsyUpdateListingResponse convenience initializers and mutators
+
+extension EtsyUpdateListingResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(EtsyUpdateListingResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        success: Bool? = nil
+    ) -> EtsyUpdateListingResponse {
+        return EtsyUpdateListingResponse(
+            success: success ?? self.success
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - GetEtsyCategoriesRequest
+struct GetEtsyCategoriesRequest: Codable, Sendable {
+    let credentialSet: String?
+
+    enum CodingKeys: String, CodingKey {
+        case credentialSet = "credentialSet"
+    }
+}
+
+// MARK: GetEtsyCategoriesRequest convenience initializers and mutators
+
+extension GetEtsyCategoriesRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(GetEtsyCategoriesRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        credentialSet: String?? = nil
+    ) -> GetEtsyCategoriesRequest {
+        return GetEtsyCategoriesRequest(
+            credentialSet: credentialSet ?? self.credentialSet
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - GetEtsyCategoriesResponse
+struct GetEtsyCategoriesResponse: Codable, Sendable {
+    let categories: [Category]
+
+    enum CodingKeys: String, CodingKey {
+        case categories = "categories"
+    }
+}
+
+// MARK: GetEtsyCategoriesResponse convenience initializers and mutators
+
+extension GetEtsyCategoriesResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(GetEtsyCategoriesResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        categories: [Category]? = nil
+    ) -> GetEtsyCategoriesResponse {
+        return GetEtsyCategoriesResponse(
+            categories: categories ?? self.categories
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - Category
+struct Category: Codable, Sendable {
+    let id: Double
+    let name: String
+
+    enum CodingKeys: String, CodingKey {
+        case id = "id"
+        case name = "name"
+    }
+}
+
+// MARK: Category convenience initializers and mutators
+
+extension Category {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(Category.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        id: Double? = nil,
+        name: String? = nil
+    ) -> Category {
+        return Category(
+            id: id ?? self.id,
+            name: name ?? self.name
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - GetEtsyReturnPoliciesRequest
+struct GetEtsyReturnPoliciesRequest: Codable, Sendable {
+    let credentialSet: String?
+
+    enum CodingKeys: String, CodingKey {
+        case credentialSet = "credentialSet"
+    }
+}
+
+// MARK: GetEtsyReturnPoliciesRequest convenience initializers and mutators
+
+extension GetEtsyReturnPoliciesRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(GetEtsyReturnPoliciesRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        credentialSet: String?? = nil
+    ) -> GetEtsyReturnPoliciesRequest {
+        return GetEtsyReturnPoliciesRequest(
+            credentialSet: credentialSet ?? self.credentialSet
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - GetEtsyReturnPoliciesResponse
+struct GetEtsyReturnPoliciesResponse: Codable, Sendable {
+    let policies: [Policy]
+
+    enum CodingKeys: String, CodingKey {
+        case policies = "policies"
+    }
+}
+
+// MARK: GetEtsyReturnPoliciesResponse convenience initializers and mutators
+
+extension GetEtsyReturnPoliciesResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(GetEtsyReturnPoliciesResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        policies: [Policy]? = nil
+    ) -> GetEtsyReturnPoliciesResponse {
+        return GetEtsyReturnPoliciesResponse(
+            policies: policies ?? self.policies
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - Policy
+struct Policy: Codable, Sendable {
+    let id: Value
+    let name: String
+
+    enum CodingKeys: String, CodingKey {
+        case id = "id"
+        case name = "name"
+    }
+}
+
+// MARK: Policy convenience initializers and mutators
+
+extension Policy {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(Policy.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        id: Value? = nil,
+        name: String? = nil
+    ) -> Policy {
+        return Policy(
+            id: id ?? self.id,
+            name: name ?? self.name
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - GetEtsyShippingProfilesRequest
+struct GetEtsyShippingProfilesRequest: Codable, Sendable {
+    let credentialSet: String?
+
+    enum CodingKeys: String, CodingKey {
+        case credentialSet = "credentialSet"
+    }
+}
+
+// MARK: GetEtsyShippingProfilesRequest convenience initializers and mutators
+
+extension GetEtsyShippingProfilesRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(GetEtsyShippingProfilesRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        credentialSet: String?? = nil
+    ) -> GetEtsyShippingProfilesRequest {
+        return GetEtsyShippingProfilesRequest(
+            credentialSet: credentialSet ?? self.credentialSet
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - GetEtsyShippingProfilesResponse
+struct GetEtsyShippingProfilesResponse: Codable, Sendable {
+    let profiles: [Profile]
+
+    enum CodingKeys: String, CodingKey {
+        case profiles = "profiles"
+    }
+}
+
+// MARK: GetEtsyShippingProfilesResponse convenience initializers and mutators
+
+extension GetEtsyShippingProfilesResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(GetEtsyShippingProfilesResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        profiles: [Profile]? = nil
+    ) -> GetEtsyShippingProfilesResponse {
+        return GetEtsyShippingProfilesResponse(
+            profiles: profiles ?? self.profiles
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - Profile
+struct Profile: Codable, Sendable {
+    let id: Value
+    let title: String
+
+    enum CodingKeys: String, CodingKey {
+        case id = "id"
+        case title = "title"
+    }
+}
+
+// MARK: Profile convenience initializers and mutators
+
+extension Profile {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(Profile.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        id: Value? = nil,
+        title: String? = nil
+    ) -> Profile {
+        return Profile(
+            id: id ?? self.id,
+            title: title ?? self.title
         )
     }
 
@@ -3764,6 +5099,106 @@ extension UpdatedAt {
         return UpdatedAt(
             nanoseconds: nanoseconds ?? self.nanoseconds,
             seconds: seconds ?? self.seconds
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - SuggestEtsyCategoryRequest
+struct SuggestEtsyCategoryRequest: Codable, Sendable {
+    let category: String?
+    let credentialSet: String?
+    let title: String?
+
+    enum CodingKeys: String, CodingKey {
+        case category = "category"
+        case credentialSet = "credentialSet"
+        case title = "title"
+    }
+}
+
+// MARK: SuggestEtsyCategoryRequest convenience initializers and mutators
+
+extension SuggestEtsyCategoryRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(SuggestEtsyCategoryRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        category: String?? = nil,
+        credentialSet: String?? = nil,
+        title: String?? = nil
+    ) -> SuggestEtsyCategoryRequest {
+        return SuggestEtsyCategoryRequest(
+            category: category ?? self.category,
+            credentialSet: credentialSet ?? self.credentialSet,
+            title: title ?? self.title
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - SuggestEtsyCategoryResponse
+struct SuggestEtsyCategoryResponse: Codable, Sendable {
+    let taxonomyId: Double
+    let taxonomyName: String
+
+    enum CodingKeys: String, CodingKey {
+        case taxonomyId = "taxonomyId"
+        case taxonomyName = "taxonomyName"
+    }
+}
+
+// MARK: SuggestEtsyCategoryResponse convenience initializers and mutators
+
+extension SuggestEtsyCategoryResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(SuggestEtsyCategoryResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        taxonomyId: Double? = nil,
+        taxonomyName: String? = nil
+    ) -> SuggestEtsyCategoryResponse {
+        return SuggestEtsyCategoryResponse(
+            taxonomyId: taxonomyId ?? self.taxonomyId,
+            taxonomyName: taxonomyName ?? self.taxonomyName
         )
     }
 

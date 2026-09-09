@@ -106,6 +106,66 @@
     "EbayApplyDriftResponse": {
       "$ref": "#/definitions/EbayApplyDriftResponse"
     },
+    "EtsyCreateListingRequest": {
+      "$ref": "#/definitions/EtsyCreateListingRequest"
+    },
+    "EtsyCreateListingResponse": {
+      "$ref": "#/definitions/EtsyCreateListingResponse"
+    },
+    "EtsyUpdateListingRequest": {
+      "$ref": "#/definitions/EtsyUpdateListingRequest"
+    },
+    "EtsyUpdateListingResponse": {
+      "$ref": "#/definitions/EtsyUpdateListingResponse"
+    },
+    "EtsyDeleteListingRequest": {
+      "$ref": "#/definitions/EtsyDeleteListingRequest"
+    },
+    "EtsyDeleteListingResponse": {
+      "$ref": "#/definitions/EtsyDeleteListingResponse"
+    },
+    "EtsyCheckShopSetupRequest": {
+      "$ref": "#/definitions/EtsyCheckShopSetupRequest"
+    },
+    "EtsyCheckShopSetupResponse": {
+      "$ref": "#/definitions/EtsyCheckShopSetupResponse"
+    },
+    "EtsyPullSyncRequest": {
+      "$ref": "#/definitions/EtsyPullSyncRequest"
+    },
+    "EtsyPullSyncResponse": {
+      "$ref": "#/definitions/EtsyPullSyncResponse"
+    },
+    "EtsyImportPullSyncRequest": {
+      "$ref": "#/definitions/EtsyImportPullSyncRequest"
+    },
+    "EtsyImportPullSyncResponse": {
+      "$ref": "#/definitions/EtsyImportPullSyncResponse"
+    },
+    "GetEtsyCategoriesRequest": {
+      "$ref": "#/definitions/GetEtsyCategoriesRequest"
+    },
+    "GetEtsyCategoriesResponse": {
+      "$ref": "#/definitions/GetEtsyCategoriesResponse"
+    },
+    "SuggestEtsyCategoryRequest": {
+      "$ref": "#/definitions/SuggestEtsyCategoryRequest"
+    },
+    "SuggestEtsyCategoryResponse": {
+      "$ref": "#/definitions/SuggestEtsyCategoryResponse"
+    },
+    "GetEtsyShippingProfilesRequest": {
+      "$ref": "#/definitions/GetEtsyShippingProfilesRequest"
+    },
+    "GetEtsyShippingProfilesResponse": {
+      "$ref": "#/definitions/GetEtsyShippingProfilesResponse"
+    },
+    "GetEtsyReturnPoliciesRequest": {
+      "$ref": "#/definitions/GetEtsyReturnPoliciesRequest"
+    },
+    "GetEtsyReturnPoliciesResponse": {
+      "$ref": "#/definitions/GetEtsyReturnPoliciesResponse"
+    },
     "EnrichListingRequest": {
       "$ref": "#/definitions/EnrichListingRequest"
     },
@@ -1597,6 +1657,534 @@
       "required": [
         "ok",
         "applied"
+      ],
+      "additionalProperties": false
+    },
+    "EtsyCreateListingRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "taxonomyId": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "number"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shippingProfileId": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "number"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "returnPolicyId": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "number"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "credentialSet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "productId"
+      ],
+      "additionalProperties": false
+    },
+    "EtsyCreateListingResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "const": true
+        },
+        "listingId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "success",
+        "listingId"
+      ],
+      "additionalProperties": false
+    },
+    "EtsyUpdateListingRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "credentialSet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "productId"
+      ],
+      "additionalProperties": false
+    },
+    "EtsyUpdateListingResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": false
+    },
+    "EtsyDeleteListingRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "credentialSet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "productId"
+      ],
+      "additionalProperties": false
+    },
+    "EtsyDeleteListingResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": false
+    },
+    "EtsyCheckShopSetupRequest": {
+      "type": "object",
+      "properties": {
+        "credentialSet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EtsyCheckShopSetupResponse": {
+      "type": "object",
+      "properties": {
+        "hasShippingProfile": {
+          "type": "boolean"
+        },
+        "hasReturnPolicy": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "hasShippingProfile",
+        "hasReturnPolicy"
+      ],
+      "additionalProperties": false
+    },
+    "EtsyPullSyncRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "credentialSet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "productId"
+      ],
+      "additionalProperties": false
+    },
+    "EtsyPullSyncResponse": {
+      "type": "object",
+      "properties": {
+        "hasDrift": {
+          "type": "boolean"
+        },
+        "diff": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "wonni": {
+                "type": "string"
+              },
+              "external": {
+                "type": "string"
+              },
+              "key": {
+                "type": "string",
+                "enum": [
+                  "title",
+                  "price",
+                  "quantity"
+                ]
+              },
+              "value": {
+                "type": [
+                  "string",
+                  "number"
+                ]
+              }
+            },
+            "required": [
+              "field",
+              "wonni",
+              "external",
+              "key",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "etsyData": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "price": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "quantity": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "listingId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "price",
+            "quantity",
+            "status",
+            "listingId"
+          ],
+          "additionalProperties": false
+        },
+        "wonniData": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "price": {
+              "type": "number"
+            },
+            "quantity": {
+              "type": "number"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "price",
+            "quantity",
+            "status"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "hasDrift",
+        "diff",
+        "etsyData",
+        "wonniData"
+      ],
+      "additionalProperties": false
+    },
+    "EtsyImportPullSyncRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fields": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "price": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "quantity": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "credentialSet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "productId",
+        "fields"
+      ],
+      "additionalProperties": false
+    },
+    "EtsyImportPullSyncResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": false
+    },
+    "GetEtsyCategoriesRequest": {
+      "type": "object",
+      "properties": {
+        "credentialSet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "GetEtsyCategoriesResponse": {
+      "type": "object",
+      "properties": {
+        "categories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "number"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "categories"
+      ],
+      "additionalProperties": false
+    },
+    "SuggestEtsyCategoryRequest": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "credentialSet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SuggestEtsyCategoryResponse": {
+      "type": "object",
+      "properties": {
+        "taxonomyId": {
+          "type": "number"
+        },
+        "taxonomyName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "taxonomyId",
+        "taxonomyName"
+      ],
+      "additionalProperties": false
+    },
+    "GetEtsyShippingProfilesRequest": {
+      "type": "object",
+      "properties": {
+        "credentialSet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "GetEtsyShippingProfilesResponse": {
+      "type": "object",
+      "properties": {
+        "profiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": [
+                  "string",
+                  "number"
+                ]
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "title"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "profiles"
+      ],
+      "additionalProperties": false
+    },
+    "GetEtsyReturnPoliciesRequest": {
+      "type": "object",
+      "properties": {
+        "credentialSet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "GetEtsyReturnPoliciesResponse": {
+      "type": "object",
+      "properties": {
+        "policies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": [
+                  "string",
+                  "number"
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "policies"
       ],
       "additionalProperties": false
     },

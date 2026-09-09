@@ -23,7 +23,11 @@ const {
 const { recoverEbayOfferIds } = require("./recover_ebay_offer_ids");
 const { tiktokCreateListing, tiktokUpdateListing, tiktokDeleteListing, getTiktokCategories } = require("./tiktok_listing");
 const { etsyExchangeToken } = require("./etsy_auth");
-const { etsyPullSync, etsyImportPullSync } = require("./etsy_listing");
+const {
+  etsyCreateListing, etsyUpdateListing, etsyDeleteListing, etsyCheckShopSetup,
+  etsyPullSync, etsyImportPullSync,
+  getEtsyCategories, suggestEtsyCategory, getEtsyShippingProfiles, getEtsyReturnPolicies,
+} = require("./etsy_listing");
 const { updateMercariListingStatus, ensureMercariListingDetails } = require("./mercari_listing");
 const { syncTiktokOrders, syncTiktokOrdersScheduled } = require("./tiktok_orders");
 const { disconnectPlatform, updateSettings, generateOAuthState } = require("./user_settings");
@@ -77,8 +81,16 @@ module.exports = {
   recoverEbayOfferIds,
 
   // Etsy listings
+  etsyCreateListing,
+  etsyUpdateListing,
+  etsyDeleteListing,
+  etsyCheckShopSetup,
   etsyPullSync,
   etsyImportPullSync,
+  getEtsyCategories,
+  suggestEtsyCategory,
+  getEtsyShippingProfiles,
+  getEtsyReturnPolicies,
 
   // Mercari listings
   updateMercariListingStatus,
