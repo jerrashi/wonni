@@ -3634,7 +3634,7 @@ function ProductDetail() {
     let isMounted = true;
     (async () => {
       try {
-        const res = await callFunction("ebayPullSync")({ productId, credentialSet: "web" });
+        const res = await callFunction("ebayPullSync")({ productId });
         if (isMounted) {
           if (res.data?.hasDrift) {
             setEbayPullSyncDiff(res.data);
@@ -3660,7 +3660,7 @@ function ProductDetail() {
     let isMounted = true;
     (async () => {
       try {
-        const res = await callFunction("etsyPullSync")({ productId, credentialSet: "web" });
+        const res = await callFunction("etsyPullSync")({ productId });
         if (isMounted) {
           if (res.data?.hasDrift) {
             setEtsyPullSyncDiff(res.data);
@@ -3810,7 +3810,7 @@ function ProductDetail() {
     setEbaySyncMessage("");
     setEbayPullSyncDiff(null);
     try {
-      const res = await callFunction("ebayPullSync")({ productId, credentialSet: "web" });
+      const res = await callFunction("ebayPullSync")({ productId });
       if (res.data?.hasDrift) {
         setEbayPullSyncDiff(res.data);
       } else {
@@ -3854,7 +3854,7 @@ function ProductDetail() {
     setEtsySyncMessage("");
     setEtsyPullSyncDiff(null);
     try {
-      const res = await callFunction("etsyPullSync")({ productId, credentialSet: "web" });
+      const res = await callFunction("etsyPullSync")({ productId });
       if (res.data?.hasDrift) {
         setEtsyPullSyncDiff(res.data);
       } else {

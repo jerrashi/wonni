@@ -101,21 +101,12 @@ export default function BulkPostModal({ products, onClose }) {
           try {
             if (platformId === "ebay") {
               // ebayCreateListing owns all eBay fields on the product doc.
-              await callFunction("ebayCreateListing")({
-                listingId: product.id,
-                productId: product.id,
-                credentialSet: "web",
-              });
+              await callFunction("ebayCreateListing")({ productId: product.id });
               if (!localStorage.getItem("hasSeenEbayEditingNotice")) {
                 setShowEbayNotice(true);
               }
             } else if (platformId === "etsy") {
-              const etsyRes = await callFunction("etsyCreateListing")({
-                productId: product.id,
-                listingId: product.id,
-                credentialSet: "web",
-                handlingTimeDays: product.handlingTimeDays,
-              });
+              const etsyRes = await callFunction("etsyCreateListing")({ productId: product.id });
               const etsyListingId = etsyRes.data?.listingId;
               const etsyUrl = etsyRes.data?.url || (etsyListingId ? `https://www.etsy.com/listing/${etsyListingId}` : null);
               try {

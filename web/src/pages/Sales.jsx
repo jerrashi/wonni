@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { collection, query, where, orderBy, onSnapshot, doc, deleteDoc } from "firebase/firestore";
-import { db, auth } from "../firebase";
+import { db, auth, callFunction } from "../firebase";
 import Layout from "../components/Layout";
 import LogSaleModal from "../components/LogSaleModal";
 
@@ -22,6 +22,27 @@ export default function Sales() {
   const [tagFilter, setTagFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [deletingId, setDeletingId] = useState(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncNote, setSyncNote] = useState("");
+
+  async function handleSync() {
+    setSyncing(true);
+    setSyncNote("");
+    setError("");
+    try {
+      const res = await callFunction("syncSales")({});
+      const { imported = 0, skipped = 0, errors = [] } = res.data || {};
+      const parts = [`${imported} new`];
+      if (skipped) parts.push(`${skipped} already logged`);
+      for (const e of errors) parts.push(`${e.platform}: ${e.message}`);
+      setSyncNote(parts.join(" · "));
+      // The sales onSnapshot listener picks up any new rows automatically.
+    } catch (e) {
+      setError("Sync failed: " + (e?.message ?? e));
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   useEffect(() => {
     const uid = auth.currentUser?.uid;
@@ -192,9 +213,15 @@ export default function Sales() {
             Cross-platform sales sync for Mercari, eBay, Etsy, & Wonni
           </span>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowLogModal(true)}>
-          💰 Log Sale
-        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {syncNote && <span style={{ fontSize: 12, color: "var(--muted)" }}>{syncNote}</span>}
+          <button className="btn" onClick={handleSync} disabled={syncing}>
+            {syncing ? "Syncing…" : "🔄 Sync eBay / Etsy"}
+          </button>
+          <button className="btn btn-primary" onClick={() => setShowLogModal(true)}>
+            💰 Log Sale
+          </button>
+        </div>
       </div>
 
       {error && <div className="card" style={{ marginBottom: 20, color: "var(--danger)" }}>{error}</div>}
