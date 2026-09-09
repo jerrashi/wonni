@@ -55,8 +55,35 @@ it but it is *not deployed* · **new** = to be built during consolidation.
 | `decrementAndCascade` | ✅ **built** | On `products/` model. **iOS call site still passes `{listingId}` → change to `{productId}`.** |
 | `restockAndCascade` | ✅ **built** | `{productId, quantity}` (was `{listingId, quantity}`) |
 | `markSoldOutAndCascade` | ✅ **built** | `{productId}` (was `{listingId}`) |
-| `syncSales` | **dead** (iOS) | Port from nested `sale_poller.js` (719 L). Poll eBay + Etsy, import each via `recordSale`. Mercari has no API → still client-scraped (`recordMercariSalesBatch`). **Stretch goal:** a `mail`-triggered function that parses Mercari "you sold an item" notification emails into `recordMercariSalesBatch` rows, so the user never has to open the extension. See § Stretch goals. |
-| `getOrderTakeHome` | **dead** (iOS calls `ebayGetOrderTakeHome` / `etsyGetReceiptTakeHome`) | Merge the two into one function keyed by the sale's `platform`. Port from nested `sale_fetch.js`. |
+| `syncSales` | **dead** (iOS) — ⚠ **OAuth-scope blocked**, see below | Port from nested `sale_poller.js` (719 L). Poll eBay + Etsy, import each via `recordSaleCore`. Mercari has no API → still client-scraped (`recordMercariSalesBatch`). **Stretch goal:** a `mail`-triggered function that parses Mercari "you sold an item" notification emails into `recordMercariSalesBatch` rows. See § Stretch goals. |
+| `getOrderTakeHome` | **dead** (iOS calls `ebayGetOrderTakeHome` / `etsyGetReceiptTakeHome`) — same scope blocker | Merge the two into one function keyed by the sale's `platform`. Port from nested `sale_fetch.js`. |
+
+#### ⚠ `syncSales` / `getOrderTakeHome` OAuth-scope blocker (found 2026-09-09)
+
+Reading eBay orders needs `sell.fulfillment`; net payout needs `sell.finances`.
+Etsy receipts need `transactions_r`. Current grants:
+
+| Client | eBay authorize scopes | Has fulfillment/finances? |
+|---|---|---|
+| iOS `ProfileView.swift` | inventory, account, **fulfillment, finances**, identity | ✅ yes |
+| web `Settings.jsx` | inventory, account, identity | ❌ **no** |
+| refresh (`ebay_auth.js EBAY_SCOPES`) | inventory, account | ❌ **no — even iOS tokens refresh without them** |
+
+eBay's `refresh_token` grant rejects (`invalid_scope`) any scope not in the
+original authorization, so `EBAY_SCOPES` can't just be widened — a web-user
+refresh would then 400. **Required before `syncSales` can run:**
+
+1. `ebay_auth.js` — record granted scopes on `users/{uid}/integrations/ebay`
+   at exchange; `refreshEbayToken` requests `desired ∩ granted`.
+2. `ebayRequest` — add `apiz.ebay.com` host support (Finances API).
+3. web `Settings.jsx` + (if changed) iOS authorize URLs → add fulfillment +
+   finances; Etsy → add `transactions_r`.
+4. The 2–3 existing users **reconnect eBay + Etsy** once (3) ships.
+5. Then port the poller onto `products/` (SKU `${productId}` / `${productId}${variantId}`
+   → `products/{id}`, not `wonni_${listingId}` → `listings/{id}`).
+
+Until then: sales still land via `recordSale` (manual "log a sale") and
+`recordMercariSalesBatch` (scrape). Only the automatic eBay/Etsy pull is blocked.
 
 **Cascade coverage today:** eBay (via `bulk_update_price_quantity` on the stored
 offer pointer), Etsy (`listings` PATCH), Mercari (`pendingMercari*` flags).
