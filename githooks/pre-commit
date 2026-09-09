@@ -1,0 +1,14 @@
+#!/bin/sh
+# wonni pre-commit — keep the backend contract artifacts + tests honest.
+# Enable once:  git config core.hooksPath githooks
+#
+# Runs only when something under functions/ is staged. Skip with:  git commit --no-verify
+
+if git diff --cached --name-only | grep -q '^functions/'; then
+  echo "· pre-commit: functions/ changed — running npm run verify"
+  ( cd functions && npm run verify ) || {
+    echo
+    echo "✗ pre-commit: 'npm run verify' failed. Fix, or commit with --no-verify."
+    exit 1
+  }
+fi

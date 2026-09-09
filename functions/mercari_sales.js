@@ -121,3 +121,6 @@ exports.recordMercariSalesBatch = onCall(
     return { results, recorded, duplicates, unmatched };
   })
 );
+
+// Internal — unit-tested in test/mercari.test.js.
+exports._internal = { buildMercariMatchMap, looseDate };
