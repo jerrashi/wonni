@@ -327,7 +327,12 @@ new feature, tracked in § Stretch goals, not part of consolidation.
    read-only archive. **Left:** `firebase deploy --only storage` needs Console
    Playground validation first (storage.rules has an undeployed "dropship
    images" block); `firestore.rules` already matches live.
-7. **Migrate the 2–3 iOS users'** `listings` (old per-user model) → `products/`.
+7. ✅ **Migrated** `listings/` → `products/` (2026-09-09). 72 of 73 `listings/`
+   docs got a `products/{sameId}` doc (`migratedFromListing:true`); 1 was
+   already web-published. `listings/` left in place (marketplace feed +
+   old-ref compat). Idempotent re-run = 0 creates. Script:
+   `functions/scripts/migrate_listings_to_products.js` (+ census). Reversal:
+   delete `products/` where `migratedFromListing == true`.
 8. **Repoint iOS** call sites: `{listingId}`→`{productId}`, `identifyItem`→
    `enrichListing`, `ebayGetOrderTakeHome`/`etsyGetReceiptTakeHome`→
    `getOrderTakeHome`, the per-variation Mercari flags (spec above); add the
