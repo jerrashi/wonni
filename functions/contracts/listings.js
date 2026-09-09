@@ -82,5 +82,16 @@ module.exports = {
       request: ProductRefRequestSchema,
       response: CrossPostStatusResponseSchema,
     },
+    {
+      name: "postToWonni",
+      summary: "Publish a products/{id} to the Wonni marketplace feed (listings/{id}, status:active). Skips a re-write when a live listing already exists.",
+      request: ProductRefRequestSchema,
+      response: z.object({
+        listingId: z.string(),
+        alreadyPosted: z.boolean(),
+        /** true = a live listing already existed; only the product flags were synced. */
+        skipped: z.boolean().optional(),
+      }),
+    },
   ],
 };

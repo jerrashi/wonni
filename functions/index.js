@@ -44,6 +44,7 @@ const {
 } = require("./sales");
 const { recordMercariSalesBatch } = require("./mercari_sales");
 const { syncSales, getOrderTakeHome } = require("./sale_poller");
+const { postToWonni } = require("./wonni_listing");
 
 module.exports = {
   // Auth
@@ -118,4 +119,5 @@ module.exports = {
   recordMercariSalesBatch,
   syncSales,
   getOrderTakeHome,
+  postToWonni,
 };
