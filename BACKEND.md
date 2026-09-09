@@ -55,35 +55,37 @@ it but it is *not deployed* · **new** = to be built during consolidation.
 | `decrementAndCascade` | ✅ **built** | On `products/` model. **iOS call site still passes `{listingId}` → change to `{productId}`.** |
 | `restockAndCascade` | ✅ **built** | `{productId, quantity}` (was `{listingId, quantity}`) |
 | `markSoldOutAndCascade` | ✅ **built** | `{productId}` (was `{listingId}`) |
-| `syncSales` | **dead** (iOS) — ⚠ **OAuth-scope blocked**, see below | Port from nested `sale_poller.js` (719 L). Poll eBay + Etsy, import each via `recordSaleCore`. Mercari has no API → still client-scraped (`recordMercariSalesBatch`). **Stretch goal:** a `mail`-triggered function that parses Mercari "you sold an item" notification emails into `recordMercariSalesBatch` rows. See § Stretch goals. |
-| `getOrderTakeHome` | **dead** (iOS calls `ebayGetOrderTakeHome` / `etsyGetReceiptTakeHome`) — same scope blocker | Merge the two into one function keyed by the sale's `platform`. Port from nested `sale_fetch.js`. |
+| `syncSales` | ✅ **built** (`functions/sale_poller.js`, wired, not deployed) — needs a one-time reconnect, see below | Polls eBay (`/sell/fulfillment/v1/order`) + Etsy (`/receipts`), matches SKU/listing-id → `products/{id}` (+ variant), records each via `recordSaleCore` (`source:"ebay-poll"`/`"etsy-poll"`, forward-only status). Best-effort per-order tracking + finance lookups. Returns `{imported, skipped, saleIds, errors}`. Mercari still client-scraped. |
+| `getOrderTakeHome` | ✅ **built** (`functions/sale_poller.js`) | `{saleId}` → resolves the sale's platform + orderId → eBay Finances (`apiz`) or Etsy Payments → `{takeHome, fees, shippingLabelCost, provisional}`, persisted onto the sale (merge-add). Replaces iOS `ebayGetOrderTakeHome` / `etsyGetReceiptTakeHome`. |
 
-#### ⚠ `syncSales` / `getOrderTakeHome` OAuth-scope blocker (found 2026-09-09)
+#### `syncSales` / `getOrderTakeHome` — code done, needs deploy + reconnect
 
-Reading eBay orders needs `sell.fulfillment`; net payout needs `sell.finances`.
-Etsy receipts need `transactions_r`. Current grants:
+eBay order reads need `sell.fulfillment`; net payout needs `sell.finances`;
+Etsy receipts need `transactions_r`. eBay's `refresh_token` grant rejects any
+scope not in the original authorization, so the refresh scope list can't just
+be widened. **Done in code (2026-09-09):**
 
-| Client | eBay authorize scopes | Has fulfillment/finances? |
-|---|---|---|
-| iOS `ProfileView.swift` | inventory, account, **fulfillment, finances**, identity | ✅ yes |
-| web `Settings.jsx` | inventory, account, identity | ❌ **no** |
-| refresh (`ebay_auth.js EBAY_SCOPES`) | inventory, account | ❌ **no — even iOS tokens refresh without them** |
+1. ✅ `ebay_auth.js` — `grantedScopes` recorded on `users/{uid}/integrations/ebay`
+   at exchange (+ backfilled on refresh); `refreshScopeFor()` sends
+   `EBAY_SCOPES_DESIRED ∩ grantedScopes`, falls back to the safe base subset
+   for legacy connections. `hasOrderReadScopes()` gates the poll.
+2. ✅ `ebayRequest(uid, m, p, b, { host:"apiz", marketplaceId })` — Finances host.
+3. ✅ web `Settings.jsx` — eBay authorize adds `sell.fulfillment` +
+   `sell.finances`; Etsy adds `transactions_r`; passes `scopes` to
+   `ebayExchangeToken`. iOS `ProfileView.swift` already requested all of these.
 
-eBay's `refresh_token` grant rejects (`invalid_scope`) any scope not in the
-original authorization, so `EBAY_SCOPES` can't just be widened — a web-user
-refresh would then 400. **Required before `syncSales` can run:**
+**Still needs a human:**
 
-1. `ebay_auth.js` — record granted scopes on `users/{uid}/integrations/ebay`
-   at exchange; `refreshEbayToken` requests `desired ∩ granted`.
-2. `ebayRequest` — add `apiz.ebay.com` host support (Finances API).
-3. web `Settings.jsx` + (if changed) iOS authorize URLs → add fulfillment +
-   finances; Etsy → add `transactions_r`.
-4. The 2–3 existing users **reconnect eBay + Etsy** once (3) ships.
-5. Then port the poller onto `products/` (SKU `${productId}` / `${productId}${variantId}`
-   → `products/{id}`, not `wonni_${listingId}` → `listings/{id}`).
+- Deploy `functions/` + `firebase deploy --only hosting` from `wonni_dropship`.
+- The 2–3 existing users **reconnect eBay + Etsy once** (their stored
+  `grantedScopes` won't include the new scopes until they re-authorize).
+  `syncSales` returns a friendly `errors:[{platform:"ebay", message:"…reconnect…"}]`
+  until then — nothing breaks.
+- Canonical `etsy_auth.js` has **no refresh-token path** (throws "reconnect"
+  on expiry). Pre-existing gap; the Etsy poll inherits it. Port
+  `refreshEtsyToken` from the nested tree when doing Etsy CRUD.
 
-Until then: sales still land via `recordSale` (manual "log a sale") and
-`recordMercariSalesBatch` (scrape). Only the automatic eBay/Etsy pull is blocked.
+Until deployed: sales still land via `recordSale` + `recordMercariSalesBatch`.
 
 **Cascade coverage today:** eBay (via `bulk_update_price_quantity` on the stored
 offer pointer), Etsy (`listings` PATCH), Mercari (`pendingMercari*` flags).

@@ -38,6 +38,7 @@ const {
   markSoldOutAndCascade,
 } = require("./sales");
 const { recordMercariSalesBatch } = require("./mercari_sales");
+const { syncSales, getOrderTakeHome } = require("./sale_poller");
 
 module.exports = {
   // Auth
@@ -101,4 +102,6 @@ module.exports = {
   restockAndCascade,
   markSoldOutAndCascade,
   recordMercariSalesBatch,
+  syncSales,
+  getOrderTakeHome,
 };

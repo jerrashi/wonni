@@ -7,9 +7,8 @@ const EBAY_CLIENT_SECRET = defineSecret("EBAY_CLIENT_SECRET");
 const EBAY_RU_NAME = defineString("EBAY_RU_NAME"); // eBay "RuName" (redirect_uri value) — NOT secret, just config
 const EBAY_ENV = defineString("EBAY_ENV", { default: "sandbox" }); // "sandbox" | "production"
 
-// Scopes requested when *refreshing* an access token. eBay's refresh_token
-// grant rejects (invalid_scope) anything that wasn't in the user's original
-// authorization, so this must stay a subset that every connected account has.
+// The scope subset EVERY connected eBay account is known to have granted —
+// the safe fallback for a refresh when we don't have a recorded grant.
 // commerce.identity.readonly is requested at authorize time (Settings.jsx /
 // ProfileView.swift) and only needed once, at token exchange, to read the
 // username — deliberately NOT listed here.
@@ -17,6 +16,35 @@ const EBAY_SCOPES = [
   "https://api.ebay.com/oauth/api_scope/sell.inventory",
   "https://api.ebay.com/oauth/api_scope/sell.account",
 ].join(" ");
+
+// Everything we'd LIKE on a refreshed token. sell.fulfillment (order reads) and
+// sell.finances (net-payout reads) power syncSales / getOrderTakeHome but were
+// not in the web app's original authorize request. eBay's refresh_token grant
+// rejects (invalid_scope) any scope not in the user's original authorization,
+// so `refreshEbayToken` sends `EBAY_SCOPES_DESIRED ∩ grantedScopes` and falls
+// back to EBAY_SCOPES for legacy connections with no recorded grant.
+const EBAY_SCOPES_DESIRED = [
+  "https://api.ebay.com/oauth/api_scope/sell.inventory",
+  "https://api.ebay.com/oauth/api_scope/sell.account",
+  "https://api.ebay.com/oauth/api_scope/sell.fulfillment",
+  "https://api.ebay.com/oauth/api_scope/sell.finances",
+];
+
+/** Space-delimited scope string to request when refreshing this user's token. */
+function refreshScopeFor(integrationData) {
+  const raw = integrationData?.grantedScopes;
+  const granted = typeof raw === "string" ? raw.split(/\s+/).filter(Boolean) : null;
+  if (!granted) return EBAY_SCOPES; // legacy connection — unknown grant, stay safe
+  const usable = EBAY_SCOPES_DESIRED.filter((s) => granted.includes(s));
+  return usable.length ? usable.join(" ") : EBAY_SCOPES;
+}
+
+/** Has this user granted the scope needed for order + finance reads? */
+function hasOrderReadScopes(integrationData) {
+  const raw = integrationData?.grantedScopes;
+  if (typeof raw !== "string") return false;
+  return raw.includes("/sell.fulfillment");
+}
 
 function ebayApiHost() {
   return EBAY_ENV.value() === "production" ? "api.ebay.com" : "api.sandbox.ebay.com";
@@ -120,6 +148,10 @@ exports.ebayExchangeToken = onCall(
       refreshToken: tokens.refresh_token,
       tokenExpiresAt: Date.now() + (tokens.expires_in ?? 7200) * 1000,
       refreshTokenExpiresAt: Date.now() + (tokens.refresh_token_expires_in ?? 0) * 1000,
+      // Space-delimited scopes eBay actually granted — drives refreshScopeFor()
+      // and hasOrderReadScopes(). eBay echoes `scope` on the token response;
+      // the client may also pass its authorize `scopes` as a fallback.
+      grantedScopes: tokens.scope ?? request.data?.scopes ?? null,
       environment: EBAY_ENV.value(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
@@ -142,13 +174,18 @@ async function refreshEbayToken(uid) {
   const tokens = await tokenRequest({
     grant_type: "refresh_token",
     refresh_token: data.refreshToken,
-    scope: EBAY_SCOPES,
+    scope: refreshScopeFor(data),
   });
 
-  await ref.update({
+  const update = {
     accessToken: tokens.access_token,
     tokenExpiresAt: Date.now() + (tokens.expires_in ?? 7200) * 1000,
-  });
+  };
+  // Backfill grantedScopes for connections made before we recorded it.
+  if (typeof tokens.scope === "string" && tokens.scope !== data.grantedScopes) {
+    update.grantedScopes = tokens.scope;
+  }
+  await ref.update(update);
 
   return tokens.access_token;
 }
@@ -160,23 +197,34 @@ async function refreshEbayToken(uid) {
 //     ("Invalid value for header Accept-Language.") — pin it to en-US.
 //   - Content-Language is only valid alongside a request body; eBay returns
 //     25709 if it's sent on GET/DELETE.
-function ebayRestHeaders(authValue, hasBody) {
+function ebayRestHeaders(authValue, hasBody, extra) {
   return {
     Authorization: authValue,
     Accept: "application/json",
     "Accept-Language": "en-US",
     "Content-Type": "application/json",
     ...(hasBody ? { "Content-Language": "en-US" } : {}),
+    ...extra,
   };
 }
 
+// The Finances API lives on apiz.* (same split as the Identity API), not the
+// api.* host that serves sell/inventory, sell/account, sell/fulfillment.
+function ebayApiZHost() {
+  return EBAY_ENV.value() === "production" ? "apiz.ebay.com" : "apiz.sandbox.ebay.com";
+}
+
 // Authenticated eBay REST call. Returns parsed JSON (or null for 204).
-async function ebayRequest(uid, method, path, body) {
+//   opts.host: "apiz" for the Finances API (default: the api.* host)
+//   opts.marketplaceId: adds X-EBAY-C-MARKETPLACE-ID (order/finance reads want it)
+async function ebayRequest(uid, method, path, body, opts = {}) {
   const accessToken = await refreshEbayToken(uid);
   const hasBody = body !== undefined && body !== null;
-  const response = await fetch(`https://${ebayApiHost()}${path}`, {
+  const host = opts.host === "apiz" ? ebayApiZHost() : ebayApiHost();
+  const extraHeaders = opts.marketplaceId ? { "X-EBAY-C-MARKETPLACE-ID": opts.marketplaceId } : undefined;
+  const response = await fetch(`https://${host}${path}`, {
     method,
-    headers: ebayRestHeaders(`Bearer ${accessToken}`, hasBody),
+    headers: ebayRestHeaders(`Bearer ${accessToken}`, hasBody, extraHeaders),
     ...(hasBody && { body: JSON.stringify(body) }),
   });
 
@@ -205,6 +253,11 @@ module.exports = {
   ebayRequest,
   ebayRestHeaders,
   ebayApiHost,
+  ebayApiZHost,
+  refreshScopeFor,
+  hasOrderReadScopes,
+  EBAY_SCOPES,
+  EBAY_SCOPES_DESIRED,
   EBAY_CLIENT_ID,
   EBAY_CLIENT_SECRET,
   EBAY_RU_NAME,
