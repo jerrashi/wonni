@@ -232,6 +232,38 @@ zero-downtime dance needed.
 `SaleRepository`, `Sale.swift`, the draft model, and ~10 `httpsCallable` call
 sites (names + payloads).
 
+#### Per-variation Mercari flags — client contract (spec for the iOS repoint)
+
+`product.variants[]` is the inline array on `products/{id}`. Each entry is one
+purchasable variation and carries: `id`, `sku`, `quantity`, `active`,
+`optionValues` (`{Size:"M"}`), an optional `price` override, and per-platform
+listing pointers — including `crossPostListingIds.mercari` (**that variation's
+own Mercari listing id**, because a Mercari listing is one item / one size).
+
+The `cascade()` in `functions/sales.js` cannot touch Mercari (no API). It
+leaves a flag for the client's headless WKWebView / extension flow to action,
+then clear:
+
+| Flag location | Set when | Client does |
+|---|---|---|
+| `product.pendingMercariDeactivation` (no-variant product) | qty → 0 | end the Mercari listing, then `FieldValue.delete()` the flag |
+| `product.pendingMercariRelist` (no-variant) | Mercari-origin sale, qty still > 0 | re-list, clear flag |
+| `product.variants[i].pendingMercariDeactivation` | that variant's qty → 0, **or** a GUI mark-out-of-stock | end `variants[i].crossPostListingIds.mercari`; clear via whole-array RMW (never `variants.i.x`) |
+| `product.variants[i].pendingMercariRelist` | Mercari-origin sale of that variant, qty > 0 | re-list that variant's listing; clear |
+
+**iOS work (part of step 9):** `CrossPostWebView.swift`'s deactivate/relist
+queue reads `UserListing.pendingMercari*` off `listings/`. Repoint it to
+`products/`: flatten each flagged variant into its own actionable row (one per
+Mercari listing), act on `variants[i].crossPostListingIds.mercari`, clear the
+flag with a whole-`variants`-array `setData(merge:)` — **not** a
+`"variants.\(i).x"` field path (corrupts the array). `ProfileView` badge count
+must sum product-level + per-variant flags.
+
+**Extension:** has **no** Mercari deactivation/relist consumer today — it only
+posts to Mercari and scrapes sold items. Sold-out Mercari listings are
+currently endable only from iOS. Adding an extension deactivation queue is a
+new feature, tracked in § Stretch goals, not part of consolidation.
+
 ---
 
 ## Sequenced work
@@ -339,6 +371,12 @@ with `HttpsError("invalid-argument", ...)`. Swift types: `contracts/generated/`.
   for consolidation; do it after `syncSales`.
 - **Sale-alert notifications.** Push/email to the user when any platform sale
   lands (eBay/Etsy poll, Mercari email/scrape), off the same ingest path.
+- **Extension Mercari deactivation/relist queue.** The extension can post to
+  Mercari and scrape sold items but can't *end* or *re-list* a listing — only
+  iOS `CrossPostWebView` does that (reading `pendingMercari*`). A web/extension
+  user's sold-out Mercari listings stay live until they open iOS. Add a
+  background queue in the extension that watches `products/` for
+  `pendingMercari*` (product- and variant-level) and runs the headless flow.
 
 ## Settled
 
