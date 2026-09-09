@@ -277,7 +277,7 @@ public class IntegrationRepository: ObservableObject {
             default: continue
             }
             do {
-                _ = try await functions.httpsCallable(fn).call(["listingId": listingId])
+                _ = try await functions.httpsCallable(fn).call(["productId": listingId])
                 print("[IntegrationRepository] \(fn) delete succeeded for \(listingId)")
             } catch {
                 print("[IntegrationRepository] \(fn) delete failed for \(listingId): \(error.localizedDescription)")
@@ -301,7 +301,7 @@ public class IntegrationRepository: ObservableObject {
                 continue
             }
             do {
-                let result = try await functions.httpsCallable(fn).call(["listingId": listingId])
+                let result = try await functions.httpsCallable(fn).call(["productId": listingId])
                 print("[IntegrationRepository] \(fn) succeeded: \(result.data)")
             } catch {
                 print("[IntegrationRepository] \(fn) failed: \(error.localizedDescription)")

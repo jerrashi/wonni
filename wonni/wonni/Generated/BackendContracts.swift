@@ -3410,9 +3410,13 @@ extension Profile {
 
 // MARK: - GetOrderTakeHomeRequest
 struct GetOrderTakeHomeRequest: Codable, Sendable {
-    let saleId: String
+    let platform: GetOrderTakeHomeRequestPlatform?
+    let platformOrderId: String?
+    let saleId: String?
 
     enum CodingKeys: String, CodingKey {
+        case platform = "platform"
+        case platformOrderId = "platformOrderId"
         case saleId = "saleId"
     }
 }
@@ -3436,9 +3440,13 @@ extension GetOrderTakeHomeRequest {
     }
 
     func with(
-        saleId: String? = nil
+        platform: GetOrderTakeHomeRequestPlatform?? = nil,
+        platformOrderId: String?? = nil,
+        saleId: String?? = nil
     ) -> GetOrderTakeHomeRequest {
         return GetOrderTakeHomeRequest(
+            platform: platform ?? self.platform,
+            platformOrderId: platformOrderId ?? self.platformOrderId,
             saleId: saleId ?? self.saleId
         )
     }
@@ -3450,6 +3458,11 @@ extension GetOrderTakeHomeRequest {
     func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
         return String(data: try self.jsonData(), encoding: encoding)
     }
+}
+
+enum GetOrderTakeHomeRequestPlatform: String, Codable, Sendable {
+    case ebay = "ebay"
+    case etsy = "etsy"
 }
 
 // MARK: - GetOrderTakeHomeResponse
@@ -5317,7 +5330,7 @@ extension SuggestEtsyCategoryResponse {
 
 // MARK: - SyncSalesRequest
 struct SyncSalesRequest: Codable, Sendable {
-    let platform: SyncSalesRequestPlatform?
+    let platform: GetOrderTakeHomeRequestPlatform?
     let since: SoldAtUnion?
 
     enum CodingKeys: String, CodingKey {
@@ -5345,7 +5358,7 @@ extension SyncSalesRequest {
     }
 
     func with(
-        platform: SyncSalesRequestPlatform?? = nil,
+        platform: GetOrderTakeHomeRequestPlatform?? = nil,
         since: SoldAtUnion?? = nil
     ) -> SyncSalesRequest {
         return SyncSalesRequest(
@@ -5361,11 +5374,6 @@ extension SyncSalesRequest {
     func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
         return String(data: try self.jsonData(), encoding: encoding)
     }
-}
-
-enum SyncSalesRequestPlatform: String, Codable, Sendable {
-    case ebay = "ebay"
-    case etsy = "etsy"
 }
 
 // MARK: - SyncSalesResponse

@@ -166,9 +166,17 @@ const SyncSalesResponseSchema = z.object({
 
 // ── take-home fetch (net payout) ───────────────────────────────────────────
 
+// Either resolve from a recorded sale (`saleId` → persists the result back onto
+// it), or — pre-save, e.g. the iOS "Record a sale" sheet prefilling the field —
+// pass the platform + order id directly.
 const GetOrderTakeHomeRequestSchema = z.object({
-  saleId: z.string(),
-});
+  saleId: z.string().optional(),
+  platform: z.enum(["ebay", "etsy"]).optional(),
+  platformOrderId: z.string().optional(),
+}).refine(
+  (o) => !!o.saleId || (!!o.platform && !!o.platformOrderId),
+  "Provide { saleId } or { platform, platformOrderId }.",
+);
 
 const GetOrderTakeHomeResponseSchema = z.object({
   takeHome: z.number().nullable(),

@@ -748,11 +748,18 @@
       "properties": {
         "saleId": {
           "type": "string"
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "ebay",
+            "etsy"
+          ]
+        },
+        "platformOrderId": {
+          "type": "string"
         }
       },
-      "required": [
-        "saleId"
-      ],
       "additionalProperties": false
     },
     "GetOrderTakeHomeResponse": {

@@ -153,7 +153,7 @@ struct ProfileView: View {
                     Task {
                         guard let id = listing.id else { return }
                         try? await ListingRepository.shared.restockListing(id: id, quantity: restockedQty)
-                        _ = try? await callCloudFunction("restockAndCascade", ["listingId": id, "quantity": restockedQty])
+                        _ = try? await callCloudFunction("restockAndCascade", ["productId": id, "quantity": restockedQty])
                         soldOutListings.removeAll { $0.id == id }
                         await loadListings()
                     }
@@ -166,7 +166,7 @@ struct ProfileView: View {
                 Button("Mark Sold Out", role: .destructive) {
                     Task {
                         guard let id = listing.id else { return }
-                        _ = try? await callCloudFunction("markSoldOutAndCascade", ["listingId": id])
+                        _ = try? await callCloudFunction("markSoldOutAndCascade", ["productId": id])
                         listings.removeAll { $0.id == id }
                         await loadListings()
                     }
@@ -822,7 +822,7 @@ struct ProfileView: View {
                     Task {
                         do {
                             let functions = Functions.functions()
-                            let _ = try await functions.httpsCallable("ebayCreateListing").call(["listingId": id])
+                            let _ = try await functions.httpsCallable("ebayCreateListing").call(["productId": id])
                             await loadListings()
                         } catch {
                             print("Failed to bulk cross-post listing \(id): \(error)")
@@ -1310,7 +1310,7 @@ struct EditListingSheet: View {
     private func markAsSoldOut() async {
         guard let id = listing.id else { return }
         isMarkingAsSoldOut = true
-        _ = try? await callCloudFunction("markSoldOutAndCascade", ["listingId": id])
+        _ = try? await callCloudFunction("markSoldOutAndCascade", ["productId": id])
         isMarkingAsSoldOut = false
         dismiss()
     }
@@ -1768,7 +1768,7 @@ struct EditListingSheet: View {
             do {
                 let functions = Functions.functions()
                 if platform == "ebay" {
-                    let _ = try await functions.httpsCallable("ebayCreateListing").call(["listingId": id])
+                    let _ = try await functions.httpsCallable("ebayCreateListing").call(["productId": id])
                     if !hasSeenEbayEditingNotice {
                         await MainActor.run { showEbayNoticeAlert = true }
                     }
@@ -2021,7 +2021,7 @@ struct EditListingSheet: View {
                 let fn = platform == "ebay" ? "ebayUpdateListing" : "etsyUpdateListing"
                 Task {
                     do {
-                        let _ = try await Functions.functions().httpsCallable(fn).call(["listingId": id])
+                        let _ = try await Functions.functions().httpsCallable(fn).call(["productId": id])
                     } catch {
                         let msg = extractCrossPostErrorMessage(error)
                         if msg.localizedLowercase.contains("not found") {
@@ -2040,7 +2040,7 @@ struct EditListingSheet: View {
                     let fn = platform == "ebay" ? "ebayCreateListing" : "etsyCreateListing"
                     Task {
                         do {
-                            let _ = try await Functions.functions().httpsCallable(fn).call(["listingId": id])
+                            let _ = try await Functions.functions().httpsCallable(fn).call(["productId": id])
                         } catch {
                             let msg = extractCrossPostErrorMessage(error)
                             await MainActor.run { crossPostErrorMessage = msg; showCrossPostError = true }
@@ -2064,7 +2064,7 @@ struct EditListingSheet: View {
                 if platform == "ebay" || platform == "etsy" {
                     let fn = platform == "ebay" ? "ebayDeleteListing" : "etsyDeleteListing"
                     Task {
-                        _ = try? await callCloudFunction(fn, ["listingId": id])
+                        _ = try? await callCloudFunction(fn, ["productId": id])
                     }
                 }
             }

@@ -371,27 +371,36 @@ exports.getOrderTakeHome = onCall(
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
     const db = admin.firestore();
 
-    const saleSnap = await db.collection("sales").doc(data.saleId).get();
-    if (!saleSnap.exists) throw new HttpsError("not-found", "Sale not found.");
-    const sale = saleSnap.data();
-    if (sale.userId !== uid) throw new HttpsError("permission-denied", "Not your sale.");
-    if (!sale.platformOrderId) {
-      throw new HttpsError("failed-precondition", "This sale has no platform order id.");
+    // Resolve platform + orderId either from a recorded sale or directly.
+    let platform, platformOrderId, saleRef = null;
+    if (data.saleId) {
+      const saleSnap = await db.collection("sales").doc(data.saleId).get();
+      if (!saleSnap.exists) throw new HttpsError("not-found", "Sale not found.");
+      const sale = saleSnap.data();
+      if (sale.userId !== uid) throw new HttpsError("permission-denied", "Not your sale.");
+      if (!sale.platformOrderId) {
+        throw new HttpsError("failed-precondition", "This sale has no platform order id.");
+      }
+      ({ platform, platformOrderId } = sale);
+      saleRef = saleSnap.ref;
+    } else {
+      platform = data.platform;
+      platformOrderId = data.platformOrderId;
     }
 
     let out = { takeHome: null, fees: null, shippingLabelCost: null, provisional: true };
-    if (sale.platform === "ebay") {
-      const f = await ebayFetchFinance(uid, sale.platformOrderId);
+    if (platform === "ebay") {
+      const f = await ebayFetchFinance(uid, platformOrderId);
       if (f) out = { takeHome: f.takeHome, fees: f.fees, shippingLabelCost: f.labelCost, provisional: false };
-    } else if (sale.platform === "etsy") {
-      const takeHome = await etsyReceiptTakeHome(await getActiveEtsyToken(uid), sale.platformOrderId);
+    } else if (platform === "etsy") {
+      const takeHome = await etsyReceiptTakeHome(await getActiveEtsyToken(uid), platformOrderId);
       out = { takeHome, fees: null, shippingLabelCost: null, provisional: takeHome == null };
     } else {
-      throw new HttpsError("failed-precondition", `Take-home is not available for ${sale.platform}.`);
+      throw new HttpsError("failed-precondition", `Take-home is not available for ${platform}.`);
     }
 
-    if (out.takeHome != null) {
-      await saleSnap.ref.set({
+    if (saleRef && out.takeHome != null) {
+      await saleRef.set({
         takeHome: out.takeHome,
         ...(out.shippingLabelCost != null ? { shippingLabelCost: out.shippingLabelCost } : {}),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),

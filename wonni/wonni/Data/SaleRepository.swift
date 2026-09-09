@@ -106,7 +106,7 @@ class SaleRepository: ObservableObject {
             do {
                 _ = try await Functions.functions()
                     .httpsCallable("decrementAndCascade")
-                    .call(["listingId": listingId, "platform": "mercari"])
+                    .call(["productId": listingId, "platform": "mercari"])
             } catch {
                 print("[SaleRepository.addSale] decrementAndCascade failed: \(error)")
                 // Sale doc already persisted — don't fail the caller over a cascade error.

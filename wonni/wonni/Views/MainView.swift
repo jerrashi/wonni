@@ -928,7 +928,7 @@ struct SoldOnMercariHandlerSheet: View {
         do {
             _ = try await Functions.functions()
                 .httpsCallable("decrementAndCascade")
-                .call(["listingId": id, "platform": "mercari"])
+                .call(["productId": id, "platform": "mercari"])
             // decrementAndCascade auto-sets pendingMercariRelist if qty > 0,
             // so we don't need a separate relist prompt on this path.
             dismiss(); onDone()
@@ -959,7 +959,7 @@ struct SoldOnMercariHandlerSheet: View {
         do {
             _ = try await Functions.functions()
                 .httpsCallable("markSoldOutAndCascade")
-                .call(["listingId": id])
+                .call(["productId": id])
             dismiss(); onDone()
         } catch {
             errorMessage = error.localizedDescription
