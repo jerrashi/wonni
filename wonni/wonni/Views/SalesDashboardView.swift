@@ -19,6 +19,7 @@ struct SalesDashboardView: View {
     @State private var syncToast: String?
     @State private var selectedSale: Sale?
     @State private var filterPlatform: String? = nil
+    @State private var filterTag: String? = nil
     @State private var showMercariSync = false
     @State private var showMercariLogin = false
     @AppStorage("lastSalesSyncDate") private var lastSyncTimestamp: Double = 0
@@ -45,12 +46,16 @@ struct SalesDashboardView: View {
     }
 
     private var filteredSales: [Sale] {
-        guard let p = filterPlatform else { return sales }
-        return sales.filter { $0.platform == p }
+        sales.filter { sale in
+            if let p = filterPlatform, sale.platform != p { return false }
+            if let t = filterTag, !(sale.productTags ?? []).contains(t) { return false }
+            return true
+        }
     }
     private var totalRevenue: Double { filteredSales.reduce(0) { $0 + $1.priceSoldFor } }
     private var totalTakeHome: Double { filteredSales.reduce(0) { $0 + ($1.takeHome ?? 0) } }
     private var platforms: [String] { Array(Set(sales.map { $0.platform })).sorted() }
+    private var allTags: [String] { Array(Set(sales.flatMap { $0.productTags ?? [] })).sorted() }
 
     var body: some View {
         Group {
@@ -196,6 +201,50 @@ struct SalesDashboardView: View {
                     )
                 }
                 .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+            }
+
+            // Net / Margin / Cost — functions/sales_metrics.js mirror via SalesMetrics.swift.
+            // Reads `sales` (not filteredSales) so the totals don't shift as you tap a filter,
+            // matching web (web/src/pages/Sales.jsx).
+            if !sales.isEmpty {
+                Section {
+                    SalesMetricsRow(sales: sales)
+                }
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+
+                Section {
+                    SalesTrendChart(sales: sales)
+                }
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+
+                Section {
+                    SalesBreakdownCard(
+                        title: "Sales by Platform",
+                        icon: "globe",
+                        sales: sales,
+                        groupBy: .platform,
+                        selectedKey: filterPlatform,
+                        onSelect: { key in filterPlatform = (filterPlatform == key) ? nil : key },
+                        labelFor: { Sale.platformDisplayName($0) }
+                    )
+                    if !allTags.isEmpty {
+                        SalesBreakdownCard(
+                            title: "Sales by Tag",
+                            icon: "tag",
+                            sales: sales,
+                            groupBy: .tag,
+                            selectedKey: filterTag,
+                            onSelect: { key in filterTag = (filterTag == key) ? nil : key }
+                        )
+                    }
+                }
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
             }
