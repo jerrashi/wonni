@@ -8,23 +8,14 @@
 //  Data/SalesMetrics.swift (the Swift mirror of functions/sales_metrics.js) —
 //  nothing here should recompute revenue/net/margin itself.
 //
-//  ── How to wire this in ─────────────────────────────────────────────────
-//  These are standalone, compiling views — SalesDashboardView.swift (983 L)
-//  isn't touched. Drop them into `salesList` in that file:
-//
-//    1. `SalesMetricsRow` — right after the existing 3-card `summaryCard`
-//       HStack (around line 197, "// Platform filter" comment follows it).
-//       Same Section, same .listRowInsets/.listRowBackground/.listRowSeparator
-//       as that HStack so it sits flush underneath.
-//    2. `SalesTrendChart` — its own Section, between the summary cards and
-//       the platform filter chips. Pass `filteredSales` so it respects the
-//       existing platform filter.
-//    3. `PlatformBreakdownCard` / `TagBreakdownCard` — new Section(s) below
-//       the trend chart, or wherever reads better next to the existing
-//       platform-filter chip row. Wire their `onSelect` to the same
-//       `filterPlatform` state the chip row already uses (for platform) —
-//       tag has no existing filter state, so either add one or leave the
-//       card tap inert for now.
+//  ── Wired in ─────────────────────────────────────────────────────────────
+//  All three are now placed in SalesDashboardView.swift's `salesList`:
+//  SalesMetricsRow right under the existing 3-card summary row, SalesTrendChart
+//  in its own Section below that, then platform + tag SalesBreakdownCards
+//  below the trend chart. All four read `sales` (not `filteredSales`) so the
+//  numbers don't shift under you as you tap a filter — same as the web
+//  version. Platform-card taps drive the existing `filterPlatform`; a new
+//  `filterTag` state drives tag-card taps and the row list.
 //
 //  All three read `SalesMetrics.aggregate`/`.trend`, which need a
 //  `costLookup: (String) -> Double?` for Cost of Goods / margin. There is no
@@ -155,15 +146,10 @@ struct SalesBreakdownCard: View {
 // MARK: - Trend chart
 
 /// 8-week revenue/net trend — Swift Charts mirror of web's inline-SVG
-/// TrendChart (web/src/pages/Sales.jsx). Bucketing/math already done by
-/// `SalesMetrics.trend`; this view is just the chart body.
-///
-/// TODO(you): pick the chart's look. A reasonable starting point —
-/// `BarMark` per week for revenue, a `LineMark` + `PointMark` for net,
-/// laid out like the web version — is sketched below but commented out so
-/// this compiles as a placeholder first. Swap it in, or design your own;
-/// `SalesMetrics.TrendPoint` gives you `periodStart: Date`, `revenue`,
-/// `net`, `count` per bucket, already excluding cancelled/returned/deleted.
+/// TrendChart (web/src/pages/Sales.jsx): a `BarMark` per bucket for revenue,
+/// a `LineMark` + `PointMark` for net. Bucketing/math is done by
+/// `SalesMetrics.trend`, which already excludes cancelled/returned/deleted.
+/// Restyle freely — this is one reasonable take, not the only one.
 struct SalesTrendChart: View {
     let sales: [Sale]
     var bucket: SalesMetrics.Bucket = .week
@@ -186,27 +172,13 @@ struct SalesTrendChart: View {
                     .foregroundStyle(.secondary)
                     .frame(height: 120)
             } else {
-                // --- TODO(you): replace this placeholder with a real Chart. ---
-                // Example starting point:
-                //
-                // Chart(points, id: \.periodStart) { point in
-                //     BarMark(
-                //         x: .value("Week", point.periodStart, unit: .weekOfYear),
-                //         y: .value("Revenue", point.revenue)
-                //     )
-                //     .foregroundStyle(Color.accentColor.opacity(0.35))
-                //
-                //     LineMark(
-                //         x: .value("Week", point.periodStart, unit: .weekOfYear),
-                //         y: .value("Net", point.net)
-                //     )
-                //     .foregroundStyle(.teal)
-                //     .symbol(.circle)
-                // }
-                // .frame(height: 140)
-                // .chartYAxis { AxisMarks(position: .leading) }
-                //
-                placeholderChart
+                chart
+                HStack(spacing: 16) {
+                    legendDot(color: Color.accentColor.opacity(0.5), label: "Revenue")
+                    legendDot(color: .teal, label: "Net")
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             }
         }
         .padding(12)
@@ -214,22 +186,67 @@ struct SalesTrendChart: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    /// Bare-bones fallback so the file compiles standalone before you fill
-    /// in the real Chart above. Delete once the real chart is in.
-    private var placeholderChart: some View {
-        let maxRevenue = max(points.map(\.revenue).max() ?? 1, 1)
-        return HStack(alignment: .bottom, spacing: 4) {
-            ForEach(points, id: \.periodStart) { point in
-                VStack {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Color.accentColor.opacity(0.35))
-                        .frame(height: max(4, CGFloat(point.revenue / maxRevenue) * 100))
-                    Text(point.periodStart.formatted(.dateTime.month(.abbreviated).day()))
-                        .font(.system(size: 8))
-                        .foregroundStyle(.secondary)
+    private var chart: some View {
+        Chart(points, id: \.periodStart) { point in
+            BarMark(
+                x: .value("Week", point.periodStart, unit: bucket.calendarComponent),
+                y: .value("Revenue", point.revenue)
+            )
+            .foregroundStyle(Color.accentColor.opacity(0.35))
+            .cornerRadius(2)
+
+            LineMark(
+                x: .value("Week", point.periodStart, unit: bucket.calendarComponent),
+                y: .value("Net", max(point.net, 0))
+            )
+            .foregroundStyle(.teal)
+            .interpolationMethod(.monotone)
+
+            PointMark(
+                x: .value("Week", point.periodStart, unit: bucket.calendarComponent),
+                y: .value("Net", max(point.net, 0))
+            )
+            .foregroundStyle(.teal)
+            .symbolSize(28)
+        }
+        .frame(height: 140)
+        .chartYAxis {
+            AxisMarks(position: .leading) { value in
+                AxisGridLine()
+                AxisValueLabel {
+                    if let d = value.as(Double.self) {
+                        Text(String(format: "$%.0f", d))
+                    }
                 }
             }
         }
-        .frame(height: 130, alignment: .bottom)
+        .chartXAxis {
+            AxisMarks(values: points.map(\.periodStart)) { value in
+                AxisValueLabel {
+                    if let d = value.as(Date.self) {
+                        Text(d.formatted(.dateTime.month(.abbreviated).day()))
+                    }
+                }
+            }
+        }
+    }
+
+    private func legendDot(color: Color, label: String) -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(label)
+        }
+    }
+}
+
+private extension SalesMetrics.Bucket {
+    /// `Calendar.Component` for the axis unit — day/week/month buckets
+    /// already align to these boundaries in `SalesMetrics.trend`.
+    var calendarComponent: Calendar.Component {
+        switch self {
+        case .day: return .day
+        case .week: return .weekOfYear
+        case .month: return .month
+        }
     }
 }

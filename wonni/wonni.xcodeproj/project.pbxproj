@@ -12,6 +12,7 @@
 		147096BF7F09296C73526449 /* PendingMercariSale.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76BC65B5E09E487A41EA3CCE /* PendingMercariSale.swift */; };
 		19BE5E984ECA727D0E9A513A /* MercariDateParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63AE5A91B4E5B0F695600110 /* MercariDateParsingTests.swift */; };
 		1A589EC58F7C4BA78F4A2708 /* SaleRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9C92C11853A41889AB9C925 /* SaleRepository.swift */; };
+		678765A92DE62F001C8C88F2 /* SalesMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = B67872FCF7164B9293FECE64 /* SalesMetrics.swift */; };
 		1A7EB043054D8318DE14D01E /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 946CBD23F95846D07C59FD39 /* Foundation.framework */; };
 		1B7D6E35082CF94A4E513D67 /* AIQualityTrackingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C8E7F46193D0A5B5F624E78 /* AIQualityTrackingTests.swift */; };
 		27831471E31BDEBFA1738E17 /* SellingFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A84FC45576E3288EA902060 /* SellingFlowTests.swift */; };
@@ -92,6 +93,7 @@
 		D66414564520B94BD62B1EEE /* BulkImportManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09C400D2D0AB7F825F735BF1 /* BulkImportManager.swift */; };
 		E638B2296070470221FCA204 /* ImportListingSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67BC65BADBDD92E27F2C170A /* ImportListingSheet.swift */; };
 		EC4CE9E74B3D4A44A464E4A6 /* SalesDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */; };
+		8F58F429D31BD8040DE57F5C /* SalesInsightsViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F58C9187109B0A023CF5811 /* SalesInsightsViews.swift */; };
 		FAAFEB48A7D6F72586D01FD4 /* MercariSaleParsing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9564BAC1690BD050B5596F07 /* MercariSaleParsing.swift */; };
 		FC3EC2E105D97BA997530E74 /* BulkImportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E177FE23B86D196AD7B41F1E /* BulkImportSheet.swift */; };
 /* End PBXBuildFile section */
@@ -183,6 +185,7 @@
 		76BC65B5E09E487A41EA3CCE /* PendingMercariSale.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PendingMercariSale.swift; sourceTree = "<group>"; };
 		7D3F2A91C4E8B5060A1D9F23 /* DraftAIProcessingPolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DraftAIProcessingPolicyTests.swift; sourceTree = "<group>"; };
 		93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalesDashboardView.swift; sourceTree = "<group>"; };
+		8F58C9187109B0A023CF5811 /* SalesInsightsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalesInsightsViews.swift; sourceTree = "<group>"; };
 		946CBD23F95846D07C59FD39 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		954511D35EA0839747028ADA /* BulkImportPillView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BulkImportPillView.swift; sourceTree = "<group>"; };
 		9564BAC1690BD050B5596F07 /* MercariSaleParsing.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MercariSaleParsing.swift; sourceTree = "<group>"; };
@@ -201,6 +204,7 @@
 		E177FE23B86D196AD7B41F1E /* BulkImportSheet.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BulkImportSheet.swift; sourceTree = "<group>"; };
 		E7EBEECFD9B24F3D971DDEA2 /* Sale.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sale.swift; sourceTree = "<group>"; };
 		E9C92C11853A41889AB9C925 /* SaleRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SaleRepository.swift; sourceTree = "<group>"; };
+		B67872FCF7164B9293FECE64 /* SalesMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalesMetrics.swift; sourceTree = "<group>"; };
 		F29C407466FC968D3BC0DEAF /* SellingFlow.xctestplan */ = {isa = PBXFileReference; includeInIndex = 1; path = SellingFlow.xctestplan; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -346,6 +350,7 @@
 				6134E1572FDCB206007C3979 /* PublishedPhotoModal.swift */,
 				209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */,
 				93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */,
+				8F58C9187109B0A023CF5811 /* SalesInsightsViews.swift */,
 				61BCCD062D7B9A710037E4B9 /* SearchBarView.swift */,
 				6192AA5B2D7F582100EC2EFA /* SearchView.swift */,
 				61FAA5822FAF22A0001C28CE /* SignInView.swift */,
@@ -385,6 +390,7 @@
 				61F0F0012FB022A0001C28CE /* IntegrationRepository.swift */,
 				AA0011223344556677AABBEE /* MercariObservedDataRepository.swift */,
 				E9C92C11853A41889AB9C925 /* SaleRepository.swift */,
+				B67872FCF7164B9293FECE64 /* SalesMetrics.swift */,
 				D58F95FAA23371A58634E74E /* URLExtractor.swift */,
 				09C400D2D0AB7F825F735BF1 /* BulkImportManager.swift */,
 				AABB00112233445566778801 /* AppTaskQueue.swift */,
@@ -606,8 +612,10 @@
 				AA0011223344556677AABBFF /* MercariObservedDataRepository.swift in Sources */,
 				4DE0F3AA27864C66A4EC49AB /* Sale.swift in Sources */,
 				1A589EC58F7C4BA78F4A2708 /* SaleRepository.swift in Sources */,
+				678765A92DE62F001C8C88F2 /* SalesMetrics.swift in Sources */,
 				60A7C95275BB4BCCAA8FA838 /* RecordSaleSheet.swift in Sources */,
 				EC4CE9E74B3D4A44A464E4A6 /* SalesDashboardView.swift in Sources */,
+				8F58F429D31BD8040DE57F5C /* SalesInsightsViews.swift in Sources */,
 				9944CB339CA5802F7C51CEEB /* URLExtractor.swift in Sources */,
 				E638B2296070470221FCA204 /* ImportListingSheet.swift in Sources */,
 				D66414564520B94BD62B1EEE /* BulkImportManager.swift in Sources */,
