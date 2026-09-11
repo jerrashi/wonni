@@ -31,7 +31,6 @@ export default function Layout({ children }) {
         </button>
         <NavLink to="/sell" end>Dashboard</NavLink>
         <NavLink to="/sell/sales">Sales</NavLink>
-        <NavLink to="/sell/orders">Orders</NavLink>
         <NavLink to="/sell/settings">Settings</NavLink>
         {auth.currentUser && (
           <NavLink to={`/profile/${auth.currentUser.uid}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13, marginTop: 12, opacity: 0.85 }}>
