@@ -104,12 +104,14 @@ covers manually-logged sales. ~small.
 The existing iOS Mercari scrape / hidden-section / bulk-select / detail-sheet
 machinery stays as-is.
 
-## 3d — `orders/` — deferred
+## 3d — `orders/` — resolved: doesn't exist as a separate thing
 
-`orders/` is empty and `Orders.jsx` unused. When AliExpress/TikTok
-auto-fulfillment goes live, model an order as an **optional child of a sale**
-(a sourcing/fulfillment step), surfaced as an expandable row inside the sales
-dashboard — not a separate page. Not part of this phase.
+Sales *are* orders (decision 4 above). `orders/{id}` is empty in prod and
+`pages/Orders.jsx` is unused — both get deleted as part of 3b, not kept
+around as a future home. Future fulfillment work (AliExpress/TikTok
+auto-source-ordering) is a `sourcing`/`fulfillment` sub-object added to
+`SaleDoc`, surfaced as an expandable section on the sale row — never a
+second collection or page.
 
 ---
 
@@ -120,18 +122,26 @@ dashboard — not a separate page. Not part of this phase.
 | 3a compute layer | ~1 session | backend + 2 mirrors + tests |
 | 3b web | ~1–2 sessions | metrics, edit modal, trend, undo |
 | 3c iOS | ~1 session | additive cards + chart; needs Xcode |
-| 3d orders | — | deferred |
+| 3d orders | — | resolved: no separate model, see below |
 
-## Decisions needed
+## Decisions (settled 2026-09-11)
 
-1. **Net when `takeHome` is null** — show the fee-% estimate (flagged `~`) and
-   overwrite when the real take-home lands? *(recommended)* Or show `net: —`
-   until fetched?
-2. **Fee percentages** — the table above is a starting guess; want it in a
-   Firestore `system/` doc so it's tunable without a deploy, or hard-coded for
-   now? *(recommended: hard-coded, revisit)*
-3. **Web sale edits** — direct `updateDoc` *(recommended, rules already allow)*
-   vs. a new `updateSale` callable. Callable only buys us server-side
-   status-change side-effects, which we don't need yet.
-4. **`sales/` vs `orders/`** — keep separate concepts? *(recommended: yes,
-   defer orders entirely)*
+1. **`takeHome` resolution order**: (1) real API take-home — `syncSales` /
+   `getOrderTakeHome` already fetch this for eBay/Etsy at record time; (2)
+   Mercari — scraped from the order page (extension/iOS WKWebView), same
+   `takeHome` field, no separate code path; (3) only when neither is
+   available does `saleFinancials` fall back to
+   `revenue - feeEstimate(platform, revenue) - shippingLabelCost`, flagged
+   `netIsEstimate: true`. In steady state nearly every sale should carry a
+   real `takeHome` — the fee-% math is a backstop, not the primary path.
+2. **Fee percentages** — hard-coded in `sales_metrics.js`, one table,
+   comment-flagged for future tuning. No Firestore config doc for this.
+3. **Web sale edits** — direct `updateDoc` to `sales/{id}` (rules already
+   allow the owner). No `updateSale` callable.
+4. **`sales/` vs `orders/`** — **sales and orders are the same thing.**
+   There is no separate order model, now or later: `sales/{id}` already *is*
+   the order (buyer address, tracking, carrier, status lifecycle all live on
+   it). `orders/` (empty in prod) and `pages/Orders.jsx` (unused) are dead
+   and should be deleted, not filled in — when AliExpress/TikTok
+   auto-fulfillment work lands, it adds fields/status values to `sales/{id}`,
+   not a second collection. § 3d below is rewritten accordingly.
