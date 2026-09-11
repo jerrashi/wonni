@@ -5,7 +5,6 @@ import { useAuthState } from "./hooks/useAuthState";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import ProductDetail from "./pages/ProductDetail";
-import Orders from "./pages/Orders";
 import Sales from "./pages/Sales";
 import Settings from "./pages/Settings";
 import { MediaJobQueueProvider } from "./lib/mediaJobQueue";
@@ -51,13 +50,12 @@ const router = createBrowserRouter([
       { path: "/sell", element: <ProtectedRoute><Dashboard /></ProtectedRoute> },
       { path: "/sell/products/:productId", element: <ProtectedRoute><ProductDetail /></ProtectedRoute> },
       { path: "/sell/sales", element: <ProtectedRoute><Sales /></ProtectedRoute> },
-      { path: "/sell/orders", element: <ProtectedRoute><Orders /></ProtectedRoute> },
       { path: "/sell/settings", element: <ProtectedRoute><Settings /></ProtectedRoute> },
 
       // Backward-compatibility redirects for existing paths
       { path: "/products/:productId", element: <Navigate to="/sell/products/:productId" replace /> },
       { path: "/sales", element: <Navigate to="/sell/sales" replace /> },
-      { path: "/orders", element: <Navigate to="/sell/orders" replace /> },
+      { path: "/orders", element: <Navigate to="/sell/sales" replace /> },
       { path: "/settings", element: <Navigate to="/sell/settings" replace /> },
       { path: "/web", element: <Navigate to="/sell" replace /> },
       { path: "/web/*", element: <Navigate to="/sell" replace /> },
