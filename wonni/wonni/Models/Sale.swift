@@ -54,6 +54,8 @@ struct Sale: Identifiable, Codable {
     var shippingRevenue: Double?       // shipping charged to buyer
     var takeHome: Double?              // net after platform fees and shipping label cost
     var shippingLabelCost: Double?     // eBay shipping label cost
+    var quantity: Int?                 // units sold; nil/absent means 1 (canonical default)
+    var productTags: [String]?         // tag snapshot at sale time — drives the tag breakdown
 
     var buyerAddress: SaleAddress?
     var trackingNumber: String?
@@ -87,6 +89,8 @@ struct Sale: Identifiable, Codable {
         shippingRevenue: Double? = nil,
         takeHome: Double? = nil,
         shippingLabelCost: Double? = nil,
+        quantity: Int? = nil,
+        productTags: [String]? = nil,
         buyerAddress: SaleAddress? = nil,
         trackingNumber: String? = nil,
         carrier: String? = nil,
@@ -109,6 +113,8 @@ struct Sale: Identifiable, Codable {
         self.shippingRevenue = shippingRevenue
         self.takeHome = takeHome
         self.shippingLabelCost = shippingLabelCost
+        self.quantity = quantity
+        self.productTags = productTags
         self.buyerAddress = buyerAddress
         self.trackingNumber = trackingNumber
         self.carrier = carrier
