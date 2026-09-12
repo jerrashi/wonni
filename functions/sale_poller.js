@@ -254,6 +254,43 @@ async function ebayFetchFinance(uid, orderId) {
   }
 }
 
+/**
+ * Re-fetch + persist a sale's take-home from the platform API — the same work
+ * `getOrderTakeHome` does, factored out so `sales.js`'s `updateSaleStatusCore`
+ * can trigger it automatically when a sale moves into `cancelled`/`returned`
+ * (docs/specs/2026-09-11-stage-board-and-revenue-accounting.md §4, "Re-poll
+ * on status change") instead of waiting on a manual refresh action. Mercari/
+ * manual sales have no take-home API — no-op for those, matching
+ * `getOrderTakeHome`'s own `failed-precondition` boundary. Best-effort: never
+ * throws, returns null on any failure or when there's nothing new to fetch.
+ */
+async function refetchTakeHomeForSale(db, uid, saleRef, sale) {
+  try {
+    if (!sale.platformOrderId) return null;
+    let result = null;
+    if (sale.platform === "ebay") {
+      const f = await ebayFetchFinance(uid, sale.platformOrderId);
+      if (f) result = { takeHome: f.takeHome, shippingLabelCost: f.labelCost };
+    } else if (sale.platform === "etsy") {
+      const takeHome = await etsyReceiptTakeHome(await getActiveEtsyToken(uid), sale.platformOrderId);
+      if (takeHome != null) result = { takeHome };
+    } else {
+      return null;
+    }
+    if (result && result.takeHome != null) {
+      await saleRef.set({
+        takeHome: result.takeHome,
+        ...(result.shippingLabelCost != null ? { shippingLabelCost: result.shippingLabelCost } : {}),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+    return result;
+  } catch (e) {
+    console.warn(`[refetchTakeHomeForSale] failed sale=${saleRef.id}: ${e.message}`);
+    return null;
+  }
+}
+
 // ── platform sync passes ──────────────────────────────────────────────────
 
 async function syncEbay(db, uid, productDocs, productById, sinceMs) {
@@ -457,5 +494,5 @@ exports.getOrderTakeHome = onCall(
 exports._internal = {
   buildEbaySkuMap, buildEtsyListingMap, ebayOrderToSaleFields,
   etsyReceiptToSaleFields, resolveEbayStatus, ebayBuyerAddress,
-  summarizeEbayTransactions, sumEtsyPayments,
+  summarizeEbayTransactions, sumEtsyPayments, refetchTakeHomeForSale,
 };

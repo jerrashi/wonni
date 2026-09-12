@@ -218,7 +218,15 @@ needed. `resolveEbayStatus()` / the Etsy mapping are unchanged by this spec.
    fix sums every row for the order except `SHIPPING_LABEL` (tracked
    separately, as before) rather than an allowlist — verify against a real
    returned order before relying on this in production.
-4. Auto re-poll on status change (§4, last paragraph).
+4. ✅ Auto re-poll on status change (§4, last paragraph). Shipped 2026-09-11:
+   `updateSaleStatusCore` (the one path a drag/dropdown move goes through)
+   now fires `sale_poller.js`'s new `refetchTakeHomeForSale` whenever a sale
+   lands on `cancelled`/`returned` and its platform is eBay/Etsy — best-effort,
+   a failed refetch never undoes the status move. Mercari/manual are
+   unaffected (no take-home API, matches `getOrderTakeHome`'s existing
+   boundary). Poller re-records don't need this wired in separately — they
+   already carry a fresh `finance` fetch in the same pass that sets the
+   status.
 5. Web board/spreadsheet UI + settings section (§6).
 6. iOS board view.
 

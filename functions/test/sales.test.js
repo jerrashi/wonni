@@ -502,3 +502,68 @@ test("updateSaleStatusCore: allows moving to the permanent cancelled/returned ke
   await updateSaleStatusCore(db, UID, { saleId: "s1", status: "returned" });
   assert.equal(db.peek("sales", "s1").status, "returned");
 });
+
+// ── auto re-poll on terminal-status move (spec §4) ─────────────────────────
+
+test("regression: moving an eBay sale to returned triggers a take-home refetch", async () => {
+  const db = new FakeFirestore({
+    sales: { s1: { userId: UID, status: "delivered", platform: "ebay", platformOrderId: "05-1" } },
+    users: { [UID]: {} },
+  });
+  const calls = [];
+  const refetchTakeHome = async (_db, uid, saleRef, sale) => {
+    calls.push({ uid, saleId: saleRef.id, platform: sale.platform });
+    return null;
+  };
+  await updateSaleStatusCore(db, UID, { saleId: "s1", status: "returned" }, { refetchTakeHome });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], { uid: UID, saleId: "s1", platform: "ebay" });
+});
+
+test("regression: moving an Etsy sale to cancelled triggers a take-home refetch", async () => {
+  const db = new FakeFirestore({
+    sales: { s1: { userId: UID, status: "shipped", platform: "etsy", platformOrderId: "999" } },
+    users: { [UID]: {} },
+  });
+  let calls = 0;
+  const refetchTakeHome = async () => { calls++; return null; };
+  await updateSaleStatusCore(db, UID, { saleId: "s1", status: "cancelled" }, { refetchTakeHome });
+  assert.equal(calls, 1);
+});
+
+test("regression: a non-terminal move (e.g. to a custom bucket) never triggers a take-home refetch", async () => {
+  const db = new FakeFirestore({
+    sales: { s1: { userId: UID, status: "ready_to_ship", platform: "ebay", platformOrderId: "05-1" } },
+    users: { [UID]: { saleStages: [...BUILT_IN_SALE_STAGES, { key: "awaiting_parts", label: "Awaiting Parts" }] } },
+  });
+  let calls = 0;
+  const refetchTakeHome = async () => { calls++; return null; };
+  await updateSaleStatusCore(db, UID, { saleId: "s1", status: "awaiting_parts" }, { refetchTakeHome });
+  assert.equal(calls, 0);
+});
+
+test("regression: a Mercari/manual sale moving to returned never triggers a refetch (no take-home API)", async () => {
+  const db = new FakeFirestore({
+    sales: {
+      s1: { userId: UID, status: "delivered", platform: "mercari", platformOrderId: "m-1" },
+      s2: { userId: UID, status: "delivered", platform: "manual" },
+    },
+    users: { [UID]: {} },
+  });
+  let calls = 0;
+  const refetchTakeHome = async () => { calls++; return null; };
+  await updateSaleStatusCore(db, UID, { saleId: "s1", status: "returned" }, { refetchTakeHome });
+  await updateSaleStatusCore(db, UID, { saleId: "s2", status: "cancelled" }, { refetchTakeHome });
+  assert.equal(calls, 0);
+});
+
+test("regression: a failed take-home refetch never undoes the status move that already landed", async () => {
+  const db = new FakeFirestore({
+    sales: { s1: { userId: UID, status: "delivered", platform: "ebay", platformOrderId: "05-1" } },
+    users: { [UID]: {} },
+  });
+  const refetchTakeHome = async () => { throw new Error("network blip"); };
+  const result = await updateSaleStatusCore(db, UID, { saleId: "s1", status: "returned" }, { refetchTakeHome });
+  assert.deepEqual(result, { success: true });
+  assert.equal(db.peek("sales", "s1").status, "returned");
+});
