@@ -42,6 +42,7 @@ const {
   restockAndCascade,
   markSoldOutAndCascade,
   updateSaleStatus,
+  reassignSaleStage,
 } = require("./sales");
 const { recordMercariSalesBatch } = require("./mercari_sales");
 const { syncSales, getOrderTakeHome } = require("./sale_poller");
@@ -122,5 +123,6 @@ module.exports = {
   syncSales,
   getOrderTakeHome,
   updateSaleStatus,
+  reassignSaleStage,
   postToWonni,
 };

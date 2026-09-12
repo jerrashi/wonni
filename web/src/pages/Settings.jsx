@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { doc, onSnapshot, setDoc } from "firebase/firestore";
+import { doc, onSnapshot, setDoc, collection, query, where, getDocs } from "firebase/firestore";
 import { linkWithPopup } from "firebase/auth";
 import { db, auth, googleProvider, appleProvider, callFunction } from "../firebase";
 import Layout from "../components/Layout";
@@ -98,6 +98,9 @@ export default function Settings() {
   const [savingStages, setSavingStages] = useState(false);
   const [stagesSavedMessage, setStagesSavedMessage] = useState("");
   const [stagesError, setStagesError] = useState("");
+  // { stage, count, remaining, targetKey } while confirming a delete that
+  // needs sales reassigned first; null otherwise.
+  const [pendingDeletion, setPendingDeletion] = useState(null);
 
   async function linkProvider(provider) {
     setLinkError("");
@@ -572,8 +575,53 @@ export default function Settings() {
     setSaleStages((stages) => stages.map((s) => (s.key === key ? { ...s, label } : s)));
   }
 
-  function removeStage(key) {
-    setSaleStages((stages) => stages.filter((s) => s.key !== key));
+  // Delete is immediate (not batched behind "Save Stages" like rename/reorder/
+  // add) — a bucket with sales in it needs its own confirm-and-reassign step,
+  // so treating it as a distinct, definitive action is simpler to reason
+  // about than half-applying it to local state and hoping Save catches up.
+  // docs/specs/2026-09-11-stage-board-and-revenue-accounting.md §1's deferred
+  // "reassign existing sales" UX.
+  async function handleDeleteStage(stage) {
+    if (stage.builtIn) return; // no delete control shown for these; guard anyway
+    setStagesError("");
+    try {
+      const uid = auth.currentUser?.uid;
+      const q = query(collection(db, "sales"), where("userId", "==", uid), where("status", "==", stage.key));
+      const snap = await getDocs(q);
+      const count = snap.size;
+      if (count === 0) {
+        await finalizeDeleteStage(stage, null);
+        return;
+      }
+      const remaining = saleStages.filter((s) => s.key !== stage.key);
+      if (remaining.length === 0) {
+        setStagesError("Can't delete the only remaining bucket.");
+        return;
+      }
+      setPendingDeletion({ stage, count, remaining, targetKey: remaining[0].key });
+    } catch (e) {
+      setStagesError(e?.message ?? "Failed to check this bucket's sales.");
+    }
+  }
+
+  async function finalizeDeleteStage(stage, targetKey) {
+    setSavingStages(true);
+    setStagesError("");
+    try {
+      if (targetKey) {
+        await callFunction("reassignSaleStage")({ fromKey: stage.key, toKey: targetKey });
+      }
+      const nextStages = saleStages.filter((s) => s.key !== stage.key);
+      await callFunction("updateSaleStages")({ stages: nextStages });
+      setSaleStages(nextStages);
+      setPendingDeletion(null);
+      setStagesSavedMessage("Deleted!");
+      setTimeout(() => setStagesSavedMessage(""), 3000);
+    } catch (e) {
+      setStagesError(e?.message ?? "Failed to delete bucket.");
+    } finally {
+      setSavingStages(false);
+    }
   }
 
   function moveStage(index, delta) {
@@ -870,7 +918,8 @@ export default function Settings() {
                 <button
                   className="btn btn-ghost"
                   style={{ padding: "4px 8px", fontSize: 12, color: "var(--danger)" }}
-                  onClick={() => removeStage(stage.key)}
+                  disabled={savingStages}
+                  onClick={() => handleDeleteStage(stage)}
                   title="Delete bucket"
                 >
                   ✕
@@ -879,6 +928,44 @@ export default function Settings() {
             </div>
           ))}
         </div>
+
+        {pendingDeletion && (
+          <div
+            className="card"
+            style={{ padding: 16, marginTop: 12, maxWidth: 480, border: "var(--border-thick) solid var(--danger)" }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>
+              Delete "{pendingDeletion.stage.label}"?
+            </div>
+            <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 12 }}>
+              {pendingDeletion.count} sale{pendingDeletion.count === 1 ? "" : "s"} {pendingDeletion.count === 1 ? "is" : "are"} in
+              this bucket. Choose where to move {pendingDeletion.count === 1 ? "it" : "them"} first:
+            </div>
+            <select
+              className="input"
+              style={{ marginBottom: 12 }}
+              value={pendingDeletion.targetKey}
+              onChange={(e) => setPendingDeletion((p) => ({ ...p, targetKey: e.target.value }))}
+            >
+              {pendingDeletion.remaining.map((s) => (
+                <option key={s.key} value={s.key}>{s.label}</option>
+              ))}
+            </select>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-ghost" onClick={() => setPendingDeletion(null)} disabled={savingStages}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-danger"
+                disabled={savingStages}
+                onClick={() => finalizeDeleteStage(pendingDeletion.stage, pendingDeletion.targetKey)}
+              >
+                {savingStages ? "Moving…" : "Move & Delete"}
+              </button>
+            </div>
+          </div>
+        )}
+
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
           <button className="btn btn-ghost" onClick={addCustomStage}>+ Add Bucket</button>
           <button className="btn btn-primary" onClick={handleSaveStages} disabled={savingStages}>

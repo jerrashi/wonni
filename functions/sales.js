@@ -564,9 +564,56 @@ exports.updateSaleStatus = onCall({ secrets: EBAY_SECRETS }, validated("updateSa
   return updateSaleStatusCore(admin.firestore(), uid, data);
 }));
 
+/**
+ * Bulk-move every one of this user's sales sitting in `fromKey` to `toKey`.
+ * Backs Settings' "delete a custom bucket" flow: a bucket can't be removed
+ * out from under sales that still point at it, so the client calls this
+ * first, then saves the trimmed `saleStages` list (updateSaleStages).
+ *
+ * Deliberately NOT the same path as updateSaleStatusCore: this is a bulk
+ * relabeling of records after a bucket was deleted, not "this sale's
+ * real-world status changed" — so it never triggers the cancelled/returned
+ * take-home auto-refetch (moving a sale out of a bucket that's being deleted
+ * doesn't mean the order was actually returned or cancelled). `toKey` is
+ * still checked against the caller's current saleStages (a safety check
+ * against a stale/bogus target) but `fromKey` isn't — by the time this runs
+ * it's normal for `fromKey` to already be gone from that list, since the
+ * client hasn't saved the trimmed list yet.
+ */
+async function reassignSaleStageCore(db, uid, { fromKey, toKey }) {
+  if (fromKey === toKey) {
+    throw new HttpsError("invalid-argument", "fromKey and toKey must be different.");
+  }
+  const stages = await loadSaleStages(db, uid);
+  if (!stages.some((s) => s.key === toKey)) {
+    throw new HttpsError("invalid-argument", `"${toKey}" isn't one of your sale stages.`);
+  }
+
+  const snap = await db.collection("sales")
+    .where("userId", "==", uid)
+    .where("status", "==", fromKey)
+    .get();
+
+  await Promise.all(snap.docs.map((d) =>
+    db.collection("sales").doc(d.id).set(
+      { status: toKey, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true },
+    )
+  ));
+
+  return { success: true, count: snap.docs.length };
+}
+
+exports.reassignSaleStage = onCall(validated("reassignSaleStage", async (data, request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+  return reassignSaleStageCore(admin.firestore(), uid, data);
+}));
+
 // Internal — reused by mercari_sales.js recordMercariSalesBatch.
 exports._internal = {
   applyQuantityDelta, cascade, resolveStock, toTimestamp, recordSaleCore,
   loadOwnedProduct, shouldAdvanceStatus, applyMercariFlags, updateSaleStatusCore,
+  reassignSaleStageCore,
 };
 exports.EBAY_SECRETS = EBAY_SECRETS;

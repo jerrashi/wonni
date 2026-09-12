@@ -46,6 +46,12 @@
     "UpdateSaleStatusResponse": {
       "$ref": "#/definitions/UpdateSaleStatusResponse"
     },
+    "ReassignSaleStageRequest": {
+      "$ref": "#/definitions/ReassignSaleStageRequest"
+    },
+    "ReassignSaleStageResponse": {
+      "$ref": "#/definitions/ReassignSaleStageResponse"
+    },
     "RecordMercariSalesBatchRequest": {
       "$ref": "#/definitions/RecordMercariSalesBatchRequest"
     },
@@ -836,6 +842,44 @@
       },
       "required": [
         "success"
+      ],
+      "additionalProperties": false
+    },
+    "ReassignSaleStageRequest": {
+      "type": "object",
+      "properties": {
+        "fromKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "toKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        }
+      },
+      "required": [
+        "fromKey",
+        "toKey"
+      ],
+      "additionalProperties": false
+    },
+    "ReassignSaleStageResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "const": true
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "success",
+        "count"
       ],
       "additionalProperties": false
     },

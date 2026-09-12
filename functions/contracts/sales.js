@@ -174,6 +174,20 @@ const UpdateSaleStatusRequestSchema = z.object({
   status: SaleStatusSchema,
 });
 
+// ── reassignSaleStage — bulk-move every sale out of a bucket being deleted ──
+// Settings' "delete a custom bucket" flow (docs/specs/2026-09-11-stage-board-
+// and-revenue-accounting.md §1's deferred "reassign existing sales" UX).
+
+const ReassignSaleStageRequestSchema = z.object({
+  fromKey: SaleStatusSchema,
+  toKey: SaleStatusSchema,
+});
+
+const ReassignSaleStageResponseSchema = z.object({
+  success: z.literal(true),
+  count: z.number().int().nonnegative(),
+});
+
 // ── take-home fetch (net payout) ───────────────────────────────────────────
 
 // Either resolve from a recorded sale (`saleId` → persists the result back onto
@@ -239,6 +253,12 @@ module.exports = {
       summary: "Move one sale to a stage-board bucket (kanban drag / spreadsheet dropdown).",
       request: UpdateSaleStatusRequestSchema,
       response: z.object({ success: z.literal(true) }),
+    },
+    {
+      name: "reassignSaleStage",
+      summary: "Bulk-move every sale in one stage-board bucket to another (used when deleting a custom bucket).",
+      request: ReassignSaleStageRequestSchema,
+      response: ReassignSaleStageResponseSchema,
     },
   ],
 };
