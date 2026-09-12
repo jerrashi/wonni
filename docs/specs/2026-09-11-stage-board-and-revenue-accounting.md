@@ -204,12 +204,20 @@ needed. `resolveEbayStatus()` / the Etsy mapping are unchanged by this spec.
 
 ## Build order
 
-1. `saleStages` schema + settings read/write (small, unblocks everything
-   else).
-2. `sales_metrics.js` revenue/net split (§2–3) + tests — this alone fixes
-   the accounting bug even before any board UI exists.
-3. `ebayFetchFinance` fix + Etsy audit (§4) — makes the fixed accounting
-   actually correct end to end for real sales.
+1. ✅ `saleStages` schema + settings read/write (small, unblocks everything
+   else). Shipped 2026-09-11.
+2. ✅ `sales_metrics.js` revenue/net split (§2–3) + tests — this alone fixes
+   the accounting bug even before any board UI exists. Shipped 2026-09-11.
+3. ✅ `ebayFetchFinance` fix + Etsy audit (§4) — makes the fixed accounting
+   actually correct end to end for real sales. Shipped 2026-09-11: both
+   `ebayFetchFinance` and `etsyReceiptTakeHome` had the same two bugs
+   (only-look-at-the-first-row + floor-negative-to-null); fixed via two pure,
+   now-unit-tested helpers, `summarizeEbayTransactions` and
+   `sumEtsyPayments` (`sale_poller.js`). No live Finances-API response was
+   available to enumerate the exact non-SALE `transactionType` list, so the
+   fix sums every row for the order except `SHIPPING_LABEL` (tracked
+   separately, as before) rather than an allowlist — verify against a real
+   returned order before relying on this in production.
 4. Auto re-poll on status change (§4, last paragraph).
 5. Web board/spreadsheet UI + settings section (§6).
 6. iOS board view.

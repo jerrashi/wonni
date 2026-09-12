@@ -189,8 +189,40 @@ async function ebayFetchTracking(uid, orderId) {
 }
 
 /**
- * eBay Finances transactions for one order. SALE amount is already net of eBay
- * fees; SHIPPING_LABEL rows are positive costs to deduct. apiz.* host.
+ * Sum one order's eBay Finances transactions into a take-home + label cost.
+ * Pure/pageable so it can be unit-tested without the HTTP layer.
+ *
+ * Fixed 2026-09-11 (docs/specs/2026-09-11-stage-board-and-revenue-accounting.md
+ * §4) — the original version only ever looked at the first `SALE` row it found
+ * (via an early `break`) and floored a negative net to `null`. That silently
+ * discarded `REFUND` rows a return posts to this same order, even though
+ * eBay's Finances API — the same data source eBay's own payout page reads —
+ * carries them. Now: every non-SHIPPING_LABEL row tied to the order is summed
+ * into `takeHome` (SALE, REFUND, and any other adjustment/credit type eBay
+ * ties to the order — deliberately not an allowlist, since eBay's own set of
+ * transactionTypes isn't fully enumerated here), and a negative sum is
+ * returned as-is: a return can leave the seller genuinely out of pocket
+ * (unrefunded original shipping/fees, a return-shipping charge), and that's a
+ * real loss to show, not a signal to discard.
+ */
+function summarizeEbayTransactions(transactions, orderId) {
+  let takeHome = null; // null = "no relevant transaction seen yet", not zero
+  let labelCost = 0;
+  for (const tx of transactions ?? []) {
+    if (tx.orderId !== orderId) continue;
+    if (tx.transactionType === "SHIPPING_LABEL") {
+      labelCost += num(tx.amount?.value);
+    } else {
+      takeHome = (takeHome ?? 0) + num(tx.amount?.value);
+    }
+  }
+  return { takeHome, labelCost };
+}
+
+/**
+ * eBay Finances transactions for one order. SALE/REFUND amounts are already
+ * net of eBay fees; SHIPPING_LABEL rows are costs, tracked separately and
+ * deducted. apiz.* host.
  */
 async function ebayFetchFinance(uid, orderId) {
   try {
@@ -202,18 +234,17 @@ async function ebayFetchFinance(uid, orderId) {
         `/sell/finances/v1/transaction?limit=20&offset=${offset}`,
         null, { host: "apiz", marketplaceId: "EBAY_US" },
       );
-      const txs = (res?.transactions ?? []).filter((t) => t.orderId === orderId);
-      for (const tx of txs) {
-        if (tx.transactionType === "SALE") takeHome = num(tx.amount?.value);
-        if (tx.transactionType === "SHIPPING_LABEL") labelCost += num(tx.amount?.value);
-      }
-      if (takeHome != null) break;
+      const summary = summarizeEbayTransactions(res?.transactions, orderId);
+      if (summary.takeHome != null) takeHome = (takeHome ?? 0) + summary.takeHome;
+      labelCost += summary.labelCost;
+      // No early exit on finding a SALE row — a REFUND for the same order can
+      // land on a later page (or a later poll, once more transactions exist).
       if ((res?.transactions ?? []).length < 20) break;
     }
     if (takeHome == null) return null;
     const net = Math.round((takeHome - labelCost) * 100) / 100;
     return {
-      takeHome: net > 0 ? net : null,
+      takeHome: net,
       labelCost: labelCost > 0 ? Math.round(labelCost * 100) / 100 : null,
       fees: null, // SALE amount is already net of fees; eBay doesn't itemize here
     };
@@ -312,17 +343,30 @@ async function syncEtsy(db, uid, productDocs, productById, sinceMs) {
   return { imported, skipped, saleIds };
 }
 
+/**
+ * Sum a shop's /payments rows for one receipt. Pure so it's unit-testable.
+ * Fixed 2026-09-11 alongside the eBay fix (same spec, §4): a refund posts its
+ * own payment row here with a negative `amount_net`, and the old floor
+ * (`net > 0 ? net : null`) discarded that, same bug as eBay's. `null` now
+ * means "no payment rows at all" (nothing posted yet), never "the sum was
+ * negative or zero."
+ */
+function sumEtsyPayments(results) {
+  if (!results || results.length === 0) return null;
+  let net = 0;
+  for (const p of results) {
+    if (p.amount_net) net += p.amount_net.amount / (p.amount_net.divisor || 100);
+  }
+  return Math.round(net * 100) / 100;
+}
+
 async function etsyReceiptTakeHome({ shopId, accessToken, clientId }, receiptId) {
   const res = await fetch(
     `https://openapi.etsy.com/v3/application/shops/${shopId}/payments?receipt_id=${encodeURIComponent(receiptId)}`,
     { headers: { "x-api-key": clientId, Authorization: `Bearer ${accessToken}` } },
   );
   if (!res.ok) return null;
-  let net = 0;
-  for (const p of (await res.json()).results ?? []) {
-    if (p.amount_net) net += p.amount_net.amount / (p.amount_net.divisor || 100);
-  }
-  return net > 0 ? Math.round(net * 100) / 100 : null;
+  return sumEtsyPayments((await res.json()).results);
 }
 
 // ── callables ─────────────────────────────────────────────────────────────
@@ -413,4 +457,5 @@ exports.getOrderTakeHome = onCall(
 exports._internal = {
   buildEbaySkuMap, buildEtsyListingMap, ebayOrderToSaleFields,
   etsyReceiptToSaleFields, resolveEbayStatus, ebayBuyerAddress,
+  summarizeEbayTransactions, sumEtsyPayments,
 };
