@@ -5,6 +5,7 @@ import Layout from "../components/Layout";
 import LogSaleModal from "../components/LogSaleModal";
 import EditSaleModal from "../components/EditSaleModal";
 import { aggregate, trend } from "../lib/salesMetrics";
+import { BUILT_IN_SALE_STAGES, BUILT_IN_CHIP_CLASS } from "../lib/saleStages";
 
 const PLATFORM_LABELS = {
   mercari: { label: "Mercari", color: "#e11d48", icon: "🔴" },
@@ -14,18 +15,7 @@ const PLATFORM_LABELS = {
   manual: { label: "In Person", color: "#64748b", icon: "⚪" },
 };
 
-const STATUS_LABELS = {
-  pending: { label: "Pending", chip: "chip-pending" },
-  shipped: { label: "Shipped", chip: "chip-fulfilling" },
-  delivered: { label: "Delivered", chip: "chip-fulfilling" },
-  complete: { label: "Complete", chip: "chip-primary" },
-  cancelled: { label: "Cancelled", chip: "chip-draft" },
-  returned: { label: "Returned", chip: "chip-draft" },
-};
-
-// Forward-only lifecycle — mirrors functions/sales.js shouldAdvanceStatus.
-// Terminal states (complete/cancelled/returned) get no advance button.
-const NEXT_STATUS = { pending: "shipped", shipped: "delivered", delivered: "complete" };
+const VIEW_STORAGE_KEY = "wonni.sales.view";
 
 function TrendChart({ points }) {
   if (points.length === 0) return null;
@@ -83,6 +73,20 @@ export default function Sales() {
   const [syncNote, setSyncNote] = useState("");
   const [showDeleted, setShowDeleted] = useState(false);
   const [undoToast, setUndoToast] = useState(null); // { saleId, title }
+  const [saleStages, setSaleStages] = useState(BUILT_IN_SALE_STAGES);
+  const [view, setView] = useState(() => {
+    try { return localStorage.getItem(VIEW_STORAGE_KEY) || "spreadsheet"; } catch { return "spreadsheet"; }
+  });
+  const [movingSaleId, setMovingSaleId] = useState(null);
+  const [dragOverKey, setDragOverKey] = useState(null);
+
+  function switchView(next) {
+    setView(next);
+    try { localStorage.setItem(VIEW_STORAGE_KEY, next); } catch { /* private-browsing, non-fatal */ }
+  }
+
+  const stageLabel = (key) => saleStages.find((s) => s.key === key)?.label ?? key;
+  const stageChipClass = (key) => BUILT_IN_CHIP_CLASS[key] ?? "chip-draft";
 
   async function handleSync() {
     setSyncing(true);
@@ -115,6 +119,13 @@ export default function Sales() {
     const prodQ = query(collection(db, "products"), where("userId", "==", uid));
     const unsubProd = onSnapshot(prodQ, (snap) => {
       setProducts(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    });
+
+    // Board columns / status dropdown options — mirrors sale_stages.js's
+    // loadSaleStages fallback (empty/missing → the 6 built-ins).
+    const unsubUser = onSnapshot(doc(db, "users", uid), (snap) => {
+      const stored = snap.data()?.saleStages;
+      setSaleStages(Array.isArray(stored) && stored.length > 0 ? stored : BUILT_IN_SALE_STAGES);
     });
 
     // Real-time sales listener (syncs across desktop & mobile)
@@ -156,6 +167,7 @@ export default function Sales() {
 
     return () => {
       unsubProd();
+      unsubUser();
       unsubSales();
     };
   }, []);
@@ -235,13 +247,19 @@ export default function Sales() {
     }
   }
 
-  async function handleAdvanceStatus(sale) {
-    const next = NEXT_STATUS[sale.status];
-    if (!next) return;
+  // The one path a user has to move a sale between buckets (board drag or
+  // spreadsheet dropdown) — routes through updateSaleStatus so the server
+  // validates the target key against this user's saleStages and, on a move
+  // into cancelled/returned, auto re-fetches the real take-home
+  // (docs/specs/2026-09-11-stage-board-and-revenue-accounting.md §4/§6).
+  async function handleStatusChange(saleId, status) {
+    setMovingSaleId(saleId);
     try {
-      await updateDoc(doc(db, "sales", sale.id), { status: next, updatedAt: serverTimestamp() });
+      await callFunction("updateSaleStatus")({ saleId, status });
     } catch (e) {
-      alert("Failed to update status: " + e.message);
+      alert("Failed to move sale: " + (e?.message ?? e));
+    } finally {
+      setMovingSaleId(null);
     }
   }
 
@@ -466,7 +484,95 @@ export default function Sales() {
         )}
       </div>
 
+      {/* View toggle */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        <button
+          className={`chip ${view === "board" ? "chip-primary" : "chip-draft"}`}
+          onClick={() => switchView("board")}
+        >
+          🗂️ Board
+        </button>
+        <button
+          className={`chip ${view === "spreadsheet" ? "chip-primary" : "chip-draft"}`}
+          onClick={() => switchView("spreadsheet")}
+        >
+          📋 Spreadsheet
+        </button>
+      </div>
+
+      {/* Sales Board */}
+      {!loading && view === "board" && (
+        <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 8, marginBottom: 20 }}>
+          {saleStages.map((stage) => {
+            const stageSales = filteredSales.filter((s) => s.status === stage.key);
+            return (
+              <div
+                key={stage.key}
+                onDragOver={(e) => { e.preventDefault(); setDragOverKey(stage.key); }}
+                onDragLeave={() => setDragOverKey((k) => (k === stage.key ? null : k))}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOverKey(null);
+                  const saleId = e.dataTransfer.getData("text/sale-id");
+                  if (saleId) handleStatusChange(saleId, stage.key);
+                }}
+                className="card"
+                style={{
+                  minWidth: 220, maxWidth: 260, flex: "0 0 auto", padding: 10,
+                  background: dragOverKey === stage.key ? "var(--surface-high)" : "var(--surface)",
+                  border: dragOverKey === stage.key ? "var(--border-thick) dashed var(--accent)" : undefined,
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.03em", color: "var(--muted)" }}>
+                    {stage.label}
+                  </span>
+                  <span style={{ fontSize: 11, color: "var(--muted)" }}>{stageSales.length}</span>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, minHeight: 40 }}>
+                  {stageSales.map((s) => {
+                    const plat = PLATFORM_LABELS[s.platform] || PLATFORM_LABELS.manual;
+                    const total = ((s.salePrice || 0) * (s.quantity || 1)).toFixed(2);
+                    return (
+                      <div
+                        key={s.id}
+                        draggable
+                        onDragStart={(e) => e.dataTransfer.setData("text/sale-id", s.id)}
+                        onClick={() => setEditingSale(s)}
+                        style={{
+                          padding: 8, borderRadius: "var(--radius)", background: "var(--surface-high)",
+                          border: "var(--border-thin) solid var(--border)", cursor: "grab",
+                          opacity: movingSaleId === s.id ? 0.5 : 1,
+                        }}
+                        title="Drag to move · click to edit"
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          {s.productImageUrl && (
+                            <img src={s.productImageUrl} alt="" style={{ width: 24, height: 24, borderRadius: 3, objectFit: "cover" }} />
+                          )}
+                          <span style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {s.productTitle || "Manual sale"}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
+                          <span style={{ fontSize: 11 }}>{plat.icon} {plat.label}</span>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: "var(--success)" }}>${total}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {stageSales.length === 0 && (
+                    <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "center", padding: "12px 0" }}>drop here</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* Sales Table */}
+      {view === "spreadsheet" && (<>
       {loading ? (
         <div className="empty-state">
           <div style={{ fontSize: 32 }}>⏳</div>
@@ -505,8 +611,14 @@ export default function Sales() {
                   : "—";
                 const plat = PLATFORM_LABELS[s.platform] || PLATFORM_LABELS.manual;
                 const total = ((s.salePrice || 0) * (s.quantity || 1)).toFixed(2);
-                const statusInfo = STATUS_LABELS[s.status] || STATUS_LABELS.pending;
-                const nextStatus = NEXT_STATUS[s.status];
+                // A sale can carry a status that isn't (or no longer is) one of
+                // this user's saleStages — e.g. a bucket got deleted, or a poller
+                // wrote a status ahead of stages loading. Show it anyway as an
+                // extra option so the dropdown never silently blanks.
+                const hasCurrentStage = saleStages.some((st) => st.key === s.status);
+                const stageOptions = hasCurrentStage || !s.status
+                  ? saleStages
+                  : [...saleStages, { key: s.status, label: stageLabel(s.status) }];
 
                 return (
                   <tr key={s.id} style={{ borderBottom: "var(--border-thin) solid var(--border)" }}>
@@ -564,17 +676,21 @@ export default function Sales() {
 
                     <td style={{ padding: "12px 16px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <span className={`chip ${statusInfo.chip}`} style={{ fontSize: 11 }}>{statusInfo.label}</span>
-                        {nextStatus && (
-                          <button
-                            className="btn btn-ghost"
-                            style={{ padding: "2px 6px", fontSize: 11 }}
-                            title={`Mark ${STATUS_LABELS[nextStatus].label}`}
-                            onClick={() => handleAdvanceStatus(s)}
-                          >
-                            → {STATUS_LABELS[nextStatus].label}
-                          </button>
-                        )}
+                        <span className={`chip ${stageChipClass(s.status)}`} style={{ fontSize: 11 }}>
+                          {stageLabel(s.status)}
+                        </span>
+                        <select
+                          className="input"
+                          style={{ fontSize: 11, padding: "2px 6px", width: "auto" }}
+                          value={s.status || ""}
+                          disabled={movingSaleId === s.id}
+                          onChange={(e) => handleStatusChange(s.id, e.target.value)}
+                          title="Move to a different stage"
+                        >
+                          {stageOptions.map((st) => (
+                            <option key={st.key} value={st.key}>{st.label}</option>
+                          ))}
+                        </select>
                       </div>
                     </td>
 
@@ -628,6 +744,7 @@ export default function Sales() {
           </table>
         </div>
       )}
+      </>)}
 
       {/* Deleted Section */}
       {deletedSales.length > 0 && (
