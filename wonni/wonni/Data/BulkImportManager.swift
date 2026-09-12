@@ -147,6 +147,11 @@ class BulkImportManager: ObservableObject {
             crossPostListingIds: crossPostIds
         )
         _ = try await ListingRepository.shared.saveDraft(listing)
+        // Bulk-imported listings never go through UploadManager's Item-draft
+        // sync — without this, `listings/{listingId}` has no `products/{id}`
+        // twin, so it's invisible to web and every Cloud Function (see
+        // ProductRepository.syncProductFromListing's doc comment).
+        try? await ProductRepository.shared.syncProductFromListing(listing)
     }
 
     private func mapCondition(_ text: String) -> ItemCondition? {

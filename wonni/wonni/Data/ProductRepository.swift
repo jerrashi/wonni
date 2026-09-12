@@ -54,4 +54,60 @@ class ProductRepository: ObservableObject {
             .filter { ($0.data()["source"] as? String) != "ios" }
             .map { (id: $0.documentID, data: $0.data()) }
     }
+
+    /// `products/{listing.id}` twin for a `UserListing` written straight into `listings`
+    /// (bulk Mercari import, single-URL import, "sell similar" duplication — none of
+    /// these go through UploadManager's `Item`-draft flow, so nothing else ever calls
+    /// `syncProduct` for them). Without this, the listing has no `products` doc: it's
+    /// invisible to web/every Cloud Function, and `ebayCreateListing`/`etsyCreateListing`
+    /// (called with the listing's own id as `productId` — see ProfileView) fail outright
+    /// because there's nothing at that id in `products`.
+    ///
+    /// Most of these listings are already `status: .active` at creation (bulk/URL
+    /// import re-posts something already live elsewhere); "sell similar" duplication
+    /// is the one path that creates a genuine `status: .draft` copy instead. `isDraft`
+    /// mirrors `listing.status` either way, same as the `Item`-draft path tracks the
+    /// draft's own in-progress state.
+    func syncProductFromListing(_ listing: UserListing) async throws {
+        guard let productId = listing.id else { return }
+        var data: [String: Any] = [:]
+        data["userId"] = listing.userId
+        data["source"] = "ios"
+        data["isDraft"] = (listing.status == .draft)
+        data["title"] = listing.customTitle
+        data["description"] = listing.customDescription
+        data["listingPrice"] = listing.price
+        data["condition"] = Self.webCondition(for: listing.condition)
+        data["category"] = listing.category
+        data["brand"] = listing.brand
+        data["tags"] = listing.tags
+        data["personalNote"] = listing.personalNote
+        data["images"] = listing.photoPaths
+        if let shipping = listing.shippingInfo {
+            data["buyerPaysShipping"] = shipping.buyerPaysShipping
+            data["handlingFee"] = shipping.handlingFee
+            data["estimatedShippingDays"] = shipping.estimatedShippingDays
+            data["handlingTimeDays"] = shipping.handlingTimeDays as Any
+            data["weightLbs"] = shipping.weightLbs as Any
+        }
+        if let crossPostStatus = listing.crossPostStatus { data["crossPostStatus"] = crossPostStatus }
+        if let crossPostListingIds = listing.crossPostListingIds { data["crossPostListingIds"] = crossPostListingIds }
+        data["updatedAt"] = Timestamp(date: Date())
+        try await syncProduct(productId: productId, data: data)
+    }
+
+    /// `ItemCondition`'s raw values (`likeNew`, `newWithoutTags`, `forParts`, …) aren't
+    /// the same strings as web's canonical `product.condition` enum
+    /// (`new|likenew|good|fair|poor` — see CLAUDE.md open work item on this exact
+    /// mismatch). `newWithoutTags` and `forParts` have no dedicated web value; folded
+    /// into the closest neighbor rather than left unmapped.
+    private static func webCondition(for condition: ItemCondition) -> String {
+        switch condition {
+        case .new, .newWithoutTags: return "new"
+        case .likeNew: return "likenew"
+        case .good: return "good"
+        case .fair: return "fair"
+        case .poor, .forParts: return "poor"
+        }
+    }
 }
