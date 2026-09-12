@@ -6,13 +6,54 @@
 import Foundation
 import FirebaseFirestore
 
-enum SaleStatus: String, Codable, CaseIterable {
-    case pending   = "pending"    // sold, not yet shipped
-    case shipped   = "shipped"    // tracking entered / in transit
-    case delivered = "delivered"  // package delivered, within return window
-    case complete  = "complete"   // return window closed / both parties rated
-    case cancelled = "cancelled"  // order cancelled
-    case returned  = "returned"   // buyer returned item
+/// Sale lifecycle status. The backend (docs/specs/2026-09-11-stage-board-and-
+/// revenue-accounting.md §1) made `sale.status` an open, per-user-configurable
+/// string — any of these 6 built-in keys, or a custom bucket key a user added
+/// in Settings/web. `.other` is that fallback: without it, decoding a sale
+/// sitting in a custom bucket would throw and the whole sale would silently
+/// vanish from every list (`try? $0.data(as: Sale.self)` in SaleRepository
+/// swallows the error). The 6 built-in *keys* are permanent (sale_stages.js)
+/// so they're still worth their own cases for exhaustive `switch`es elsewhere
+/// (statusBadge colors, etc.) — `.other` only ever holds a custom key.
+enum SaleStatus: Codable, Hashable {
+    case pending    // sold, not yet shipped
+    case shipped    // tracking entered / in transit
+    case delivered  // package delivered, within return window
+    case complete   // return window closed / both parties rated
+    case cancelled  // order cancelled
+    case returned   // buyer returned item
+    case other(String)
+
+    private static let knownByRawValue: [String: SaleStatus] = [
+        "pending": .pending, "shipped": .shipped, "delivered": .delivered,
+        "complete": .complete, "cancelled": .cancelled, "returned": .returned,
+    ]
+
+    var rawValue: String {
+        switch self {
+        case .pending:          return "pending"
+        case .shipped:          return "shipped"
+        case .delivered:        return "delivered"
+        case .complete:         return "complete"
+        case .cancelled:        return "cancelled"
+        case .returned:         return "returned"
+        case .other(let raw):   return raw
+        }
+    }
+
+    init(rawValue: String) {
+        self = Self.knownByRawValue[rawValue] ?? .other(rawValue)
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self = SaleStatus(rawValue: try container.decode(String.self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 struct SaleAddress: Codable, Equatable {

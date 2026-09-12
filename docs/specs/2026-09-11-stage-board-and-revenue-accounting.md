@@ -247,7 +247,38 @@ needed. `resolveEbayStatus()` / the Etsy mapping are unchanged by this spec.
    bucket, add/delete custom buckets (built-ins can't be deleted, no delete
    control shown), batch-saved via `updateSaleStages`. New shared UI mirror:
    `web/src/lib/saleStages.js` (built-ins + chip-color map).
-6. iOS board view.
+6. ✅ iOS board view. Shipped 2026-09-11:
+   - `Sale.swift`'s `SaleStatus` was still the fixed 6-case `String` raw-value
+     enum — decoding a sale sitting in a custom (non-built-in) bucket would
+     have thrown and silently dropped that sale from every list
+     (`try? $0.data(as: Sale.self)`). Rewritten as a 6-known-case enum plus
+     `.other(String)` with a custom `Codable` (`init(rawValue:)` never fails,
+     falls back to `.other`), fixing the real gap flagged when `SalesMetrics.
+     swift` was ported. `statusBadge`'s switch updated for the new case.
+   - `SaleStage.swift` (new): `SaleStage`/`SaleStages` mirror of
+     `sale_stages.js`/`saleStages.js`, plus `SaleStages.including(_:in:)` so
+     a picker/board never drops a sale whose status isn't in the current
+     stage list.
+   - `SaleRepository.updateSaleStatus(id:status:)` (new): the ONE path,
+     calling the `updateSaleStatus` Cloud Function instead of a raw
+     `updateData` — closes a real parity gap, since `SaleDetailSheet.save()`
+     previously wrote `status` directly to Firestore, bypassing both the
+     server's `saleStages` membership check and the cancelled/returned
+     take-home auto-refetch (§4). `fetchSaleStages()` (new): one-shot read
+     with the built-in fallback.
+   - `SaleDetailSheet`'s status `Picker` now lists the user's live stages
+     (fetched via `.task`) instead of the fixed 6, and `save()` routes the
+     status field through `updateSaleStatus` while everything else keeps
+     going through the existing `updateSale`.
+   - `SalesBoardView.swift` (new): tap-to-move board — one column per stage,
+     horizontally scrollable; tapping a card opens the existing
+     `SaleDetailSheet`, long-press shows a "move to…" context menu. Wired
+     into `SalesDashboardView` behind a List/Board segmented control
+     (`@AppStorage`-persisted), reusing the existing `reload()` refresh.
+   - Verified with a full `xcodebuild build` (iOS Simulator destination) —
+     BUILD SUCCEEDED, no warnings from any of the touched/new files. (New
+     files had to be registered in `project.pbxproj` by hand — no
+     file-system-synchronized groups in this project.)
 
 Steps 1–4 are backend-only and independently shippable/testable
 (`node --test`, per `backend-task-loop`). §5 no longer blocks anything —

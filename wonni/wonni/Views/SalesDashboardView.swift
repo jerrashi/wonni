@@ -39,6 +39,11 @@ struct SalesDashboardView: View {
     @State private var saleToPurge: Sale? = nil
     @ObservedObject private var taskQueue = AppTaskQueue.shared
 
+    // Board view (tap-to-move, no drag) — iOS step of docs/specs/2026-09-11-
+    // stage-board-and-revenue-accounting.md §6, after web's board shipped.
+    @AppStorage("wonni.sales.viewMode") private var viewMode: String = "list"
+    @State private var saleStages: [SaleStage] = SaleStages.builtIn
+
     private var secondsUntilNextSync: Int {
         let elapsed = Date().timeIntervalSince1970 - lastSyncTimestamp
         let remaining = syncCooldown - elapsed
@@ -57,12 +62,43 @@ struct SalesDashboardView: View {
     private var platforms: [String] { Array(Set(sales.map { $0.platform })).sorted() }
     private var allTags: [String] { Array(Set(sales.flatMap { $0.productTags ?? [] })).sorted() }
 
+    private var viewModePicker: some View {
+        Picker("View", selection: $viewMode) {
+            Text("List").tag("list")
+            Text("Board").tag("board")
+        }
+        .pickerStyle(.segmented)
+    }
+
+    private var salesBoard: some View {
+        VStack(spacing: 0) {
+            viewModePicker
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            SalesBoardView(
+                sales: filteredSales,
+                stages: saleStages,
+                onTapSale: { selectedSale = $0 },
+                onMove: { sale, target in
+                    guard let id = sale.id else { return }
+                    Task {
+                        try? await SaleRepository.shared.updateSaleStatus(id: id, status: target.key)
+                        await reload()
+                    }
+                }
+            )
+            Spacer(minLength: 0)
+        }
+    }
+
     var body: some View {
         Group {
             if isLoading {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if sales.isEmpty {
                 emptySalesState
+            } else if viewMode == "board" {
+                salesBoard
             } else {
                 salesList
             }
@@ -174,10 +210,18 @@ struct SalesDashboardView: View {
                 Text("This can't be undone. If it was imported from Mercari, it can be re-scanned on the next sync.")
             }
         .task { await reload() }
+        .task { saleStages = await SaleRepository.shared.fetchSaleStages() }
     }
 
     private var salesList: some View {
         List {
+            Section {
+                viewModePicker
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+            }
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+
             // Summary cards
             Section {
                 HStack(spacing: 12) {
@@ -770,12 +814,13 @@ private struct SaleRow: View {
 
     private func statusBadge(_ status: SaleStatus) -> some View {
         let (label, color): (String, Color) = switch status {
-        case .pending:   ("Pending", .orange)
-        case .shipped:   ("Shipped", .blue)
-        case .delivered: ("Delivered", .cyan)
-        case .complete:  ("Complete", .green)
-        case .cancelled: ("Cancelled", .red)
-        case .returned:  ("Returned", .purple)
+        case .pending:          ("Pending", .orange)
+        case .shipped:          ("Shipped", .blue)
+        case .delivered:        ("Delivered", .cyan)
+        case .complete:         ("Complete", .green)
+        case .cancelled:        ("Cancelled", .red)
+        case .returned:         ("Returned", .purple)
+        case .other(let raw):   (raw.capitalized, .gray) // a custom stage-board bucket
         }
         return Text(label)
             .font(.caption2.weight(.semibold))
@@ -792,19 +837,22 @@ struct SaleDetailSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var trackingNumber: String
     @State private var carrier: String
-    @State private var status: SaleStatus
+    @State private var statusKey: String
+    @State private var stages: [SaleStage] = SaleStages.builtIn
     @State private var priceString: String
     @State private var takeHomeString: String
     @State private var soldAt: Date
     @State private var addressText: String
     @State private var isSaving = false
 
+    private var stageOptions: [SaleStage] { SaleStages.including(statusKey, in: stages) }
+
     init(sale: Sale, onUpdated: @escaping () -> Void) {
         self.sale = sale
         self.onUpdated = onUpdated
         _trackingNumber = State(initialValue: sale.trackingNumber ?? "")
         _carrier = State(initialValue: sale.carrier ?? "USPS")
-        _status = State(initialValue: sale.status)
+        _statusKey = State(initialValue: sale.status.rawValue)
         _soldAt = State(initialValue: sale.soldAt.dateValue())
         _priceString = State(initialValue: String(format: "%.2f", sale.priceSoldFor))
         _addressText = State(initialValue: sale.buyerAddress?.multiLine ?? "")
@@ -877,15 +925,16 @@ struct SaleDetailSheet: View {
                             } label: { Image(systemName: "doc.on.doc").foregroundStyle(.secondary) }
                         }
                     }
-                    Picker("Status", selection: $status) {
-                        ForEach(SaleStatus.allCases, id: \.self) { s in
-                            Text(s.rawValue.capitalized).tag(s)
+                    Picker("Status", selection: $statusKey) {
+                        ForEach(stageOptions) { stage in
+                            Text(stage.label).tag(stage.key)
                         }
                     }
                 }
             }
             .navigationTitle("Sale Details")
             .navigationBarTitleDisplayMode(.inline)
+            .task { stages = await SaleRepository.shared.fetchSaleStages() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
@@ -906,7 +955,11 @@ struct SaleDetailSheet: View {
     private func save() async {
         guard let id = sale.id else { return }
         isSaving = true
-        var data: [String: Any] = ["status": status.rawValue]
+        var data: [String: Any] = [:]
+        // Entering a tracking number while still "pending" implies it shipped —
+        // same auto-bump as before, just resolved before deciding what status
+        // (if any) actually needs writing below.
+        var finalStatusKey = statusKey
 
         if !Calendar.current.isDate(soldAt, inSameDayAs: sale.soldAt.dateValue()) {
             data["soldAt"] = Timestamp(date: soldAt)
@@ -932,12 +985,18 @@ struct SaleDetailSheet: View {
         if !trackingNumber.isEmpty {
             data["trackingNumber"] = trackingNumber
             data["carrier"] = carrier
-            if status == .pending {
-                data["status"] = SaleStatus.shipped.rawValue
+            if statusKey == SaleStatus.pending.rawValue {
+                finalStatusKey = SaleStatus.shipped.rawValue
                 data["shippedAt"] = Timestamp(date: Date())
             }
         }
+
         try? await SaleRepository.shared.updateSale(id: id, data: data)
+        // Status specifically goes through updateSaleStatus (not updateData
+        // above) — see SaleRepository.updateSaleStatus for why.
+        if finalStatusKey != sale.status.rawValue {
+            try? await SaleRepository.shared.updateSaleStatus(id: id, status: finalStatusKey)
+        }
         onUpdated()
         dismiss()
         isSaving = false
