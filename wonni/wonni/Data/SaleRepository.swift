@@ -62,6 +62,31 @@ class SaleRepository: ObservableObject {
         try await db.collection(col).document(id).updateData(d)
     }
 
+    /// The ONE path for moving a sale between stage-board buckets (tap-to-move
+    /// board, or the status picker in SaleDetailSheet) — mirrors web's
+    /// Sales.jsx handleStatusChange. Routes through the validated
+    /// `updateSaleStatus` Cloud Function instead of a raw `updateData` so the
+    /// server checks the target key against this user's `saleStages` and, on
+    /// a move into cancelled/returned, auto re-fetches the real take-home
+    /// (docs/specs/2026-09-11-stage-board-and-revenue-accounting.md §4/§6).
+    func updateSaleStatus(id: String, status: String) async throws {
+        _ = try await Functions.functions()
+            .httpsCallable("updateSaleStatus")
+            .call(["saleId": id, "status": status])
+    }
+
+    /// One-shot read of this user's stage-board buckets, falling back to the
+    /// built-ins — mirrors sale_stages.js's loadSaleStages. Not a live
+    /// listener; callers that need live updates (a persistent board screen)
+    /// should watch `users/{uid}` themselves instead.
+    func fetchSaleStages() async -> [SaleStage] {
+        guard let userId = Auth.auth().currentUser?.uid else { return SaleStages.builtIn }
+        guard let snap = try? await db.collection("users").document(userId).getDocument() else {
+            return SaleStages.builtIn
+        }
+        return SaleStages.parse(snap.data())
+    }
+
     func hideSale(id: String) async throws {
         try await db.collection(col).document(id).updateData([
             "isDeleted": true,

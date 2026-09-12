@@ -94,6 +94,8 @@
 		E638B2296070470221FCA204 /* ImportListingSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67BC65BADBDD92E27F2C170A /* ImportListingSheet.swift */; };
 		EC4CE9E74B3D4A44A464E4A6 /* SalesDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */; };
 		8F58F429D31BD8040DE57F5C /* SalesInsightsViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F58C9187109B0A023CF5811 /* SalesInsightsViews.swift */; };
+		EF402964D356415AABA08F1F /* SaleStage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2528ACBB4D5E4B89B60BE65A /* SaleStage.swift */; };
+		5E40C361C5444016970A4A7F /* SalesBoardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F98B6103F36C4C689466B9A5 /* SalesBoardView.swift */; };
 		FAAFEB48A7D6F72586D01FD4 /* MercariSaleParsing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9564BAC1690BD050B5596F07 /* MercariSaleParsing.swift */; };
 		FC3EC2E105D97BA997530E74 /* BulkImportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E177FE23B86D196AD7B41F1E /* BulkImportSheet.swift */; };
 /* End PBXBuildFile section */
@@ -186,6 +188,8 @@
 		7D3F2A91C4E8B5060A1D9F23 /* DraftAIProcessingPolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DraftAIProcessingPolicyTests.swift; sourceTree = "<group>"; };
 		93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalesDashboardView.swift; sourceTree = "<group>"; };
 		8F58C9187109B0A023CF5811 /* SalesInsightsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalesInsightsViews.swift; sourceTree = "<group>"; };
+		2528ACBB4D5E4B89B60BE65A /* SaleStage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SaleStage.swift; sourceTree = "<group>"; };
+		F98B6103F36C4C689466B9A5 /* SalesBoardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalesBoardView.swift; sourceTree = "<group>"; };
 		946CBD23F95846D07C59FD39 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		954511D35EA0839747028ADA /* BulkImportPillView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BulkImportPillView.swift; sourceTree = "<group>"; };
 		9564BAC1690BD050B5596F07 /* MercariSaleParsing.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MercariSaleParsing.swift; sourceTree = "<group>"; };
@@ -350,6 +354,7 @@
 				6134E1572FDCB206007C3979 /* PublishedPhotoModal.swift */,
 				209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */,
 				93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */,
+				F98B6103F36C4C689466B9A5 /* SalesBoardView.swift */,
 				8F58C9187109B0A023CF5811 /* SalesInsightsViews.swift */,
 				61BCCD062D7B9A710037E4B9 /* SearchBarView.swift */,
 				6192AA5B2D7F582100EC2EFA /* SearchView.swift */,
@@ -370,6 +375,7 @@
 				CCDD00112233445566778800 /* ListingTemplate.swift */,
 				61EE007C2D778EFA006063C3 /* Listing.swift */,
 				E7EBEECFD9B24F3D971DDEA2 /* Sale.swift */,
+				2528ACBB4D5E4B89B60BE65A /* SaleStage.swift */,
 				76BC65B5E09E487A41EA3CCE /* PendingMercariSale.swift */,
 			);
 			path = Models;
@@ -615,6 +621,8 @@
 				678765A92DE62F001C8C88F2 /* SalesMetrics.swift in Sources */,
 				60A7C95275BB4BCCAA8FA838 /* RecordSaleSheet.swift in Sources */,
 				EC4CE9E74B3D4A44A464E4A6 /* SalesDashboardView.swift in Sources */,
+				5E40C361C5444016970A4A7F /* SalesBoardView.swift in Sources */,
+				EF402964D356415AABA08F1F /* SaleStage.swift in Sources */,
 				8F58F429D31BD8040DE57F5C /* SalesInsightsViews.swift in Sources */,
 				9944CB339CA5802F7C51CEEB /* URLExtractor.swift in Sources */,
 				E638B2296070470221FCA204 /* ImportListingSheet.swift in Sources */,
