@@ -33,10 +33,11 @@ jobs:
 
       - name: Run unit tests
         run: |
+          set -o pipefail
           cd wonni
           xcodebuild test \
             -scheme wonni \
-            -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+            -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
             -configuration Debug \
             -enableCodeCoverage YES \
             2>&1 | tee test-output.log
@@ -59,10 +60,11 @@ jobs:
 
       - name: Run selling flow UI tests
         run: |
+          set -o pipefail
           cd wonni
           xcodebuild test \
             -scheme wonniUITests \
-            -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+            -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
             -configuration Debug \
             -testPlan SellingFlow \
             2>&1 | tee ui-test-output.log
@@ -76,7 +78,7 @@ jobs:
 
       - name: Upload test logs on failure
         if: failure()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ui-test-logs
           path: wonni/ui-test-output.log
@@ -95,7 +97,7 @@ jobs:
           cd wonni
           xcodebuild build \
             -scheme wonni \
-            -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+            -destination 'generic/platform=iOS Simulator' \
             -configuration Debug
 
       - name: Build UI tests
@@ -103,7 +105,7 @@ jobs:
           cd wonni
           xcodebuild build-for-testing \
             -scheme wonniUITests \
-            -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+            -destination 'generic/platform=iOS Simulator' \
             -configuration Debug
 
   test-results:
@@ -112,12 +114,17 @@ jobs:
     needs: [lint, unit-tests, ui-tests, build]
     if: always()
     steps:
+      # Step-level success()/failure() only look at prior STEPS in this same
+      # job — this job has none, so they don't actually see the needs jobs'
+      # outcomes. That's why this used to print "All checks passed!" right
+      # above a run that GitHub had already marked failed (found 2026-09-12).
+      # Read needs.*.result explicitly instead.
       - name: ✅ All checks passed
-        if: success()
+        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
         run: echo "All tests and lint checks passed!"
 
       - name: ❌ Some checks failed
-        if: failure()
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
         run: |
           echo "⚠️  Build or tests failed. Review the logs above."
           exit 1
