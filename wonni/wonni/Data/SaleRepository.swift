@@ -76,15 +76,33 @@ class SaleRepository: ObservableObject {
     }
 
     /// One-shot read of this user's stage-board buckets, falling back to the
-    /// built-ins — mirrors sale_stages.js's loadSaleStages. Not a live
-    /// listener; callers that need live updates (a persistent board screen)
-    /// should watch `users/{uid}` themselves instead.
+    /// built-ins — mirrors sale_stages.js's loadSaleStages. Prefer
+    /// `observeSaleStages` for any screen that stays on-screen a while (a
+    /// rename in Settings should show up without a manual refresh); this is
+    /// for one-off reads like a sheet that's about to close anyway.
     func fetchSaleStages() async -> [SaleStage] {
         guard let userId = Auth.auth().currentUser?.uid else { return SaleStages.builtIn }
         guard let snap = try? await db.collection("users").document(userId).getDocument() else {
             return SaleStages.builtIn
         }
         return SaleStages.parse(snap.data())
+    }
+
+    /// Live version of `fetchSaleStages` — one shared `users/{uid}` listener
+    /// callers can hold for as long as they're on screen, so a bucket
+    /// rename/add/delete in Settings shows up immediately everywhere else
+    /// (matches web's single `onSnapshot(doc(db,"users",uid))` in
+    /// Sales.jsx). Caller owns the returned registration's lifetime — remove
+    /// it (e.g. in `.onDisappear`) when done.
+    @discardableResult
+    func observeSaleStages(onChange: @escaping ([SaleStage]) -> Void) -> ListenerRegistration? {
+        guard let userId = Auth.auth().currentUser?.uid else {
+            onChange(SaleStages.builtIn)
+            return nil
+        }
+        return db.collection("users").document(userId).addSnapshotListener { snap, _ in
+            onChange(SaleStages.parse(snap?.data()))
+        }
     }
 
     func hideSale(id: String) async throws {

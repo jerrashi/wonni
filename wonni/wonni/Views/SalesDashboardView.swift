@@ -43,6 +43,7 @@ struct SalesDashboardView: View {
     // stage-board-and-revenue-accounting.md §6, after web's board shipped.
     @AppStorage("wonni.sales.viewMode") private var viewMode: String = "list"
     @State private var saleStages: [SaleStage] = SaleStages.builtIn
+    @State private var saleStagesListener: ListenerRegistration?
 
     private var secondsUntilNextSync: Int {
         let elapsed = Date().timeIntervalSince1970 - lastSyncTimestamp
@@ -167,7 +168,7 @@ struct SalesDashboardView: View {
             .animation(.spring(response: 0.35, dampingFraction: 0.8), value: taskQueue.current?.id)
         }
             .sheet(item: $selectedSale) { sale in
-                SaleDetailSheet(sale: sale) {
+                SaleDetailSheet(sale: sale, stages: saleStages) {
                     Task { await reload() }
                 }
             }
@@ -210,7 +211,17 @@ struct SalesDashboardView: View {
                 Text("This can't be undone. If it was imported from Mercari, it can be re-scanned on the next sync.")
             }
         .task { await reload() }
-        .task { saleStages = await SaleRepository.shared.fetchSaleStages() }
+        .onAppear {
+            // A single live listener for the life of this screen — a bucket
+            // rename/add/delete in Settings shows up immediately in both the
+            // board and any open SaleDetailSheet, instead of each fetching
+            // its own stale one-shot snapshot.
+            saleStagesListener = SaleRepository.shared.observeSaleStages { saleStages = $0 }
+        }
+        .onDisappear {
+            saleStagesListener?.remove()
+            saleStagesListener = nil
+        }
     }
 
     private var salesList: some View {
@@ -832,13 +843,16 @@ private struct SaleRow: View {
 
 struct SaleDetailSheet: View {
     let sale: Sale
+    /// Live from the caller (SalesDashboardView's shared observeSaleStages
+    /// listener) rather than fetched here, so a bucket rename/add/delete in
+    /// Settings shows up immediately even while this sheet is already open.
+    let stages: [SaleStage]
     var onUpdated: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var trackingNumber: String
     @State private var carrier: String
     @State private var statusKey: String
-    @State private var stages: [SaleStage] = SaleStages.builtIn
     @State private var priceString: String
     @State private var takeHomeString: String
     @State private var soldAt: Date
@@ -847,8 +861,9 @@ struct SaleDetailSheet: View {
 
     private var stageOptions: [SaleStage] { SaleStages.including(statusKey, in: stages) }
 
-    init(sale: Sale, onUpdated: @escaping () -> Void) {
+    init(sale: Sale, stages: [SaleStage] = SaleStages.builtIn, onUpdated: @escaping () -> Void) {
         self.sale = sale
+        self.stages = stages
         self.onUpdated = onUpdated
         _trackingNumber = State(initialValue: sale.trackingNumber ?? "")
         _carrier = State(initialValue: sale.carrier ?? "USPS")
@@ -934,7 +949,6 @@ struct SaleDetailSheet: View {
             }
             .navigationTitle("Sale Details")
             .navigationBarTitleDisplayMode(.inline)
-            .task { stages = await SaleRepository.shared.fetchSaleStages() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
