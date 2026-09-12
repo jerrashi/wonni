@@ -19,6 +19,7 @@ const { _internal: sales } = require("../sales");
 const {
   buildEbaySkuMap, buildEtsyListingMap, ebayOrderToSaleFields,
   etsyReceiptToSaleFields, resolveEbayStatus, ebayBuyerAddress,
+  summarizeEbayTransactions, sumEtsyPayments,
 } = poller;
 
 const UID = "user_1";
@@ -109,6 +110,61 @@ test("ebayOrderToSaleFields: folds in tracking + finance lookups", () => {
 
 test("ebayBuyerAddress: null when there's no ship-to and no name", () => {
   assert.equal(ebayBuyerAddress({ fulfillmentStartInstructions: [] }), null);
+});
+
+// ── eBay/Etsy take-home accuracy fix (regression, 2026-09-11 spec §4) ──────
+
+test("regression: summarizeEbayTransactions sums SALE + REFUND, doesn't stop at the first row", () => {
+  const s = summarizeEbayTransactions([
+    { orderId: "o1", transactionType: "SALE", amount: { value: "20.00" } },
+    { orderId: "o1", transactionType: "REFUND", amount: { value: "-18.50" } },
+    { orderId: "other-order", transactionType: "SALE", amount: { value: "999.00" } },
+  ], "o1");
+  assert.equal(s.takeHome, 1.5, "20 - 18.50, not just the first SALE row");
+});
+
+test("regression: summarizeEbayTransactions returns a negative sum as-is (a real loss), not floored to null/0", () => {
+  const s = summarizeEbayTransactions([
+    { orderId: "o1", transactionType: "SALE", amount: { value: "20.00" } },
+    { orderId: "o1", transactionType: "REFUND", amount: { value: "-25.00" } },
+  ], "o1");
+  assert.equal(s.takeHome, -5, "the seller lost money on this return");
+});
+
+test("summarizeEbayTransactions: SHIPPING_LABEL tracked separately from takeHome, still summed across rows", () => {
+  const s = summarizeEbayTransactions([
+    { orderId: "o1", transactionType: "SALE", amount: { value: "20.00" } },
+    { orderId: "o1", transactionType: "SHIPPING_LABEL", amount: { value: "4.10" } },
+    { orderId: "o1", transactionType: "SHIPPING_LABEL", amount: { value: "1.00" } },
+  ], "o1");
+  assert.equal(s.takeHome, 20);
+  assert.equal(s.labelCost, 5.1);
+});
+
+test("summarizeEbayTransactions: no matching transaction for the order -> takeHome null (found-nothing, not zero)", () => {
+  const s = summarizeEbayTransactions([{ orderId: "other", transactionType: "SALE", amount: { value: "20.00" } }], "o1");
+  assert.equal(s.takeHome, null);
+});
+
+test("regression: sumEtsyPayments sums every payment row (a refund's negative amount_net included)", () => {
+  const net = sumEtsyPayments([
+    { amount_net: { amount: 1500, divisor: 100 } },
+    { amount_net: { amount: -1200, divisor: 100 } },
+  ]);
+  assert.equal(net, 3, "15.00 - 12.00");
+});
+
+test("regression: sumEtsyPayments returns a negative net as-is, not floored to null", () => {
+  const net = sumEtsyPayments([
+    { amount_net: { amount: 1500, divisor: 100 } },
+    { amount_net: { amount: -2000, divisor: 100 } },
+  ]);
+  assert.equal(net, -5);
+});
+
+test("sumEtsyPayments: no rows at all -> null (distinct from a real zero/negative sum)", () => {
+  assert.equal(sumEtsyPayments([]), null);
+  assert.equal(sumEtsyPayments(null), null);
 });
 
 // ── Etsy receipt → sale fields ─────────────────────────────────────────────
