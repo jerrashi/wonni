@@ -756,6 +756,10 @@ struct ProfileView: View {
 
         do {
             _ = try await ListingRepository.shared.saveDraft(copy)
+            // See ProductRepository.syncProductFromListing — a duplicated
+            // listing is written straight into `listings` under a new id,
+            // so it needs its own `products/{id}` twin created here too.
+            try? await ProductRepository.shared.syncProductFromListing(copy)
             AppTaskQueue.shared.complete(id: taskId)
             await loadListings()
             // Open EditListingSheet for the new listing

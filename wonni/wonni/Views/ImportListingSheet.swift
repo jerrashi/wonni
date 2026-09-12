@@ -151,6 +151,10 @@ struct ImportListingSheet: View {
                 crossPostListingIds: crossPostIds
             )
             _ = try await ListingRepository.shared.saveDraft(listing)
+            // See ProductRepository.syncProductFromListing — this listing was
+            // written straight into `listings`, so it needs its `products/{id}`
+            // twin created here too.
+            try? await ProductRepository.shared.syncProductFromListing(listing)
 
             dismiss()
         } catch {
