@@ -23,6 +23,7 @@ const { validated } = require("./contracts");
 const { ebayRequest, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET } = require("./ebay_auth");
 const { getValidEtsyToken, getEtsyClientId } = require("./etsy_auth");
 const { variantSkuFor } = require("./ebay_listing");
+const { loadSaleStages } = require("./sale_stages");
 
 const EBAY_SECRETS = [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET];
 
@@ -512,9 +513,43 @@ exports.markSoldOutAndCascade = onCall({ secrets: EBAY_SECRETS }, validated("mar
   return { success: true };
 }));
 
+/**
+ * The manual stage-board move (kanban drag / spreadsheet dropdown) — the ONE
+ * path a user has to move a sale to any bucket, built-in or custom. Poller
+ * re-records (recordSaleCore/shouldAdvanceStatus) are unaffected: they only
+ * ever write one of the 6 permanent built-in keys directly, which always
+ * exist in every user's saleStages (sale_stages.js), so they need no
+ * membership check against per-user config.
+ */
+async function updateSaleStatusCore(db, uid, { saleId, status }) {
+  const saleRef = db.collection("sales").doc(saleId);
+  const snap = await saleRef.get();
+  if (!snap.exists) throw new HttpsError("not-found", "Sale not found.");
+  const sale = snap.data();
+  if (sale.userId !== uid) throw new HttpsError("permission-denied", "Not your sale.");
+
+  const stages = await loadSaleStages(db, uid);
+  if (!stages.some((s) => s.key === status)) {
+    throw new HttpsError("invalid-argument", `"${status}" isn't one of your sale stages.`);
+  }
+
+  await saleRef.set({
+    status,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  return { success: true };
+}
+
+exports.updateSaleStatus = onCall(validated("updateSaleStatus", async (data, request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+  return updateSaleStatusCore(admin.firestore(), uid, data);
+}));
+
 // Internal — reused by mercari_sales.js recordMercariSalesBatch.
 exports._internal = {
   applyQuantityDelta, cascade, resolveStock, toTimestamp, recordSaleCore,
-  loadOwnedProduct, shouldAdvanceStatus, applyMercariFlags,
+  loadOwnedProduct, shouldAdvanceStatus, applyMercariFlags, updateSaleStatusCore,
 };
 exports.EBAY_SECRETS = EBAY_SECRETS;

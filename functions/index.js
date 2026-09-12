@@ -30,7 +30,7 @@ const {
 } = require("./etsy_listing");
 const { updateMercariListingStatus, ensureMercariListingDetails } = require("./mercari_listing");
 const { syncTiktokOrders, syncTiktokOrdersScheduled } = require("./tiktok_orders");
-const { disconnectPlatform, updateSettings, generateOAuthState } = require("./user_settings");
+const { disconnectPlatform, updateSettings, generateOAuthState, updateSaleStages } = require("./user_settings");
 const { onProductDeleted } = require("./product_cleanup");
 const { generateProductDescription } = require("./generate_description");
 const { aiAutofillListing } = require("./listing_fields");
@@ -41,6 +41,7 @@ const {
   decrementAndCascade,
   restockAndCascade,
   markSoldOutAndCascade,
+  updateSaleStatus,
 } = require("./sales");
 const { recordMercariSalesBatch } = require("./mercari_sales");
 const { syncSales, getOrderTakeHome } = require("./sale_poller");
@@ -103,6 +104,7 @@ module.exports = {
   generateOAuthState,
   disconnectPlatform,
   updateSettings,
+  updateSaleStages,
 
   // Orders + fulfillment
   syncTiktokOrders,
@@ -119,5 +121,6 @@ module.exports = {
   recordMercariSalesBatch,
   syncSales,
   getOrderTakeHome,
+  updateSaleStatus,
   postToWonni,
 };

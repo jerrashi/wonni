@@ -6,6 +6,13 @@
 // almost always be real — eBay/Etsy come from the API, Mercari from a page
 // scrape. FEE_RATES is only a backstop for the rare sale with no real
 // take-home. Hard-coded on purpose, not a Firestore config doc.
+//
+// Decision (2026-09-11, docs/specs/2026-09-11-stage-board-and-revenue-
+// accounting.md): EXCLUDED_STATUSES only gates the top-line `revenue` total
+// now, not `net`/`cost`/`units`/`count` — those always reflect every
+// non-deleted sale, so a cancelled/returned sale's real (possibly negative)
+// takeHome still shows as a loss instead of being zeroed out. See
+// isCounted vs isRevenueCounted below.
 
 /** Estimated marketplace take-rate, applied to (item + shipping) revenue.
  *  Backstop only — real `sale.takeHome` always wins when present. */
@@ -65,11 +72,20 @@ export function saleFinancials(sale, product) {
   return { revenue, cost, feesEstimate, net, margin, netIsEstimate };
 }
 
+/** Every non-deleted sale is "real" — its actual `takeHome` (may be negative
+ *  on a return) always counts toward `net`/`cost`/`units`/`count`. */
 function isCounted(sale) {
   if (!sale) return false;
   if (sale.isDeleted) return false;
-  if (sale.status && EXCLUDED_STATUSES.has(sale.status)) return false;
   return true;
+}
+
+/** Whether a counted sale's gross price counts toward the top-line `revenue`
+ *  total. Excludes cancelled/returned by default (deferred: per-status
+ *  configurability, wonni#70) — keyed on `sale.status` directly since the
+ *  two keys are permanent (a user can rename the label, never the key). */
+function isRevenueCounted(sale) {
+  return !(sale.status && EXCLUDED_STATUSES.has(sale.status));
 }
 
 function groupKeysFor(sale, groupBy) {
@@ -96,6 +112,7 @@ export function aggregate(sales, productsById = {}, opts = {}) {
     count: 0,
     units: 0,
     revenue: 0,
+    revenueCount: 0, // sales counted toward revenue/avgOrderValue — excludes cancelled/returned
     net: 0,
     cost: 0,
     avgOrderValue: 0,
@@ -109,13 +126,17 @@ export function aggregate(sales, productsById = {}, opts = {}) {
     const product = sale.productId ? productsById[sale.productId] : null;
     const fin = saleFinancials(sale, product);
     const quantity = Number.isFinite(sale.quantity) && sale.quantity > 0 ? sale.quantity : 1;
+    const revenueCounted = isRevenueCounted(sale);
 
     totals.count += 1;
     totals.units += quantity;
-    totals.revenue = round2(totals.revenue + fin.revenue);
     totals.net = round2(totals.net + fin.net);
     totals.cost = round2(totals.cost + fin.cost);
     if (fin.netIsEstimate) totals.netIsEstimate = true;
+    if (revenueCounted) {
+      totals.revenue = round2(totals.revenue + fin.revenue);
+      totals.revenueCount += 1;
+    }
 
     if (groupBy) {
       const keys = groupKeysFor(sale, groupBy);
@@ -124,18 +145,21 @@ export function aggregate(sales, productsById = {}, opts = {}) {
         const g = groupMap.get(key);
         g.count += 1;
         g.units += quantity;
-        g.revenue = round2(g.revenue + fin.revenue);
         g.net = round2(g.net + fin.net);
         g.cost = round2(g.cost + fin.cost);
         if (fin.netIsEstimate) g.netIsEstimate = true;
+        if (revenueCounted) {
+          g.revenue = round2(g.revenue + fin.revenue);
+          g.revenueCount += 1;
+        }
       }
     }
   }
 
-  totals.avgOrderValue = totals.count > 0 ? round2(totals.revenue / totals.count) : 0;
+  totals.avgOrderValue = totals.revenueCount > 0 ? round2(totals.revenue / totals.revenueCount) : 0;
   const groups = [...groupMap.entries()]
     .map(([key, g]) => {
-      g.avgOrderValue = g.count > 0 ? round2(g.revenue / g.count) : 0;
+      g.avgOrderValue = g.revenueCount > 0 ? round2(g.revenue / g.revenueCount) : 0;
       return { key, totals: g };
     })
     .sort((a, b) => b.totals.revenue - a.totals.revenue);
@@ -186,7 +210,7 @@ export function trend(sales, opts = {}) {
     const b = buckets.get(key);
     const product = sale.productId ? productsById[sale.productId] : null;
     const fin = saleFinancials(sale, product);
-    b.revenue = round2(b.revenue + fin.revenue);
+    if (isRevenueCounted(sale)) b.revenue = round2(b.revenue + fin.revenue);
     b.net = round2(b.net + fin.net);
     b.count += 1;
   }

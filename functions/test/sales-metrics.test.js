@@ -59,7 +59,7 @@ test("saleFinancials: revenue 0 gives null margin, no divide-by-zero", () => {
   assert.equal(fin.margin, null);
 });
 
-test("aggregate: excludes cancelled/returned/isDeleted from totals", () => {
+test("aggregate: isDeleted is excluded from everything; cancelled/returned only from revenue", () => {
   const sales = [
     { priceSoldFor: 100, platform: "ebay", takeHome: 90, status: "complete" },
     { priceSoldFor: 50, platform: "ebay", takeHome: 45, status: "cancelled" },
@@ -67,8 +67,56 @@ test("aggregate: excludes cancelled/returned/isDeleted from totals", () => {
     { priceSoldFor: 20, platform: "ebay", takeHome: 18, status: "complete", isDeleted: true },
   ];
   const { totals } = aggregate(sales, {});
-  assert.equal(totals.count, 1);
+  // count/net/cost: every non-deleted sale (3), isDeleted dropped entirely.
+  assert.equal(totals.count, 3);
+  assert.equal(totals.net, 90 + 45 + 25);
+  // revenue: only the non-excluded status.
   assert.equal(totals.revenue, 100);
+  assert.equal(totals.revenueCount, 1);
+  assert.equal(totals.avgOrderValue, 100); // over revenueCount, not count
+});
+
+test("aggregate: a returned sale's real negative takeHome shows as a net loss, zero revenue", () => {
+  // The exact scenario from the spec: a return the seller lost money on
+  // (unrefunded outbound shipping / return-shipping charge baked into a
+  // negative real takeHome), with revenue still excluded.
+  const sales = [
+    { priceSoldFor: 40, platform: "ebay", takeHome: -8.4, status: "returned" },
+  ];
+  const { totals } = aggregate(sales, {});
+  assert.equal(totals.revenue, 0);
+  assert.equal(totals.revenueCount, 0);
+  assert.equal(totals.count, 1);
+  assert.equal(totals.net, -8.4);
+});
+
+test("aggregate: a cancelled sale with no real takeHome falls back to the fee-% estimate (known gap, not this spec's fix)", () => {
+  const sales = [
+    { priceSoldFor: 40, platform: "ebay", takeHome: null, status: "cancelled" },
+  ];
+  const { totals } = aggregate(sales, {});
+  // Revenue is correctly excluded either way. Net is NOT a clean zero here —
+  // with no real takeHome, saleFinancials falls back to the fee-% estimate,
+  // which assumes a normal completed sale. That's an inaccurate net for a
+  // cancellation with nothing actually charged, but requiring manual entry
+  // instead of estimating for this case is deferred (spec §4, last
+  // paragraph) — pin the current behavior so that fix shows as a visible
+  // diff here, not a silent regression.
+  assert.equal(totals.revenue, 0);
+  assert.equal(totals.net, 34.7); // 40 - 13.25%*40 fee estimate - 0 label - 0 cost
+  assert.equal(totals.netIsEstimate, true);
+});
+
+test("aggregate: a renamed cancelled/returned bucket (label only) still excludes revenue by key", () => {
+  // key is what sale.status stores; label is display-only (sale_stages.js) —
+  // this proves the exclusion check (keyed on sale.status) survives a
+  // relabel, since it never looks at the label at all.
+  const sales = [
+    { priceSoldFor: 40, platform: "ebay", takeHome: -5, status: "cancelled" }, // labeled "Refunded" in the user's saleStages, doesn't matter here
+  ];
+  const { totals } = aggregate(sales, {});
+  assert.equal(totals.revenue, 0);
+  assert.equal(totals.net, -5);
 });
 
 test("aggregate: groups by platform, sorted by revenue desc", () => {
@@ -134,13 +182,17 @@ test("trend: week bucket starts on Monday", () => {
   assert.equal(weekly[0].periodStart, "2026-01-12T00:00:00.000Z"); // Monday of that week
 });
 
-test("trend: excludes cancelled/returned/deleted and sales with no soldAt", () => {
+test("trend: excludes isDeleted and sales with no soldAt; cancelled/returned show net but not revenue", () => {
   const sales = [
     { priceSoldFor: 10, platform: "manual", takeHome: 10, status: "cancelled", soldAt: "2026-01-15T00:00:00Z" },
     { priceSoldFor: 10, platform: "manual", takeHome: 10, status: "complete" }, // no soldAt
+    { priceSoldFor: 999, platform: "manual", takeHome: 999, status: "complete", isDeleted: true, soldAt: "2026-01-15T00:00:00Z" },
   ];
   const weekly = trend(sales, { bucket: "week" });
-  assert.equal(weekly.length, 0);
+  assert.equal(weekly.length, 1); // only the cancelled sale has both isCounted + soldAt
+  assert.equal(weekly[0].revenue, 0); // cancelled excluded from revenue
+  assert.equal(weekly[0].net, 10); // real takeHome still counts
+  assert.equal(weekly[0].count, 1);
 });
 
 test("trend: accepts Firestore-Timestamp-shaped soldAt (toDate())", () => {

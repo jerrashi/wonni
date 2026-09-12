@@ -18,6 +18,19 @@
 //  therefore the fee-% fallback branch of `net`) is simply 0, which is safe:
 //  real `takeHome` already nets fees on its own.
 //
+//  Decision (2026-09-11, docs/specs/2026-09-11-stage-board-and-revenue-
+//  accounting.md): excludedStatuses only gates the top-line `revenue` total
+//  now, not `net`/`cost`/`units`/`count` — those always reflect every
+//  non-deleted sale, so a cancelled/returned sale's real (possibly negative)
+//  takeHome still shows as a loss instead of being zeroed out. See
+//  isCounted vs isRevenueCounted below. NOTE: `sale.status` here is still
+//  typed `SaleStatus` (the fixed 6-case enum) — the backend now accepts any
+//  string (open, user-editable stage-board buckets), so this Swift model
+//  will need a decode-fallback (e.g. an `.other(String)` case) before iOS
+//  can round-trip a sale sitting in a custom bucket. Deferred to the iOS
+//  step of that spec — not needed for excludedStatuses to keep working on
+//  the 6 built-ins, which are permanent.
+//
 
 import Foundation
 
@@ -82,16 +95,25 @@ enum SalesMetrics {
         return Financials(revenue: revenue, cost: cost, feesEstimate: feesEstimate, net: net, margin: margin, netIsEstimate: netIsEstimate)
     }
 
+    /// Every non-deleted sale is "real" — its actual `takeHome` (may be
+    /// negative on a return) always counts toward `net`/`cost`/`units`/`count`.
     static func isCounted(_ sale: Sale) -> Bool {
-        if sale.isDeleted == true { return false }
-        if excludedStatuses.contains(sale.status) { return false }
-        return true
+        sale.isDeleted != true
+    }
+
+    /// Whether a counted sale's gross price counts toward the top-line
+    /// `revenue` total. Excludes cancelled/returned by default (deferred:
+    /// per-status configurability, wonni#70).
+    static func isRevenueCounted(_ sale: Sale) -> Bool {
+        !excludedStatuses.contains(sale.status)
     }
 
     struct GroupTotals {
         var count: Int = 0
         var units: Int = 0
         var revenue: Double = 0
+        /// Sales counted toward `revenue`/`avgOrderValue` — excludes cancelled/returned.
+        var revenueCount: Int = 0
         var net: Double = 0
         var cost: Double = 0
         var avgOrderValue: Double = 0
@@ -128,13 +150,17 @@ enum SalesMetrics {
         for sale in counted {
             let fin = saleFinancials(sale, costLookup: costLookup)
             let quantity = max(sale.quantity ?? 1, 1)
+            let revenueCounted = isRevenueCounted(sale)
 
             totals.count += 1
             totals.units += quantity
-            totals.revenue = round2(totals.revenue + fin.revenue)
             totals.net = round2(totals.net + fin.net)
             totals.cost = round2(totals.cost + fin.cost)
             if fin.netIsEstimate { totals.netIsEstimate = true }
+            if revenueCounted {
+                totals.revenue = round2(totals.revenue + fin.revenue)
+                totals.revenueCount += 1
+            }
 
             if let groupBy {
                 for key in groupKeys(for: sale, groupBy: groupBy) {
@@ -144,18 +170,21 @@ enum SalesMetrics {
                     }
                     groupMap[key]!.count += 1
                     groupMap[key]!.units += quantity
-                    groupMap[key]!.revenue = round2(groupMap[key]!.revenue + fin.revenue)
                     groupMap[key]!.net = round2(groupMap[key]!.net + fin.net)
                     groupMap[key]!.cost = round2(groupMap[key]!.cost + fin.cost)
                     if fin.netIsEstimate { groupMap[key]!.netIsEstimate = true }
+                    if revenueCounted {
+                        groupMap[key]!.revenue = round2(groupMap[key]!.revenue + fin.revenue)
+                        groupMap[key]!.revenueCount += 1
+                    }
                 }
             }
         }
 
-        totals.avgOrderValue = totals.count > 0 ? round2(totals.revenue / Double(totals.count)) : 0
+        totals.avgOrderValue = totals.revenueCount > 0 ? round2(totals.revenue / Double(totals.revenueCount)) : 0
         let groups = groupOrder.map { key -> (key: String, totals: GroupTotals) in
             var g = groupMap[key]!
-            g.avgOrderValue = g.count > 0 ? round2(g.revenue / Double(g.count)) : 0
+            g.avgOrderValue = g.revenueCount > 0 ? round2(g.revenue / Double(g.revenueCount)) : 0
             return (key: key, totals: g)
         }.sorted { $0.totals.revenue > $1.totals.revenue }
 
@@ -205,7 +234,9 @@ enum SalesMetrics {
                 buckets[periodStart] = TrendPoint(periodStart: periodStart, revenue: 0, net: 0, count: 0)
                 order.append(periodStart)
             }
-            buckets[periodStart]!.revenue = round2(buckets[periodStart]!.revenue + fin.revenue)
+            if isRevenueCounted(sale) {
+                buckets[periodStart]!.revenue = round2(buckets[periodStart]!.revenue + fin.revenue)
+            }
             buckets[periodStart]!.net = round2(buckets[periodStart]!.net + fin.net)
             buckets[periodStart]!.count += 1
         }

@@ -69,6 +69,10 @@ struct BackendContracts: Codable, Sendable {
     let syncSalesResponse: SyncSalesResponse?
     let updateMercariListingStatusRequest: UpdateMercariListingStatusRequest?
     let updateMercariListingStatusResponse: UpdateMercariListingStatusResponse?
+    let updateSaleStagesRequest: UpdateSaleStagesRequest?
+    let updateSaleStagesResponse: UpdateSaleStagesResponse?
+    let updateSaleStatusRequest: UpdateSaleStatusRequest?
+    let updateSaleStatusResponse: UpdateSaleStatusResponse?
 
     enum CodingKeys: String, CodingKey {
         case decrementAndCascadeRequest = "DecrementAndCascadeRequest"
@@ -132,6 +136,10 @@ struct BackendContracts: Codable, Sendable {
         case syncSalesResponse = "SyncSalesResponse"
         case updateMercariListingStatusRequest = "UpdateMercariListingStatusRequest"
         case updateMercariListingStatusResponse = "UpdateMercariListingStatusResponse"
+        case updateSaleStagesRequest = "UpdateSaleStagesRequest"
+        case updateSaleStagesResponse = "UpdateSaleStagesResponse"
+        case updateSaleStatusRequest = "UpdateSaleStatusRequest"
+        case updateSaleStatusResponse = "UpdateSaleStatusResponse"
     }
 }
 
@@ -214,7 +222,11 @@ extension BackendContracts {
         syncSalesRequest: SyncSalesRequest?? = nil,
         syncSalesResponse: SyncSalesResponse?? = nil,
         updateMercariListingStatusRequest: UpdateMercariListingStatusRequest?? = nil,
-        updateMercariListingStatusResponse: UpdateMercariListingStatusResponse?? = nil
+        updateMercariListingStatusResponse: UpdateMercariListingStatusResponse?? = nil,
+        updateSaleStagesRequest: UpdateSaleStagesRequest?? = nil,
+        updateSaleStagesResponse: UpdateSaleStagesResponse?? = nil,
+        updateSaleStatusRequest: UpdateSaleStatusRequest?? = nil,
+        updateSaleStatusResponse: UpdateSaleStatusResponse?? = nil
     ) -> BackendContracts {
         return BackendContracts(
             decrementAndCascadeRequest: decrementAndCascadeRequest ?? self.decrementAndCascadeRequest,
@@ -277,7 +289,11 @@ extension BackendContracts {
             syncSalesRequest: syncSalesRequest ?? self.syncSalesRequest,
             syncSalesResponse: syncSalesResponse ?? self.syncSalesResponse,
             updateMercariListingStatusRequest: updateMercariListingStatusRequest ?? self.updateMercariListingStatusRequest,
-            updateMercariListingStatusResponse: updateMercariListingStatusResponse ?? self.updateMercariListingStatusResponse
+            updateMercariListingStatusResponse: updateMercariListingStatusResponse ?? self.updateMercariListingStatusResponse,
+            updateSaleStagesRequest: updateSaleStagesRequest ?? self.updateSaleStagesRequest,
+            updateSaleStagesResponse: updateSaleStagesResponse ?? self.updateSaleStagesResponse,
+            updateSaleStatusRequest: updateSaleStatusRequest ?? self.updateSaleStatusRequest,
+            updateSaleStatusResponse: updateSaleStatusResponse ?? self.updateSaleStatusResponse
         )
     }
 
@@ -4767,7 +4783,7 @@ struct SaleDoc: Codable, Sendable {
     let shippingRevenue: Double?
     let soldAt: SoldAt
     let source: Source?
-    let status: SaleDocStatus
+    let status: String
     let takeHome: Double?
     let thumbnailUrl: String?
     let trackingNumber: String?
@@ -4851,7 +4867,7 @@ extension SaleDoc {
         shippingRevenue: Double?? = nil,
         soldAt: SoldAt? = nil,
         source: Source?? = nil,
-        status: SaleDocStatus? = nil,
+        status: String? = nil,
         takeHome: Double?? = nil,
         thumbnailUrl: String?? = nil,
         trackingNumber: String?? = nil,
@@ -5169,15 +5185,6 @@ enum Source: String, Codable, Sendable {
     case etsyPoll = "etsy-poll"
     case manual = "manual"
     case mercariScan = "mercari-scan"
-}
-
-enum SaleDocStatus: String, Codable, Sendable {
-    case cancelled = "cancelled"
-    case complete = "complete"
-    case delivered = "delivered"
-    case pending = "pending"
-    case returned = "returned"
-    case shipped = "shipped"
 }
 
 // MARK: - UpdatedAt
@@ -5604,6 +5611,238 @@ extension UpdateMercariListingStatusResponse {
     ) -> UpdateMercariListingStatusResponse {
         return UpdateMercariListingStatusResponse(
             ok: ok ?? self.ok
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - UpdateSaleStagesRequest
+struct UpdateSaleStagesRequest: Codable, Sendable {
+    let stages: [Stage]
+
+    enum CodingKeys: String, CodingKey {
+        case stages = "stages"
+    }
+}
+
+// MARK: UpdateSaleStagesRequest convenience initializers and mutators
+
+extension UpdateSaleStagesRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(UpdateSaleStagesRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        stages: [Stage]? = nil
+    ) -> UpdateSaleStagesRequest {
+        return UpdateSaleStagesRequest(
+            stages: stages ?? self.stages
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - Stage
+struct Stage: Codable, Sendable {
+    let builtIn: Bool?
+    let key: String
+    let label: String
+
+    enum CodingKeys: String, CodingKey {
+        case builtIn = "builtIn"
+        case key = "key"
+        case label = "label"
+    }
+}
+
+// MARK: Stage convenience initializers and mutators
+
+extension Stage {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(Stage.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        builtIn: Bool?? = nil,
+        key: String? = nil,
+        label: String? = nil
+    ) -> Stage {
+        return Stage(
+            builtIn: builtIn ?? self.builtIn,
+            key: key ?? self.key,
+            label: label ?? self.label
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - UpdateSaleStagesResponse
+struct UpdateSaleStagesResponse: Codable, Sendable {
+    let ok: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case ok = "ok"
+    }
+}
+
+// MARK: UpdateSaleStagesResponse convenience initializers and mutators
+
+extension UpdateSaleStagesResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(UpdateSaleStagesResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        ok: Bool? = nil
+    ) -> UpdateSaleStagesResponse {
+        return UpdateSaleStagesResponse(
+            ok: ok ?? self.ok
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - UpdateSaleStatusRequest
+struct UpdateSaleStatusRequest: Codable, Sendable {
+    let saleId: String
+    let status: String
+
+    enum CodingKeys: String, CodingKey {
+        case saleId = "saleId"
+        case status = "status"
+    }
+}
+
+// MARK: UpdateSaleStatusRequest convenience initializers and mutators
+
+extension UpdateSaleStatusRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(UpdateSaleStatusRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        saleId: String? = nil,
+        status: String? = nil
+    ) -> UpdateSaleStatusRequest {
+        return UpdateSaleStatusRequest(
+            saleId: saleId ?? self.saleId,
+            status: status ?? self.status
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - UpdateSaleStatusResponse
+struct UpdateSaleStatusResponse: Codable, Sendable {
+    let success: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case success = "success"
+    }
+}
+
+// MARK: UpdateSaleStatusResponse convenience initializers and mutators
+
+extension UpdateSaleStatusResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(UpdateSaleStatusResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        success: Bool? = nil
+    ) -> UpdateSaleStatusResponse {
+        return UpdateSaleStatusResponse(
+            success: success ?? self.success
         )
     }
 
