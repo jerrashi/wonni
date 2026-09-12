@@ -56,6 +56,8 @@ struct BackendContracts: Codable, Sendable {
     let mercariScrapeItem: MercariScrapeItem?
     let postToWonniRequest: PostToWonniRequest?
     let postToWonniResponse: PostToWonniResponse?
+    let reassignSaleStageRequest: ReassignSaleStageRequest?
+    let reassignSaleStageResponse: ReassignSaleStageResponse?
     let recordMercariSalesBatchRequest: RecordMercariSalesBatchRequest?
     let recordMercariSalesBatchResponse: RecordMercariSalesBatchResponse?
     let recordSaleRequest: RecordSaleRequest?
@@ -123,6 +125,8 @@ struct BackendContracts: Codable, Sendable {
         case mercariScrapeItem = "MercariScrapeItem"
         case postToWonniRequest = "PostToWonniRequest"
         case postToWonniResponse = "PostToWonniResponse"
+        case reassignSaleStageRequest = "ReassignSaleStageRequest"
+        case reassignSaleStageResponse = "ReassignSaleStageResponse"
         case recordMercariSalesBatchRequest = "RecordMercariSalesBatchRequest"
         case recordMercariSalesBatchResponse = "RecordMercariSalesBatchResponse"
         case recordSaleRequest = "RecordSaleRequest"
@@ -210,6 +214,8 @@ extension BackendContracts {
         mercariScrapeItem: MercariScrapeItem?? = nil,
         postToWonniRequest: PostToWonniRequest?? = nil,
         postToWonniResponse: PostToWonniResponse?? = nil,
+        reassignSaleStageRequest: ReassignSaleStageRequest?? = nil,
+        reassignSaleStageResponse: ReassignSaleStageResponse?? = nil,
         recordMercariSalesBatchRequest: RecordMercariSalesBatchRequest?? = nil,
         recordMercariSalesBatchResponse: RecordMercariSalesBatchResponse?? = nil,
         recordSaleRequest: RecordSaleRequest?? = nil,
@@ -277,6 +283,8 @@ extension BackendContracts {
             mercariScrapeItem: mercariScrapeItem ?? self.mercariScrapeItem,
             postToWonniRequest: postToWonniRequest ?? self.postToWonniRequest,
             postToWonniResponse: postToWonniResponse ?? self.postToWonniResponse,
+            reassignSaleStageRequest: reassignSaleStageRequest ?? self.reassignSaleStageRequest,
+            reassignSaleStageResponse: reassignSaleStageResponse ?? self.reassignSaleStageResponse,
             recordMercariSalesBatchRequest: recordMercariSalesBatchRequest ?? self.recordMercariSalesBatchRequest,
             recordMercariSalesBatchResponse: recordMercariSalesBatchResponse ?? self.recordMercariSalesBatchResponse,
             recordSaleRequest: recordSaleRequest ?? self.recordSaleRequest,
@@ -4088,6 +4096,102 @@ extension PostToWonniResponse {
             alreadyPosted: alreadyPosted ?? self.alreadyPosted,
             listingId: listingId ?? self.listingId,
             skipped: skipped ?? self.skipped
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - ReassignSaleStageRequest
+struct ReassignSaleStageRequest: Codable, Sendable {
+    let fromKey: String
+    let toKey: String
+
+    enum CodingKeys: String, CodingKey {
+        case fromKey = "fromKey"
+        case toKey = "toKey"
+    }
+}
+
+// MARK: ReassignSaleStageRequest convenience initializers and mutators
+
+extension ReassignSaleStageRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(ReassignSaleStageRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        fromKey: String? = nil,
+        toKey: String? = nil
+    ) -> ReassignSaleStageRequest {
+        return ReassignSaleStageRequest(
+            fromKey: fromKey ?? self.fromKey,
+            toKey: toKey ?? self.toKey
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - ReassignSaleStageResponse
+struct ReassignSaleStageResponse: Codable, Sendable {
+    let count: Int
+    let success: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case count = "count"
+        case success = "success"
+    }
+}
+
+// MARK: ReassignSaleStageResponse convenience initializers and mutators
+
+extension ReassignSaleStageResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(ReassignSaleStageResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        count: Int? = nil,
+        success: Bool? = nil
+    ) -> ReassignSaleStageResponse {
+        return ReassignSaleStageResponse(
+            count: count ?? self.count,
+            success: success ?? self.success
         )
     }
 

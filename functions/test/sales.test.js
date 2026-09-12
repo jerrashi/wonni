@@ -18,7 +18,7 @@ const { BUILT_IN_SALE_STAGES } = require("../sale_stages");
 
 const {
   applyQuantityDelta, cascade, resolveStock, recordSaleCore, toTimestamp,
-  shouldAdvanceStatus, applyMercariFlags, updateSaleStatusCore,
+  shouldAdvanceStatus, applyMercariFlags, updateSaleStatusCore, reassignSaleStageCore,
 } = _internal;
 
 const UID = "user_1";
@@ -501,6 +501,77 @@ test("updateSaleStatusCore: allows moving to the permanent cancelled/returned ke
   });
   await updateSaleStatusCore(db, UID, { saleId: "s1", status: "returned" });
   assert.equal(db.peek("sales", "s1").status, "returned");
+});
+
+// ── reassignSaleStageCore ────────────────────────────────────────────────────
+// Settings' "delete a custom bucket" flow — bulk-move every sale out of a
+// bucket before it's removed from saleStages.
+
+test("reassignSaleStageCore: moves every matching sale, leaves others untouched", async () => {
+  const db = new FakeFirestore({
+    sales: {
+      s1: { userId: UID, status: "awaiting_parts" },
+      s2: { userId: UID, status: "awaiting_parts" },
+      s3: { userId: UID, status: "pending" },
+    },
+    users: { [UID]: { saleStages: [...BUILT_IN_SALE_STAGES, { key: "awaiting_parts", label: "Awaiting Parts" }] } },
+  });
+  const result = await reassignSaleStageCore(db, UID, { fromKey: "awaiting_parts", toKey: "pending" });
+  assert.deepEqual(result, { success: true, count: 2 });
+  assert.equal(db.peek("sales", "s1").status, "pending");
+  assert.equal(db.peek("sales", "s2").status, "pending");
+  assert.equal(db.peek("sales", "s3").status, "pending", "already there, untouched value same");
+});
+
+test("reassignSaleStageCore: zero matches still succeeds with count 0", async () => {
+  const db = new FakeFirestore({
+    sales: { s1: { userId: UID, status: "pending" } },
+    users: { [UID]: {} },
+  });
+  const result = await reassignSaleStageCore(db, UID, { fromKey: "awaiting_parts", toKey: "pending" });
+  assert.deepEqual(result, { success: true, count: 0 });
+});
+
+test("reassignSaleStageCore: rejects fromKey === toKey", async () => {
+  const db = new FakeFirestore({ users: { [UID]: {} } });
+  await assert.rejects(
+    () => reassignSaleStageCore(db, UID, { fromKey: "pending", toKey: "pending" }),
+    /must be different/,
+  );
+});
+
+test("reassignSaleStageCore: rejects a toKey that isn't one of the user's current sale stages", async () => {
+  const db = new FakeFirestore({ users: { [UID]: {} } });
+  await assert.rejects(
+    () => reassignSaleStageCore(db, UID, { fromKey: "awaiting_parts", toKey: "made_up" }),
+    /isn't one of your sale stages/,
+  );
+});
+
+test("reassignSaleStageCore: fromKey need not still be a current stage (normal mid-delete)", async () => {
+  // By the time this runs the client hasn't saved the trimmed saleStages yet,
+  // so fromKey ("awaiting_parts") is still technically present — but even if
+  // it weren't, this call shouldn't care; only toKey is checked.
+  const db = new FakeFirestore({
+    sales: { s1: { userId: UID, status: "awaiting_parts" } },
+    users: { [UID]: {} }, // fromKey isn't even in the (built-in-only) list here
+  });
+  const result = await reassignSaleStageCore(db, UID, { fromKey: "awaiting_parts", toKey: "returned" });
+  assert.deepEqual(result, { success: true, count: 1 });
+  assert.equal(db.peek("sales", "s1").status, "returned");
+});
+
+test("regression: reassignSaleStageCore never touches another user's sales", async () => {
+  const db = new FakeFirestore({
+    sales: {
+      s1: { userId: UID, status: "awaiting_parts" },
+      s2: { userId: "someone_else", status: "awaiting_parts" },
+    },
+    users: { [UID]: {} },
+  });
+  const result = await reassignSaleStageCore(db, UID, { fromKey: "awaiting_parts", toKey: "pending" });
+  assert.equal(result.count, 1);
+  assert.equal(db.peek("sales", "s2").status, "awaiting_parts", "other user's sale untouched");
 });
 
 // ── auto re-poll on terminal-status move (spec §4) ─────────────────────────
