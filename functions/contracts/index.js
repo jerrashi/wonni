@@ -27,8 +27,9 @@ const listings = require("./listings");
 const ebay = require("./ebay");
 const etsy = require("./etsy");
 const enrichment = require("./enrichment");
+const settings = require("./settings");
 
-const domains = { sales, mercari, listings, ebay, etsy, enrichment };
+const domains = { sales, mercari, listings, ebay, etsy, enrichment, settings };
 
 /** Flat list of every contract: [{ name, summary, request, response, domain }]. */
 const ALL = Object.entries(domains).flatMap(([domain, mod]) =>

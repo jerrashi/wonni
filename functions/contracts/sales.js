@@ -164,6 +164,16 @@ const SyncSalesResponseSchema = z.object({
   errors: z.array(z.object({ platform: z.string(), message: z.string() })),
 });
 
+// ── updateSaleStatus — move one sale to a stage-board bucket ────────────────
+// The manual drag/dropdown move (kanban board or spreadsheet). Validated
+// against the caller's own `saleStages` at handle-time (sale_stages.js),
+// not here — this schema only checks shape, not membership.
+
+const UpdateSaleStatusRequestSchema = z.object({
+  saleId: z.string().min(1),
+  status: SaleStatusSchema,
+});
+
 // ── take-home fetch (net payout) ───────────────────────────────────────────
 
 // Either resolve from a recorded sale (`saleId` → persists the result back onto
@@ -223,6 +233,12 @@ module.exports = {
       summary: "Fetch the platform's net payout for a recorded sale (eBay/Etsy).",
       request: GetOrderTakeHomeRequestSchema,
       response: GetOrderTakeHomeResponseSchema,
+    },
+    {
+      name: "updateSaleStatus",
+      summary: "Move one sale to a stage-board bucket (kanban drag / spreadsheet dropdown).",
+      request: UpdateSaleStatusRequestSchema,
+      response: z.object({ success: z.literal(true) }),
     },
   ],
 };

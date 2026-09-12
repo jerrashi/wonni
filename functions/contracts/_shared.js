@@ -60,16 +60,18 @@ const PlatformSchema = z.enum([
 /** Channels that have a real cross-post integration (excludes manual). */
 const CrossPostPlatformSchema = z.enum(["ebay", "mercari", "etsy", "tiktok", "wonni"]);
 
-/** Lifecycle of a sale after it lands. Ported from iOS `SaleStatus` — the more
- *  complete of the two apps' models; web historically wrote no status at all. */
-const SaleStatusSchema = z.enum([
-  "pending",   // sold, not yet shipped
-  "shipped",   // tracking entered / in transit
-  "delivered", // delivered, still inside the return window
-  "complete",  // return window closed / both parties rated
-  "cancelled", // order cancelled
-  "returned",  // buyer returned the item
-]);
+/** Lifecycle of a sale after it lands. Was a fixed 6-value enum (ported from
+ *  iOS `SaleStatus`); loosened 2026-09-11 (docs/specs/2026-09-11-stage-board-
+ *  and-revenue-accounting.md) to an open string — `status` is now a
+ *  per-user-editable kanban/spreadsheet bucket key (`users/{uid}.saleStages`,
+ *  see `sale_stages.js`), not a fixed set. The 6 built-in keys below are
+ *  still what the eBay/Etsy pollers write directly (`sale_stages.js`
+ *  `BUILT_IN_SALE_STAGES`) and are permanent — a user can rename their
+ *  labels but never delete or repurpose the keys — so code that only ever
+ *  needs to recognize those 6 (poller re-record ordering, revenue exclusion)
+ *  keeps matching on the literal strings unchanged. Only a manual board/
+ *  dropdown move can produce any other value. */
+const SaleStatusSchema = z.string().min(1).max(40);
 
 /** Canonical product condition. Matches web `product.condition`
  *  (`new|likenew|good|fair|poor`) — iOS `ItemCondition` maps onto this. */

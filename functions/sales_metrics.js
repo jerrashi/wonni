@@ -11,6 +11,13 @@
  * getOrderTakeHome), Mercari from a page scrape. FEE_RATES below is only a
  * backstop for the rare sale where no real take-home could be resolved.
  * Hard-coded on purpose (not a Firestore config doc) — revisit if it drifts.
+ *
+ * Decision (2026-09-11, docs/specs/2026-09-11-stage-board-and-revenue-
+ * accounting.md): `EXCLUDED_STATUSES` only gates the top-line `revenue`
+ * total now, not `net`/`cost`/`units`/`count` — those always reflect every
+ * non-deleted sale so a cancelled/returned sale's real (possibly negative)
+ * `takeHome` still shows as a loss instead of being zeroed out. See
+ * `isCounted` vs `isRevenueCounted` below.
  */
 
 /** Estimated marketplace take-rate, applied to (item + shipping) revenue.
@@ -73,11 +80,31 @@ function saleFinancials(sale, product) {
   return { revenue, cost, feesEstimate, net, margin, netIsEstimate };
 }
 
+/**
+ * Every non-deleted sale is "real" — it happened, and its actual `takeHome`
+ * (which may be negative on a return, see saleFinancials) always counts
+ * toward `net`/`cost`/`units`/`count`. Only a hard/soft delete removes a
+ * sale from the numbers entirely.
+ */
 function isCounted(sale) {
   if (!sale) return false;
   if (sale.isDeleted) return false;
-  if (sale.status && EXCLUDED_STATUSES.has(sale.status)) return false;
   return true;
+}
+
+/**
+ * Whether a counted sale's gross price counts toward the top-line `revenue`
+ * total. `cancelled`/`returned` are excluded by default — those sales didn't
+ * really land — but their `net` impact (a real loss, e.g. an unrefunded fee
+ * or return-shipping charge baked into a negative `takeHome`) still shows up
+ * via `isCounted` above. Keyed on `sale.status` directly (not looked up
+ * against the user's `saleStages` labels) because the two keys are
+ * permanent — a user can rename the bucket's label but never the key
+ * (sale_stages.js) — so this keeps working after a rename with no per-user
+ * config needed. Per-status configurability of this is deferred: wonni#70.
+ */
+function isRevenueCounted(sale) {
+  return !(sale.status && EXCLUDED_STATUSES.has(sale.status));
 }
 
 /**
@@ -96,6 +123,7 @@ function aggregate(sales, productsById = {}, opts = {}) {
     count: 0,
     units: 0,
     revenue: 0,
+    revenueCount: 0, // sales counted toward `revenue`/`avgOrderValue` — excludes cancelled/returned
     net: 0,
     cost: 0,
     avgOrderValue: 0,
@@ -109,13 +137,20 @@ function aggregate(sales, productsById = {}, opts = {}) {
     const product = sale.productId ? productsById[sale.productId] : null;
     const fin = saleFinancials(sale, product);
     const quantity = Number.isFinite(sale.quantity) && sale.quantity > 0 ? sale.quantity : 1;
+    const revenueCounted = isRevenueCounted(sale);
 
+    // net/cost/units/count: every non-deleted sale, so a returned sale's
+    // real (possibly negative) takeHome always shows as a loss.
     totals.count += 1;
     totals.units += quantity;
-    totals.revenue = round2(totals.revenue + fin.revenue);
     totals.net = round2(totals.net + fin.net);
     totals.cost = round2(totals.cost + fin.cost);
     if (fin.netIsEstimate) totals.netIsEstimate = true;
+    // revenue/avgOrderValue: gross top-line, excludes cancelled/returned.
+    if (revenueCounted) {
+      totals.revenue = round2(totals.revenue + fin.revenue);
+      totals.revenueCount += 1;
+    }
 
     if (groupBy) {
       const keys = groupKeysFor(sale, groupBy);
@@ -124,18 +159,21 @@ function aggregate(sales, productsById = {}, opts = {}) {
         const g = groupMap.get(key);
         g.count += 1;
         g.units += quantity;
-        g.revenue = round2(g.revenue + fin.revenue);
         g.net = round2(g.net + fin.net);
         g.cost = round2(g.cost + fin.cost);
         if (fin.netIsEstimate) g.netIsEstimate = true;
+        if (revenueCounted) {
+          g.revenue = round2(g.revenue + fin.revenue);
+          g.revenueCount += 1;
+        }
       }
     }
   }
 
-  totals.avgOrderValue = totals.count > 0 ? round2(totals.revenue / totals.count) : 0;
+  totals.avgOrderValue = totals.revenueCount > 0 ? round2(totals.revenue / totals.revenueCount) : 0;
   const groups = [...groupMap.entries()]
     .map(([key, g]) => {
-      g.avgOrderValue = g.count > 0 ? round2(g.revenue / g.count) : 0;
+      g.avgOrderValue = g.revenueCount > 0 ? round2(g.revenue / g.revenueCount) : 0;
       return { key, totals: g };
     })
     .sort((a, b) => b.totals.revenue - a.totals.revenue);
@@ -174,7 +212,7 @@ function trend(sales, opts = {}) {
     const b = buckets.get(key);
     const product = sale.productId ? productsById[sale.productId] : null;
     const fin = saleFinancials(sale, product);
-    b.revenue = round2(b.revenue + fin.revenue);
+    if (isRevenueCounted(sale)) b.revenue = round2(b.revenue + fin.revenue);
     b.net = round2(b.net + fin.net);
     b.count += 1;
   }
@@ -211,5 +249,5 @@ module.exports = {
   saleFinancials,
   aggregate,
   trend,
-  _internal: { isCounted, groupKeysFor, bucketStart, round2 },
+  _internal: { isCounted, isRevenueCounted, groupKeysFor, bucketStart, round2 },
 };

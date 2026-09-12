@@ -14,10 +14,11 @@ const assert = require("node:assert/strict");
 
 const { FakeFirestore } = require("./helpers/fake-firestore");
 const { _internal } = require("../sales");
+const { BUILT_IN_SALE_STAGES } = require("../sale_stages");
 
 const {
   applyQuantityDelta, cascade, resolveStock, recordSaleCore, toTimestamp,
-  shouldAdvanceStatus, applyMercariFlags,
+  shouldAdvanceStatus, applyMercariFlags, updateSaleStatusCore,
 } = _internal;
 
 const UID = "user_1";
@@ -435,4 +436,69 @@ test("toTimestamp: accepts null (→ now), epoch ms, and ISO strings", () => {
   assert.ok(toTimestamp(null));
   assert.equal(toTimestamp(1_700_000_000_000).toMillis(), 1_700_000_000_000);
   assert.equal(toTimestamp("2026-01-02T03:04:05.000Z").toDate().toISOString(), "2026-01-02T03:04:05.000Z");
+});
+
+// ── updateSaleStatusCore ─────────────────────────────────────────────────────
+// The manual stage-board move (docs/specs/2026-09-11-stage-board-and-revenue-
+// accounting.md §1/§6) — kanban drag or spreadsheet dropdown.
+
+test("updateSaleStatusCore: moves a sale to a built-in bucket", async () => {
+  const db = new FakeFirestore({
+    sales: { s1: { userId: UID, status: "ready_to_ship" } },
+    users: { [UID]: {} }, // no custom saleStages yet → falls back to built-ins
+  });
+  const result = await updateSaleStatusCore(db, UID, { saleId: "s1", status: "in_transit" });
+  assert.deepEqual(result, { success: true });
+  assert.equal(db.peek("sales", "s1").status, "in_transit");
+});
+
+test("updateSaleStatusCore: accepts a user's custom bucket key", async () => {
+  const db = new FakeFirestore({
+    sales: { s1: { userId: UID, status: "ready_to_ship" } },
+    users: { [UID]: { saleStages: [...BUILT_IN_SALE_STAGES, { key: "awaiting_parts", label: "Awaiting Parts" }] } },
+  });
+  await updateSaleStatusCore(db, UID, { saleId: "s1", status: "awaiting_parts" });
+  assert.equal(db.peek("sales", "s1").status, "awaiting_parts");
+});
+
+test("updateSaleStatusCore: rejects a status that isn't one of the user's stages", async () => {
+  const db = new FakeFirestore({
+    sales: { s1: { userId: UID, status: "ready_to_ship" } },
+    users: { [UID]: {} },
+  });
+  await assert.rejects(
+    () => updateSaleStatusCore(db, UID, { saleId: "s1", status: "made_up_bucket" }),
+    /isn't one of your sale stages/,
+  );
+  assert.equal(db.peek("sales", "s1").status, "ready_to_ship", "unchanged");
+});
+
+test("updateSaleStatusCore: rejects a sale owned by someone else", async () => {
+  const db = new FakeFirestore({
+    sales: { s1: { userId: "someone_else", status: "ready_to_ship" } },
+    users: { [UID]: {} },
+  });
+  await assert.rejects(
+    () => updateSaleStatusCore(db, UID, { saleId: "s1", status: "in_transit" }),
+    /Not your sale/,
+  );
+});
+
+test("updateSaleStatusCore: rejects a missing sale", async () => {
+  const db = new FakeFirestore({ users: { [UID]: {} } });
+  await assert.rejects(
+    () => updateSaleStatusCore(db, UID, { saleId: "ghost", status: "in_transit" }),
+    /Sale not found/,
+  );
+});
+
+test("updateSaleStatusCore: allows moving to the permanent cancelled/returned keys even after relabeling", async () => {
+  const db = new FakeFirestore({
+    sales: { s1: { userId: UID, status: "delivered" } },
+    users: { [UID]: {
+      saleStages: BUILT_IN_SALE_STAGES.map((s) => (s.key === "returned" ? { ...s, label: "Sent Back" } : s)),
+    } },
+  });
+  await updateSaleStatusCore(db, UID, { saleId: "s1", status: "returned" });
+  assert.equal(db.peek("sales", "s1").status, "returned");
 });

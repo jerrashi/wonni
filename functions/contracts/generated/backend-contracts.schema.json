@@ -40,6 +40,12 @@
     "GetOrderTakeHomeResponse": {
       "$ref": "#/definitions/GetOrderTakeHomeResponse"
     },
+    "UpdateSaleStatusRequest": {
+      "$ref": "#/definitions/UpdateSaleStatusRequest"
+    },
+    "UpdateSaleStatusResponse": {
+      "$ref": "#/definitions/UpdateSaleStatusResponse"
+    },
     "RecordMercariSalesBatchRequest": {
       "$ref": "#/definitions/RecordMercariSalesBatchRequest"
     },
@@ -177,6 +183,12 @@
     },
     "EnrichListingResponse": {
       "$ref": "#/definitions/EnrichListingResponse"
+    },
+    "UpdateSaleStagesRequest": {
+      "$ref": "#/definitions/UpdateSaleStagesRequest"
+    },
+    "UpdateSaleStagesResponse": {
+      "$ref": "#/definitions/UpdateSaleStagesResponse"
     },
     "SaleDoc": {
       "$ref": "#/definitions/SaleDoc"
@@ -792,6 +804,38 @@
         "fees",
         "shippingLabelCost",
         "provisional"
+      ],
+      "additionalProperties": false
+    },
+    "UpdateSaleStatusRequest": {
+      "type": "object",
+      "properties": {
+        "saleId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        }
+      },
+      "required": [
+        "saleId",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "UpdateSaleStatusResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "success"
       ],
       "additionalProperties": false
     },
@@ -2487,6 +2531,57 @@
       ],
       "additionalProperties": false
     },
+    "UpdateSaleStagesRequest": {
+      "type": "object",
+      "properties": {
+        "stages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60
+              },
+              "builtIn": {
+                "type": "boolean",
+                "default": false
+              }
+            },
+            "required": [
+              "key",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 50
+        }
+      },
+      "required": [
+        "stages"
+      ],
+      "additionalProperties": false
+    },
+    "UpdateSaleStagesResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "ok"
+      ],
+      "additionalProperties": false
+    },
     "SaleDoc": {
       "type": "object",
       "properties": {
@@ -2706,14 +2801,8 @@
         },
         "status": {
           "type": "string",
-          "enum": [
-            "pending",
-            "shipped",
-            "delivered",
-            "complete",
-            "cancelled",
-            "returned"
-          ]
+          "minLength": 1,
+          "maxLength": 40
         },
         "soldAt": {
           "type": "object",
