@@ -3,6 +3,7 @@ import { doc, onSnapshot, setDoc } from "firebase/firestore";
 import { linkWithPopup } from "firebase/auth";
 import { db, auth, googleProvider, appleProvider, callFunction } from "../firebase";
 import Layout from "../components/Layout";
+import { BUILT_IN_SALE_STAGES } from "../lib/saleStages";
 
 const EXT_ID = import.meta.env.VITE_EXTENSION_ID;
 
@@ -93,6 +94,10 @@ export default function Settings() {
   const [returnWindowDays, setReturnWindowDays] = useState(30);
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsSavedMessage, setSettingsSavedMessage] = useState("");
+  const [saleStages, setSaleStages] = useState(BUILT_IN_SALE_STAGES);
+  const [savingStages, setSavingStages] = useState(false);
+  const [stagesSavedMessage, setStagesSavedMessage] = useState("");
+  const [stagesError, setStagesError] = useState("");
 
   async function linkProvider(provider) {
     setLinkError("");
@@ -111,6 +116,11 @@ export default function Settings() {
     return onSnapshot(ref, (snap) => {
       const data = snap.data() ?? {};
       setFeeRate(String((data.tiktokFeeRate ?? 0.075) * 100));
+      // Mirrors functions/sale_stages.js loadSaleStages' fallback — an empty
+      // or missing saleStages means "never customized," not "no stages."
+      setSaleStages(Array.isArray(data.saleStages) && data.saleStages.length > 0
+        ? data.saleStages
+        : BUILT_IN_SALE_STAGES);
     });
   }, []);
 
@@ -551,6 +561,57 @@ export default function Settings() {
     await callFunction("disconnectPlatform")({ platform });
   }
 
+  // ── Sale stages (kanban/spreadsheet board buckets) ─────────────────────
+  // docs/specs/2026-09-11-stage-board-and-revenue-accounting.md §1/§6.
+  // Edits are local until "Save Stages" — the server (updateSaleStages /
+  // sale_stages.js validateSaleStages) is the source of truth for what a
+  // valid stage list looks like, so this only needs light client-side
+  // guards (non-empty label) and lets the callable reject the rest.
+
+  function renameStage(key, label) {
+    setSaleStages((stages) => stages.map((s) => (s.key === key ? { ...s, label } : s)));
+  }
+
+  function removeStage(key) {
+    setSaleStages((stages) => stages.filter((s) => s.key !== key));
+  }
+
+  function moveStage(index, delta) {
+    setSaleStages((stages) => {
+      const next = [...stages];
+      const target = index + delta;
+      if (target < 0 || target >= next.length) return stages;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  function addCustomStage() {
+    const label = window.prompt("Name the new bucket (e.g. \"Awaiting Parts\"):");
+    if (!label || !label.trim()) return;
+    const key = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || `stage_${Date.now()}`;
+    if (saleStages.some((s) => s.key === key)) {
+      setStagesError(`A bucket already uses the key "${key}" — try a different name.`);
+      return;
+    }
+    setSaleStages((stages) => [...stages, { key, label: label.trim(), builtIn: false }]);
+  }
+
+  async function handleSaveStages() {
+    setSavingStages(true);
+    setStagesError("");
+    setStagesSavedMessage("");
+    try {
+      await callFunction("updateSaleStages")({ stages: saleStages });
+      setStagesSavedMessage("Saved!");
+      setTimeout(() => setStagesSavedMessage(""), 3000);
+    } catch (e) {
+      setStagesError(e?.message ?? "Failed to save sale stages.");
+    } finally {
+      setSavingStages(false);
+    }
+  }
+
   return (
     <Layout>
       <div className="page-header">
@@ -769,6 +830,63 @@ export default function Settings() {
             )}
           </div>
         </form>
+      </div>
+
+      <div className="settings-section">
+        <h2>Sale Stages</h2>
+        <p style={{ fontSize: 13, color: "var(--muted)", marginTop: -4, marginBottom: 12 }}>
+          The columns on the Sales board / the dropdown on the sales table.
+          The 6 built-in stages can be renamed but not removed — everything
+          else is yours to add, rename, reorder, or delete.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, maxWidth: 480 }}>
+          {saleStages.map((stage, i) => (
+            <div
+              key={stage.key}
+              style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "6px 10px", background: "var(--surface-high)", borderRadius: "var(--radius)",
+              }}
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                <button
+                  className="btn btn-ghost" style={{ padding: "0 4px", fontSize: 10, lineHeight: 1 }}
+                  disabled={i === 0} onClick={() => moveStage(i, -1)} title="Move up"
+                >▲</button>
+                <button
+                  className="btn btn-ghost" style={{ padding: "0 4px", fontSize: 10, lineHeight: 1 }}
+                  disabled={i === saleStages.length - 1} onClick={() => moveStage(i, 1)} title="Move down"
+                >▼</button>
+              </div>
+              <input
+                className="input"
+                style={{ flex: 1, padding: "6px 10px", fontSize: 13 }}
+                value={stage.label}
+                onChange={(e) => renameStage(stage.key, e.target.value)}
+              />
+              {stage.builtIn ? (
+                <span style={{ fontSize: 11, color: "var(--muted)", padding: "0 6px" }}>built-in</span>
+              ) : (
+                <button
+                  className="btn btn-ghost"
+                  style={{ padding: "4px 8px", fontSize: 12, color: "var(--danger)" }}
+                  onClick={() => removeStage(stage.key)}
+                  title="Delete bucket"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
+          <button className="btn btn-ghost" onClick={addCustomStage}>+ Add Bucket</button>
+          <button className="btn btn-primary" onClick={handleSaveStages} disabled={savingStages}>
+            {savingStages ? "Saving…" : "Save Stages"}
+          </button>
+          {stagesSavedMessage && <span style={{ fontSize: 13, color: "var(--success)" }}>{stagesSavedMessage}</span>}
+          {stagesError && <span style={{ fontSize: 13, color: "var(--danger)" }}>{stagesError}</span>}
+        </div>
       </div>
 
       <div className="settings-section">

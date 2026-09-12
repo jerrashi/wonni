@@ -237,7 +237,16 @@ needed. `resolveEbayStatus()` / the Etsy mapping are unchanged by this spec.
    boundary). Poller re-records don't need this wired in separately — they
    already carry a fresh `finance` fetch in the same pass that sets the
    status.
-5. Web board/spreadsheet UI + settings section (§6).
+5. ✅ Web board/spreadsheet UI + settings section (§6). Shipped 2026-09-11:
+   `Sales.jsx` gets a Board (native HTML5 drag-and-drop columns, no new
+   dependency — `@dnd-kit` wasn't in the repo and wasn't needed for this)
+   and the existing Spreadsheet's status cell is now a `<select>` of the
+   user's stage labels; both route through `updateSaleStatus`. View choice
+   persisted in `localStorage` (per-device convenience, not backend state).
+   `Settings.jsx` gets a "Sale Stages" section: reorder (▲▼), rename any
+   bucket, add/delete custom buckets (built-ins can't be deleted, no delete
+   control shown), batch-saved via `updateSaleStages`. New shared UI mirror:
+   `web/src/lib/saleStages.js` (built-ins + chip-color map).
 6. iOS board view.
 
 Steps 1–4 are backend-only and independently shippable/testable
