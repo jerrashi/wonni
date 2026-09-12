@@ -1404,6 +1404,56 @@ exports.ebayImportPullSync = onCall(async (request) => {
   return { success: true };
 });
 
+// Fetch ANY eBay listing by its item id (Browse API, app token, no
+// ownership check) — used to seed a new product from an existing eBay
+// listing (iOS's "paste an eBay URL" import). `fetchImpl` is injectable so
+// this is testable without a live eBay call. Accept-Language pinned to
+// en-US: undici's default `*` value gets rejected by eBay error 25709 on
+// REST calls (see wonni-repo memory on this).
+async function ebayImportListingCore(itemId, { fetchImpl = fetch } = {}) {
+  const appToken = await getEbayAppTokenCached();
+  const res = await fetchImpl(
+    `https://${ebayApiHost()}/buy/browse/v1/item/get_item_by_legacy_id?legacy_item_id=${encodeURIComponent(itemId)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${appToken}`,
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+        "Accept-Language": "en-US",
+        "Content-Language": "en-US",
+      },
+    }
+  );
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new HttpsError(
+      "not-found",
+      `eBay item ${itemId} not found or unavailable (${res.status}): ${json.errors?.[0]?.message ?? JSON.stringify(json)}`
+    );
+  }
+
+  const price = parseFloat(json.price?.value ?? "0");
+  const imageUrls = [json.image?.imageUrl, ...(json.additionalImages ?? []).map((i) => i.imageUrl)].filter(Boolean);
+
+  return {
+    title: json.title ?? "",
+    price: Number.isFinite(price) ? price : 0,
+    description: (json.shortDescription ?? json.description ?? "").toString(),
+    imageUrls,
+    condition: json.condition ?? "",
+  };
+}
+
+exports.ebayImportListing = onCall(
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 30, memory: "256MiB" },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+    const { itemId } = request.data ?? {};
+    if (!itemId) throw new HttpsError("invalid-argument", "Missing itemId.");
+    return ebayImportListingCore(itemId);
+  }
+);
+
 // READ: the full current state of a product's eBay listing, pulled live from
 // the Inventory API. Single- or multi-variation. Uses the stable pointers on
 // the product doc (ebayOfferId / ebayInventoryItemGroupKey /
@@ -1538,7 +1588,10 @@ module.exports = {
   ebaySyncListing: exports.ebaySyncListing,
   ebayPullSync: exports.ebayPullSync,
   ebayImportPullSync: exports.ebayImportPullSync,
+  ebayImportListing: exports.ebayImportListing,
   // shared helpers (used by sales.js cascade)
   variantSkuFor,
   ebayPackageWeightAndSize,
+  // testable core (used by functions/test/ebay_import_listing.test.js)
+  _internal: { ebayImportListingCore },
 };

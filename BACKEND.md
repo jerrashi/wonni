@@ -53,7 +53,7 @@ it but it is *not deployed* · **new** = to be built during consolidation.
 | Function | Status | Notes / action |
 |---|---|---|
 | `recordSale` | ✅ **built** (`functions/sales.js`, wired, not deployed) | THE sale-write path. Web `LogSaleModal` migrated. iOS `SaleRepository` still to repoint. |
-| `decrementAndCascade` | ✅ **built** | On `products/` model. **iOS call site still passes `{listingId}` → change to `{productId}`.** |
+| `decrementAndCascade` | ✅ **built** | On `products/` model. All iOS call sites already pass `{productId}` (verified 2026-09-12 across `SaleRepository`/`RecordSaleSheet`/`CrossPostWebView`/`MainView` — some still hold the value in a locally-named `listingId` variable, but the payload key is correct). |
 | `restockAndCascade` | ✅ **built** | `{productId, quantity}` (was `{listingId, quantity}`) |
 | `markSoldOutAndCascade` | ✅ **built** | `{productId}` (was `{listingId}`) |
 | `syncSales` | ✅ **built** (`functions/sale_poller.js`, wired, not deployed) — needs a one-time reconnect, see below | Polls eBay (`/sell/fulfillment/v1/order`) + Etsy (`/receipts`), matches SKU/listing-id → `products/{id}` (+ variant), records each via `recordSaleCore` (`source:"ebay-poll"`/`"etsy-poll"`, forward-only status). Best-effort per-order tracking + finance lookups. Returns `{imported, skipped, saleIds, errors}`. Mercari still client-scraped. |

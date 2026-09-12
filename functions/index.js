@@ -19,6 +19,7 @@ const {
   ebaySyncListing,
   ebayPullSync,
   ebayImportPullSync,
+  ebayImportListing,
 } = require("./ebay_listing");
 const { recoverEbayOfferIds } = require("./recover_ebay_offer_ids");
 const { tiktokCreateListing, tiktokUpdateListing, tiktokDeleteListing, getTiktokCategories } = require("./tiktok_listing");
@@ -83,6 +84,7 @@ module.exports = {
   ebaySyncListing,
   ebayPullSync,
   ebayImportPullSync,
+  ebayImportListing,
   recoverEbayOfferIds,
 
   // Etsy listings
