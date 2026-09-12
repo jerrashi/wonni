@@ -14,13 +14,26 @@
  * those keys are guaranteed to always exist.
  */
 
-/** Default board, seeded for every user until they customize it. Order here
- *  is the default column/dropdown order. */
+/**
+ * Default board, seeded for every user until they customize it. Order here
+ * is the default column/dropdown order.
+ *
+ * Keys are the LITERAL values `sale.status` already holds — `sales.js`'s
+ * `SALE_STATUS_ORDER`/`SALE_STATUS_TERMINAL`, `resolveEbayStatus()` /
+ * the Etsy status ternary (`sale_poller.js`), and the web `Sales.jsx` status
+ * chips all write/read these exact strings today. Using different-looking
+ * built-in keys (e.g. "ready_to_ship" for what's actually written as
+ * "pending") would make every freshly-recorded sale land on a status that
+ * doesn't match any of the user's own saleStages — caught before shipping
+ * the board UI (docs/specs/2026-09-11-stage-board-and-revenue-accounting.md
+ * §1/§6). Only the LABELS are free to read however's friendliest; the key
+ * must stay the wire value.
+ */
 const BUILT_IN_SALE_STAGES = [
-  { key: "ready_to_ship", label: "Ready to Ship", builtIn: true },
-  { key: "in_transit", label: "In Transit", builtIn: true },
+  { key: "pending", label: "Ready to Ship", builtIn: true },
+  { key: "shipped", label: "In Transit", builtIn: true },
   { key: "delivered", label: "Delivered", builtIn: true },
-  { key: "completed", label: "Completed", builtIn: true },
+  { key: "complete", label: "Completed", builtIn: true },
   { key: "cancelled", label: "Cancelled", builtIn: true },
   { key: "returned", label: "Returned", builtIn: true },
 ];
