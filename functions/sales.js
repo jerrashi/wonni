@@ -521,7 +521,7 @@ exports.markSoldOutAndCascade = onCall({ secrets: EBAY_SECRETS }, validated("mar
  * exist in every user's saleStages (sale_stages.js), so they need no
  * membership check against per-user config.
  */
-async function updateSaleStatusCore(db, uid, { saleId, status }) {
+async function updateSaleStatusCore(db, uid, { saleId, status }, deps = {}) {
   const saleRef = db.collection("sales").doc(saleId);
   const snap = await saleRef.get();
   if (!snap.exists) throw new HttpsError("not-found", "Sale not found.");
@@ -538,10 +538,27 @@ async function updateSaleStatusCore(db, uid, { saleId, status }) {
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   }, { merge: true });
 
+  // Auto re-poll (docs/specs/2026-09-11-stage-board-and-revenue-accounting.md
+  // §4): a move into cancelled/returned may have a different real take-home
+  // now (a refund's REFUND transaction — see sale_poller.js's
+  // summarizeEbayTransactions/sumEtsyPayments fix) — fetch it so the number
+  // updates without the user hunting for a manual refresh. eBay/Etsy only;
+  // Mercari/manual have no take-home API. `deps.refetchTakeHome` defaults to
+  // sale_poller.js's helper, lazy-required to dodge a circular top-level
+  // require (sale_poller.js itself requires ./sales for recordSaleCore);
+  // tests inject a fake instead of hitting the network. Best-effort — a
+  // failure here never undoes the status move that already landed above.
+  if (SALE_STATUS_TERMINAL.includes(status) && (sale.platform === "ebay" || sale.platform === "etsy")) {
+    const refetchTakeHome = deps.refetchTakeHome ?? require("./sale_poller")._internal.refetchTakeHomeForSale;
+    await refetchTakeHome(db, uid, saleRef, sale).catch((e) => {
+      console.warn(`[updateSaleStatusCore] take-home refetch failed sale=${saleId}: ${e.message}`);
+    });
+  }
+
   return { success: true };
 }
 
-exports.updateSaleStatus = onCall(validated("updateSaleStatus", async (data, request) => {
+exports.updateSaleStatus = onCall({ secrets: EBAY_SECRETS }, validated("updateSaleStatus", async (data, request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
   return updateSaleStatusCore(admin.firestore(), uid, data);
