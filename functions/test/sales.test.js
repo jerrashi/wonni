@@ -444,17 +444,17 @@ test("toTimestamp: accepts null (→ now), epoch ms, and ISO strings", () => {
 
 test("updateSaleStatusCore: moves a sale to a built-in bucket", async () => {
   const db = new FakeFirestore({
-    sales: { s1: { userId: UID, status: "ready_to_ship" } },
+    sales: { s1: { userId: UID, status: "pending" } },
     users: { [UID]: {} }, // no custom saleStages yet → falls back to built-ins
   });
-  const result = await updateSaleStatusCore(db, UID, { saleId: "s1", status: "in_transit" });
+  const result = await updateSaleStatusCore(db, UID, { saleId: "s1", status: "shipped" });
   assert.deepEqual(result, { success: true });
-  assert.equal(db.peek("sales", "s1").status, "in_transit");
+  assert.equal(db.peek("sales", "s1").status, "shipped");
 });
 
 test("updateSaleStatusCore: accepts a user's custom bucket key", async () => {
   const db = new FakeFirestore({
-    sales: { s1: { userId: UID, status: "ready_to_ship" } },
+    sales: { s1: { userId: UID, status: "pending" } },
     users: { [UID]: { saleStages: [...BUILT_IN_SALE_STAGES, { key: "awaiting_parts", label: "Awaiting Parts" }] } },
   });
   await updateSaleStatusCore(db, UID, { saleId: "s1", status: "awaiting_parts" });
@@ -463,23 +463,23 @@ test("updateSaleStatusCore: accepts a user's custom bucket key", async () => {
 
 test("updateSaleStatusCore: rejects a status that isn't one of the user's stages", async () => {
   const db = new FakeFirestore({
-    sales: { s1: { userId: UID, status: "ready_to_ship" } },
+    sales: { s1: { userId: UID, status: "pending" } },
     users: { [UID]: {} },
   });
   await assert.rejects(
     () => updateSaleStatusCore(db, UID, { saleId: "s1", status: "made_up_bucket" }),
     /isn't one of your sale stages/,
   );
-  assert.equal(db.peek("sales", "s1").status, "ready_to_ship", "unchanged");
+  assert.equal(db.peek("sales", "s1").status, "pending", "unchanged");
 });
 
 test("updateSaleStatusCore: rejects a sale owned by someone else", async () => {
   const db = new FakeFirestore({
-    sales: { s1: { userId: "someone_else", status: "ready_to_ship" } },
+    sales: { s1: { userId: "someone_else", status: "pending" } },
     users: { [UID]: {} },
   });
   await assert.rejects(
-    () => updateSaleStatusCore(db, UID, { saleId: "s1", status: "in_transit" }),
+    () => updateSaleStatusCore(db, UID, { saleId: "s1", status: "shipped" }),
     /Not your sale/,
   );
 });
@@ -487,7 +487,7 @@ test("updateSaleStatusCore: rejects a sale owned by someone else", async () => {
 test("updateSaleStatusCore: rejects a missing sale", async () => {
   const db = new FakeFirestore({ users: { [UID]: {} } });
   await assert.rejects(
-    () => updateSaleStatusCore(db, UID, { saleId: "ghost", status: "in_transit" }),
+    () => updateSaleStatusCore(db, UID, { saleId: "ghost", status: "shipped" }),
     /Sale not found/,
   );
 });
@@ -533,7 +533,7 @@ test("regression: moving an Etsy sale to cancelled triggers a take-home refetch"
 
 test("regression: a non-terminal move (e.g. to a custom bucket) never triggers a take-home refetch", async () => {
   const db = new FakeFirestore({
-    sales: { s1: { userId: UID, status: "ready_to_ship", platform: "ebay", platformOrderId: "05-1" } },
+    sales: { s1: { userId: UID, status: "pending", platform: "ebay", platformOrderId: "05-1" } },
     users: { [UID]: { saleStages: [...BUILT_IN_SALE_STAGES, { key: "awaiting_parts", label: "Awaiting Parts" }] } },
   });
   let calls = 0;

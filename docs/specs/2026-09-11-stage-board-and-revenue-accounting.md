@@ -30,21 +30,31 @@ other column, not special-cased in the UI.
 
 ```js
 saleStages: [
-  { key: "ready_to_ship", label: "Ready to Ship", builtIn: true },
-  { key: "in_transit",    label: "In Transit",     builtIn: true },
-  { key: "delivered",     label: "Delivered",      builtIn: true },
-  { key: "completed",     label: "Completed",      builtIn: true },
-  { key: "cancelled",     label: "Cancelled",      builtIn: true },
-  { key: "returned",      label: "Returned",       builtIn: true },
+  { key: "pending",   label: "Ready to Ship", builtIn: true },
+  { key: "shipped",   label: "In Transit",    builtIn: true },
+  { key: "delivered", label: "Delivered",     builtIn: true },
+  { key: "complete",  label: "Completed",     builtIn: true },
+  { key: "cancelled", label: "Cancelled",     builtIn: true },
+  { key: "returned",  label: "Returned",      builtIn: true },
 ]
 ```
 
-- Seeded with the above 6 on first use (matches today's defaults, renamed to
-  the user's wording from the kanban ask). Order = column/dropdown order.
-- `key` is the value written to `sale.status` and is **permanent** for the 6
-  built-ins — never editable, never deletable. `label` is the only thing the
-  user can rename, so renaming never breaks old sales or the revenue-exclusion
-  match below (which keys off `key`, not `label`).
+- Seeded with the above 6 on first use. `label` is the user's kanban wording;
+  `key` is the LITERAL value `sale.status` already holds today — matches
+  `sales.js`'s `SALE_STATUS_ORDER`/`SALE_STATUS_TERMINAL`,
+  `resolveEbayStatus()`/the Etsy status ternary (`sale_poller.js`), and the
+  web `Sales.jsx` chips, so every already-recorded sale (and every sale a
+  poller writes going forward) lands on a key that's guaranteed to exist in
+  the board — no migration of existing `sales/{id}` docs needed. (First
+  draft of this table used friendlier-looking keys like `ready_to_ship` /
+  `in_transit` / `completed` that didn't match those wire values — caught
+  before the UI shipped, since the board renders one column per key and an
+  unmatched status would have nowhere to land. Fixed 2026-09-11.) Order here
+  = column/dropdown order.
+- `key` is **permanent** for the 6 built-ins — never editable, never
+  deletable. `label` is the only thing the user can rename, so renaming
+  never breaks old sales or the revenue-exclusion match below (which keys
+  off `key`, not `label`).
 - User *can* add/rename/reorder/delete their own custom buckets
   (`builtIn: false` or absent). Deleting a custom bucket that sales still
   reference: block deletion (or offer "reassign existing sales to ___") —
