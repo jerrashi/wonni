@@ -38,7 +38,12 @@ final class MercariScanJSTests: XCTestCase {
         webView.loadHTMLString(html, baseURL: URL(string: "https://www.mercari.com/mypage/listings/in_progress/")!)
         // Can't poll readyState alone: the initial about:blank document is already
         // "complete", so the check must also confirm the fixture's baseURL committed.
-        for _ in 0..<100 {
+        // Generous timeout (30s, matching the UI tests' own CI-timing allowance):
+        // a loaded/contended CI runner needs more than a 10s cap gives it — this
+        // caused a one-off "Fixture never finished loading" flake on 2026-09-12
+        // against a test that isn't otherwise special (test_emptyPage_...), on a
+        // run where every other fixture test using this same helper passed.
+        for _ in 0..<300 {
             if let probe = try? await webView.callJS("return window.location.href + '|' + document.readyState;") as? String,
                probe.contains("mercari.com"), probe.hasSuffix("complete") { return }
             try await Task.sleep(nanoseconds: 100_000_000)

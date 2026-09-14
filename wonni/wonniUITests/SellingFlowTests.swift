@@ -19,18 +19,50 @@ final class SellingFlowTests: XCTestCase {
 
     /// Test the complete selling flow from camera to publish
     func testPublishSingleListing() throws {
+        // Photos permission alert may appear the first time the picker touches the
+        // library — auto-allow it so the flow isn't blocked.
+        let photosInterruption = addUIInterruptionMonitor(withDescription: "Photos permission") { alert in
+            let allowButtons = alert.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'Allow' OR label CONTAINS 'OK'")
+            )
+            if allowButtons.count > 0 {
+                allowButtons.firstMatch.tap()
+                return true
+            }
+            return false
+        }
+        defer { removeUIInterruptionMonitor(photosInterruption) }
+
         // 1. Navigate to Sell tab (camera)
         app.tabBars.buttons["Sell"].tap()
 
-        // 2. Verify camera view appears
-        let cameraView = app.staticTexts["Camera"]
-        XCTAssert(cameraView.waitForExistence(timeout: 5), "Camera view should appear")
+        // 2. Verify the camera view appears. CameraView's own capture UI has no
+        // accessible title text (was previously checked via a nonexistent
+        // staticTexts["Camera"] — that label actually belongs to a *different*
+        // screen's back button, see pickerBackButton below) — cameraGalleryButton
+        // is the one stable, always-present element on this screen.
+        let galleryButton = app.buttons["cameraGalleryButton"]
+        XCTAssert(galleryButton.waitForExistence(timeout: 5), "Camera view should appear")
 
-        // 3. Take a photo (use simulator's mock photo)
-        let takePhotoButton = app.buttons.matching(NSPredicate(format: "label CONTAINS 'photo' OR label CONTAINS 'camera'")).firstMatch
-        if takePhotoButton.exists {
-            takePhotoButton.tap()
-        }
+        // 3. Add a photo via the gallery picker. iOS Simulator has no camera
+        // hardware — AVCaptureSession's shutter button (no accessibility
+        // identifier, and inert on Simulator either way) can't produce a real
+        // photo, so this goes through the same picker route already proven out
+        // in testDraftsCarouselStaysPinnedToBottomAfterPickerRoundTrip below.
+        galleryButton.tap()
+        app.tap() // flush the permission-alert interruption monitor if it fired
+
+        let firstPhoto = app.descendants(matching: .any).matching(identifier: "photoGridItem").firstMatch
+        XCTAssert(firstPhoto.waitForExistence(timeout: 30), "At least one photo grid item should load")
+        firstPhoto.tap()
+
+        let commitButton = app.buttons.matching(identifier: "draftsCarousel").firstMatch
+        XCTAssert(commitButton.waitForExistence(timeout: 5), "Commit ('+') button should appear once a photo is selected")
+        commitButton.tap()
+
+        let backButton = app.buttons["pickerBackButton"]
+        XCTAssert(backButton.waitForExistence(timeout: 5), "Back-to-camera button should appear")
+        backButton.tap()
 
         // 4. Proceed to drafts
         let proceedButton = app.buttons["Proceed"]

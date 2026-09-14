@@ -64,6 +64,34 @@ jobs:
       - name: Provide CI placeholder Secrets.xcconfig
         run: cp wonni/wonni/Secrets.xcconfig.example wonni/wonni/Secrets.xcconfig
 
+      - name: Seed the simulator's Photos library
+        # The UI tests drive selling through the gallery/photo picker (iOS
+        # Simulator has no camera hardware for the AVCaptureSession shutter
+        # path) — a fresh CI simulator's Photos library is empty, so without
+        # this "At least one photo grid item should load" always times out.
+        # screencapture needs no extra tooling and always produces a real PNG.
+        run: |
+          UDID=$(xcrun simctl list devices available --json | python3 -c '
+          import json, re, sys
+          devices = json.load(sys.stdin)["devices"]
+          candidates = []
+          for runtime, devs in devices.items():
+              m = re.search(r"iOS-(\d+)-(\d+)", runtime)
+              if not m:
+                  continue
+              version = tuple(int(x) for x in m.groups())
+              for dev in devs:
+                  if dev["name"] == "iPhone 17":
+                      candidates.append((version, dev["udid"]))
+          candidates.sort()
+          # Highest iOS version wins, matching the test destinations OS=latest.
+          print(candidates[-1][1])
+          ')
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          screencapture -x /tmp/seed-photo.png
+          xcrun simctl addmedia "$UDID" /tmp/seed-photo.png
+
       - name: Run selling flow UI tests
         run: |
           set -o pipefail
