@@ -4,11 +4,9 @@ import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
 import { getFunctions, httpsCallable, connectFunctionsEmulator } from "firebase/functions";
 import { getStorage, ref, uploadBytes, connectStorageEmulator } from "firebase/storage";
 
-// Points at the shared wonni-app project (Phase B backend merge) — NOT
-// wonni-dropship. Do not deploy/build against this until the rest of the
-// cutover (data migration + merged functions/rules deploy) is done; see the
-// integration plan's step 9. The old wonni-dropship config is kept below,
-// commented out, for reference during the migration window.
+// Points at the shared wonni-app project (the monorepo merge is complete —
+// this IS the live config deployed at wonni-app.web.app). NOT wonni-dropship.
+// The old wonni-dropship config is kept below, commented out, for reference.
 const firebaseConfig = {
   apiKey: "AIzaSyCrroW6RXSl15a4j9FPeAUOqkiNCx3g2Lk",
   authDomain: "wonni-app.firebaseapp.com",
