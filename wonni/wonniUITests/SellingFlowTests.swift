@@ -69,69 +69,70 @@ final class SellingFlowTests: XCTestCase {
         XCTAssert(proceedButton.waitForExistence(timeout: 5), "Proceed button should exist")
         proceedButton.tap()
 
-        // 5. Verify BulkListingOverviewView (draft list) appears
-        let draftListView = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'draft' OR label CONTAINS 'Process'")).firstMatch
-        XCTAssert(draftListView.waitForExistence(timeout: 5), "Draft list should appear")
-
-        // 6. Verify draft row exists
+        // 5. Verify BulkListingOverviewView (draft list) appears. That screen sets no
+        // .navigationTitle and renders no static text at all until processing actually
+        // starts — the "Processing N of M…" banner (uploadManager.isProcessing) — so the
+        // real, always-present signal that we landed here is the draft row itself (was
+        // previously checked via a staticTexts CONTAINS 'draft'/'Process' match that never
+        // existed on this screen, silently never passing — found 2026-09-15).
         let draftCell = app.cells.firstMatch
-        XCTAssert(draftCell.exists, "At least one draft cell should exist")
+        XCTAssert(draftCell.waitForExistence(timeout: 5), "At least one draft cell should exist")
 
-        // 7. Tap Process button
+        // 6. Tap Process button
         let processButton = app.buttons["Process"]
         XCTAssert(processButton.exists, "Process button should exist")
         processButton.tap()
 
-        // 8. Wait for ProcessProgressView sheet to appear
+        // 7. Wait for ProcessProgressView sheet to appear
         let processingTitle = app.staticTexts["Processing"]
         XCTAssert(processingTitle.waitForExistence(timeout: 5), "Processing view should appear")
 
-        // 9. Wait for AI processing to complete (longer timeout for API calls)
+        // 8. Wait for AI processing to complete (longer timeout for API calls)
         let processCompleteText = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Complete' OR label CONTAINS 'processed'")).firstMatch
         XCTAssert(processCompleteText.waitForExistence(timeout: 60), "AI processing should complete within 60s")
 
-        // 10. Dismiss processing view or wait for results sheet
+        // 9. Dismiss processing view or wait for results sheet
         let closeButton = app.buttons["Close"]
         if closeButton.exists {
             closeButton.tap()
         }
 
-        // 11. Wait for ProcessResultsOverviewView (Review & Publish sheet) to appear
+        // 10. Wait for ProcessResultsOverviewView (Review & Publish sheet) to appear
         let reviewTitle = app.staticTexts["Review & Publish"]
         XCTAssert(reviewTitle.waitForExistence(timeout: 10), "Review & Publish sheet should appear")
 
-        // 12. Verify Publish button is enabled
+        // 11. Verify Publish button is enabled
         let publishButton = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Publish'")).firstMatch
         XCTAssert(publishButton.exists && !publishButton.isHittable == false, "Publish button should be enabled")
 
-        // 13. Tap Publish
+        // 12. Tap Publish
         publishButton.tap()
 
-        // 14. Wait for PublishConfirmationSheet with platform toggles
+        // 13. Wait for PublishConfirmationSheet with platform toggles
         let publishConfirmTitle = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Publish'")).firstMatch
         XCTAssert(publishConfirmTitle.waitForExistence(timeout: 5), "Publish confirmation sheet should appear")
 
-        // 15. Verify platform toggles exist and respond
+        // 14. Verify platform toggles exist and respond
         let mercariToggle = app.switches.matching(NSPredicate(format: "label CONTAINS 'Mercari'")).firstMatch
         XCTAssert(mercariToggle.exists, "Mercari toggle should exist")
 
-        // 16. Tap Mercari toggle to select it
+        // 15. Tap Mercari toggle to select it
         mercariToggle.tap()
 
-        // 17. Verify toggle is now ON
+        // 16. Verify toggle is now ON
         let isOn = mercariToggle.value as? NSNumber
         XCTAssertEqual(isOn?.boolValue, true, "Mercari toggle should be ON after tapping")
 
-        // 18. Tap Publish button in confirmation sheet
+        // 17. Tap Publish button in confirmation sheet
         let confirmPublishButton = app.buttons.matching(NSPredicate(format: "label == 'Publish'")).firstMatch
         XCTAssert(confirmPublishButton.exists, "Publish confirmation button should exist")
         confirmPublishButton.tap()
 
-        // 19. Wait for publishing to start (progress indicator)
+        // 18. Wait for publishing to start (progress indicator)
         let publishingIndicator = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Publishing' OR label CONTAINS 'posting'")).firstMatch
         XCTAssert(publishingIndicator.waitForExistence(timeout: 5), "Publishing should start")
 
-        // 20. Wait for CrossPostStatusView to appear (final status screen)
+        // 19. Wait for CrossPostStatusView to appear (final status screen)
         let statusTitle = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Status' OR label CONTAINS 'published'")).firstMatch
         XCTAssert(statusTitle.waitForExistence(timeout: 60), "Cross-post status should appear after publishing")
     }
