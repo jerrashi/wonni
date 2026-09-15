@@ -91,11 +91,12 @@ final class SellingFlowTests: XCTestCase {
         let processCompleteText = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Complete' OR label CONTAINS 'processed'")).firstMatch
         XCTAssert(processCompleteText.waitForExistence(timeout: 60), "AI processing should complete within 60s")
 
-        // 9. Dismiss processing view or wait for results sheet
-        let closeButton = app.buttons["Close"]
-        if closeButton.exists {
-            closeButton.tap()
-        }
+        // 9. The processing sheet auto-dismisses itself (UploadManager.processDrafts sets
+        // showProcessResults = true ~1.2s after processing finishes) — no manual dismiss
+        // needed. A prior version of this test tapped a "Close" button here, but that raced
+        // the auto-dismiss: `.exists` could pass and the button still vanish before `.tap()`
+        // landed, failing the whole test on an XCUIElement AX-action error rather than a
+        // real assertion (found 2026-09-15, CI run 35007555834).
 
         // 10. Wait for ProcessResultsOverviewView (Review & Publish sheet) to appear
         let reviewTitle = app.staticTexts["Review & Publish"]
