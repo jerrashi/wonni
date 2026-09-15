@@ -3541,7 +3541,7 @@ function ProductDetail() {
         {
           const effSourcePrice = "sourcePrice" in effectiveFields
             ? effectiveFields.sourcePrice
-            : (next.sourcePrice ?? next.sourceCost ?? next.aliexpressPrice);
+            : next.sourcePrice;
           const sp = typeof effSourcePrice === "number" ? effSourcePrice : null;
           setSourcePrice(sp);
           setSourcePriceInput(sp != null ? String(sp) : "");
