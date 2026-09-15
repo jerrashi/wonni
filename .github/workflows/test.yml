@@ -69,7 +69,10 @@ jobs:
         # Simulator has no camera hardware for the AVCaptureSession shutter
         # path) — a fresh CI simulator's Photos library is empty, so without
         # this "At least one photo grid item should load" always times out.
-        # screencapture needs no extra tooling and always produces a real PNG.
+        # `screencapture` was tried first but the macOS runner is headless
+        # ("could not create image from display", found 2026-09-14) — build
+        # the PNG by hand instead (stdlib zlib/struct only, no display or
+        # extra tooling needed).
         run: |
           UDID=$(xcrun simctl list devices available --json | python3 -c '
           import json, re, sys
@@ -89,7 +92,20 @@ jobs:
           ')
           xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID" -b
-          screencapture -x /tmp/seed-photo.png
+          python3 -c '
+          import struct, zlib
+
+          def chunk(tag, data):
+              return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xffffffff)
+
+          width, height = 200, 200
+          ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)  # 8-bit RGB, no filter/interlace
+          raw = b"".join(b"\x00" + bytes([80, 140, 200]) * width for _ in range(height))
+          idat = zlib.compress(raw)
+          png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
+          with open("/tmp/seed-photo.png", "wb") as f:
+              f.write(png)
+          '
           xcrun simctl addmedia "$UDID" /tmp/seed-photo.png
 
       - name: Run selling flow UI tests
