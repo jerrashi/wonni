@@ -646,13 +646,6 @@ class UploadManager: ObservableObject {
                     let hasUserTitle = draft.userEditedTitle != nil && !draft.userEditedTitle!.isEmpty
                     let hasUserDesc = draft.userEditedDescription != nil && !draft.userEditedDescription!.isEmpty
 
-                    if hasUserTitle {
-                        draft.originalUserTitleBeforeAI = draft.userEditedTitle
-                    }
-                    if hasUserDesc {
-                        draft.originalUserDescriptionBeforeAI = draft.userEditedDescription
-                    }
-
                     print("[UploadManager] Running Gemini for draft \(draft.id)...")
                     let gemini = try await GeminiService.shared.identifyItem(
                         images: Array(images.prefix(3)),
@@ -662,7 +655,20 @@ class UploadManager: ObservableObject {
                     )
                     print("[UploadManager] Gemini success for \(draft.id): \(gemini.name ?? "Untitled")")
                     processStatuses[draft.id] = .uploading(0.7)  // Generating description...
-                    
+
+                    // Snapshot the user's pre-AI text now that Gemini has actually succeeded and
+                    // is about to overwrite it — taking this snapshot before the (possibly-throwing)
+                    // call above left originalUser*BeforeAI set (and the Undo button showing) even
+                    // when Gemini failed and nothing was ever overwritten, since the catch block
+                    // below never rolled it back (found 2026-09-15, alongside the Gemini outage
+                    // that made it obvious: every draft showed an Undo with no AI edit to undo).
+                    if hasUserTitle {
+                        draft.originalUserTitleBeforeAI = draft.userEditedTitle
+                    }
+                    if hasUserDesc {
+                        draft.originalUserDescriptionBeforeAI = draft.userEditedDescription
+                    }
+
                     // Use Gemini's shortTitle (≤80 chars) as the primary listing title —
                     // it already incorporates the user's title hints from the prompt.
                     // Fall back to name if shortTitle wasn't returned.

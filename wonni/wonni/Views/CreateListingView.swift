@@ -1104,6 +1104,8 @@ struct DraftRow: View, Equatable {
     @State private var titleText: String = ""
     @State private var showDescriptionEditor = false
     @State private var descriptionEditorOpenedViaFocus = false
+    @State private var showTitleEditor = false
+    @State private var titleEditorOpenedViaFocus = false
 
     // BulkListingOverviewView.body re-evaluates on every uploadManager @Published change
     // (isProcessing/processProgress are read directly there) — which fires repeatedly while
@@ -1164,24 +1166,27 @@ struct DraftRow: View, Equatable {
 
                 // Title + price (constrained to photo height)
                 VStack(alignment: .leading, spacing: 6) {
-                    TextField("Add title…", text: $titleText, axis: .vertical)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(item.userEditedTitle != nil ? .primary : .secondary)
-                        .lineLimit(2)
-                        .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .title))
-                        .onReceive(NotificationCenter.default.publisher(for: UITextField.textDidBeginEditingNotification)) { notification in
-                            // Scoped to this row's own title field — the original version of
-                            // this fired unconditionally, so every draft row in the list
-                            // subscribed to every UITextField gaining focus anywhere in the
-                            // view (any row's title *or* price field), each dispatching a
-                            // select-all. With many drafts on screen that's O(rows) redundant
-                            // work on every single focus change — a real source of the
-                            // lagginess reported when editing. Matches the guard
-                            // `DraftHistoryTitleField` already uses correctly.
-                            guard focusedField.wrappedValue == DraftFocusField(itemID: item.id, field: .title),
-                                  let tf = notification.object as? UITextField else { return }
-                            DispatchQueue.main.async { tf.selectAll(nil) }
+                    // A plain, tap-to-edit Text rather than an inline-growing TextField: an
+                    // editable multi-line TextField has no way to truncate with an ellipsis, so
+                    // a long title just clipped mid-line instead of cutting off cleanly (reported
+                    // 2026-09-15). Title editing moves into a sheet, same pattern the description
+                    // field below already uses.
+                    Button { showTitleEditor = true } label: {
+                        Text(titleText.isEmpty ? "Add title…" : titleText)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(titleText.isEmpty ? Color(.placeholderText) : (item.userEditedTitle != nil ? .primary : .secondary))
+                            .lineLimit(2)
+                            .truncationMode(.tail)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .sheet(isPresented: $showTitleEditor) {
+                        TitleEditorSheet(initialText: titleText) { newText in
+                            titleText = String(newText.prefix(140))
+                            item.userEditedTitle = titleText.isEmpty ? nil : titleText
                         }
+                    }
 
                     TitleCharCountView(count: titleText.count)
 
@@ -1290,9 +1295,14 @@ struct DraftRow: View, Equatable {
             if oldFocus?.itemID == item.id && newFocus?.itemID != item.id {
                 saveLocalStateToModel()
             }
-            // Description isn't a real focusable field (it's a button that opens a sheet),
-            // so the keyboard arrows can't land real focus there. Landing "on" it via arrow
-            // navigation instead opens the sheet directly, so up/down keeps working through it.
+            // Title and description are both buttons that open a sheet, not real focusable
+            // fields, so the keyboard arrows can't land real focus there. Landing "on" either
+            // via arrow navigation instead opens its sheet directly, so up/down keeps working
+            // through both.
+            if newFocus == DraftFocusField(itemID: item.id, field: .title) {
+                titleEditorOpenedViaFocus = true
+                showTitleEditor = true
+            }
             if newFocus == DraftFocusField(itemID: item.id, field: .description) {
                 descriptionEditorOpenedViaFocus = true
                 showDescriptionEditor = true
@@ -1308,6 +1318,14 @@ struct DraftRow: View, Equatable {
                 priceText = String(format: "%.2f", p)
             } else {
                 priceText = ""
+            }
+        }
+        .onChange(of: showTitleEditor) { _, isShowing in
+            // Fires whether the sheet was saved or swiped away — either way, continue the
+            // arrow-key flow onward once the user's done with the title.
+            if !isShowing && titleEditorOpenedViaFocus {
+                titleEditorOpenedViaFocus = false
+                onDescriptionAutoAdvance?()
             }
         }
         .onChange(of: showDescriptionEditor) { _, isShowing in
@@ -1720,6 +1738,40 @@ private struct DescriptionEditorSheet: View {
     }
 }
 
+// MARK: - TitleEditorSheet
+private struct TitleEditorSheet: View {
+    var initialText: String
+    var onSave: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var focused: Bool
+
+    @State private var localText: String = ""
+
+    var body: some View {
+        NavigationStack {
+            TextField("Add title…", text: $localText, axis: .vertical)
+                .focused($focused)
+                .font(.body)
+                .padding(.horizontal, 12)
+                .padding(.top, 4)
+                .navigationTitle("Title")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            onSave(localText)
+                            dismiss()
+                        }
+                    }
+                }
+        }
+        .onAppear {
+            localText = initialText
+            focused = true
+        }
+    }
+}
+
 // MARK: - BulkListingOverviewView (Drafts)
 struct BulkListingOverviewView: View {
     @Environment(\.modelContext) private var modelContext
@@ -2011,7 +2063,14 @@ struct ProcessResultsOverviewView: View {
         // live listing looking like an ordinary draft (see deleteDraftLocallyAndCloud).
         // pendingPublish=true items ARE kept here intentionally — they are failed-to-publish
         // drafts that the user is retrying. They appear with an orange highlight below.
-        return allItems.filter { processedSet.contains($0.id) && !uploadManager.deletedDraftIDs.contains($0.id) && $0.publishedAt == nil }
+        // Items where Gemini itself failed (processingFailedIDs) must ALSO show here, not
+        // just successes — ResultDraftRow already renders a dedicated "Couldn't identify —
+        // enter details manually" state for isGeminiFailed, but excluding them from `results`
+        // made that state unreachable: if every draft failed AI (e.g. Gemini outage), this
+        // screen rendered a totally empty list instead of the failed drafts to fix up by hand
+        // (found 2026-09-15).
+        let failedSet = Set(uploadManager.processingFailedIDs)
+        return allItems.filter { (processedSet.contains($0.id) || failedSet.contains($0.id)) && !uploadManager.deletedDraftIDs.contains($0.id) && $0.publishedAt == nil }
     }
 
     private var toPublish: [Item] {

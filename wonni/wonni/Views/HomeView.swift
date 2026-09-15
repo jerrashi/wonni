@@ -67,13 +67,23 @@ class FeedViewModel: ObservableObject {
         async let pageFetch = ListingRepository.shared.fetchFeedPage()
         async let bannerFetch = fetchBanners()
 
-        if let page = try? await pageFetch {
+        // `try?` here used to swallow any failure (permission-denied, missing index,
+        // decode error, …) completely silently — the feed just rendered "No listings
+        // yet" with nothing in Console pointing at why (reported empty home feed,
+        // 2026-09-15). Logging the failure doesn't change behavior, just makes the
+        // next occurrence actually diagnosable.
+        do {
+            let page = try await pageFetch
             listings = page.listings
             lastDoc = page.lastDocument
             hasMore = page.hasMore
+        } catch {
+            print("[FeedViewModel] loadInitial: fetchFeedPage failed: \(error)")
         }
-        if let banners = try? await bannerFetch {
-            promotedBanners = banners
+        do {
+            promotedBanners = try await bannerFetch
+        } catch {
+            print("[FeedViewModel] loadInitial: fetchBanners failed: \(error)")
         }
     }
 
