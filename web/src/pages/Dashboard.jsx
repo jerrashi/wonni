@@ -418,7 +418,7 @@ function ProductCard({ product, selected = false, onSelect = null, selectMode = 
         <button
           className="product-card-image"
           style={{ position: "relative" }}
-          onClick={() => navigate(`/sell/products/${product.id}`)}
+          onClick={() => (selectMode ? onSelect(!selected) : navigate(`/sell/products/${product.id}`))}
         >
           {primaryImage ? (
             <img src={primaryImage} alt={product.title} />
@@ -471,7 +471,7 @@ function ProductCard({ product, selected = false, onSelect = null, selectMode = 
 
           {/* Select checkbox - only in select mode */}
           {selectMode && (
-            <div style={{ position: "absolute", top: 8, left: 8, zIndex: 10 }}>
+            <div style={{ position: "absolute", top: 8, left: 8, zIndex: 10 }} onClick={(e) => e.stopPropagation()}>
               <input
                 type="checkbox"
                 checked={selected}
@@ -489,7 +489,10 @@ function ProductCard({ product, selected = false, onSelect = null, selectMode = 
 
         <div className="product-card-body">
           {/* Title */}
-          <button className="product-card-title-button" onClick={() => navigate(`/sell/products/${product.id}`)}>
+          <button
+            className="product-card-title-button"
+            onClick={() => (selectMode ? onSelect(!selected) : navigate(`/sell/products/${product.id}`))}
+          >
             <div className="product-card-title">{product.title}</div>
           </button>
 
