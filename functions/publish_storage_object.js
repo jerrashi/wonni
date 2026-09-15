@@ -20,8 +20,11 @@ exports.publishStorageObject = onCall(
 
     const { path } = request.data ?? {};
     if (!path || typeof path !== "string") throw new HttpsError("invalid-argument", "Missing path.");
-    // Only allow publishing objects under this user's own upload namespace.
-    if (!path.startsWith(`dropship/${uid}/`)) {
+    // Only allow publishing objects under this user's own upload namespace —
+    // `dropship/{uid}/...` (web edits/drafts, AliExpress/Weverse imports) or
+    // `users/{uid}/...` (iOS listing/template photos, the shared callable
+    // both platforms now use to finalize an upload).
+    if (!path.startsWith(`dropship/${uid}/`) && !path.startsWith(`users/${uid}/`)) {
       throw new HttpsError("permission-denied", "Not your upload path.");
     }
 

@@ -105,6 +105,23 @@ test("listingDocToProduct: missing/blank fields get safe defaults", () => {
   assert.deepEqual(p.images, []);
 });
 
+test("listingDocToProduct: bucketName resolves bare photoPaths to public URLs, leaves real URLs alone", () => {
+  const p = listingDocToProduct(
+    { ...singleListing, photoPaths: ["users/u1/x/0.jpg", "https://storage.googleapis.com/other-bucket/already-resolved.jpg"] },
+    ID,
+    { bucketName: "wonni-app.firebasestorage.app" },
+  );
+  assert.deepEqual(p.images, [
+    "https://storage.googleapis.com/wonni-app.firebasestorage.app/users/u1/x/0.jpg",
+    "https://storage.googleapis.com/other-bucket/already-resolved.jpg",
+  ]);
+});
+
+test("listingDocToProduct: no bucketName leaves photoPaths as bare paths (back-compat)", () => {
+  const p = listingDocToProduct(singleListing, ID);
+  assert.deepEqual(p.images, ["users/u1/x/0.jpg", "users/u1/x/1.jpg"]);
+});
+
 test("normalizeCondition / normalizeCrossPostStatus", () => {
   assert.equal(normalizeCondition("forParts"), "poor");
   assert.equal(normalizeCondition("NWT"), null);
