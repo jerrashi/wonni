@@ -29,8 +29,12 @@ const args = process.argv.slice(2);
 const APPLY = args.includes("--apply");
 const userFilter = args.includes("--user") ? args[args.indexOf("--user") + 1] : null;
 
-admin.initializeApp({ projectId: process.env.GCLOUD_PROJECT || "wonni-app" });
+admin.initializeApp({
+  projectId: process.env.GCLOUD_PROJECT || "wonni-app",
+  storageBucket: process.env.STORAGE_BUCKET || "wonni-app.firebasestorage.app",
+});
 const db = admin.firestore();
+const bucket = admin.storage().bucket();
 const now = admin.firestore.FieldValue.serverTimestamp();
 
 function toTs(v) {
@@ -55,7 +59,7 @@ function toTs(v) {
     if (userFilter && l.userId !== userFilter) continue;
     if (productIds.has(doc.id)) { plan.push({ id: doc.id, action: "skip (products/ doc exists)", title: l.customTitle }); continue; }
 
-    const product = listingDocToProduct(l, doc.id);
+    const product = listingDocToProduct(l, doc.id, { bucketName: bucket.name });
     // Preserve the original timestamps; stamp fresh ones for the migration row.
     product.importedAt = toTs(l.createdAt) || now;
     product.updatedAt = now;
@@ -63,7 +67,7 @@ function toTs(v) {
     if (toTs(l.soldAt)) product.soldAt = toTs(l.soldAt);
     product.migratedAt = now;
 
-    plan.push({ id: doc.id, action: "create products/ doc", title: product.title, doc: product });
+    plan.push({ id: doc.id, action: "create products/ doc", title: product.title, doc: product, photoPaths: l.photoPaths });
   }
 
   const creates = plan.filter((p) => p.doc);
@@ -77,6 +81,16 @@ function toTs(v) {
 
   if (!APPLY) { console.log("\n(dry run — nothing written. Re-run with --apply)\n"); process.exit(0); }
   if (!creates.length) { console.log("\nNothing to do.\n"); process.exit(0); }
+
+  // Flip each referenced Storage object public before the doc goes live —
+  // listingDocToProduct already rewrote `images` to the public URL string,
+  // this just makes that URL actually resolve.
+  for (const { photoPaths } of creates) {
+    for (const p of photoPaths ?? []) {
+      if (typeof p !== "string" || !p || /^https?:\/\//.test(p)) continue;
+      await bucket.file(p).makePublic().catch((e) => console.warn(`  makePublic failed for ${p}: ${e.message}`));
+    }
+  }
 
   let batch = db.batch();
   let n = 0;
