@@ -71,6 +71,17 @@ function formatDate(value) {
   }).format(value.toDate());
 }
 
+// eBay/Etsy pull-sync diff tables render whatever value the backend put in
+// `d.wonni` / `d.external` for a given field. A plain `value || "(empty)"`
+// treats a genuine 0 (e.g. quantity legitimately out of stock) the same as
+// missing data. Quantity should only fall back to "(empty)" when the value
+// is actually null/undefined; title/price/etc. keep the old "" -> empty"
+// behavior since a blank string is meaningfully "no value" for those.
+function formatDiffValue(field, value) {
+  if (field === "quantity") return value != null ? value : "(empty)";
+  return value || "(empty)";
+}
+
 function badgeLabel(source) {
   if (source === "weverse") return "Weverse";
   if (source === "aliexpress") return "AliExpress";
@@ -2543,6 +2554,10 @@ function VariantsEditor({
   variants,
   images,
   listingPrice,
+  quantityVariesByVariant,
+  masterQuantity,
+  onQuantityModelChange,
+  onVariantQuantityCommit,
   onOptionsChange,
   onVariantFieldChange,
   onBulkFieldChange,
@@ -2573,6 +2588,8 @@ function VariantsEditor({
   // { primaryValue, field, value } awaiting confirmation, or null.
   const [pendingBulkEdit, setPendingBulkEdit] = useState(null);
   const [resetToken, setResetToken] = useState(0);
+  const [masterQuantityInput, setMasterQuantityInput] = useState(String(masterQuantity ?? 0));
+  useEffect(() => { setMasterQuantityInput(String(masterQuantity ?? 0)); }, [masterQuantity]);
 
   function toggleSelected(id) {
     setSelectedIds((prev) => {
@@ -2684,9 +2701,11 @@ function VariantsEditor({
           className="input"
           type="number"
           min="0"
-          value={v.quantity}
+          value={quantityVariesByVariant ? v.quantity : (masterQuantity ?? 0)}
+          disabled={!quantityVariesByVariant}
+          title={quantityVariesByVariant ? undefined : "Shared quantity — edit the total above"}
           onChange={(e) => onVariantFieldChange(v.id, "quantity", Number(e.target.value) || 0)}
-          onBlur={onCommit}
+          onBlur={async () => { onCommit(); await onVariantQuantityCommit(v); }}
         />
         {v.mercariUrl ? (
           <a
@@ -2785,6 +2804,42 @@ function VariantsEditor({
         <p className="detail-copy" style={{ fontSize: 12, color: "var(--muted)" }}>
           No variations yet — this is a single-SKU listing.
         </p>
+      )}
+
+      {options.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 12px", marginBottom: 12, background: "var(--surface-hover)", borderRadius: 8 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={quantityVariesByVariant}
+              onChange={(e) => onQuantityModelChange({ quantityVariesByVariant: e.target.checked })}
+            />
+            Quantity varies by variant
+            <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400 }}>
+              {quantityVariesByVariant
+                ? "— each variant tracks its own stock"
+                : "— off: one shared total, same number posted to every variant"}
+            </span>
+          </label>
+          {!quantityVariesByVariant && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 12, color: "var(--muted)" }}>Total quantity</span>
+              <input
+                className="input"
+                type="number"
+                min="0"
+                style={{ width: 80 }}
+                value={masterQuantityInput}
+                onChange={(e) => setMasterQuantityInput(e.target.value)}
+                onBlur={(e) => {
+                  const next = Math.max(0, Number(e.target.value) || 0);
+                  setMasterQuantityInput(String(next));
+                  if (next !== masterQuantity) onQuantityModelChange({ quantity: next });
+                }}
+              />
+            </div>
+          )}
+        </div>
       )}
 
       {manageOpen && (
@@ -3006,7 +3061,7 @@ function VariantsEditor({
 // photo reorder). `actions` is an ordered list of { label, onClick, primary? };
 // clicking any action or the ✕ dismisses the toast. Auto-dismisses after
 // `autoDismissMs` (default 6s) so it never lingers forever if ignored.
-export function ActionToast({ message, actions, onDismiss, autoDismissMs = 6000 }) {
+export function ActionToast({ message, actions = [], onDismiss, autoDismissMs = 6000 }) {
   useEffect(() => {
     const t = setTimeout(onDismiss, autoDismissMs);
     return () => clearTimeout(t);
@@ -3417,6 +3472,7 @@ function ProductDetail() {
   const [applyingMercariEdits, setApplyingMercariEdits] = useState(false);
   const [syncingEbay, setSyncingEbay] = useState(false);
   const [deletingEbay, setDeletingEbay] = useState(false);
+  const [markingOutOfStock, setMarkingOutOfStock] = useState(false);
   const [showEbaySyncModal, setShowEbaySyncModal] = useState(false);
   const [ebayListingDetails, setEbayListingDetails] = useState(null);
   const [applyingEbaySync, setApplyingEbaySync] = useState(false);
@@ -3899,14 +3955,18 @@ function ProductDetail() {
   }
 
   // Every variant whose price still equals the price *before this keystroke*
-  // is "following" it, not a deliberate override — bump those to the new
-  // value so they keep following. Anything the user already typed a
-  // different number into is left untouched. Runs per-change (not just on
-  // blur) so a follower tracks correctly through a whole typing sequence.
+  // is "following" it, not a deliberate override — reset those to null (the
+  // real "follow the listing price" value, per variantPriceOr) rather than
+  // copying the new number in. Copying a number here looks identical in the
+  // UI (blank input, since v.price === listingPrice) but silently converts
+  // a follower into a pinned override — any edit path that ever misses this
+  // exact equality check (reload, another session, a race) then freezes
+  // that variant's price forever, out of sync with the listing price. Null
+  // has no such failure mode: it always resolves to the live listingPrice.
   function handleListingPriceChange(rawValue) {
     const prevPrice = listingPrice;
     const nextPrice = rawValue === "" ? null : Number(rawValue);
-    const nextVariants = variants.map((v) => (v.price === prevPrice ? { ...v, price: nextPrice } : v));
+    const nextVariants = variants.map((v) => (v.price === prevPrice ? { ...v, price: null } : v));
     setListingPrice(nextPrice);
     setVariants(nextVariants);
     if (Number(nextPrice) > 0) setShowPriceRequired(false);
@@ -4578,6 +4638,58 @@ function ProductDetail() {
     await updateDoc(doc(db, "products", product.id), { ...fields, updatedAt: serverTimestamp() });
   }
 
+  // Toggling "quantity varies by variant" off, or editing the shared total,
+  // for a product with variation dimensions. See CLAUDE.md's eBay listing
+  // lifecycle / shared-quantity-pool section — sales.js's resolveStock/
+  // cascade and ebay_listing.js's postMultiVariant already read/write
+  // `product.quantity` as the authoritative number once this is false.
+  async function handleQuantityModelChange({ quantityVariesByVariant, quantity }) {
+    if (!product) return;
+    const patch = { updatedAt: serverTimestamp() };
+    if (typeof quantityVariesByVariant === "boolean") {
+      patch.quantityVariesByVariant = quantityVariesByVariant;
+      // Turning it off for the first time: seed the shared total from
+      // today's per-variant sum so the user doesn't see a surprise 0.
+      if (!quantityVariesByVariant && typeof product.quantity !== "number") {
+        patch.quantity = variants.reduce((sum, v) => sum + (v.active ? (v.quantity ?? 0) : 0), 0);
+      }
+    }
+    if (typeof quantity === "number") patch.quantity = quantity;
+    await updateDoc(doc(db, "products", product.id), patch);
+
+    // Wonni is the master listing — push the new shared quantity downstream
+    // to eBay if it's live. Etsy/TikTok manual-edit push isn't wired yet
+    // (see contracts/sales.js pushEbayQuantityUpdate). Best-effort: a failed
+    // push shouldn't block the Wonni-side save, which already succeeded —
+    // the existing Sync/diff flow catches any resulting drift later.
+    if ("quantity" in patch && product.crossPostStatus?.ebay === "active") {
+      try {
+        await callFunction("pushEbayQuantityUpdate")({ productId: product.id });
+      } catch (e) {
+        console.warn("Could not push quantity to eBay:", e.message);
+      }
+    }
+  }
+
+  // Per-variant quantity edit (quantityVariesByVariant: true) — push just
+  // that one variant's new quantity to its own eBay offer. Fires on blur
+  // from the per-row QTY input in VariantsEditor, right after `onCommit`
+  // stages the variants-array edit into the debounced autosave
+  // (localFieldsRef/scheduleWriteFields, ~1s). `pushEbayQuantityUpdate`
+  // re-reads the product from Firestore server-side, so it would race that
+  // debounce and could push the STALE pre-edit quantity — flush the pending
+  // write via `writeFieldsNow()` first so eBay always sees what Wonni just
+  // saved. Best-effort: a failed push doesn't block the Wonni-side save.
+  async function handleVariantQuantityCommit(variant) {
+    if (!product || product.crossPostStatus?.ebay !== "active" || !variant?.sku) return;
+    try {
+      await writeFieldsNow();
+      await callFunction("pushEbayQuantityUpdate")({ productId: product.id, variantSku: variant.sku });
+    } catch (e) {
+      console.warn("Could not push variant quantity to eBay:", e.message);
+    }
+  }
+
   // Builds and dispatches one variant's Mercari cross-post from the master
   // template. Doesn't wait for it to finish — callers that need to serialize
   // multiple variants use waitForVariantMercariStatus below.
@@ -4995,21 +5107,47 @@ function ProductDetail() {
     }
   }
 
+  // Wonni is the master listing (see CLAUDE.md's eBay listing lifecycle
+  // section): deleting it here means "stop selling this item everywhere,"
+  // not "delete just the Wonni record" — leaving eBay/Etsy live would just
+  // get Wonni silently re-created the next time any platform is posted
+  // (postToWonni always posts to Wonni first). No per-platform choice, one
+  // confirm, then cascade-delete every API-connected platform before
+  // deleting the doc itself.
   async function handleDeleteProduct() {
-    const liveOn = [
-      product?.tiktokStatus === "active" ? "TikTok Shop" : null,
-      (product?.ebayStatus === "active" || product?.crossPostStatus?.ebay === "active" || product?.crossPostStatus?.ebay === "posted") ? "eBay" : null,
-      (product?.etsyStatus === "active" || product?.crossPostStatus?.etsy === "active" || product?.crossPostStatus?.etsy === "posted") ? "Etsy" : null,
+    const liveApiPlatforms = [
+      (product?.ebayStatus === "active" || product?.crossPostStatus?.ebay === "active" || product?.crossPostStatus?.ebay === "posted") ? "ebay" : null,
+      (product?.etsyStatus === "active" || product?.crossPostStatus?.etsy === "active" || product?.crossPostStatus?.etsy === "posted") ? "etsy" : null,
+      product?.tiktokStatus === "active" ? "tiktok" : null,
     ].filter(Boolean);
-    if (liveOn.length) {
-      window.alert(
-        `Can't delete "${product?.title ?? "this product"}" — it's still active on ${liveOn.join(" and ")}. Take it down there first, then delete it here.`
-      );
-      return;
-    }
-    if (!window.confirm(`Delete "${product?.title ?? "this product"}"? This can't be undone.`)) return;
+    const liveOnMercari = product?.crossPostStatus?.mercari === "active" || !!product?.crossPostListingIds?.mercari || !!product?.mercariListingId
+      || (product?.variants ?? []).some((v) => v?.crossPostListingIds?.mercari || v?.mercariListingId);
+
+    const platformNote = liveApiPlatforms.length || liveOnMercari
+      ? ` This will also remove it from ${[...liveApiPlatforms.map((p) => ({ ebay: "eBay", etsy: "Etsy", tiktok: "TikTok Shop" }[p])), liveOnMercari ? "Mercari" : null].filter(Boolean).join(", ")}.`
+      : "";
+    if (!window.confirm(`Delete "${product?.title ?? "this product"}"?${platformNote} This can't be undone.`)) return;
+
     setDeletingProduct(true);
+    setError("");
     try {
+      const deleteFns = { ebay: "ebayDeleteListing", etsy: "etsyDeleteListing", tiktok: "tiktokDeleteListing" };
+      const results = await Promise.allSettled(
+        liveApiPlatforms.map((p) => callFunction(deleteFns[p])({ productId }))
+      );
+      const failed = liveApiPlatforms.filter((_, i) => results[i].status === "rejected");
+      if (failed.length) {
+        const names = { ebay: "eBay", etsy: "Etsy", tiktok: "TikTok Shop" };
+        setDeletingProduct(false);
+        setError(`Couldn't remove it from ${failed.map((p) => names[p]).join(", ")} — delete it there manually, then try again.`);
+        return;
+      }
+      // Mercari has no delete API/automation yet — flag for manual removal
+      // rather than silently leaving a live Mercari listing behind.
+      if (liveOnMercari && !window.confirm("Mercari has no automatic delete yet — you'll need to remove that listing manually on Mercari. Continue deleting from Wonni?")) {
+        setDeletingProduct(false);
+        return;
+      }
       await deleteDoc(doc(db, "products", productId));
       navigate("/sell");
     } catch (e) {
@@ -5074,6 +5212,25 @@ function ProductDetail() {
     variantsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  // Zeroes quantity (product-level, or every active variant) and cascades
+  // the new quantity to every connected platform via a lightweight PATCH —
+  // no listing is withdrawn/deleted, so it stays visible for organic reach
+  // and watchlisted buyers, and flips back by editing quantity again. See
+  // CLAUDE.md's eBay listing lifecycle section.
+  async function handleMarkOutOfStock() {
+    if (!window.confirm("Mark this listing as out of stock? Quantity will be set to 0 everywhere it's posted, but listings stay live.")) return;
+    setMarkingOutOfStock(true);
+    setError("");
+    try {
+      await callFunction("markSoldOutAndCascade")({ productId });
+      setToast({ message: "Marked out of stock everywhere" });
+    } catch (e) {
+      setError(`Failed to mark out of stock: ${e.message}`);
+    } finally {
+      setMarkingOutOfStock(false);
+    }
+  }
+
   return (
     <Layout>
       <div className="page-header">
@@ -5124,6 +5281,11 @@ function ProductDetail() {
                 onClick: checkMercariSoldItems,
                 disabled: checkingMercariSold
               },
+              ...(product?.saleStatus !== "sold" ? [{
+                label: markingOutOfStock ? "⏳ Marking…" : "📭 Mark as out of stock",
+                onClick: handleMarkOutOfStock,
+                disabled: markingOutOfStock
+              }] : []),
               ...(product?.crossPostListingIds?.ebay ? [{
                 label: deletingEbay ? "⏳ Deleting…" : "🗑️ Delete eBay listing",
                 onClick: handleEbayDeleteListing,
@@ -5238,8 +5400,8 @@ function ProductDetail() {
                     {ebayPullSyncDiff.diff.map((d, i) => (
                       <tr key={i} style={{ borderBottom: "1px solid var(--surface-hover)" }}>
                         <td style={{ padding: "6px 8px", fontWeight: 600 }}>{d.field}</td>
-                        <td style={{ padding: "6px 8px", color: "var(--danger, #ef4444)" }}>{String(d.wonni || "(empty)")}</td>
-                        <td style={{ padding: "6px 8px", color: "var(--success, #22c55e)", fontWeight: 600 }}>{String(d.external || "(empty)")}</td>
+                        <td style={{ padding: "6px 8px", color: "var(--danger, #ef4444)" }}>{String(formatDiffValue(d.field, d.wonni))}</td>
+                        <td style={{ padding: "6px 8px", color: "var(--success, #22c55e)", fontWeight: 600 }}>{String(formatDiffValue(d.field, d.external))}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -5299,8 +5461,8 @@ function ProductDetail() {
                     {etsyPullSyncDiff.diff.map((d, i) => (
                       <tr key={i} style={{ borderBottom: "1px solid var(--surface-hover)" }}>
                         <td style={{ padding: "6px 8px", fontWeight: 600 }}>{d.field}</td>
-                        <td style={{ padding: "6px 8px", color: "var(--danger, #ef4444)" }}>{String(d.wonni || "(empty)")}</td>
-                        <td style={{ padding: "6px 8px", color: "var(--success, #22c55e)", fontWeight: 600 }}>{String(d.external || "(empty)")}</td>
+                        <td style={{ padding: "6px 8px", color: "var(--danger, #ef4444)" }}>{String(formatDiffValue(d.field, d.wonni))}</td>
+                        <td style={{ padding: "6px 8px", color: "var(--success, #22c55e)", fontWeight: 600 }}>{String(formatDiffValue(d.field, d.external))}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -6309,6 +6471,10 @@ function ProductDetail() {
               variants={variants}
               images={images}
               listingPrice={listingPrice}
+              quantityVariesByVariant={product?.quantityVariesByVariant !== false}
+              masterQuantity={product?.quantity}
+              onQuantityModelChange={handleQuantityModelChange}
+              onVariantQuantityCommit={handleVariantQuantityCommit}
               onOptionsChange={handleOptionsChange}
               onVariantFieldChange={updateVariantField}
               onBulkFieldChange={bulkSetFieldForPrimaryValue}

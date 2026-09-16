@@ -82,6 +82,85 @@ async function getOfferOrNull(uid, offerId) {
   }
 }
 
+// Live title/price/quantity for a multi-variant listing, read directly from
+// the doc's own stored pointers (inventory_item_group + each variant's own
+// offer) — mirrors the already-correct pattern in `ebayGetListing`.
+// Deliberately does NOT go through `resolveEbayOffer`: its `bulk_migrate_listing`
+// step 409s with "already migrated" (errorId 25002) for every listing Wonni
+// itself posted via the Inventory API, since there's nothing to migrate —
+// that's expected, not a failure. It then silently fell through to a
+// SKU/title search that can latch onto an unrelated stale offer (confirmed
+// via prod logs 2026-09-16: it kept resolving a pre-variant-SKU-scheme offer
+// under the bare productId SKU instead of any of the listing's real, current
+// per-variant offers). When the doc already knows its own group key + offer
+// IDs, use them directly — `resolveEbayOffer` is for recovery only (a lost
+// pointer, or a pre-Inventory-API legacy listing).
+async function readMultiVariantEbayData(uid, product) {
+  const groupKey = product.ebayInventoryItemGroupKey;
+  const variants = Array.isArray(product.variants) ? product.variants : [];
+  const [group, perVariantOffers] = await Promise.all([
+    groupKey
+      ? ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`)
+          .catch((e) => { if (e.status !== 404) throw e; return null; })
+      : null,
+    Promise.all(variants.map((v) => (v.ebayOfferId ? getOfferOrNull(uid, v.ebayOfferId) : null))),
+  ]);
+  const firstOffer = perVariantOffers.find(Boolean) || null;
+  // "Ended" = the user (or eBay) took the listing down directly on eBay,
+  // outside Wonni — none of the offers we know about are still published.
+  // Surfaced as upstream drift (Path 4 of the listing-lifecycle design in
+  // CLAUDE.md), not an error: the sync-diff UI's existing "keep eBay
+  // version" choice already means "match Wonni to what's live on eBay",
+  // which for a gone listing is exactly "mark out of stock."
+  const ended = !perVariantOffers.some((o) => o?.status === "PUBLISHED");
+  return {
+    title: group?.title || "",
+    description: firstOffer?.listingDescription ?? group?.description ?? "",
+    photoCount: group?.imageUrls?.length ?? 0,
+    price: firstOffer?.pricingSummary?.price?.value != null ? parseFloat(firstOffer.pricingSummary.price.value) : null,
+    quantity: perVariantOffers.reduce((sum, o) => sum + (o?.availableQuantity ?? 0), 0),
+    offerId: firstOffer?.offerId ?? null,
+    listingId: firstOffer?.listing?.listingId ?? product.ebayListingId ?? null,
+    ended,
+  };
+}
+
+// True when the doc already knows its own multi-variant offer pointers —
+// the signal to use `readMultiVariantEbayData` instead of `resolveEbayOffer`.
+function hasKnownMultiVariantOffers(product) {
+  return !!(product.ebayHasVariations && product.ebayInventoryItemGroupKey
+    && Array.isArray(product.variants) && product.variants.some((v) => v.ebayOfferId));
+}
+
+// Create (or reuse) a fulfillment policy that matches `base` in every way
+// except handling time. Named deterministically off the requested value so a
+// later listing that wants the same handling time reuses it instead of
+// spawning a duplicate every post.
+async function cloneFulfillmentPolicyWithHandlingTime(uid, base, handlingTimeDays) {
+  const name = `${base.name || "Wonni Shipping"} (${handlingTimeDays}d handling)`.slice(0, 64);
+  try {
+    const existing = await ebayRequest(
+      uid, "GET",
+      `/sell/account/v1/fulfillment_policy/get_by_policy_name?marketplace_id=${MARKETPLACE_ID}&name=${encodeURIComponent(name)}`
+    );
+    if (existing?.fulfillmentPolicyId) return existing;
+  } catch (_) {
+    // 404 = doesn't exist yet, fall through to create it.
+  }
+  try {
+    const { fulfillmentPolicyId, ...rest } = base;
+    const created = await ebayRequest(uid, "POST", "/sell/account/v1/fulfillment_policy", {
+      ...rest,
+      name,
+      handlingTime: { value: handlingTimeDays, unit: "DAY" },
+    });
+    return created;
+  } catch (e) {
+    console.warn(`[getListingPolicies] Could not create ${handlingTimeDays}-day fulfillment policy, falling back to account default:`, e.message);
+    return null;
+  }
+}
+
 // First existing inventory location — eBay requires one to publish an offer.
 async function getMerchantLocationKey(uid) {
   const result = await ebayRequest(uid, "GET", "/sell/inventory/v1/location?limit=1");
@@ -95,8 +174,17 @@ async function getMerchantLocationKey(uid) {
   return key;
 }
 
+// eBay's Account API rejects a fulfillment policy's handlingTime above this.
+// The web handling-time dropdown intentionally goes higher (matching Etsy's
+// up-to-10-week options) since it's a shared cross-platform field — eBay
+// just gets the closest value it can actually accept.
+const EBAY_MAX_HANDLING_TIME_DAYS = 30;
+
 // First business policy of each type — eBay offers require all three.
 async function getListingPolicies(uid, handlingTimeDays) {
+  if (typeof handlingTimeDays === "number" && handlingTimeDays > EBAY_MAX_HANDLING_TIME_DAYS) {
+    handlingTimeDays = EBAY_MAX_HANDLING_TIME_DAYS;
+  }
   const [fulfillment, payment, returns] = await Promise.all([
     ebayRequest(uid, "GET", `/sell/account/v1/fulfillment_policy?marketplace_id=${MARKETPLACE_ID}`),
     ebayRequest(uid, "GET", `/sell/account/v1/payment_policy?marketplace_id=${MARKETPLACE_ID}`),
@@ -110,6 +198,16 @@ async function getListingPolicies(uid, handlingTimeDays) {
     matchingFulfillment = fulfillmentPolicies.find(
       (p) => p.handlingTime?.value === handlingTimeDays && p.handlingTime?.unit === "DAY"
     );
+    // No account policy already has this handling time — picking
+    // fulfillmentPolicies[0] here would silently ignore the value the user
+    // chose (that's how a listing ended up back at the account default of
+    // 1 business day). Clone the base policy with the requested handling
+    // time instead of mutating a policy other listings may also use.
+    if (!matchingFulfillment && fulfillmentPolicies[0]) {
+      matchingFulfillment = await cloneFulfillmentPolicyWithHandlingTime(
+        uid, fulfillmentPolicies[0], handlingTimeDays
+      );
+    }
   }
 
   const fulfillmentPolicyId = matchingFulfillment?.fulfillmentPolicyId
@@ -140,18 +238,45 @@ async function resolveEbayOffer(uid, product, productId) {
       });
       console.log(`[resolveEbayOffer] bulk_migrate_listing response:`, JSON.stringify(migrateRes));
       const resp = migrateRes?.responses?.[0];
-      const migratedOfferId = resp?.offers?.[0]?.offerId || resp?.offerId;
+      // Real response shape is `{ inventoryItems: [{ sku, offerId }, ...] }`,
+      // one entry per SKU (N for a multi-variant group) — NOT `resp.offers`.
+      // That wrong field name meant `migratedOfferId` was always undefined
+      // and this whole branch silently no-opped even when eBay returned
+      // perfectly good, current offer data (confirmed via prod logs
+      // 2026-09-16: bulk_migrate_listing returned 200 with 4 live
+      // inventoryItems, but the old code fell through to the much less
+      // reliable SKU/group-key search below, which then latched onto a
+      // stale/unrelated offerId — the source of the stale drift-check UI).
+      const inventoryItems = Array.isArray(resp?.inventoryItems) ? resp.inventoryItems : [];
+      const migratedOfferId = resp?.offerId || inventoryItems[0]?.offerId;
       if (migratedOfferId) {
         console.log(`[resolveEbayOffer] Successfully migrated listingId=${storedId} to offerId=${migratedOfferId}`);
         const offer = await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${migratedOfferId}`);
         const docRef = admin.firestore().collection("products").doc(productId);
-        await docRef.update({
+        const updatePayload = {
           ebayOfferId: migratedOfferId,
           "crossPostListingIds.ebay": storedId,
           ebayListingId: storedId,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-        return { offer, offerId: migratedOfferId, sku: offer?.sku || resp?.inventoryItemGroupKey || productId };
+        };
+        // Multi-variant group: bulk_migrate's inventoryItems is the
+        // authoritative current SKU->offerId map for every variant. Backfill
+        // it onto product.variants so a subsequent pull-sync/quantity-sum
+        // (which reads product.variants[i].ebayOfferId directly, not this
+        // function's single returned `offer`) reads live offers instead of
+        // whatever stale ebayOfferId the doc happened to still be holding.
+        if (inventoryItems.length > 1 && Array.isArray(product?.variants)) {
+          const offerIdBySku = Object.fromEntries(inventoryItems.map((it) => [it.sku, it.offerId]));
+          updatePayload.variants = product.variants.map((v) => (
+            v.ebayVariantSku && offerIdBySku[v.ebayVariantSku]
+              ? { ...v, ebayOfferId: offerIdBySku[v.ebayVariantSku] }
+              : v
+          ));
+          if (resp?.inventoryItemGroupKey) updatePayload.ebayInventoryItemGroupKey = resp.inventoryItemGroupKey;
+          delete updatePayload.ebayOfferId; // single-offer field; this is a group
+        }
+        await docRef.update(updatePayload);
+        return { offer, offerId: migratedOfferId, sku: offer?.sku || resp?.inventoryItemGroupKey || productId, inventoryItemGroupKey: resp?.inventoryItemGroupKey };
       }
     } catch (migErr) {
       console.warn(`[resolveEbayOffer] bulk_migrate_listing for ${storedId} failed (${migErr.message}). Continuing with search...`);
@@ -648,11 +773,20 @@ async function publishWithRecovery({ doPublish, refresh, categoryAspects, brand,
   const addedAspects = {};
   let conditionOverride = null;
   let triedCondition = false;
+  let triedTransient = false;
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
       return await doPublish();
     } catch (e) {
       const errs = e.ebayErrors || [];
+      // eBay's own generic "system error" (25001) is transient on their end —
+      // seen 2026-09-15 mid-publish with no request-side cause. One immediate
+      // retry before giving up, since eBay gives no retry-after guidance.
+      if (!triedTransient && errs.some((x) => x.errorId === 25001)) {
+        triedTransient = true;
+        console.warn("[ebay publish] eBay system error (25001) — retrying once");
+        continue;
+      }
       if (!triedCondition && errs.some((x) => [25021, 25059].includes(x.errorId))) {
         triedCondition = true;
         conditionOverride = "USED_EXCELLENT";
@@ -795,9 +929,20 @@ async function postMultiVariant(ctx) {
     }
   }
 
+  // Shared pool (`quantityVariesByVariant === false`): every variant offer
+  // gets the SAME master quantity — it's one stock number tracked at the
+  // product level, not summed/split across variants (see CLAUDE.md's eBay
+  // listing lifecycle section, and `resolveStock` in sales.js which decrements
+  // this same master field regardless of which variant actually sold).
+  const sharedPoolQty = product.quantityVariesByVariant === false
+    ? (typeof product.quantity === "number" && product.quantity >= 0 ? Math.floor(product.quantity) : 0)
+    : null;
+
   const perVariant = activeVariants.map(({ v, i }) => {
     const sku = v.ebayVariantSku || variantSkuFor(productId, v, i);
-    const qty = typeof v.quantity === "number" && v.quantity >= 0 ? Math.floor(v.quantity) : 0;
+    const qty = sharedPoolQty != null
+      ? sharedPoolQty
+      : (typeof v.quantity === "number" && v.quantity >= 0 ? Math.floor(v.quantity) : 0);
     // { "Size": ["2XL"], "Color": ["Red"] } — mapped + arrays.
     const aspects = Object.entries(v.optionValues ?? {}).reduce((acc, [k, val]) => {
       const values = (Array.isArray(val) ? val : [val]).map((x) => mapOptionValue(k, x));
@@ -1072,39 +1217,77 @@ exports.ebayGetListingDetails = onCall(
     const product = snap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
 
-    try {
-      const { offer, sku } = await resolveEbayOffer(uid, product, productId);
+    const wonniPhotos = listingImagesFor(product);
+    const wonni = {
+      title: product.title ?? "",
+      description: canonicalDescription(product),
+      price: Number.isFinite(Number(product.listingPrice)) ? Number(product.listingPrice) : null,
+      quantity: product.variants?.reduce((sum, v) => sum + (v.quantity ?? 0), 0) ?? (product.quantity ?? 1),
+      photoCount: wonniPhotos.length,
+      handlingTimeDays: product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays ?? null,
+    };
 
-      let inventory = null;
-      if (sku) {
+    try {
+      let ebayTitle, ebayDescription, ebayPrice, ebayQuantity, ebayPhotoCount, offerId, listingId, ended;
+      if (hasKnownMultiVariantOffers(product)) {
+        const data = await readMultiVariantEbayData(uid, product);
+        ebayTitle = data.title;
+        ebayDescription = data.description;
+        ebayPrice = data.price;
+        ebayQuantity = data.quantity;
+        ebayPhotoCount = data.photoCount;
+        offerId = data.offerId;
+        listingId = data.listingId;
+        ended = data.ended;
+      } else {
+        let offer = null, sku = null;
         try {
-          inventory = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
-        } catch {
-          // Ignore inventory fetch error for multi-variant items
+          ({ offer, sku } = await resolveEbayOffer(uid, product, productId));
+        } catch (_) {
+          // Nothing found anywhere on eBay — treat as ended, not a hard error.
         }
+        ended = !offer || offer.status !== "PUBLISHED";
+        let inventory = null;
+        if (sku) {
+          try {
+            inventory = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
+          } catch {
+            // Ignore inventory fetch error for multi-variant items
+          }
+        }
+        ebayTitle = offer?.title || inventory?.product?.title || "";
+        ebayDescription = offer?.listingDescription ?? "";
+        ebayPrice = offer?.pricingSummary?.price?.value
+          ? parseFloat(offer.pricingSummary.price.value)
+          : (offer?.pricingSummary?.minimumAdvertisedPrice?.value ? parseFloat(offer.pricingSummary.minimumAdvertisedPrice.value) : null);
+        ebayQuantity = inventory?.availability?.shipToLocationAvailability?.quantity ?? (offer?.availableQuantity ?? 0);
+        ebayPhotoCount = inventory?.product?.imageUrls?.length ?? 0;
+        offerId = offer?.offerId;
+        listingId = offer?.listingId;
       }
 
-      const wonniPhotos = listingImagesFor(product);
+      // Ended (user or eBay took it down directly on eBay): a gone listing's
+      // title/description/price are meaningless to diff — the only real
+      // drift is quantity, which is now 0. Mirror Wonni's own values for
+      // everything else so the sync-diff UI's existing "keep eBay version"
+      // choice reduces to exactly "mark out of stock" (see readMultiVariantEbayData).
+      if (ended) {
+        return {
+          wonni,
+          ebay: { ...wonni, quantity: 0, offerId, listingId, ended: true },
+        };
+      }
 
       return {
-        wonni: {
-          title: product.title ?? "",
-          description: canonicalDescription(product),
-          price: Number.isFinite(Number(product.listingPrice)) ? Number(product.listingPrice) : null,
-          quantity: product.variants?.reduce((sum, v) => sum + (v.quantity ?? 0), 0) ?? (product.quantity ?? 1),
-          photoCount: wonniPhotos.length,
-          handlingTimeDays: product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays ?? null,
-        },
+        wonni,
         ebay: {
-          title: offer?.title || inventory?.product?.title || "",
-          description: offer?.listingDescription ?? "",
-          price: offer?.pricingSummary?.price?.value
-            ? parseFloat(offer.pricingSummary.price.value)
-            : (offer?.pricingSummary?.minimumAdvertisedPrice?.value ? parseFloat(offer.pricingSummary.minimumAdvertisedPrice.value) : null),
-          quantity: inventory?.availability?.shipToLocationAvailability?.quantity ?? (offer?.availableQuantity ?? 0),
-          photoCount: inventory?.product?.imageUrls?.length ?? 0,
-          offerId: offer?.offerId,
-          listingId: offer?.listingId,
+          title: ebayTitle,
+          description: ebayDescription,
+          price: ebayPrice,
+          quantity: ebayQuantity,
+          photoCount: ebayPhotoCount,
+          offerId,
+          listingId,
         },
       };
     } catch (e) {
@@ -1133,23 +1316,54 @@ exports.ebaySyncListing = onCall(
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
 
     try {
-      const { offer, offerId, sku } = await resolveEbayOffer(uid, product, productId);
+      const isMultiVariant = product.ebayHasVariations || !!product.ebayInventoryItemGroupKey
+        || buildEbayVariations(product) !== null;
 
-      if (applyFrom === "wonni") {
-        // Push Wonni version to eBay (title, description, price, photos, shipping/handling time, variation quantities)
+      if (isMultiVariant) {
+        if (applyFrom === "wonni") {
+          await syncMultiVariantToEbay(uid, product, productId, docRef);
+        } else {
+          await syncMultiVariantFromEbay(uid, product, productId, docRef);
+        }
+      } else if (applyFrom === "ebay") {
+        // Pull eBay version to Wonni. First check whether the listing is
+        // even still live — a gone/unpublished offer has no meaningful
+        // title/description/price to pull, only "mark out of stock" (see
+        // readMultiVariantEbayData's comment for the full ended-listing design).
+        let offer = null, sku = null;
+        try {
+          ({ offer, sku } = await resolveEbayOffer(uid, product, productId));
+        } catch (_) {
+          // Nothing found anywhere on eBay — treat as ended.
+        }
+        const ended = !offer || offer.status !== "PUBLISHED";
+        if (ended) {
+          await docRef.update({ quantity: 0 });
+        } else {
+          const inventory = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
+
+          const updatePayload = {
+            title: offer?.title ?? product.title,
+            description: offer?.listingDescription ?? product.description,
+            listingPrice: offer?.pricingSummary?.price?.value
+              ? parseFloat(offer.pricingSummary.price.value)
+              : product.listingPrice,
+          };
+
+          if (inventory?.availability?.shipToLocationAvailability?.quantity != null) {
+            updatePayload.quantity = inventory.availability.shipToLocationAvailability.quantity;
+          }
+
+          await docRef.update(updatePayload);
+        }
+      } else {
+        // applyFrom === "wonni": push Wonni version to eBay (title,
+        // description, price, photos, shipping/handling time, quantity).
+        const { offerId, sku } = await resolveEbayOffer(uid, product, productId);
+
         const title = (product.title ?? "").slice(0, 80);
         const description = canonicalDescription(product);
         const basePrice = resolveListingPrice(product);
-
-        // Multi-variation in-place edit isn't wired to the Inventory API's
-        // item-group flow yet — a single-offer PATCH can't express N variations.
-        // Until that path is built, re-posting (delete + create) is the route.
-        if (buildEbayVariations(product) !== null) {
-          throw new HttpsError(
-            "unimplemented",
-            "Editing a multi-variation eBay listing in place isn't supported yet — delete the listing and re-post it to apply changes.",
-          );
-        }
 
         const qty = typeof product.quantity === "number" && product.quantity >= 0 ? product.quantity : 1;
         const inventoryPayload = {
@@ -1183,24 +1397,6 @@ exports.ebaySyncListing = onCall(
 
         // Re-publish existing offer to apply changes in-place
         await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`);
-      } else {
-        // Pull eBay version to Wonni
-        const inventory = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
-
-        const updatePayload = {
-          title: offer?.title ?? product.title,
-          description: offer?.listingDescription ?? product.description,
-          listingPrice: offer?.pricingSummary?.price?.value
-            ? parseFloat(offer.pricingSummary.price.value)
-            : product.listingPrice,
-        };
-
-        if (inventory?.availability?.shipToLocationAvailability?.quantity != null
-          && !(product.ebayHasVariations && Array.isArray(product.variants))) {
-          updatePayload.quantity = inventory.availability.shipToLocationAvailability.quantity;
-        }
-
-        await docRef.update(updatePayload);
       }
 
       // Update sync timestamp
@@ -1215,6 +1411,82 @@ exports.ebaySyncListing = onCall(
     }
   }
 );
+
+// Push the Wonni doc's current data to an already-live multi-variation eBay
+// listing. Reuses `postMultiVariant` — the same PUT-items → PUT-group →
+// per-variant offer create-or-update → publish_by_inventory_item_group flow
+// the create path uses. Each variant already carries its stable
+// `ebayVariantSku` / `ebayOfferId` from the original post, so this updates
+// those inventory items/offers and republishes in place rather than minting
+// new SKUs or offers.
+async function syncMultiVariantToEbay(uid, product, productId, docRef) {
+  const title = (product.title ?? "").slice(0, 80);
+  const description = canonicalDescription(product);
+  const basePrice = resolveListingPrice(product);
+
+  const [merchantLocationKey, listingPolicies, categoryId] = await Promise.all([
+    getMerchantLocationKey(uid),
+    getListingPolicies(uid, product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays),
+    suggestCategoryId(uid, title, product.geminiCategory || product.category),
+  ]);
+  const [categoryAspects, allowedConditionIds] = await Promise.all([
+    getCategoryAspects(categoryId),
+    getAllowedConditionIds(uid, categoryId),
+  ]);
+  const brand = resolveBrand(product);
+  const conditionEnum = resolveCondition(productConditionToEbayEnum(product), allowedConditionIds);
+
+  await postMultiVariant({
+    uid, product, productId, docRef, basePrice, categoryId, listingPolicies,
+    merchantLocationKey, title, description, categoryAspects, brand, conditionEnum,
+  });
+}
+
+// Pull the live eBay group + per-variant offers/inventory items back onto the
+// Wonni doc. Mirrors `ebayGetListing`'s multi-variant read, but writes the
+// result back: group title/description at the top level, and per-variant
+// price/quantity into `product.variants`. Always read-modify-write the WHOLE
+// `variants` array — a dotted `variants.N.x` update path clobbers the array
+// into a map and drops every other field on each variant.
+async function syncMultiVariantFromEbay(uid, product, productId, docRef) {
+  const groupKey = product.ebayInventoryItemGroupKey || productId;
+  let group = null;
+  try {
+    group = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`);
+  } catch (e) {
+    if (e.status !== 404) throw e;
+  }
+
+  const baseVariants = Array.isArray(product.variants) ? product.variants : Object.values(product.variants || {});
+  const nextVariants = await Promise.all(baseVariants.map(async (v) => {
+    if (!v.ebayOfferId && !v.ebayVariantSku) return v;
+    const [offer, item] = await Promise.all([
+      v.ebayOfferId ? getOfferOrNull(uid, v.ebayOfferId) : null,
+      v.ebayVariantSku ? readEbayInventoryItem(uid, v.ebayVariantSku) : null,
+    ]);
+    const next = { ...v };
+    // Ended (offer gone or unpublished) — mirrors the ended-listing handling
+    // in readMultiVariantEbayData/ebaySyncListing's single-variant branch:
+    // no meaningful price to pull, just mark this variant out of stock.
+    if (!offer || offer.status !== "PUBLISHED") {
+      next.quantity = 0;
+      return next;
+    }
+    if (offer.pricingSummary?.price?.value != null) {
+      next.price = parseFloat(offer.pricingSummary.price.value);
+    }
+    if (item?.availability?.shipToLocationAvailability?.quantity != null) {
+      next.quantity = item.availability.shipToLocationAvailability.quantity;
+    }
+    return next;
+  }));
+
+  const updatePayload = { variants: nextVariants };
+  if (group?.title) updatePayload.title = group.title;
+  if (group?.description != null) updatePayload.description = group.description;
+
+  await docRef.update(updatePayload);
+}
 
 // Update an eBay listing with current Wonni product data (title, description, price, images, variations/quantities, shipping)
 exports.ebayUpdateListing = onCall(
@@ -1317,33 +1589,60 @@ exports.ebayPullSync = onCall(
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
 
     try {
-      const { offer, sku } = await resolveEbayOffer(uid, product, productId);
-      let inventory = null;
-      if (sku) {
+      let ebayTitle, ebayPrice, ebayQuantity, offerId, listingId, ended;
+      if (hasKnownMultiVariantOffers(product)) {
+        const data = await readMultiVariantEbayData(uid, product);
+        ebayTitle = data.title;
+        ebayPrice = data.price;
+        ebayQuantity = data.quantity;
+        offerId = data.offerId;
+        listingId = data.listingId;
+        ended = data.ended;
+      } else {
+        let offer = null, sku = null;
         try {
-          inventory = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
-        } catch (_) {}
+          ({ offer, sku } = await resolveEbayOffer(uid, product, productId));
+        } catch (_) {
+          // Nothing found anywhere on eBay — treat as ended, not a hard error.
+        }
+        ended = !offer || offer.status !== "PUBLISHED";
+        let inventory = null;
+        if (sku) {
+          try {
+            inventory = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
+          } catch (_) {}
+        }
+        ebayTitle = offer?.title || inventory?.product?.title || "";
+        ebayPrice = offer?.pricingSummary?.price?.value
+          ? parseFloat(offer.pricingSummary.price.value)
+          : (offer?.pricingSummary?.minimumAdvertisedPrice?.value ? parseFloat(offer.pricingSummary.minimumAdvertisedPrice.value) : null);
+        ebayQuantity = inventory?.availability?.shipToLocationAvailability?.quantity ?? (offer?.availableQuantity ?? 0);
+        offerId = offer?.offerId;
+        listingId = offer?.listingId;
       }
-
-      const ebayTitle = offer?.title || inventory?.product?.title || "";
-      const ebayPrice = offer?.pricingSummary?.price?.value
-        ? parseFloat(offer.pricingSummary.price.value)
-        : (offer?.pricingSummary?.minimumAdvertisedPrice?.value ? parseFloat(offer.pricingSummary.minimumAdvertisedPrice.value) : null);
-      const ebayQuantity = inventory?.availability?.shipToLocationAvailability?.quantity ?? (offer?.availableQuantity ?? 0);
 
       const localTitle = product.title ?? "";
       const localPrice = Number(product.listingPrice);
       const localQuantity = product.variants?.reduce((sum, v) => sum + (v.quantity ?? 0), 0) ?? (product.quantity ?? 1);
 
+      // Ended (taken down directly on eBay): title/price of a gone listing
+      // aren't meaningful drift — surface only the quantity→0 row, so
+      // "keep eBay version" in the sync-diff UI means exactly "mark out of
+      // stock" (see readMultiVariantEbayData's comment for the full design).
       const diff = [];
-      if (ebayTitle && ebayTitle !== localTitle) {
-        diff.push({ field: "title", local: localTitle, ebay: ebayTitle });
-      }
-      if (ebayPrice != null && Number.isFinite(localPrice) && Math.abs(ebayPrice - localPrice) > 0.01) {
-        diff.push({ field: "price", local: localPrice, ebay: ebayPrice });
-      }
-      if (ebayQuantity != null && ebayQuantity !== localQuantity) {
-        diff.push({ field: "quantity", local: localQuantity, ebay: ebayQuantity });
+      if (ended) {
+        ebayQuantity = 0;
+        if (localQuantity !== 0) diff.push({ field: "quantity", wonni: localQuantity, external: 0 });
+      } else {
+        if (ebayTitle && ebayTitle !== localTitle) {
+          diff.push({ field: "title", wonni: localTitle, external: ebayTitle });
+        }
+        if (ebayPrice != null && Number.isFinite(localPrice) && Math.abs(ebayPrice - localPrice) > 0.01) {
+          diff.push({ field: "price", wonni: localPrice, external: ebayPrice });
+        }
+        if (ebayQuantity != null && ebayQuantity !== localQuantity) {
+          diff.push({ field: "quantity", wonni: localQuantity, external: ebayQuantity });
+        }
       }
 
       const hasDrift = diff.length > 0;
@@ -1355,8 +1654,9 @@ exports.ebayPullSync = onCall(
           title: ebayTitle,
           price: ebayPrice,
           quantity: ebayQuantity,
-          offerId: offer?.offerId,
-          listingId: offer?.listingId,
+          offerId,
+          listingId,
+          ended,
         },
         lastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
