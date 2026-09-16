@@ -148,6 +148,26 @@ const RestockRequestSchema = z.object({
   variantSku: z.string().nullish(),
 });
 
+// ── pushEbayQuantityUpdate — manual Wonni quantity edit → eBay only ────────
+// Wonni is the master listing (see CLAUDE.md's eBay listing lifecycle
+// section): a manual quantity edit in the Wonni UI (not a sale) should flow
+// downstream to eBay, same direction as every other field. Etsy/TikTok are
+// deliberately out of scope here — Etsy's own push already exists inside the
+// sale cascade (`pushEtsyQuantity`) but manual-edit wiring for it, and
+// TikTok's quantity push entirely, aren't built yet.
+
+const PushEbayQuantityRequestSchema = z.object({
+  productId: ProductIdSchema,
+  /** Omit for a no-variant product or a shared-pool (quantityVariesByVariant:false)
+   *  product — pushes product.quantity. Required to push one specific
+   *  variant's own quantity when quantities vary by variant. */
+  variantSku: z.string().nullish(),
+});
+
+const PushEbayQuantityResponseSchema = z.object({
+  outcome: z.enum(["updated", "skipped", "failed"]),
+});
+
 // ── syncSales — on-demand poll of eBay + Etsy for new orders ────────────────
 
 const SyncSalesRequestSchema = z.object({
@@ -253,6 +273,12 @@ module.exports = {
       summary: "Move one sale to a stage-board bucket (kanban drag / spreadsheet dropdown).",
       request: UpdateSaleStatusRequestSchema,
       response: z.object({ success: z.literal(true) }),
+    },
+    {
+      name: "pushEbayQuantityUpdate",
+      summary: "Manual Wonni quantity edit → push the new quantity to eBay only (Etsy/TikTok not wired yet).",
+      request: PushEbayQuantityRequestSchema,
+      response: PushEbayQuantityResponseSchema,
     },
     {
       name: "reassignSaleStage",

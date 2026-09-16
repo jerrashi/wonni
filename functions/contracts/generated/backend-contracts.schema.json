@@ -46,6 +46,12 @@
     "UpdateSaleStatusResponse": {
       "$ref": "#/definitions/UpdateSaleStatusResponse"
     },
+    "PushEbayQuantityUpdateRequest": {
+      "$ref": "#/definitions/PushEbayQuantityUpdateRequest"
+    },
+    "PushEbayQuantityUpdateResponse": {
+      "$ref": "#/definitions/PushEbayQuantityUpdateResponse"
+    },
     "ReassignSaleStageRequest": {
       "$ref": "#/definitions/ReassignSaleStageRequest"
     },
@@ -842,6 +848,42 @@
       },
       "required": [
         "success"
+      ],
+      "additionalProperties": false
+    },
+    "PushEbayQuantityUpdateRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "variantSku": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "productId"
+      ],
+      "additionalProperties": false
+    },
+    "PushEbayQuantityUpdateResponse": {
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "updated",
+            "skipped",
+            "failed"
+          ]
+        }
+      },
+      "required": [
+        "outcome"
       ],
       "additionalProperties": false
     },
