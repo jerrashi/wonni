@@ -11,6 +11,7 @@ import BulkTagModal from "../components/BulkTagModal";
 import OverflowMenu from "../components/OverflowMenu";
 import { getPlatformListingUrl } from "../lib/platformLinks";
 import { productCost, suggestedListingPrice } from "../lib/pricing";
+import { deleteProductEverywhere, isLiveOnMercari } from "../lib/deleteProduct";
 
 // ── List Modal ────────────────────────────────────────────────────────────────
 
@@ -358,6 +359,7 @@ function ProductCard({ product, selected = false, onSelect = null, selectMode = 
   const navigate = useNavigate();
   const [showPostModal, setShowPostModal] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [markingOutOfStock, setMarkingOutOfStock] = useState(false);
 
   const primaryImage = product.images?.[0] ?? "";
   const isSourceSoldOut = product.hasVariants
@@ -385,6 +387,19 @@ function ProductCard({ product, selected = false, onSelect = null, selectMode = 
     }
   }
 
+  // Same callable ProductDetail's "Mark as out of stock" menu item uses.
+  async function handleMarkOutOfStock() {
+    if (!window.confirm("Mark this listing as out of stock? Quantity will be set to 0 everywhere it's posted, but listings stay live.")) return;
+    setMarkingOutOfStock(true);
+    try {
+      await callFunction("markSoldOutAndCascade")({ productId: product.id });
+    } catch (e) {
+      window.alert(e.message ?? "Failed to mark out of stock.");
+    } finally {
+      setMarkingOutOfStock(false);
+    }
+  }
+
   return (
     <>
       <div className="product-card" style={{ position: "relative" }}>
@@ -404,6 +419,11 @@ function ProductCard({ product, selected = false, onSelect = null, selectMode = 
         >
           <OverflowMenu
             items={[
+              ...(product?.saleStatus !== "sold" ? [{
+                label: markingOutOfStock ? "⏳ Marking…" : "📭 Mark as out of stock",
+                onClick: handleMarkOutOfStock,
+                disabled: markingOutOfStock,
+              }] : []),
               {
                 label: deleting ? "Deleting…" : "Delete Product",
                 danger: true,
@@ -575,6 +595,8 @@ export default function Dashboard() {
   const [showBulkPostModal, setShowBulkPostModal] = useState(false);
   const [showBulkTagModal, setShowBulkTagModal] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkMarkingOOS, setBulkMarkingOOS] = useState(false);
 
   useEffect(() => {
     const uid = auth.currentUser?.uid;
@@ -666,6 +688,56 @@ export default function Dashboard() {
     }
     setSelectedIds(newSelected);
   };
+
+  // Same cascade-delete rule as ProductDetail's single delete (see
+  // deleteProduct.js): each product's live eBay/Etsy/TikTok listings go
+  // first, then the Firestore doc. One confirm for the whole batch rather
+  // than one per product.
+  async function handleBulkDelete() {
+    const selected = regularProducts.filter((p) => selectedIds.has(p.id));
+    if (!selected.length) return;
+
+    const anyLiveOnMercari = selected.some(isLiveOnMercari);
+    const countNote = selected.length === 1 ? `"${selected[0].title}"` : `${selected.length} products`;
+    if (!window.confirm(`Delete ${countNote}? This will also remove any live eBay/Etsy/TikTok listings for them. This can't be undone.`)) return;
+    if (anyLiveOnMercari && !window.confirm("Some selected products are live on Mercari, which has no automatic delete yet — you'll need to remove those listings manually on Mercari. Continue deleting from Wonni?")) return;
+
+    setBulkDeleting(true);
+    setError("");
+    const failures = [];
+    for (const product of selected) {
+      const result = await deleteProductEverywhere(product, callFunction);
+      if (!result.ok) failures.push(result.error);
+    }
+    setBulkDeleting(false);
+    setSelectedIds(new Set());
+    if (failures.length) setError(failures.join(" "));
+  }
+
+  // Same callable ProductDetail's "Mark as out of stock" menu item uses
+  // (markSoldOutAndCascade) — zeroes quantity respecting quantityVariesByVariant
+  // and cascade-pushes to every live platform, without withdrawing any listing.
+  async function handleBulkMarkOutOfStock() {
+    const selected = regularProducts.filter((p) => selectedIds.has(p.id));
+    if (!selected.length) return;
+
+    const countNote = selected.length === 1 ? `"${selected[0].title}"` : `${selected.length} products`;
+    if (!window.confirm(`Mark ${countNote} as out of stock? Quantity will be set to 0 everywhere posted, but listings stay live.`)) return;
+
+    setBulkMarkingOOS(true);
+    setError("");
+    const failures = [];
+    for (const product of selected) {
+      try {
+        await callFunction("markSoldOutAndCascade")({ productId: product.id });
+      } catch (e) {
+        failures.push(`Couldn't mark "${product.title}" out of stock: ${e.message}`);
+      }
+    }
+    setBulkMarkingOOS(false);
+    setSelectedIds(new Set());
+    if (failures.length) setError(failures.join(" "));
+  }
 
   return (
     <Layout>
@@ -763,6 +835,22 @@ export default function Dashboard() {
                   onClick={() => setShowBulkPostModal(true)}
                 >
                   Post to Platforms
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  style={{ fontSize: 12, padding: "8px 12px" }}
+                  onClick={handleBulkMarkOutOfStock}
+                  disabled={bulkMarkingOOS}
+                >
+                  {bulkMarkingOOS ? "Marking…" : "📭 Mark Out of Stock"}
+                </button>
+                <button
+                  className="btn btn-danger"
+                  style={{ fontSize: 12, padding: "8px 12px" }}
+                  onClick={handleBulkDelete}
+                  disabled={bulkDeleting}
+                >
+                  {bulkDeleting ? "Deleting…" : "🗑️ Delete Selected"}
                 </button>
               </div>
             )}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, Component, Fragment } from "react";
-import { collection, deleteField, doc, deleteDoc, onSnapshot, query, serverTimestamp, updateDoc, where } from "firebase/firestore";
+import { collection, deleteField, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from "firebase/firestore";
 import { useBlocker, useNavigate, useParams } from "react-router-dom";
 import { auth, db, callFunction, uploadImageBlob } from "../firebase";
 import Layout from "../components/Layout";
@@ -13,6 +13,7 @@ import { normalizeImageAssets, buildImagePayload } from "../lib/media";
 import { useMediaJobQueue } from "../lib/mediaJobQueue";
 import { getPlatformListingUrl } from "../lib/platformLinks";
 import { resolveListingPrice, variantPrice, suggestedListingPrice, productCost } from "../lib/pricing";
+import { deleteProductEverywhere, isLiveOnMercari, platformNoteFor } from "../lib/deleteProduct";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -5107,48 +5108,25 @@ function ProductDetail() {
     }
   }
 
-  // Wonni is the master listing (see CLAUDE.md's eBay listing lifecycle
-  // section): deleting it here means "stop selling this item everywhere,"
-  // not "delete just the Wonni record" — leaving eBay/Etsy live would just
-  // get Wonni silently re-created the next time any platform is posted
-  // (postToWonni always posts to Wonni first). No per-platform choice, one
-  // confirm, then cascade-delete every API-connected platform before
-  // deleting the doc itself.
   async function handleDeleteProduct() {
-    const liveApiPlatforms = [
-      (product?.ebayStatus === "active" || product?.crossPostStatus?.ebay === "active" || product?.crossPostStatus?.ebay === "posted") ? "ebay" : null,
-      (product?.etsyStatus === "active" || product?.crossPostStatus?.etsy === "active" || product?.crossPostStatus?.etsy === "posted") ? "etsy" : null,
-      product?.tiktokStatus === "active" ? "tiktok" : null,
-    ].filter(Boolean);
-    const liveOnMercari = product?.crossPostStatus?.mercari === "active" || !!product?.crossPostListingIds?.mercari || !!product?.mercariListingId
-      || (product?.variants ?? []).some((v) => v?.crossPostListingIds?.mercari || v?.mercariListingId);
-
-    const platformNote = liveApiPlatforms.length || liveOnMercari
-      ? ` This will also remove it from ${[...liveApiPlatforms.map((p) => ({ ebay: "eBay", etsy: "Etsy", tiktok: "TikTok Shop" }[p])), liveOnMercari ? "Mercari" : null].filter(Boolean).join(", ")}.`
-      : "";
+    const platformNote = platformNoteFor(product);
     if (!window.confirm(`Delete "${product?.title ?? "this product"}"?${platformNote} This can't be undone.`)) return;
 
     setDeletingProduct(true);
     setError("");
     try {
-      const deleteFns = { ebay: "ebayDeleteListing", etsy: "etsyDeleteListing", tiktok: "tiktokDeleteListing" };
-      const results = await Promise.allSettled(
-        liveApiPlatforms.map((p) => callFunction(deleteFns[p])({ productId }))
-      );
-      const failed = liveApiPlatforms.filter((_, i) => results[i].status === "rejected");
-      if (failed.length) {
-        const names = { ebay: "eBay", etsy: "Etsy", tiktok: "TikTok Shop" };
-        setDeletingProduct(false);
-        setError(`Couldn't remove it from ${failed.map((p) => names[p]).join(", ")} — delete it there manually, then try again.`);
-        return;
-      }
       // Mercari has no delete API/automation yet — flag for manual removal
       // rather than silently leaving a live Mercari listing behind.
-      if (liveOnMercari && !window.confirm("Mercari has no automatic delete yet — you'll need to remove that listing manually on Mercari. Continue deleting from Wonni?")) {
+      if (isLiveOnMercari(product) && !window.confirm("Mercari has no automatic delete yet — you'll need to remove that listing manually on Mercari. Continue deleting from Wonni?")) {
         setDeletingProduct(false);
         return;
       }
-      await deleteDoc(doc(db, "products", productId));
+      const result = await deleteProductEverywhere({ ...product, id: productId }, callFunction);
+      if (!result.ok) {
+        setDeletingProduct(false);
+        setError(result.error);
+        return;
+      }
       navigate("/sell");
     } catch (e) {
       setDeletingProduct(false);
