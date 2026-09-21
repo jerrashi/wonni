@@ -82,7 +82,12 @@ class ProductRepository: ObservableObject {
         data["brand"] = listing.brand
         data["tags"] = listing.tags
         data["personalNote"] = listing.personalNote
-        data["images"] = listing.photoPaths
+        // `listing.photoPaths` are bare Storage object keys (kept that way — deletion,
+        // cross-post webviews, and templates all still key off the bare path). `products`
+        // is the one field web/every Cloud Function reads directly as `<img src>`, so it
+        // needs the resolved public URL, same convention StorageService.publicURL already
+        // uses when it writes `products.images` from a fresh Storage upload.
+        data["images"] = listing.photoPaths.map { StorageService.shared.publicURL(forPath: $0) }
         if let shipping = listing.shippingInfo {
             data["buyerPaysShipping"] = shipping.buyerPaysShipping
             data["handlingFee"] = shipping.handlingFee

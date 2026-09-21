@@ -6,10 +6,15 @@ on:
   push:
     branches: [ main ]
 
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: SwiftLint
     runs-on: macos-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
@@ -25,6 +30,7 @@ jobs:
   unit-tests:
     name: Unit Tests
     runs-on: macos-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -55,6 +61,7 @@ jobs:
   ui-tests:
     name: UI Tests (Selling Flow)
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -136,6 +143,7 @@ jobs:
   build:
     name: Build Check
     runs-on: macos-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -164,6 +172,7 @@ jobs:
   test-results:
     name: Summary
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: [lint, unit-tests, ui-tests, build]
     if: always()
     steps:

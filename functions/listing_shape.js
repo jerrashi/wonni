@@ -6,6 +6,8 @@
 // products now read/write. Centralized here so every import/cross-post
 // function converts the same way instead of re-deriving the mapping.
 
+const { publicStorageUrl } = require("./product_media");
+
 // { Size: "L", Color: "Red" } -> [{ name: "Size", value: "L" }, ...]
 function optionValuesToAttributes(optionValues) {
   return Object.entries(optionValues ?? {}).map(([name, value]) => ({ name, value }));
@@ -181,13 +183,22 @@ function normalizeCondition(raw) {
   return CONDITION_MAP[raw.toLowerCase().replace(/[\s-]/g, "")] || null;
 }
 
+// Bare Storage paths already look like URLs never do ("users/uid/id/0.jpg" has
+// no scheme) — pass real URLs through untouched, resolve everything else.
+function resolvePhotoUrl(path, bucketName) {
+  if (typeof path !== "string" || !path) return path;
+  if (/^https?:\/\//.test(path)) return path;
+  if (!bucketName) return path;
+  return publicStorageUrl(bucketName, path);
+}
+
 /**
  * Build the `products/{id}` doc for a `listings/{id}` (UserListing). `id` is
  * reused verbatim so the marketplace `listings/{id}` doc and everything keyed
  * off it (Sale.listingId, eBay SKU `wonni_${id}`) still line up.
  * Returns a plain object — the script stamps server timestamps + merges.
  */
-function listingDocToProduct(listing, id) {
+function listingDocToProduct(listing, id, { bucketName = null } = {}) {
   const status = listing.status || "active";           // "active" | "sold" | "draft"
   const isDraft = status === "draft";
   const variations = Array.isArray(listing.variations) ? listing.variations : [];
@@ -218,7 +229,16 @@ function listingDocToProduct(listing, id) {
     listingPrice: typeof listing.price === "number" ? listing.price : null,
     quantity: typeof listing.quantity === "number" ? listing.quantity : 1,
 
-    images: Array.isArray(listing.photoPaths) ? listing.photoPaths : [],
+    // `photoPaths` is a bare Storage object key (e.g. "users/uid/id/0.jpg"),
+    // not a fetchable URL — every other source (Weverse/AliExpress/current
+    // iOS writes/web) stores a full storage.googleapis.com URL in `images`,
+    // and the dashboard renders `images[0]` directly with no resolution
+    // step. Resolve here so migrated docs match that convention; the actual
+    // object-level makePublic() ACL flip is the caller's job (it has the
+    // live `bucket`, this mapper stays pure/sync for testability).
+    images: Array.isArray(listing.photoPaths)
+      ? listing.photoPaths.map((p) => resolvePhotoUrl(p, bucketName))
+      : [],
     options: Array.isArray(listing.options) ? listing.options : [],
     variants: variations.map((v) => {
       const mapped = variationToVariant(v);
@@ -267,4 +287,5 @@ module.exports = {
   listingDocToProduct,
   normalizeCondition,
   normalizeCrossPostStatus,
+  resolvePhotoUrl,
 };

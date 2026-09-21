@@ -42,6 +42,7 @@ const {
   decrementAndCascade,
   restockAndCascade,
   markSoldOutAndCascade,
+  pushEbayQuantityUpdate,
   updateSaleStatus,
   reassignSaleStage,
 } = require("./sales");
@@ -121,6 +122,7 @@ module.exports = {
   decrementAndCascade,
   restockAndCascade,
   markSoldOutAndCascade,
+  pushEbayQuantityUpdate,
   recordMercariSalesBatch,
   syncSales,
   getOrderTakeHome,
