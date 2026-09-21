@@ -80,6 +80,14 @@ test("resolveStock: variant product with no sku / unknown sku → qty null", () 
   assert.equal(resolveStock(variantProduct(), "TEE-XL").qty, null);
 });
 
+test("resolveStock: quantityVariesByVariant:false reads the shared product.quantity regardless of which variant sold", () => {
+  const p = variantProduct({ quantity: 2, quantityVariesByVariant: false });
+  const r = resolveStock(p, "TEE-M");
+  assert.equal(r.scope, "product");
+  assert.equal(r.qty, 2);
+  assert.equal(r.variantIndex, -1);
+});
+
 // ── applyQuantityDelta ──────────────────────────────────────────────────────
 
 test("applyQuantityDelta: decrements a no-variant product and flips status at 0", async () => {
@@ -246,6 +254,23 @@ test("applyMercariFlags: no-op when the product/variant has no Mercari listing",
     "skipped",
   );
   assert.deepEqual(upd, {});
+});
+
+test("applyMercariFlags: shared pool flags EVERY Mercari-listed variant, not just the one that sold", () => {
+  const p = variantProduct({
+    quantityVariesByVariant: false,
+    variants: [
+      { id: "vS", sku: "TEE-S", quantity: 2, active: true, optionValues: { Size: "S" }, mercariListingId: "m1" },
+      { id: "vM", sku: "TEE-M", quantity: 2, active: true, optionValues: { Size: "M" }, mercariListingId: "m2" },
+    ],
+  });
+  const upd = {};
+  // Sold on eBay, pool now at 0 — both Mercari variant listings must be
+  // flagged for deactivation, even though only "TEE-M" sold.
+  const outcome = applyMercariFlags(p, upd, { variantSku: "TEE-M", soldOut: true, soldOnPlatform: "ebay" });
+  assert.equal(outcome, "pending-manual");
+  assert.equal(upd.variants[0].pendingMercariDeactivation, true);
+  assert.equal(upd.variants[1].pendingMercariDeactivation, true);
 });
 
 // ── recordSaleCore ──────────────────────────────────────────────────────────

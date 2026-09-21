@@ -104,3 +104,6 @@ design-system/dist/
 /LEAD_AGENT_SETUP.md
 /MERCARI_PHOTO_SYNC_ANALYSIS.md
 config.bat
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat

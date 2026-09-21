@@ -56,6 +56,8 @@ struct BackendContracts: Codable, Sendable {
     let mercariScrapeItem: MercariScrapeItem?
     let postToWonniRequest: PostToWonniRequest?
     let postToWonniResponse: PostToWonniResponse?
+    let pushEbayQuantityUpdateRequest: PushEbayQuantityUpdateRequest?
+    let pushEbayQuantityUpdateResponse: PushEbayQuantityUpdateResponse?
     let reassignSaleStageRequest: ReassignSaleStageRequest?
     let reassignSaleStageResponse: ReassignSaleStageResponse?
     let recordMercariSalesBatchRequest: RecordMercariSalesBatchRequest?
@@ -125,6 +127,8 @@ struct BackendContracts: Codable, Sendable {
         case mercariScrapeItem = "MercariScrapeItem"
         case postToWonniRequest = "PostToWonniRequest"
         case postToWonniResponse = "PostToWonniResponse"
+        case pushEbayQuantityUpdateRequest = "PushEbayQuantityUpdateRequest"
+        case pushEbayQuantityUpdateResponse = "PushEbayQuantityUpdateResponse"
         case reassignSaleStageRequest = "ReassignSaleStageRequest"
         case reassignSaleStageResponse = "ReassignSaleStageResponse"
         case recordMercariSalesBatchRequest = "RecordMercariSalesBatchRequest"
@@ -214,6 +218,8 @@ extension BackendContracts {
         mercariScrapeItem: MercariScrapeItem?? = nil,
         postToWonniRequest: PostToWonniRequest?? = nil,
         postToWonniResponse: PostToWonniResponse?? = nil,
+        pushEbayQuantityUpdateRequest: PushEbayQuantityUpdateRequest?? = nil,
+        pushEbayQuantityUpdateResponse: PushEbayQuantityUpdateResponse?? = nil,
         reassignSaleStageRequest: ReassignSaleStageRequest?? = nil,
         reassignSaleStageResponse: ReassignSaleStageResponse?? = nil,
         recordMercariSalesBatchRequest: RecordMercariSalesBatchRequest?? = nil,
@@ -283,6 +289,8 @@ extension BackendContracts {
             mercariScrapeItem: mercariScrapeItem ?? self.mercariScrapeItem,
             postToWonniRequest: postToWonniRequest ?? self.postToWonniRequest,
             postToWonniResponse: postToWonniResponse ?? self.postToWonniResponse,
+            pushEbayQuantityUpdateRequest: pushEbayQuantityUpdateRequest ?? self.pushEbayQuantityUpdateRequest,
+            pushEbayQuantityUpdateResponse: pushEbayQuantityUpdateResponse ?? self.pushEbayQuantityUpdateResponse,
             reassignSaleStageRequest: reassignSaleStageRequest ?? self.reassignSaleStageRequest,
             reassignSaleStageResponse: reassignSaleStageResponse ?? self.reassignSaleStageResponse,
             recordMercariSalesBatchRequest: recordMercariSalesBatchRequest ?? self.recordMercariSalesBatchRequest,
@@ -4108,6 +4116,104 @@ extension PostToWonniResponse {
     }
 }
 
+// MARK: - PushEbayQuantityUpdateRequest
+struct PushEbayQuantityUpdateRequest: Codable, Sendable {
+    let productId: String
+    let variantSku: String?
+
+    enum CodingKeys: String, CodingKey {
+        case productId = "productId"
+        case variantSku = "variantSku"
+    }
+}
+
+// MARK: PushEbayQuantityUpdateRequest convenience initializers and mutators
+
+extension PushEbayQuantityUpdateRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(PushEbayQuantityUpdateRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        productId: String? = nil,
+        variantSku: String?? = nil
+    ) -> PushEbayQuantityUpdateRequest {
+        return PushEbayQuantityUpdateRequest(
+            productId: productId ?? self.productId,
+            variantSku: variantSku ?? self.variantSku
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - PushEbayQuantityUpdateResponse
+struct PushEbayQuantityUpdateResponse: Codable, Sendable {
+    let outcome: PushEbayQuantityUpdateResponseOutcome
+
+    enum CodingKeys: String, CodingKey {
+        case outcome = "outcome"
+    }
+}
+
+// MARK: PushEbayQuantityUpdateResponse convenience initializers and mutators
+
+extension PushEbayQuantityUpdateResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(PushEbayQuantityUpdateResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        outcome: PushEbayQuantityUpdateResponseOutcome? = nil
+    ) -> PushEbayQuantityUpdateResponse {
+        return PushEbayQuantityUpdateResponse(
+            outcome: outcome ?? self.outcome
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+enum PushEbayQuantityUpdateResponseOutcome: String, Codable, Sendable {
+    case failed = "failed"
+    case skipped = "skipped"
+    case updated = "updated"
+}
+
 // MARK: - ReassignSaleStageRequest
 struct ReassignSaleStageRequest: Codable, Sendable {
     let fromKey: String
@@ -4399,7 +4505,7 @@ extension RecordMercariSalesBatchResponse {
 // MARK: - Result
 struct Result: Codable, Sendable {
     let mercariItemId: String
-    let outcome: Outcome
+    let outcome: ResultOutcome
     let productId: String?
     let saleId: String?
     let warning: String?
@@ -4433,7 +4539,7 @@ extension Result {
 
     func with(
         mercariItemId: String? = nil,
-        outcome: Outcome? = nil,
+        outcome: ResultOutcome? = nil,
         productId: String?? = nil,
         saleId: String?? = nil,
         warning: String?? = nil
@@ -4456,7 +4562,7 @@ extension Result {
     }
 }
 
-enum Outcome: String, Codable, Sendable {
+enum ResultOutcome: String, Codable, Sendable {
     case duplicate = "duplicate"
     case noMatch = "no-match"
     case parseFailed = "parse-failed"

@@ -12,6 +12,7 @@ jobs:
   lint-and-test:
     name: Lint & Test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: functions
@@ -32,6 +33,7 @@ jobs:
     name: Deploy to Firebase
     needs: lint-and-test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:

@@ -6,9 +6,9 @@
  * `{ productId }`-in shape and get added here as their functions are folded
  * into the consolidated codebase (BACKEND.md §Consolidation).
  *
- * KEY CHANGE from the iOS backend: the request key is `productId`, not
- * `listingId`. iOS currently calls `ebayCreateListing({ listingId })` — that
- * call site changes as part of the migration.
+ * The request key is `productId`, not `listingId` — iOS already calls
+ * `ebayCreateListing({ productId })` (`wonni/wonni/Views/ProfileView.swift`
+ * :829, :1775), matching this contract.
  */
 
 const { z } = require("zod");

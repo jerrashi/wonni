@@ -20,7 +20,9 @@
       "mcp__plugin_firebase_firebase__firebase_get_environment",
       "mcp__plugin_firebase_firebase__firebase_update_environment",
       "Skill(commit-commands:commit)",
-      "Bash(awk '/^    struct BulkListingOverviewView:/,/^    }$/ {print NR\": \"$0}' /Users/jerryshi/Documents/GitHub/wonni/wonni/wonni/Views/CreateListingView.swift)"
+      "Bash(awk '/^    struct BulkListingOverviewView:/,/^    }$/ {print NR\": \"$0}' /Users/jerryshi/Documents/GitHub/wonni/wonni/wonni/Views/CreateListingView.swift)",
+      "Bash(firebase functions:secrets:get ETSY_CLIENT_ID --project wonni-app)",
+      "Bash(firebase functions:secrets:get ETSY_SHARED_SECRET --project wonni-app)"
     ]
   }
 }
