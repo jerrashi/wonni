@@ -5,6 +5,7 @@ const { downloadBuffer, savePublicBuffer } = require("./product_media");
 const { geminiApiKey } = require("./gemini_identify");
 const { buildNewProductDoc, extractSourceImages } = require("./product_schema");
 const { findPossibleDuplicates } = require("./weverse_duplicate_detection");
+const { maybeApplyCrossPostRulesAfterImport } = require("./cross_post");
 
 const MAX_IMAGES = 24;
 const USER_AGENT =
@@ -381,6 +382,13 @@ exports.weverseImportProduct = onCall(
     }
 
     await docRef.set(newProduct);
+
+    // Rule-based cross-posting: automatic, best-effort, never blocks the
+    // import — and only runs at all when this user has configured at least
+    // one crossPostRules doc, so nothing changes for a user who hasn't set
+    // up rules yet. See cross_post.js.
+    await maybeApplyCrossPostRulesAfterImport(db, uid, docRef.id);
+
     return {
       productId: docRef.id,
       ...(possibleDuplicates.length > 0 && { possibleDuplicates }),

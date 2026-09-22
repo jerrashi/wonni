@@ -44,15 +44,27 @@ function snapshot(o) {
 }
 
 class FakeDoc {
-  constructor(collection, id) {
-    this.collection = collection;
+  // NOTE: the parent is stored as `_parentCollection`, NOT `this.collection`
+  // — a same-named `collection` INSTANCE property would shadow the
+  // `collection()` PROTOTYPE method below (own properties win over prototype
+  // methods on `this.collection(...)` lookups), silently breaking every
+  // subcollection call.
+  constructor(parentCollection, id) {
+    this._parentCollection = parentCollection;
     this.id = id;
   }
   get ref() {
     return this;
   }
+  /** Subcollection under this doc, e.g. `users/{uid}/crossPostRules`. Keyed
+   *  by full path so two different parent docs' same-named subcollections
+   *  (`users/a/crossPostRules` vs `users/b/crossPostRules`) don't share a
+   *  store. */
+  collection(name) {
+    return new FakeCollection(`${this._parentCollection.path}/${this.id}/${name}`, this._parentCollection.db);
+  }
   async get() {
-    const stored = this.collection.store.get(this.id);
+    const stored = this._parentCollection.store.get(this.id);
     return {
       exists: stored !== undefined,
       id: this.id,
@@ -61,36 +73,41 @@ class FakeDoc {
     };
   }
   async set(patch, opts = {}) {
-    const cur = this.collection.store.get(this.id);
+    const cur = this._parentCollection.store.get(this.id);
     if (opts.merge && cur) {
       applyPatch(cur, patch);
     } else {
       const fresh = {};
       applyPatch(fresh, patch);
-      this.collection.store.set(this.id, fresh);
+      this._parentCollection.store.set(this.id, fresh);
     }
   }
   async update(patch) {
-    const cur = this.collection.store.get(this.id);
-    if (!cur) throw new Error(`update() on missing doc ${this.collection.name}/${this.id}`);
+    const cur = this._parentCollection.store.get(this.id);
+    if (!cur) throw new Error(`update() on missing doc ${this._parentCollection.name}/${this.id}`);
     applyPatch(cur, patch);
   }
 }
 
 class FakeQuery {
-  constructor(collection, predicates) {
+  constructor(collection, predicates, limitN = null) {
     this.collection = collection;
     this.predicates = predicates;
+    this.limitN = limitN;
   }
   where(field, op, value) {
     if (op !== "==") throw new Error(`fake-firestore: only "==" where() is supported (got "${op}")`);
-    return new FakeQuery(this.collection, [...this.predicates, { field, value }]);
+    return new FakeQuery(this.collection, [...this.predicates, { field, value }], this.limitN);
+  }
+  limit(n) {
+    return new FakeQuery(this.collection, this.predicates, n);
   }
   async get() {
     const docs = [];
     for (const [id, data] of this.collection.store.entries()) {
       if (this.predicates.every((p) => data[p.field] === p.value)) {
         docs.push({ id, data: () => snapshot(data) });
+        if (this.limitN != null && docs.length >= this.limitN) break;
       }
     }
     return { docs, empty: docs.length === 0, size: docs.length };
@@ -98,17 +115,25 @@ class FakeQuery {
 }
 
 class FakeCollection {
-  constructor(name, db) {
-    this.name = name;
+  /** @param {string} path  Full path, e.g. "products" or "users/u1/crossPostRules". */
+  constructor(path, db) {
+    this.path = path;
+    this.name = path.split("/").pop();
     this.db = db;
-    if (!db.collections.has(name)) db.collections.set(name, new Map());
-    this.store = db.collections.get(name);
+    if (!db.collections.has(path)) db.collections.set(path, new Map());
+    this.store = db.collections.get(path);
   }
   doc(id) {
     return new FakeDoc(this, id ?? `auto_${this.name}_${++this.db._autoId}`);
   }
   where(field, op, value) {
     return new FakeQuery(this, []).where(field, op, value);
+  }
+  limit(n) {
+    return new FakeQuery(this, []).limit(n);
+  }
+  async get() {
+    return new FakeQuery(this, []).get();
   }
 }
 

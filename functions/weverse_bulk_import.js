@@ -6,6 +6,7 @@ const { fetchWeverseSale, validateSaleForImport, mapSaleToProduct, parseWeverseU
 const { geminiApiKey } = require("./gemini_identify");
 const { buildNewProductDoc, extractSourceImages } = require("./product_schema");
 const { findPossibleDuplicates } = require("./weverse_duplicate_detection");
+const { maybeApplyCrossPostRulesAfterImport } = require("./cross_post");
 
 const BATCH_SIZE_LIMIT = 25;
 const CONCURRENCY_CHUNK_SIZE = 4;
@@ -166,6 +167,12 @@ exports.weverseBulkImportProducts = onCall(
             }
 
             await docRef.set(newProduct);
+
+            // Rule-based cross-posting: automatic, best-effort, never blocks
+            // the import — and only runs at all when this user has
+            // configured at least one crossPostRules doc. See cross_post.js.
+            await maybeApplyCrossPostRulesAfterImport(db, uid, docRef.id);
+
             importedProductIds.push(docRef.id);
             existingWeverseProducts.push({
               id: docRef.id,

@@ -50,6 +50,7 @@ const { recordMercariSalesBatch } = require("./mercari_sales");
 const { syncSales, getOrderTakeHome } = require("./sale_poller");
 const { postToWonni } = require("./wonni_listing");
 const { watchStockSourcesScheduled } = require("./stock_watch");
+const { applyCrossPostRules } = require("./cross_post");
 
 module.exports = {
   // Auth
@@ -133,4 +134,7 @@ module.exports = {
 
   // Stock watcher
   watchStockSourcesScheduled,
+
+  // Cross-post rules engine
+  applyCrossPostRules,
 };

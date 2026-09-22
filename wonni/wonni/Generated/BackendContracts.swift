@@ -8,6 +8,8 @@ import Foundation
 /// Generated from functions/contracts/. Do not edit by hand.
 // MARK: - BackendContracts
 struct BackendContracts: Codable, Sendable {
+    let applyCrossPostRulesRequest: ApplyCrossPostRulesRequest?
+    let applyCrossPostRulesResponse: ApplyCrossPostRulesResponse?
     let decrementAndCascadeRequest: DecrementAndCascadeRequest?
     let decrementAndCascadeResponse: DecrementAndCascadeResponse?
     let detectMercariPullSyncDiffRequest: DetectMercariPullSyncDiffRequest?
@@ -82,6 +84,8 @@ struct BackendContracts: Codable, Sendable {
     let variant: VariantClass?
 
     enum CodingKeys: String, CodingKey {
+        case applyCrossPostRulesRequest = "ApplyCrossPostRulesRequest"
+        case applyCrossPostRulesResponse = "ApplyCrossPostRulesResponse"
         case decrementAndCascadeRequest = "DecrementAndCascadeRequest"
         case decrementAndCascadeResponse = "DecrementAndCascadeResponse"
         case detectMercariPullSyncDiffRequest = "DetectMercariPullSyncDiffRequest"
@@ -176,6 +180,8 @@ extension BackendContracts {
     }
 
     func with(
+        applyCrossPostRulesRequest: ApplyCrossPostRulesRequest?? = nil,
+        applyCrossPostRulesResponse: ApplyCrossPostRulesResponse?? = nil,
         decrementAndCascadeRequest: DecrementAndCascadeRequest?? = nil,
         decrementAndCascadeResponse: DecrementAndCascadeResponse?? = nil,
         detectMercariPullSyncDiffRequest: DetectMercariPullSyncDiffRequest?? = nil,
@@ -250,6 +256,8 @@ extension BackendContracts {
         variant: VariantClass?? = nil
     ) -> BackendContracts {
         return BackendContracts(
+            applyCrossPostRulesRequest: applyCrossPostRulesRequest ?? self.applyCrossPostRulesRequest,
+            applyCrossPostRulesResponse: applyCrossPostRulesResponse ?? self.applyCrossPostRulesResponse,
             decrementAndCascadeRequest: decrementAndCascadeRequest ?? self.decrementAndCascadeRequest,
             decrementAndCascadeResponse: decrementAndCascadeResponse ?? self.decrementAndCascadeResponse,
             detectMercariPullSyncDiffRequest: detectMercariPullSyncDiffRequest ?? self.detectMercariPullSyncDiffRequest,
@@ -322,6 +330,106 @@ extension BackendContracts {
             updateSaleStatusRequest: updateSaleStatusRequest ?? self.updateSaleStatusRequest,
             updateSaleStatusResponse: updateSaleStatusResponse ?? self.updateSaleStatusResponse,
             variant: variant ?? self.variant
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - ApplyCrossPostRulesRequest
+struct ApplyCrossPostRulesRequest: Codable, Sendable {
+    let productId: String
+
+    enum CodingKeys: String, CodingKey {
+        case productId = "productId"
+    }
+}
+
+// MARK: ApplyCrossPostRulesRequest convenience initializers and mutators
+
+extension ApplyCrossPostRulesRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(ApplyCrossPostRulesRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        productId: String? = nil
+    ) -> ApplyCrossPostRulesRequest {
+        return ApplyCrossPostRulesRequest(
+            productId: productId ?? self.productId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - ApplyCrossPostRulesResponse
+struct ApplyCrossPostRulesResponse: Codable, Sendable {
+    let listingPrice: Double?
+    let matched: Bool
+    let platforms: [String: String]?
+    let ruleId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case listingPrice = "listingPrice"
+        case matched = "matched"
+        case platforms = "platforms"
+        case ruleId = "ruleId"
+    }
+}
+
+// MARK: ApplyCrossPostRulesResponse convenience initializers and mutators
+
+extension ApplyCrossPostRulesResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(ApplyCrossPostRulesResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        listingPrice: Double?? = nil,
+        matched: Bool? = nil,
+        platforms: [String: String]?? = nil,
+        ruleId: String?? = nil
+    ) -> ApplyCrossPostRulesResponse {
+        return ApplyCrossPostRulesResponse(
+            listingPrice: listingPrice ?? self.listingPrice,
+            matched: matched ?? self.matched,
+            platforms: platforms ?? self.platforms,
+            ruleId: ruleId ?? self.ruleId
         )
     }
 

@@ -202,6 +202,12 @@
     "UpdateSaleStagesResponse": {
       "$ref": "#/definitions/UpdateSaleStagesResponse"
     },
+    "ApplyCrossPostRulesRequest": {
+      "$ref": "#/definitions/ApplyCrossPostRulesRequest"
+    },
+    "ApplyCrossPostRulesResponse": {
+      "$ref": "#/definitions/ApplyCrossPostRulesResponse"
+    },
     "SaleDoc": {
       "$ref": "#/definitions/SaleDoc"
     },
@@ -2674,6 +2680,52 @@
       },
       "required": [
         "ok"
+      ],
+      "additionalProperties": false
+    },
+    "ApplyCrossPostRulesRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "productId"
+      ],
+      "additionalProperties": false
+    },
+    "ApplyCrossPostRulesResponse": {
+      "type": "object",
+      "properties": {
+        "matched": {
+          "type": "boolean"
+        },
+        "ruleId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "listingPrice": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "platforms": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        }
+      },
+      "required": [
+        "matched",
+        "ruleId",
+        "listingPrice"
       ],
       "additionalProperties": false
     },

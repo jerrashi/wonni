@@ -269,81 +269,91 @@ const etsyIdOf = (product) =>
 
 // ── Callables ─────────────────────────────────────────────────────────────
 
+// Core create-listing logic, shared by the `etsyCreateListing` callable and
+// any other server-side caller (e.g. cross_post.js's rule-driven cross-post)
+// that needs to post to Etsy without going through another Cloud Function
+// over HTTP. Assumes `uid` is already authenticated and `data` already
+// contract-validated (or, for an internal caller, just `{ productId }`) —
+// mirrors the `recordSale` / `recordSaleCore` split in sales.js.
+async function etsyCreateListingCore(uid, data) {
+  const db = admin.firestore();
+  const product = await loadOwnedProduct(db, uid, data.productId);
+  if (!product) throw new HttpsError("not-found", "Product not found.");
+  const ref = db.collection("products").doc(data.productId);
+
+  if (product.crossPostStatus?.etsy === "active" && etsyIdOf(product)) {
+    return { success: true, listingId: String(etsyIdOf(product)) };
+  }
+
+  await ref.set({ crossPostStatus: { etsy: "pending" } }, { merge: true });
+  try {
+    const auth = await getActiveEtsyToken(uid);
+    const { shopId } = auth;
+
+    const shippingProfileId = data.shippingProfileId ?? await firstShippingProfileId(shopId, auth);
+    const returnPolicyId = data.returnPolicyId ?? await firstReturnPolicyId(shopId, auth);
+    if (!shippingProfileId) throw new HttpsError("failed-precondition", "etsy_missing_shipping_profile: add a shipping profile in your Etsy shop settings.");
+    if (!returnPolicyId) throw new HttpsError("failed-precondition", "etsy_missing_return_policy: add a return policy in your Etsy shop settings.");
+
+    let taxonomyId = data.taxonomyId != null ? Number(data.taxonomyId) : null;
+    let whenMade = "2020_2024";
+    let whoMade = "someone_else";
+    if (!taxonomyId) {
+      const r = await resolveEtsyFields(auth.clientId, product.title, product.category || product.artistName);
+      taxonomyId = r.taxonomy_id;
+      whenMade = r.when_made;
+      whoMade = r.who_made;
+    }
+
+    const price = resolveListingPrice(product);
+    const quantity = productTotalQuantity(product);
+    const createBody = buildEtsyCreateBody(product, {
+      taxonomyId, whenMade, whoMade, price, quantity, shippingProfileId, returnPolicyId,
+    });
+
+    const { status, data: created } = await etsyReq(
+      "POST", `/v3/application/shops/${shopId}/listings`, { ...auth, body: createBody },
+    );
+    if (status !== 200 && status !== 201) {
+      throw new Error(`Etsy create failed (${status}): ${JSON.stringify(created)}`);
+    }
+    const etsyListingId = String(created.listing_id);
+
+    const images = listingImagesFor(product, 10);
+    if (images.length) await uploadListingImages(shopId, etsyListingId, images, auth);
+
+    const variants = Array.isArray(product.variants) ? product.variants.filter((v) => v.active !== false) : [];
+    if (variants.length > 1) {
+      try {
+        await etsyReq("PUT", `/v3/application/listings/${etsyListingId}/inventory`,
+          { ...auth, body: buildEtsyInventoryPayload(variants, priceAmount(price)) });
+      } catch (e) {
+        console.warn(`[etsyCreateListing] inventory update failed: ${e.message}`);
+      }
+    }
+
+    await ref.set({
+      crossPostStatus: { etsy: "active" },
+      crossPostListingIds: { etsy: etsyListingId },
+      etsyListingId,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    return { success: true, listingId: etsyListingId };
+  } catch (err) {
+    await ref.set({ crossPostStatus: { etsy: "failed" } }, { merge: true });
+    if (err instanceof HttpsError) throw err;
+    console.error(`[etsyCreateListing] ${data.productId}: ${err.stack || err.message}`);
+    throw new HttpsError("internal", `Etsy listing failed: ${err.message}`);
+  }
+}
+
 exports.etsyCreateListing = onCall(
   { timeoutSeconds: 120, memory: "512MiB" },
   validated("etsyCreateListing", async (data, request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
-    const db = admin.firestore();
-    const product = await loadOwnedProduct(db, uid, data.productId);
-    if (!product) throw new HttpsError("not-found", "Product not found.");
-    const ref = db.collection("products").doc(data.productId);
-
-    if (product.crossPostStatus?.etsy === "active" && etsyIdOf(product)) {
-      return { success: true, listingId: String(etsyIdOf(product)) };
-    }
-
-    await ref.set({ crossPostStatus: { etsy: "pending" } }, { merge: true });
-    try {
-      const auth = await getActiveEtsyToken(uid);
-      const { shopId } = auth;
-
-      const shippingProfileId = data.shippingProfileId ?? await firstShippingProfileId(shopId, auth);
-      const returnPolicyId = data.returnPolicyId ?? await firstReturnPolicyId(shopId, auth);
-      if (!shippingProfileId) throw new HttpsError("failed-precondition", "etsy_missing_shipping_profile: add a shipping profile in your Etsy shop settings.");
-      if (!returnPolicyId) throw new HttpsError("failed-precondition", "etsy_missing_return_policy: add a return policy in your Etsy shop settings.");
-
-      let taxonomyId = data.taxonomyId != null ? Number(data.taxonomyId) : null;
-      let whenMade = "2020_2024";
-      let whoMade = "someone_else";
-      if (!taxonomyId) {
-        const r = await resolveEtsyFields(auth.clientId, product.title, product.category || product.artistName);
-        taxonomyId = r.taxonomy_id;
-        whenMade = r.when_made;
-        whoMade = r.who_made;
-      }
-
-      const price = resolveListingPrice(product);
-      const quantity = productTotalQuantity(product);
-      const createBody = buildEtsyCreateBody(product, {
-        taxonomyId, whenMade, whoMade, price, quantity, shippingProfileId, returnPolicyId,
-      });
-
-      const { status, data: created } = await etsyReq(
-        "POST", `/v3/application/shops/${shopId}/listings`, { ...auth, body: createBody },
-      );
-      if (status !== 200 && status !== 201) {
-        throw new Error(`Etsy create failed (${status}): ${JSON.stringify(created)}`);
-      }
-      const etsyListingId = String(created.listing_id);
-
-      const images = listingImagesFor(product, 10);
-      if (images.length) await uploadListingImages(shopId, etsyListingId, images, auth);
-
-      const variants = Array.isArray(product.variants) ? product.variants.filter((v) => v.active !== false) : [];
-      if (variants.length > 1) {
-        try {
-          await etsyReq("PUT", `/v3/application/listings/${etsyListingId}/inventory`,
-            { ...auth, body: buildEtsyInventoryPayload(variants, priceAmount(price)) });
-        } catch (e) {
-          console.warn(`[etsyCreateListing] inventory update failed: ${e.message}`);
-        }
-      }
-
-      await ref.set({
-        crossPostStatus: { etsy: "active" },
-        crossPostListingIds: { etsy: etsyListingId },
-        etsyListingId,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-
-      return { success: true, listingId: etsyListingId };
-    } catch (err) {
-      await ref.set({ crossPostStatus: { etsy: "failed" } }, { merge: true });
-      if (err instanceof HttpsError) throw err;
-      console.error(`[etsyCreateListing] ${data.productId}: ${err.stack || err.message}`);
-      throw new HttpsError("internal", `Etsy listing failed: ${err.message}`);
-    }
+    return etsyCreateListingCore(uid, data);
   }),
 );
 
@@ -514,4 +524,5 @@ exports.getEtsyReturnPolicies = onCall(
 exports._internal = {
   matchEtsyTaxonomyId, categoryWords, buildEtsyInventoryPayload, buildEtsyCreateBody,
   etsyDriftDiff, etsyImportUpdates, productTotalQuantity, priceAmount, etsyIdOf,
+  etsyCreateListingCore,
 };
