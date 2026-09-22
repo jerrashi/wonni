@@ -149,7 +149,13 @@ final class VariantMercariPostQueue: ObservableObject {
     /// Called by `VariantMercariPostRunner`'s `MercariAutoPosterView.onOutcome`
     /// closure — resolves the attempt the run loop is currently awaiting. A
     /// no-op if nothing is currently awaited (e.g. the timeout already fired).
-    fileprivate func reportOutcome(_ outcome: MercariPostOutcome) {
+    ///
+    /// Internal rather than `fileprivate` (both real call sites are already in
+    /// this file, so that's not a behavior change) specifically so `@testable
+    /// import` can drive it directly — it's the seam a test needs to simulate
+    /// a fast `.posted`/`.failed` outcome instead of waiting out the real
+    /// 90s/3-attempt timeout path. See `VariantMercariPostQueueTests.swift`.
+    func reportOutcome(_ outcome: MercariPostOutcome) {
         guard let continuation = outcomeContinuation else { return }
         outcomeContinuation = nil
         continuation.resume(returning: outcome)
