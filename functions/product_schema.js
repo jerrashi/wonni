@@ -34,6 +34,10 @@ function buildNewProductDoc(rawData) {
     // `listingPrice` = the required cross-platform list price.
     sourcePrice: rawData.sourcePrice || null,
     listingPrice: rawData.listingPrice || null,
+    // What it costs to get the item from the source to us (e.g. a Weverse
+    // shop's own shipping fee) — distinct from `handlingFee`, which is the
+    // buyer-facing fee set later at listing time via toShippingInfo().
+    sourceShippingCost: rawData.sourceShippingCost ?? null,
 
     // Images
     sourceImages: rawData.sourceImages || [], // Original source URLs (Weverse CDN, AliExpress, etc.)

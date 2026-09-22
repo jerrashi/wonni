@@ -271,6 +271,11 @@ module.exports.fetchWeverseSale = fetchWeverseSale;
 module.exports.validateSaleForImport = validateSaleForImport;
 module.exports.mapSaleToProduct = mapSaleToProduct;
 module.exports.mapWeverseVariantsToOptions = mapWeverseVariantsToOptions;
+module.exports.isAllowedImageUrl = isAllowedImageUrl;
+module.exports.normalizeInfoTable = normalizeInfoTable;
+module.exports.buildDescriptionFromInfoTable = buildDescriptionFromInfoTable;
+module.exports.cleanText = cleanText;
+module.exports.USER_AGENT = USER_AGENT;
 
 // Import a product from a Weverse Shop sale URL (URL-paste flow, no extension needed)
 exports.weverseImportProduct = onCall(
@@ -359,6 +364,7 @@ exports.weverseImportProduct = onCall(
       title: product.title,
       description: product.description,
       sourcePrice: product.price,
+      sourceShippingCost: typeof request.data?.shippingCost === "number" ? request.data.shippingCost : null,
       listingPrice: null,
       sourceImages,
       images: finalImages,

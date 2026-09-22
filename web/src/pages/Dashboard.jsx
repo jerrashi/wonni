@@ -8,6 +8,7 @@ import CreateDraftModal from "../components/CreateDraftModal";
 import PostModal from "../components/PostModal";
 import BulkPostModal from "../components/BulkPostModal";
 import BulkTagModal from "../components/BulkTagModal";
+import WeverseShopImportModal from "../components/WeverseShopImportModal";
 import OverflowMenu from "../components/OverflowMenu";
 import { getPlatformListingUrl } from "../lib/platformLinks";
 import { productCost, suggestedListingPrice } from "../lib/pricing";
@@ -176,6 +177,15 @@ function ImportBar({ onImported }) {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
+  const [shopModalUrl, setShopModalUrl] = useState(null);
+
+  const isShopSectionUrl = urlText.includes("shop.weverse.io") && !/\/sales\/\d+/.test(urlText);
+
+  function handlePreviewShopSection() {
+    const url = urlText.trim();
+    if (!url) return;
+    setShopModalUrl(url);
+  }
 
   async function handleImport() {
     const rawLines = urlText.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
@@ -219,7 +229,11 @@ function ImportBar({ onImported }) {
     <div className="card" style={{ marginBottom: 24 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <div style={{ fontSize: 13, color: "var(--muted)" }}>
-          {isBulk ? "Paste multiple Weverse Shop URLs (one per line)" : "Paste a Weverse Shop or AliExpress product URL"}
+          {isBulk
+            ? "Paste multiple Weverse Shop URLs (one per line)"
+            : isShopSectionUrl
+              ? "That's a shop/artist section — preview its items before importing"
+              : "Paste a Weverse Shop or AliExpress product URL, or a Weverse shop/artist section URL"}
         </div>
         <button
           className="btn btn-ghost"
@@ -242,24 +256,35 @@ function ImportBar({ onImported }) {
         ) : (
           <input
             className="input"
-            placeholder="https://shop.weverse.io/en/shop/USD/artists/.../sales/..."
+            placeholder="https://shop.weverse.io/en/shop/USD/artists/.../sales/... or /artists/.../category/..."
             value={urlText}
             onChange={(e) => setUrlText(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleImport()}
+            onKeyDown={(e) => e.key === "Enter" && (isShopSectionUrl ? handlePreviewShopSection() : handleImport())}
           />
         )}
         <button
           className="btn btn-primary"
           style={{ alignSelf: isBulk ? "flex-end" : "auto" }}
-          onClick={handleImport}
+          onClick={isBulk ? handleImport : isShopSectionUrl ? handlePreviewShopSection : handleImport}
           disabled={loading || !urlText.trim()}
         >
-          {loading ? "Importing…" : isBulk ? "Import All URLs" : "Import"}
+          {loading ? "Importing…" : isBulk ? "Import All URLs" : isShopSectionUrl ? "Preview Items" : "Import"}
         </button>
       </div>
 
       {status && <div style={{ marginTop: 8, fontSize: 13, color: "var(--success)" }}>{status}</div>}
       {error && <div style={{ marginTop: 8, fontSize: 13, color: "var(--danger)" }}>{error}</div>}
+
+      {shopModalUrl && (
+        <WeverseShopImportModal
+          shopUrl={shopModalUrl}
+          onClose={() => setShopModalUrl(null)}
+          onImported={(productIds) => {
+            setUrlText("");
+            productIds.forEach((id) => onImported?.(id));
+          }}
+        />
+      )}
     </div>
   );
 }
