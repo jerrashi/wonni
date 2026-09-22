@@ -71,8 +71,19 @@ enum SalesMetrics {
         let shippingRevenue = sale.shippingRevenue ?? 0
         let revenue = round2(itemRevenue + shippingRevenue)
 
-        let unitCost = sale.linkedProductId.flatMap(costLookup) ?? 0
-        let cost = round2(unitCost * Double(quantity))
+        // `actualCostPaid` (set via recordWeverseOrderPlaced) is the real
+        // total spent to fulfill THIS sale — not a per-unit price, so it's
+        // used as-is rather than multiplied by quantity. Falls back to the
+        // estimated per-unit cost (costLookup(productId) * quantity) when
+        // not present (the common case — most sales don't go through the
+        // Weverse re-order flow).
+        let cost: Double
+        if let actualCostPaid = sale.actualCostPaid {
+            cost = round2(actualCostPaid)
+        } else {
+            let unitCost = sale.linkedProductId.flatMap(costLookup) ?? 0
+            cost = round2(unitCost * Double(quantity))
+        }
 
         let feesEstimate: Double?
         let net: Double

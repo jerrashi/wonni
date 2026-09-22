@@ -45,6 +45,29 @@ test("saleFinancials: quantity multiplies item price and cost, not shipping", ()
   assert.equal(fin.net, 28); // 34 - 0 fee - 0 label - 6 cost
 });
 
+test("saleFinancials: actualCostPaid wins over product.sourcePrice as the cost basis", () => {
+  const sale = { priceSoldFor: 50, quantity: 1, platform: "ebay", takeHome: 40, actualCostPaid: 18.5 };
+  const product = { sourcePrice: 10 };
+  const fin = saleFinancials(sale, product);
+  assert.equal(fin.cost, 18.5);
+  assert.equal(fin.net, 21.5); // 40 takeHome - 18.5 actual cost
+});
+
+test("saleFinancials: actualCostPaid is a real TOTAL for the sale, not multiplied by quantity", () => {
+  const sale = { priceSoldFor: 10, quantity: 3, platform: "manual", takeHome: 20, actualCostPaid: 6 };
+  const product = { sourcePrice: 2 };
+  const fin = saleFinancials(sale, product);
+  assert.equal(fin.cost, 6); // not 6*3
+  assert.equal(fin.net, 14); // 20 - 6
+});
+
+test("saleFinancials: falls back to product.sourcePrice when actualCostPaid is absent/null", () => {
+  const sale = { priceSoldFor: 50, quantity: 2, platform: "ebay", takeHome: 40, actualCostPaid: null };
+  const product = { sourcePrice: 10 };
+  const fin = saleFinancials(sale, product);
+  assert.equal(fin.cost, 20); // 10 * 2, unaffected by null actualCostPaid
+});
+
 test("saleFinancials: missing product defaults cost to 0", () => {
   const sale = { priceSoldFor: 25, quantity: 1, platform: "manual", takeHome: 25 };
   const fin = saleFinancials(sale, null);
@@ -149,6 +172,12 @@ test("aggregate: looks up cost via productsById", () => {
   const sales = [{ priceSoldFor: 100, platform: "ebay", takeHome: 90, status: "complete", productId: "p1" }];
   const { totals } = aggregate(sales, { p1: { sourcePrice: 15 } });
   assert.equal(totals.cost, 15);
+});
+
+test("aggregate: a sale's actualCostPaid overrides its linked product's sourcePrice", () => {
+  const sales = [{ priceSoldFor: 100, platform: "ebay", takeHome: 90, status: "complete", productId: "p1", actualCostPaid: 22 }];
+  const { totals } = aggregate(sales, { p1: { sourcePrice: 15 } });
+  assert.equal(totals.cost, 22);
 });
 
 test("aggregate: netIsEstimate true when any counted sale used the fallback", () => {
