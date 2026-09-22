@@ -39,12 +39,25 @@ struct VariantsEditorView: View {
     @State private var quantityVariesByVariant: Bool = false
     @State private var masterQuantity: Int = 0
     @State private var imageAssets: [ProductImageAsset] = []
+    /// Phase 3: per-variant Mercari title overrides for this editing session
+    /// only — see `VariantLogic`'s "Mercari per-variant listing resolution"
+    /// doc comment for why this never gets persisted to Firestore.
+    @State private var mercariTitleOverrides: [String: String] = [:]
+    /// Raw product fields (`fetchProduct`) needed to build each variant's
+    /// `CrossPostJob` when posting to Mercari — mirrors exactly what
+    /// `CrossPostWebView.startVariantRelist` reads for the single-variant
+    /// relist flow, just captured once up front for the whole batch.
+    @State private var productTitle: String = ""
+    @State private var productDescription: String = ""
+    @State private var productBuyerPaysShipping: Bool = false
+    @State private var productCondition: String = ItemCondition.good.rawValue
 
     @State private var isLoading = true
     @State private var loadError: String?
     @State private var saveError: String?
     @State private var showManageVariations = false
     @State private var pendingRemoval: PendingRemoval?
+    @State private var showMercariBatchPost = false
 
     /// Bridges a pending destructive-delete confirm (computed by
     /// `VariantLogic.rowsToBeRemoved`) back to whoever asked for the
@@ -144,7 +157,53 @@ struct VariantsEditorView: View {
             } message: {
                 Text(saveError ?? "")
             }
+            .sheet(isPresented: $showMercariBatchPost) {
+                VariantMercariBatchPostView(items: buildMercariBatchItems())
+            }
             .task { await load() }
+        }
+    }
+
+    /// Builds one posting-queue item per active variant, resolving each
+    /// variant's Mercari title/photos from the current in-session cascade
+    /// state (`mercariTitleOverrides`/`imageAssets`) exactly as they stand
+    /// right now — this is the "review, then post" hand-off point: nothing
+    /// here reads back from Firestore, so whatever's on screen is what posts.
+    /// Mirrors `CrossPostWebView.startVariantRelist`'s job construction for
+    /// the single-variant relist flow, just for every active variant at once.
+    private func buildMercariBatchItems() -> [VariantMercariPostQueue.Item] {
+        let photoPaths: [String: [String]] = Dictionary(
+            uniqueKeysWithValues: activeVariants.map { v in
+                let urls = VariantLogic.resolvedMercariPhotoURLs(variant: v, imageAssets: imageAssets)
+                return (v.id, urls.compactMap { StorageService.shared.path(fromPublicURL: $0) })
+            }
+        )
+        return activeVariants.map { variant in
+            let title = VariantLogic.resolvedMercariTitle(
+                baseTitle: productTitle.isEmpty ? "Untitled" : productTitle,
+                variant: variant,
+                overrides: mercariTitleOverrides
+            )
+            let styleName = options.first?.name
+            let sizeName = options.count > 1 ? options[1].name : nil
+            let job = CrossPostJob(
+                platform: "mercari",
+                title: title,
+                description: productDescription,
+                price: variant.price ?? listingPrice ?? 0,
+                photoFirebasePaths: photoPaths[variant.id] ?? [],
+                buyerPaysShipping: productBuyerPaysShipping,
+                condition: productCondition,
+                variantProductId: productId,
+                variantId: variant.id
+            )
+            return VariantMercariPostQueue.Item(
+                variantId: variant.id,
+                productId: productId,
+                styleLabel: styleName.flatMap { variant.optionValues[$0] } ?? "",
+                sizeLabel: sizeName.flatMap { variant.optionValues[$0] },
+                job: job
+            )
         }
     }
 
@@ -185,11 +244,25 @@ struct VariantsEditorView: View {
                 masterQuantity: $masterQuantity,
                 listingPrice: listingPrice,
                 imageAssets: $imageAssets,
+                mercariTitleOverrides: $mercariTitleOverrides,
+                mercariBaseTitle: productTitle,
                 onCommitVariants: { await persistVariants() },
                 onCommitImageAssets: { await persistImageAssets() }
             )
+            Divider()
+            Button {
+                showMercariBatchPost = true
+            } label: {
+                Label("Post All Variants to Mercari", systemImage: "arrow.up.circle.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .padding()
+            .disabled(activeVariants.isEmpty)
         }
     }
+
+    private var activeVariants: [Variant] { variants.filter { $0.active } }
 
     // MARK: - Load / persist
 
@@ -209,6 +282,10 @@ struct VariantsEditorView: View {
             hasVariants = doc?.hasVariants ?? !options.isEmpty
             quantityVariesByVariant = doc?.quantityVariesByVariant ?? false
             masterQuantity = (raw?["quantity"] as? Int) ?? variants.first?.quantity ?? 0
+            productTitle = (raw?["title"] as? String) ?? ""
+            productDescription = (raw?["description"] as? String) ?? ""
+            productBuyerPaysShipping = (raw?["buyerPaysShipping"] as? Bool) ?? false
+            productCondition = (raw?["condition"] as? String) ?? ItemCondition.good.rawValue
         } catch {
             loadError = "Could not load this product's variations."
         }

@@ -376,6 +376,73 @@ enum VariantLogic {
         }
     }
 
+    // MARK: Mercari per-variant listing resolution (Phase 3)
+    //
+    // Mercari has no variant concept — each active variant becomes its own,
+    // independently posted listing (see `VariantMercariPostQueue`). Unlike
+    // web's token-based title builder (ProductDetail.jsx's
+    // mercariTitleTokens/mercariPhotoTemplate, stored server-side as a
+    // product-level template), iOS reuses the exact primary(Style)/
+    // secondary(Size) cascade-edit pattern already built for price/quantity
+    // (VariantsTableView) instead of adding a second "listing templates"
+    // abstraction: a title typed at the Style level cascades (bulk overwrite,
+    // same mechanism as price) to every Size under it, and any Size can
+    // override it directly. That override text is intentionally NOT
+    // persisted onto `Variant` — the generated struct (BackendContracts.swift)
+    // has no field for it and adding one is a contract change out of scope
+    // here — it's kept as plain in-memory state
+    // (`VariantsTableView.mercariTitleOverrides`, `[variantId: String]`) for
+    // the one "review, then post" session, and resolved to its final string
+    // here at job-build time, right before the batch starts. Photos need no
+    // equivalent: `imageAssets[].variantTags` already persists real
+    // per-variant photo assignment (`VariantPhotoPickerSheet`), so
+    // `resolvedMercariPhotoURLs` below just reads that existing mechanism.
+
+    /// The default Mercari title for a variant with no override set — the
+    /// product's base title plus every option value the variant carries
+    /// (e.g. "Cool Hoodie - Black L"), so two variants of the same product
+    /// never collide with an identical Mercari listing title out of the box.
+    static func defaultMercariTitle(baseTitle: String, variant: Variant) -> String {
+        let suffix = variant.optionValues
+            .sorted { $0.key < $1.key }
+            .map { $0.value }
+            .joined(separator: " ")
+        guard !suffix.isEmpty else { return baseTitle }
+        return "\(baseTitle) - \(suffix)"
+    }
+
+    /// Resolves the title actually sent to Mercari for one variant: the
+    /// explicit override for this variant id if one was typed (at either the
+    /// Style or Size cascade level — both write into the same
+    /// `[variantId: String]` map, see `VariantsTableView`), else
+    /// `defaultMercariTitle`. Truncated to Mercari's 80-character title cap,
+    /// matching web's `resolveMercariTitle` and eBay's existing truncation.
+    static func resolvedMercariTitle(
+        baseTitle: String,
+        variant: Variant,
+        overrides: [String: String]
+    ) -> String {
+        let trimmed = overrides[variant.id]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = (trimmed?.isEmpty == false ? trimmed! : nil) ?? defaultMercariTitle(baseTitle: baseTitle, variant: variant)
+        return String(title.prefix(80))
+    }
+
+    /// Resolves the photo set for one variant's Mercari listing: every shared
+    /// (untagged) photo plus this variant's own tagged photos, de-duplicated
+    /// in that order — the same tagging `VariantPhotoPickerSheet` already
+    /// writes, so "Select photo" in the variants table IS the Mercari photo
+    /// picker; no separate photo-selection UI exists or is needed.
+    static func resolvedMercariPhotoURLs(variant: Variant, imageAssets: [ProductImageAsset]) -> [String] {
+        var seen = Set<String>()
+        var ordered: [String] = []
+        for asset in sharedPhotos(imageAssets) + variantPhotos(variant, imageAssets: imageAssets) {
+            guard !seen.contains(asset.url) else { continue }
+            seen.insert(asset.url)
+            ordered.append(asset.url)
+        }
+        return ordered
+    }
+
     // MARK: ProductDoc <-> pure-logic type bridging
 
     /// `ProductDoc.options` decodes as `[OptionElement]` (quicktype generated

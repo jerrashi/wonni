@@ -321,4 +321,58 @@ final class VariantEditingTests: XCTestCase {
         XCTAssertEqual(VariantLogic.photosTagged(optionName: "Style", value: "RM", in: [photo]).map(\.id), ["1"])
         XCTAssertEqual(VariantLogic.photosTagged(optionName: "Style", value: "Jimin", in: [photo]), [])
     }
+
+    // MARK: - Mercari per-variant listing resolution (Phase 3)
+
+    func test_defaultMercariTitle_appendsSortedOptionValues() {
+        let variant = makeVariant(optionValues: ["Size": "L", "Style": "RM"])
+        XCTAssertEqual(VariantLogic.defaultMercariTitle(baseTitle: "Cool Hoodie", variant: variant), "Cool Hoodie - RM L")
+    }
+
+    func test_defaultMercariTitle_noOptionValues_fallsBackToBaseTitle() {
+        let variant = makeVariant(optionValues: [:])
+        XCTAssertEqual(VariantLogic.defaultMercariTitle(baseTitle: "Cool Hoodie", variant: variant), "Cool Hoodie")
+    }
+
+    func test_resolvedMercariTitle_usesOverrideWhenSet() {
+        let variant = makeVariant(optionValues: ["Style": "RM"])
+        let resolved = VariantLogic.resolvedMercariTitle(
+            baseTitle: "Cool Hoodie",
+            variant: variant,
+            overrides: [variant.id: "Custom Title"]
+        )
+        XCTAssertEqual(resolved, "Custom Title")
+    }
+
+    func test_resolvedMercariTitle_blankOverrideFallsBackToDefault() {
+        let variant = makeVariant(optionValues: ["Style": "RM"])
+        let resolved = VariantLogic.resolvedMercariTitle(
+            baseTitle: "Cool Hoodie",
+            variant: variant,
+            overrides: [variant.id: "   "]
+        )
+        XCTAssertEqual(resolved, "Cool Hoodie - RM")
+    }
+
+    func test_resolvedMercariTitle_truncatesTo80Characters() {
+        let variant = makeVariant(optionValues: [:])
+        let longTitle = String(repeating: "x", count: 100)
+        let resolved = VariantLogic.resolvedMercariTitle(baseTitle: longTitle, variant: variant, overrides: [:])
+        XCTAssertEqual(resolved.count, 80)
+    }
+
+    func test_resolvedMercariPhotoURLs_combinesSharedAndOwnTaggedPhotos_deduplicated() {
+        let shared = ProductImageAsset(id: "shared", url: "shared-url", variantTags: nil)
+        let owned = ProductImageAsset(id: "owned", url: "owned-url", variantTags: [VariantPhotoTag(optionName: "Style", value: "RM")])
+        let otherStyle = ProductImageAsset(id: "other", url: "other-url", variantTags: [VariantPhotoTag(optionName: "Style", value: "Jimin")])
+        let duplicateSharedUrl = ProductImageAsset(id: "dup", url: "shared-url", variantTags: nil)
+        let variant = makeVariant(optionValues: ["Style": "RM"])
+
+        let urls = VariantLogic.resolvedMercariPhotoURLs(
+            variant: variant,
+            imageAssets: [shared, owned, otherStyle, duplicateSharedUrl]
+        )
+
+        XCTAssertEqual(urls, ["shared-url", "owned-url"])
+    }
 }

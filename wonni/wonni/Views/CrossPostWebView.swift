@@ -2184,9 +2184,28 @@ struct MercariShippingPreferencesView: View {
 
 // MARK: - MercariAutoPosterView
 
+/// Terminal result of one headless posting attempt, reported to `onOutcome` when
+/// `headless == true` (see `VariantMercariPostQueue`, Phase 3). Unused when
+/// `headless == false` — the legacy foreground flows (single relist, draft publish)
+/// keep surfacing the full-screen WebView on failure instead.
+enum MercariPostOutcome {
+    case success(mercariItemId: String)
+    case failed(String)
+}
+
 struct MercariAutoPosterView: View {
     let job: CrossPostJob
     var onDismiss: () -> Void = {}
+    /// When true, this instance never auto-expands its full-screen WebView on a
+    /// failure or a review-required state (category pick, login) — it's being driven
+    /// unattended by `VariantMercariPostQueue`, which applies its own retry-then-skip
+    /// policy and timeout instead of blocking on user interaction. Defaults to false so
+    /// every existing call site (single relist, draft publish cross-post) is unaffected.
+    var headless: Bool = false
+    /// Fired once, only when `headless == true`, with the terminal outcome of this
+    /// attempt (a captured Mercari listing id, or a failure message). The queue uses
+    /// this instead of `onDismiss` to know whether to advance or retry.
+    var onOutcome: ((MercariPostOutcome) -> Void)? = nil
     @EnvironmentObject private var uploadManager: UploadManager
     @StateObject private var state = MercariPostingState()
     @State private var hasInjected = false
@@ -2396,16 +2415,17 @@ struct MercariAutoPosterView: View {
                 case .success:
                     Task {
                         await updateFirestore()
-                        guard state.mercariItemId?.isEmpty == false else {
+                        guard let confirmedId = state.mercariItemId, !confirmedId.isEmpty else {
                             await MainActor.run { state.status = .failed("Listing ID not confirmed — verify on Mercari") }
                             return
                         }
+                        if headless { onOutcome?(.success(mercariItemId: confirmedId)) }
                         // Q4: no lingering per-item success state — advance the queue
                         // immediately instead of holding the "Listed on Mercari!" screen.
                         isExpanded = false
                         onDismiss()
                     }
-                case .failed:
+                case .failed(let failureMessage):
                     // First pre-submit failure: retry once, silently, before surfacing the
                     // webview for manual completion. Post-submit failures (latestSubmitResult
                     // set) are excluded — the submission may have gone through without a
@@ -2415,12 +2435,17 @@ struct MercariAutoPosterView: View {
                         hasInjected = false
                         state.prepareForResume()
                         Task { await fetchPhotosAndResume() }
+                    } else if headless {
+                        // Batch queue (VariantMercariPostQueue): report the terminal failure
+                        // instead of surfacing the full-screen WebView — the queue applies its
+                        // own retry-then-skip policy and moves on to the next variant.
+                        onOutcome?(.failed(failureMessage))
                     }
                 default: break
                 }
             }
             .onChange(of: requiresUserInteraction) { _, needs in
-                guard needs, !isExpanded else { return }
+                guard needs, !isExpanded, !headless else { return }
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                     isExpanded = true
                 }
@@ -2445,12 +2470,20 @@ struct MercariAutoPosterView: View {
                     if state.mercariItemId?.isEmpty != false {
                         await MainActor.run {
                             state.injectionStep = ""
+                            // Cascades into the state.status onChange above, which reports
+                            // this to onOutcome when headless — do not also call onOutcome
+                            // here, that would fire it twice.
                             state.status = .failed("Submission not confirmed — verify your listing on Mercari")
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                isExpanded = true
+                            if !headless {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                    isExpanded = true
+                                }
                             }
                         }
                     } else {
+                        if headless, let confirmedId = state.mercariItemId {
+                            onOutcome?(.success(mercariItemId: confirmedId))
+                        }
                         isExpanded = false
                         onDismiss()
                     }

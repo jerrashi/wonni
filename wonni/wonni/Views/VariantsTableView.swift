@@ -29,6 +29,16 @@ struct VariantsTableView: View {
     @Binding var masterQuantity: Int
     let listingPrice: Double?
     @Binding var imageAssets: [ProductImageAsset]
+    /// Phase 3 (Mercari batch posting): per-variant Mercari title override,
+    /// keyed by variant id. Intentionally NOT part of `Variant` itself and
+    /// NOT persisted to Firestore — see `VariantLogic`'s "Mercari per-variant
+    /// listing resolution" section for why. Lives only as long as this
+    /// editing session; `VariantsEditorView` reads it when building the
+    /// posting queue's jobs.
+    @Binding var mercariTitleOverrides: [String: String]
+    /// The product's own title — the fallback every variant's Mercari title
+    /// is built from when no override is set (`VariantLogic.defaultMercariTitle`).
+    let mercariBaseTitle: String
     let onCommitVariants: () async -> Void
     let onCommitImageAssets: () async -> Void
 
@@ -40,9 +50,18 @@ struct VariantsTableView: View {
 
     private enum TableMode { case primary, secondary }
 
+    /// One primary-level (Style) field edit awaiting the cascade confirm —
+    /// price or Mercari title, never both at once. Reusing this single
+    /// pending-edit + confirm-dialog mechanism for both fields is the point:
+    /// Mercari titles don't get a second cascade UI built for them.
+    private enum PendingBulkEditField {
+        case price(Double?)
+        case mercariTitle(String)
+    }
+
     private struct PendingBulkEdit {
         let primaryValue: String
-        let price: Double?
+        let field: PendingBulkEditField
     }
 
     private struct PhotoPickerTarget: Identifiable {
@@ -203,6 +222,19 @@ struct VariantsTableView: View {
                     Text("\(totalQty)").foregroundStyle(.secondary)
                 }
             }
+            HStack {
+                Text("Mercari title")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField(
+                    group.rows.first.map { VariantLogic.defaultMercariTitle(baseTitle: mercariBaseTitle, variant: $0) } ?? mercariBaseTitle,
+                    text: Binding(
+                        get: { group.rows.first.flatMap { mercariTitleOverrides[$0.id] } ?? "" },
+                        set: { newValue in commitPrimaryMercariTitleEdit(primaryValue: group.key, text: newValue) }
+                    )
+                )
+                .textFieldStyle(.roundedBorder)
+            }
         }
         .padding(.vertical, 4)
     }
@@ -216,14 +248,31 @@ struct VariantsTableView: View {
         if skipBulkEditWarning {
             applyBulkPriceEdit(primaryValue: primaryValue, price: price)
         } else {
-            pendingBulkEdit = PendingBulkEdit(primaryValue: primaryValue, price: price)
+            pendingBulkEdit = PendingBulkEdit(primaryValue: primaryValue, field: .price(price))
+        }
+    }
+
+    private func commitPrimaryMercariTitleEdit(primaryValue: String, text: String) {
+        guard let primaryName else { return }
+        let firstId = variants.first(where: { $0.optionValues[primaryName] == primaryValue })?.id
+        let current = firstId.flatMap { mercariTitleOverrides[$0] } ?? ""
+        guard current != text else { return }
+        if skipBulkEditWarning {
+            applyBulkMercariTitleEdit(primaryValue: primaryValue, text: text)
+        } else {
+            pendingBulkEdit = PendingBulkEdit(primaryValue: primaryValue, field: .mercariTitle(text))
         }
     }
 
     private func confirmBulkEdit(remember: Bool) {
         guard let pending = pendingBulkEdit else { return }
         if remember { skipBulkEditWarning = true }
-        applyBulkPriceEdit(primaryValue: pending.primaryValue, price: pending.price)
+        switch pending.field {
+        case .price(let price):
+            applyBulkPriceEdit(primaryValue: pending.primaryValue, price: price)
+        case .mercariTitle(let text):
+            applyBulkMercariTitleEdit(primaryValue: pending.primaryValue, text: text)
+        }
         pendingBulkEdit = nil
     }
 
@@ -234,6 +283,23 @@ struct VariantsTableView: View {
             return v.with(price: price)
         }
         Task { await onCommitVariants() }
+    }
+
+    /// Bulk-overwrites every row under this Style value's Mercari title
+    /// override (same blunt "set all" semantics as `applyBulkPriceEdit` — a
+    /// per-Size override made afterwards in the secondary view still wins
+    /// for that one row, exactly like price). An empty string clears the
+    /// override back to the default title instead of storing blank text.
+    private func applyBulkMercariTitleEdit(primaryValue: String, text: String) {
+        guard let primaryName else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        for v in variants where v.optionValues[primaryName] == primaryValue {
+            if trimmed.isEmpty {
+                mercariTitleOverrides.removeValue(forKey: v.id)
+            } else {
+                mercariTitleOverrides[v.id] = text
+            }
+        }
     }
 
     // MARK: - Secondary (per-SKU) row
@@ -277,8 +343,33 @@ struct VariantsTableView: View {
                 priceField(variant)
                 quantityField(variant)
             }
+            HStack {
+                Text("Mercari title").font(.caption).foregroundStyle(.secondary)
+                mercariTitleField(variant)
+            }
         }
         .padding(.vertical, 4)
+    }
+
+    /// Direct per-variant write, no cascade confirm — same as `priceField`
+    /// et al. at the secondary (Size) level, which always edit exactly one
+    /// row. An empty string clears the override back to the default title.
+    private func mercariTitleField(_ variant: Variant) -> some View {
+        TextField(
+            VariantLogic.defaultMercariTitle(baseTitle: mercariBaseTitle, variant: variant),
+            text: Binding(
+                get: { mercariTitleOverrides[variant.id] ?? "" },
+                set: { newValue in
+                    let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.isEmpty {
+                        mercariTitleOverrides.removeValue(forKey: variant.id)
+                    } else {
+                        mercariTitleOverrides[variant.id] = newValue
+                    }
+                }
+            )
+        )
+        .textFieldStyle(.roundedBorder)
     }
 
     private func skuField(_ variant: Variant) -> some View {
