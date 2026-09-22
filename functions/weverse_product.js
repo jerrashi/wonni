@@ -268,6 +268,7 @@ module.exports.parseWeverseUrl = parseWeverseUrl;
 module.exports.fetchWeverseSale = fetchWeverseSale;
 module.exports.validateSaleForImport = validateSaleForImport;
 module.exports.mapSaleToProduct = mapSaleToProduct;
+module.exports.mapWeverseVariantsToOptions = mapWeverseVariantsToOptions;
 
 // Import a product from a Weverse Shop sale URL (URL-paste flow, no extension needed)
 exports.weverseImportProduct = onCall(
