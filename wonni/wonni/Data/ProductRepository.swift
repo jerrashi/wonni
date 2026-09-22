@@ -7,6 +7,87 @@ import Foundation
 import FirebaseFirestore
 import FirebaseAuth
 
+/// One flagged row for the per-variant Mercari action queue — `products/{productId}
+/// .variants[variantId]` carrying a `pendingMercariDeactivation`/`pendingMercariRelist`
+/// flag the on-device headless flow (`CrossPostWebView`'s `MercariProfileSyncSheet`) needs
+/// to act on. See `ProductRepository.fetchPendingMercariVariantActions`.
+struct PendingMercariVariantAction: Identifiable {
+    enum Kind { case deactivate, relist }
+
+    var id: String { "\(productId)#\(variantId)" }
+    let productId: String
+    let variantId: String
+    let kind: Kind
+    /// The SPECIFIC Mercari listing this variant maps to — never the product-level
+    /// `mercariUrl`/listing id, since Mercari is one-item-one-size.
+    let mercariId: String
+    let productTitle: String
+    /// e.g. "Size: L, Color: Red" — the variant's `optionValues`, joined for display.
+    let variantLabel: String
+    let price: Double?
+    let photoURL: String?
+}
+
+/// Explicit-nil mutators for `Variant`'s two pending-Mercari flags and its Mercari
+/// cross-post fields. The generated `Variant.with(...)` mutator (`Generated/
+/// BackendContracts.swift`) can't express "clear this field to nil": its
+/// `pendingMercariDeactivation`/`pendingMercariRelist`/etc. parameters are `Bool??`/
+/// `String??`, where passing `nil` (the default) means "leave unchanged", not "set to
+/// nil" — there's no way to pass the "present-but-.none" case through a default
+/// argument. These go through `Variant`'s full memberwise init instead, so intent is
+/// unambiguous. See `CrossPostWebView`'s `MercariAutoDeactivateSheet`/
+/// `MercariAutoPosterView` variant-relist path for where these are used.
+extension Variant {
+    func clearingPendingMercariDeactivation() -> Variant {
+        Variant(active: active, crossPostListingIds: crossPostListingIds, crossPostStatus: crossPostStatus,
+                id: id, mercariUrl: mercariUrl, optionValues: optionValues,
+                pendingMercariDeactivation: nil, pendingMercariRelist: pendingMercariRelist,
+                price: price, quantity: quantity, sku: sku, sourcePrice: sourcePrice, sourceVariantId: sourceVariantId)
+    }
+
+    func clearingPendingMercariRelist() -> Variant {
+        Variant(active: active, crossPostListingIds: crossPostListingIds, crossPostStatus: crossPostStatus,
+                id: id, mercariUrl: mercariUrl, optionValues: optionValues,
+                pendingMercariDeactivation: pendingMercariDeactivation, pendingMercariRelist: nil,
+                price: price, quantity: quantity, sku: sku, sourcePrice: sourcePrice, sourceVariantId: sourceVariantId)
+    }
+
+    /// Records a captured Mercari listing id + cross-post status for this variant
+    /// (a successful re-list), and clears `pendingMercariRelist` in the same write.
+    func withMercariListing(id mercariId: String, status: String) -> Variant {
+        Variant(
+            active: active,
+            crossPostListingIds: VariantCrossPostListingIds(
+                ebay: crossPostListingIds.ebay, etsy: crossPostListingIds.etsy,
+                mercari: mercariId, tiktok: crossPostListingIds.tiktok
+            ),
+            crossPostStatus: VariantCrossPostStatus(
+                ebay: crossPostStatus.ebay, etsy: crossPostStatus.etsy,
+                mercari: status, tiktok: crossPostStatus.tiktok
+            ),
+            id: id, mercariUrl: mercariUrl, optionValues: optionValues,
+            pendingMercariDeactivation: pendingMercariDeactivation, pendingMercariRelist: nil,
+            price: price, quantity: quantity, sku: sku, sourcePrice: sourcePrice, sourceVariantId: sourceVariantId
+        )
+    }
+
+    /// Updates just `crossPostStatus.mercari` (e.g. "pending" while a re-list submit is
+    /// in flight), leaving everything else — including both pending flags — untouched.
+    func withMercariStatus(_ status: String) -> Variant {
+        Variant(
+            active: active,
+            crossPostListingIds: crossPostListingIds,
+            crossPostStatus: VariantCrossPostStatus(
+                ebay: crossPostStatus.ebay, etsy: crossPostStatus.etsy,
+                mercari: status, tiktok: crossPostStatus.tiktok
+            ),
+            id: id, mercariUrl: mercariUrl, optionValues: optionValues,
+            pendingMercariDeactivation: pendingMercariDeactivation, pendingMercariRelist: pendingMercariRelist,
+            price: price, quantity: quantity, sku: sku, sourcePrice: sourcePrice, sourceVariantId: sourceVariantId
+        )
+    }
+}
+
 /// The shared `products/{id}` collection wonni_dropship (web) already owns and iOS now
 /// also writes into — the single "Product" record described in the cross-platform draft
 /// continuity plan: an unpublished-or-ready working item, distinct from `listings`
@@ -127,6 +208,30 @@ class ProductRepository: ObservableObject {
             .setData(data, merge: true)
     }
 
+    /// Read-modify-write helper for touching ONE variant: fetches the product, applies
+    /// `transform` to the variant matching `variantId`, and persists the WHOLE
+    /// `options`/`variants` arrays back through `syncVariants` — never a dotted path
+    /// like `"variants.2.pendingMercariDeactivation"` (see `syncVariants`'s doc
+    /// comment). No-ops if the product or the variant doesn't exist.
+    ///
+    /// This is the entry point the per-variant Mercari deactivate/relist flow
+    /// (`CrossPostWebView`'s `MercariAutoDeactivateSheet`/`MercariAutoPosterView`) uses
+    /// to clear a `pendingMercariDeactivation`/`pendingMercariRelist` flag or record a
+    /// fresh `crossPostListingIds.mercari` after a successful re-list.
+    func updateVariant(productId: String, variantId: String, transform: (Variant) -> Variant) async throws {
+        guard let product = try await fetchProductVariants(productId: productId) else { return }
+        var variants = product.variants ?? []
+        guard let idx = variants.firstIndex(where: { $0.id == variantId }) else { return }
+        variants[idx] = transform(variants[idx])
+        try await syncVariants(
+            productId: productId,
+            options: VariantLogic.options(from: product),
+            variants: variants,
+            hasVariants: product.hasVariants ?? true,
+            quantityVariesByVariant: product.quantityVariesByVariant ?? false
+        )
+    }
+
     /// `products/{listing.id}` twin for a `UserListing` written straight into `listings`
     /// (bulk Mercari import, single-URL import, "sell similar" duplication — none of
     /// these go through UploadManager's `Item`-draft flow, so nothing else ever calls
@@ -195,6 +300,55 @@ class ProductRepository: ObservableObject {
         if let quantityVariesByVariant { data["quantityVariesByVariant"] = quantityVariesByVariant }
         data["updatedAt"] = Timestamp(date: Date())
         try await syncProduct(productId: productId, data: data)
+    }
+
+    /// All variant-level `pendingMercariDeactivation`/`pendingMercariRelist` rows across the
+    /// user's variant products, flattened to one row per flagged variant — the per-variant
+    /// analog of `ListingRepository`/`UserListing.pendingMercariDeactivation`/
+    /// `pendingMercariRelist`. See `functions/sales.js`'s `applyMercariFlags` doc comment:
+    /// Mercari has no API and is one-item-one-size, so a variant product has ONE Mercari
+    /// listing PER VARIANT, and the backend cascade sets these flags on the specific
+    /// `variants[i]` that needs action.
+    ///
+    /// No Firestore query can look inside `variants[]` for a per-element boolean, so this
+    /// fetches every variant product the user owns (the same `userId` index
+    /// `fetchDesktopDrafts` already needs) and filters client-side — fine at the small
+    /// per-user scale this runs at (a user's own products, checked when they open the
+    /// Mercari sync sheet / their profile badge).
+    func fetchPendingMercariVariantActions(userId: String) async throws -> [PendingMercariVariantAction] {
+        let snap = try await db.collection(productsCollection)
+            .whereField("userId", isEqualTo: userId)
+            .whereField("hasVariants", isEqualTo: true)
+            .getDocuments()
+        var results: [PendingMercariVariantAction] = []
+        for doc in snap.documents {
+            guard let product = try? doc.data(as: ProductDoc.self) else { continue }
+            let raw = doc.data()
+            let title = (raw["title"] as? String) ?? "Untitled"
+            let images = raw["images"] as? [String]
+            for variant in product.variants ?? [] {
+                guard let mercariId = variant.crossPostListingIds.mercari, !mercariId.isEmpty else { continue }
+                let kind: PendingMercariVariantAction.Kind
+                if variant.pendingMercariDeactivation == true { kind = .deactivate }
+                else if variant.pendingMercariRelist == true { kind = .relist }
+                else { continue }
+                let label = variant.optionValues
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key): \($0.value)" }
+                    .joined(separator: ", ")
+                results.append(PendingMercariVariantAction(
+                    productId: doc.documentID,
+                    variantId: variant.id,
+                    kind: kind,
+                    mercariId: mercariId,
+                    productTitle: title,
+                    variantLabel: label,
+                    price: variant.price,
+                    photoURL: images?.first
+                ))
+            }
+        }
+        return results
     }
 
     /// `ItemCondition`'s raw values (`likeNew`, `newWithoutTags`, `forParts`, …) aren't

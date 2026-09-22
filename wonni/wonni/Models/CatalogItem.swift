@@ -12,18 +12,6 @@ import FirebaseFirestore
 
 // MARK: - Supporting Types
 
-struct VariantDimension: Codable {
-    var name: String           // e.g. "Size"
-    var values: [String]       // e.g. ["XS", "S", "M", "L", "XL"]
-    var affects: VariantEffect
-}
-
-enum VariantEffect: String, Codable {
-    case pricing      = "pricing"
-    case availability = "availability"
-    case both         = "both"
-}
-
 struct PriceBucket: Codable {
     var priceBucket: Double    // Lower bound of this bucket (e.g. 18.00)
     var soldCount: Int         // Units sold at this price from market data
@@ -69,9 +57,6 @@ struct CatalogItem: Identifiable, Codable {
     var descriptionLong: String     // Full catalog description
     var attributes: [String: String] // {"Color": "Black", "Connectivity": "Bluetooth 5.0"}
     var keywords: [String]
-
-    // ── Variant dimensions ───────────────────────────────────────────────────
-    var variantDimensions: [VariantDimension]
 
     // ── Reference images (user-contributed, stored in /catalog/ in Storage) ──
     var referenceImagePaths: [String]

@@ -74,34 +74,6 @@ struct PackageDimensions: Codable {
     var heightIn: Double
 }
 
-// MARK: - Variations
-
-enum VariationStrategy: String, Codable {
-    case singleListing     // All variations on one listing (Etsy default; eBay variesBy)
-    case separateListings  // Each variation becomes its own listing
-}
-
-struct VariationAttribute: Codable {
-    var name: String    // "Size", "Color" — maps to Etsy property_name / eBay variationSpecifics key
-    var value: String   // "Large", "Red"
-}
-
-struct ListingVariation: Codable, Identifiable {
-    var id: String = UUID().uuidString
-    var attributes: [VariationAttribute]  // e.g. [{name:"Size",value:"L"},{name:"Color",value:"Red"}]
-    var price: Double?     // overrides parent listing price; nil = inherit
-    var quantity: Int?     // overrides parent quantity; nil = 1
-    var sku: String?       // optional seller-defined SKU for this variant
-
-    // Per-variation cross-post state, mirroring UserListing's own
-    // crossPostStatus/crossPostListingIds — needed for platforms (e.g.
-    // Mercari, which has no variant concept) that post one listing per
-    // variation rather than one per parent listing. Additive: not read by
-    // any UI/cross-poster yet, same as the pre-existing fields above.
-    var crossPostStatus: [String: String]?
-    var crossPostListingIds: [String: String]?
-}
-
 // MARK: - AI quality tracking
 
 /// Model-quality telemetry captured when a draft is published: what the AI (and the
@@ -243,11 +215,6 @@ struct UserListing: Identifiable, Codable {
     var pendingMercariDeactivation: Bool?  // qty hit 0; Mercari listing needs deactivating
     var pendingMercariRelist: Bool?        // Mercari sold while qty>0; needs re-listing
 
-    // ── Variations ────────────────────────────────────────────────────────────
-    // Etsy: maps to inventory products/property_values; eBay: maps to variesBy + variationSpecifics
-    var variations: [ListingVariation]?
-    var variationStrategy: VariationStrategy?
-
     // MARK: - Convenience
 
     var isDraft: Bool { status == .draft }
@@ -306,9 +273,7 @@ struct UserListing: Identifiable, Codable {
         crossPostListingIds: [String: String]? = nil,
         ebayCategory: Int? = nil,
         pendingMercariDeactivation: Bool? = nil,
-        pendingMercariRelist: Bool? = nil,
-        variations: [ListingVariation]? = nil,
-        variationStrategy: VariationStrategy? = nil
+        pendingMercariRelist: Bool? = nil
     ) {
         self.id = id
         self.userId = userId
@@ -340,7 +305,5 @@ struct UserListing: Identifiable, Codable {
         self.ebayCategory = ebayCategory
         self.pendingMercariDeactivation = pendingMercariDeactivation
         self.pendingMercariRelist = pendingMercariRelist
-        self.variations = variations
-        self.variationStrategy = variationStrategy
     }
 }
