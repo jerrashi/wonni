@@ -31,12 +31,28 @@ class ProductRepository: ObservableObject {
             .setData(data, merge: true)
     }
 
-    /// Raw-dictionary fetch — `products` docs carry wonni_dropship's own schema (no
-    /// Swift `Codable` model exists for it yet), so this intentionally doesn't attempt
-    /// to decode into a typed struct the way `ListingRepository` does for `UserListing`.
+    /// Raw-dictionary fetch — `products` docs carry wonni_dropship's own schema, and no
+    /// single Swift `Codable` model exists for the WHOLE doc yet (title, pricing, images,
+    /// source-specific fields, etc. are all still loose dict access — see
+    /// `fetchProductVariants` below for the one part of the doc that IS typed).
     func fetchProduct(productId: String) async throws -> [String: Any]? {
         let snap = try await db.collection(productsCollection).document(productId).getDocument()
         return snap.data()
+    }
+
+    /// Typed read of just the variant-related subset of `products/{id}` — `options`,
+    /// `variants`, `hasVariants`, `quantityVariesByVariant` — decoded into the
+    /// generated `ProductDoc` / `Variant` / `Option` structs (`Generated/BackendContracts.swift`,
+    /// sourced from `functions/contracts/products.js`). Everything else on the doc still
+    /// goes through `fetchProduct`'s raw dict; see that method's doc comment.
+    ///
+    /// Returns `nil` if the doc doesn't exist. A doc that exists but predates variants
+    /// (no `options`/`variants` keys at all) decodes fine — every field on `ProductDoc`
+    /// is optional/defaulted in the JSON Schema this was generated from.
+    func fetchProductVariants(productId: String) async throws -> ProductDoc? {
+        let snap = try await db.collection(productsCollection).document(productId).getDocument()
+        guard snap.exists else { return nil }
+        return try snap.data(as: ProductDoc.self)
     }
 
     /// "Desktop Drafts" — dropship (web-originated) products still in progress
@@ -55,6 +71,39 @@ class ProductRepository: ObservableObject {
             .map { (id: $0.documentID, data: $0.data()) }
     }
 
+    /// Merge-writes the WHOLE `options`/`variants` arrays onto `products/{productId}`,
+    /// plus the `hasVariants`/`quantityVariesByVariant` flags. This is the ONLY entry
+    /// point for touching variant data — never write a dotted path like
+    /// `"variants.2.price"`: Firestore coerces a dotted numeric segment into a map key,
+    /// which silently turns the whole `variants` array into a `{"0": …, "1": …, "2": …}`
+    /// map and corrupts every other reader of the doc (web, the eBay/Mercari cross-post
+    /// functions). See `functions/ebay_listing.js` / `functions/sales.js` for the
+    /// server-side comments explaining the same rule, enforced there by always
+    /// read-modify-writing the full array.
+    ///
+    /// No UI calls this yet — iOS has no variant-editing surface (that's a later
+    /// phase). This is data-layer plumbing for that phase, and for anything server-side
+    /// that needs iOS to push a full variant set (e.g. importing a multi-variant
+    /// Weverse/AliExpress source).
+    func syncVariants(
+        productId: String,
+        options: [Option],
+        variants: [Variant],
+        hasVariants: Bool,
+        quantityVariesByVariant: Bool
+    ) async throws {
+        let encoder = Firestore.Encoder()
+        let data: [String: Any] = [
+            "options": try options.map { try encoder.encode($0) },
+            "variants": try variants.map { try encoder.encode($0) },
+            "hasVariants": hasVariants,
+            "quantityVariesByVariant": quantityVariesByVariant,
+            "updatedAt": Timestamp(date: Date()),
+        ]
+        try await db.collection(productsCollection).document(productId)
+            .setData(data, merge: true)
+    }
+
     /// `products/{listing.id}` twin for a `UserListing` written straight into `listings`
     /// (bulk Mercari import, single-URL import, "sell similar" duplication — none of
     /// these go through UploadManager's `Item`-draft flow, so nothing else ever calls
@@ -68,7 +117,21 @@ class ProductRepository: ObservableObject {
     /// is the one path that creates a genuine `status: .draft` copy instead. `isDraft`
     /// mirrors `listing.status` either way, same as the `Item`-draft path tracks the
     /// draft's own in-progress state.
-    func syncProductFromListing(_ listing: UserListing) async throws {
+    /// The `options`/`variants`/`hasVariants`/`quantityVariesByVariant` params are
+    /// pass-through plumbing, not wired to real data yet: `UserListing` (iOS's own
+    /// listing model) has no variant fields today, and no iOS UI produces variant
+    /// data — there's nothing to source them from until a later phase builds
+    /// variant-editing. They're accepted here (default `nil`/`false`, so every
+    /// existing call site compiles unchanged) purely so this is the ONE place a
+    /// future caller needs to touch to start carrying variants through this path,
+    /// instead of this method silently dropping them the way it does today.
+    func syncProductFromListing(
+        _ listing: UserListing,
+        options: [Option]? = nil,
+        variants: [Variant]? = nil,
+        hasVariants: Bool? = nil,
+        quantityVariesByVariant: Bool? = nil
+    ) async throws {
         guard let productId = listing.id else { return }
         var data: [String: Any] = [:]
         data["userId"] = listing.userId
@@ -97,6 +160,16 @@ class ProductRepository: ObservableObject {
         }
         if let crossPostStatus = listing.crossPostStatus { data["crossPostStatus"] = crossPostStatus }
         if let crossPostListingIds = listing.crossPostListingIds { data["crossPostListingIds"] = crossPostListingIds }
+        if let options {
+            let encoder = Firestore.Encoder()
+            data["options"] = try options.map { try encoder.encode($0) }
+        }
+        if let variants {
+            let encoder = Firestore.Encoder()
+            data["variants"] = try variants.map { try encoder.encode($0) }
+        }
+        if let hasVariants { data["hasVariants"] = hasVariants }
+        if let quantityVariesByVariant { data["quantityVariesByVariant"] = quantityVariesByVariant }
         data["updatedAt"] = Timestamp(date: Date())
         try await syncProduct(productId: productId, data: data)
     }
