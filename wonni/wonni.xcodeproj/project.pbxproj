@@ -98,6 +98,13 @@
 		5E40C361C5444016970A4A7F /* SalesBoardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F98B6103F36C4C689466B9A5 /* SalesBoardView.swift */; };
 		FAAFEB48A7D6F72586D01FD4 /* MercariSaleParsing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9564BAC1690BD050B5596F07 /* MercariSaleParsing.swift */; };
 		FC3EC2E105D97BA997530E74 /* BulkImportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E177FE23B86D196AD7B41F1E /* BulkImportSheet.swift */; };
+		41EF18CF28D58B18A479E660 /* VariantEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D644DAF7C5E9A560EE40662 /* VariantEditing.swift */; };
+		D7198E4199244AB0EC476883 /* VariantMercariPostQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 404AC380FE28D2DF6F916397 /* VariantMercariPostQueue.swift */; };
+		24E9F656BC753E8A80F7625A /* VariantMercariBatchPostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7762ADBFA03A7B250644DDDF /* VariantMercariBatchPostView.swift */; };
+		9564C276DF5F092402E15D59 /* VariantsEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FE9929091CAFA925F82B309 /* VariantsEditorView.swift */; };
+		594361A78A13340A0FA618DC /* VariantsTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3A4C41A88F047E4519A86F0 /* VariantsTableView.swift */; };
+		5AE27094F4F4DED09BBA82BE /* VariantEditingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 570CA587E17CD5EDC122D8CE /* VariantEditingTests.swift */; };
+		460667840A20621A2C2DF35F /* VariantMercariPostQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E85E88794B38261E935C2BDC /* VariantMercariPostQueueTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -210,6 +217,13 @@
 		E9C92C11853A41889AB9C925 /* SaleRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SaleRepository.swift; sourceTree = "<group>"; };
 		B67872FCF7164B9293FECE64 /* SalesMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalesMetrics.swift; sourceTree = "<group>"; };
 		F29C407466FC968D3BC0DEAF /* SellingFlow.xctestplan */ = {isa = PBXFileReference; includeInIndex = 1; path = SellingFlow.xctestplan; sourceTree = "<group>"; };
+		5D644DAF7C5E9A560EE40662 /* VariantEditing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VariantEditing.swift; sourceTree = "<group>"; };
+		404AC380FE28D2DF6F916397 /* VariantMercariPostQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VariantMercariPostQueue.swift; sourceTree = "<group>"; };
+		7762ADBFA03A7B250644DDDF /* VariantMercariBatchPostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VariantMercariBatchPostView.swift; sourceTree = "<group>"; };
+		1FE9929091CAFA925F82B309 /* VariantsEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VariantsEditorView.swift; sourceTree = "<group>"; };
+		F3A4C41A88F047E4519A86F0 /* VariantsTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VariantsTableView.swift; sourceTree = "<group>"; };
+		570CA587E17CD5EDC122D8CE /* VariantEditingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VariantEditingTests.swift; sourceTree = "<group>"; };
+		E85E88794B38261E935C2BDC /* VariantMercariPostQueueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VariantMercariPostQueueTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -362,6 +376,9 @@
 				00EE85F19AD747589FB21EB0 /* UploadPillView.swift */,
 				170EF2F9EA31030386E584A7 /* AddSaleSheet.swift */,
 				9F42B5F211D314136D6C1E34 /* DeleteAccountView.swift */,
+				1FE9929091CAFA925F82B309 /* VariantsEditorView.swift */,
+				F3A4C41A88F047E4519A86F0 /* VariantsTableView.swift */,
+				7762ADBFA03A7B250644DDDF /* VariantMercariBatchPostView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -403,6 +420,8 @@
 				9564BAC1690BD050B5596F07 /* MercariSaleParsing.swift */,
 				520B53ED7B01C7E414B50230 /* PendingMercariSaleRepository.swift */,
 				56EC85A21B130DB43A7EB01C /* MercariScanJS.swift */,
+				5D644DAF7C5E9A560EE40662 /* VariantEditing.swift */,
+				404AC380FE28D2DF6F916397 /* VariantMercariPostQueue.swift */,
 			);
 			path = Data;
 			sourceTree = "<group>";
@@ -427,6 +446,8 @@
 				7D3F2A91C4E8B5060A1D9F23 /* DraftAIProcessingPolicyTests.swift */,
 				9F5B4C13E60AD7282C3F1B45 /* VisionTitlePolicyTests.swift */,
 				2C8E7F46193D0A5B5F624E78 /* AIQualityTrackingTests.swift */,
+				570CA587E17CD5EDC122D8CE /* VariantEditingTests.swift */,
+				E85E88794B38261E935C2BDC /* VariantMercariPostQueueTests.swift */,
 			);
 			name = wonniTests;
 			path = wonniTests;
@@ -639,6 +660,11 @@
 				147096BF7F09296C73526449 /* PendingMercariSale.swift in Sources */,
 				D2FF825E4990E0C83AE448A4 /* MercariScanJS.swift in Sources */,
 				AF1271838F6624E84D677BBB /* DeleteAccountView.swift in Sources */,
+				41EF18CF28D58B18A479E660 /* VariantEditing.swift in Sources */,
+				9564C276DF5F092402E15D59 /* VariantsEditorView.swift in Sources */,
+				594361A78A13340A0FA618DC /* VariantsTableView.swift in Sources */,
+				D7198E4199244AB0EC476883 /* VariantMercariPostQueue.swift in Sources */,
+				24E9F656BC753E8A80F7625A /* VariantMercariBatchPostView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -653,6 +679,8 @@
 				8E4A3B02D5F9C6171B2E0A34 /* DraftAIProcessingPolicyTests.swift in Sources */,
 				0A6C5D24F71BE8393D402C56 /* VisionTitlePolicyTests.swift in Sources */,
 				1B7D6E35082CF94A4E513D67 /* AIQualityTrackingTests.swift in Sources */,
+				5AE27094F4F4DED09BBA82BE /* VariantEditingTests.swift in Sources */,
+				460667840A20621A2C2DF35F /* VariantMercariPostQueueTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

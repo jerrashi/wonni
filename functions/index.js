@@ -49,6 +49,9 @@ const {
 const { recordMercariSalesBatch } = require("./mercari_sales");
 const { syncSales, getOrderTakeHome } = require("./sale_poller");
 const { postToWonni } = require("./wonni_listing");
+const { watchStockSourcesScheduled } = require("./stock_watch");
+const { applyCrossPostRules } = require("./cross_post");
+const { recordWeverseOrderPlaced, listWeverseOrderTasks } = require("./weverse_order_tasks");
 
 module.exports = {
   // Auth
@@ -129,4 +132,14 @@ module.exports = {
   updateSaleStatus,
   reassignSaleStage,
   postToWonni,
+
+  // Stock watcher
+  watchStockSourcesScheduled,
+
+  // Cross-post rules engine
+  applyCrossPostRules,
+
+  // Weverse re-order tasks (fulfill a resale sale by re-buying on Weverse)
+  recordWeverseOrderPlaced,
+  listWeverseOrderTasks,
 };

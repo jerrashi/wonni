@@ -63,15 +63,23 @@ struct ProfileView: View {
     @State private var listingToDelete: UserListing?
     @State private var isSellingSimilar = false
 
+    // Per-variant pending-Mercari rows (products/{id}.variants[i].pendingMercari*) —
+    // fetched alongside `listings` in loadListings() so the badge/button below reflect
+    // variant products too, not just legacy `listings`-collection rows. See
+    // ProductRepository.fetchPendingMercariVariantActions and CrossPostWebView's
+    // MercariProfileSyncSheet, which is what this button opens.
+    @State private var variantMercariActions: [PendingMercariVariantAction] = []
+
     private var user: FirebaseAuth.User? { authManager.currentUser }
 
     private var hasMercariListings: Bool {
-        listings.contains { $0.crossPostListingIds?["mercari"] != nil }
+        listings.contains { $0.crossPostListingIds?["mercari"] != nil } || !variantMercariActions.isEmpty
     }
     private var pendingMercariCount: Int {
-        listings.filter {
+        let legacyCount = listings.filter {
             $0.pendingMercariDeactivation == true || $0.pendingMercariRelist == true
         }.count
+        return legacyCount + variantMercariActions.count
     }
 
     private var initials: String {
@@ -667,6 +675,9 @@ struct ProfileView: View {
         } catch {
             print("[ProfileView] Failed to load listings: \(error)")
         }
+        if let userId = user?.uid {
+            variantMercariActions = (try? await ProductRepository.shared.fetchPendingMercariVariantActions(userId: userId)) ?? []
+        }
     }
     
     private func deleteListing(_ listing: UserListing) async {
@@ -722,9 +733,7 @@ struct ProfileView: View {
             sourceAssetIdentifiers: [],
             geminiIdentificationConfirmed: false,
             sellingProfileId: original.sellingProfileId,
-            ebayCategory: original.ebayCategory,
-            variations: original.variations,
-            variationStrategy: original.variationStrategy
+            ebayCategory: original.ebayCategory
         )
 
         // Copy brand / category / tags / personalNote

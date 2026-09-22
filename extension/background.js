@@ -120,6 +120,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((e) => sendResponse({ error: e.message }));
     return true;
   }
+  if (message.type === "LIST_WEVERSE_ORDER_TASKS") {
+    handleListWeverseOrderTasks(message.status)
+      .then((result) => sendResponse(result))
+      .catch((e) => sendResponse({ error: e.message }));
+    return true;
+  }
+  if (message.type === "RECORD_WEVERSE_ORDER_PLACED") {
+    handleRecordWeverseOrderPlaced(message.payload)
+      .then((result) => sendResponse(result))
+      .catch((e) => sendResponse({ error: e.message }));
+    return true;
+  }
+  if (message.type === "OPEN_WEVERSE_ORDER_URL") {
+    if (message.url) chrome.tabs.create({ url: message.url, active: true });
+    sendResponse({ ok: true });
+    return true;
+  }
 });
 
 // Content scripts' own fetch()/XHR calls are still subject to the PAGE's CORS policy
@@ -411,4 +428,65 @@ async function handleMercariSoldCheckResult(soldItems) {
   } catch (err) {
     console.error("[Wonni Drop] Error calling recordMercariSalesBatch:", err);
   }
+}
+
+// ── Weverse re-order tasks ──────────────────────────────────────────────
+// Surfacing-only, per the product decision recorded in
+// weverse_order_fill.js: the extension deep-links the user to the original
+// Weverse sale page and lets them confirm "Mark as ordered" by hand once
+// they've actually placed the order themselves. Nothing here fills a cart,
+// checks out, or pays — see that file's header for the full explanation and
+// the follow-up scope.
+
+// Lists this user's pending (or `status`-filtered) weverseOrderTasks, same
+// auth/call pattern as every other extension→callable request (idToken
+// bearer token, POST { data: {...} } to <FUNCTIONS_BASE>/<callableName>).
+async function handleListWeverseOrderTasks(status) {
+  const { idToken } = await chrome.storage.local.get(["idToken"]);
+  if (!idToken) return { error: "Not signed in." };
+
+  const response = await fetch(`${FUNCTIONS_BASE}/listWeverseOrderTasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+    body: JSON.stringify({ data: { status: status ?? "pending" } }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    return { error: `listWeverseOrderTasks failed (${response.status}): ${body}` };
+  }
+
+  const json = await response.json();
+  return json?.result ?? { tasks: [], nextCursor: null };
+}
+
+// The human has manually re-ordered the item on Weverse and confirmed it in
+// the popup ("Mark as ordered"). Records the order number + what they paid;
+// never called from anywhere that isn't a direct user confirmation.
+async function handleRecordWeverseOrderPlaced(payload) {
+  if (!payload?.taskId || !payload?.orderNumber || payload?.costPaid == null) {
+    return { error: "Missing taskId, orderNumber, or costPaid." };
+  }
+
+  const { idToken } = await chrome.storage.local.get(["idToken"]);
+  if (!idToken) return { error: "Not signed in." };
+
+  const response = await fetch(`${FUNCTIONS_BASE}/recordWeverseOrderPlaced`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+    body: JSON.stringify({
+      data: {
+        taskId: payload.taskId,
+        orderNumber: payload.orderNumber,
+        costPaid: payload.costPaid,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    return { error: `recordWeverseOrderPlaced failed (${response.status}): ${body}` };
+  }
+
+  return await response.json();
 }

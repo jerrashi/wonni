@@ -5,6 +5,8 @@ const { downloadBuffer, savePublicBuffer } = require("./product_media");
 const { fetchWeverseSale, validateSaleForImport, mapSaleToProduct, parseWeverseUrl } = require("./weverse_product");
 const { geminiApiKey } = require("./gemini_identify");
 const { buildNewProductDoc, extractSourceImages } = require("./product_schema");
+const { findPossibleDuplicates } = require("./weverse_duplicate_detection");
+const { maybeApplyCrossPostRulesAfterImport } = require("./cross_post");
 
 const BATCH_SIZE_LIMIT = 25;
 const CONCURRENCY_CHUNK_SIZE = 4;
@@ -50,6 +52,20 @@ exports.weverseBulkImportProducts = onCall(
     const existingSaleIds = new Set(
       existingSnap.docs.map((doc) => doc.data().weverseSaleId).filter(Boolean)
     );
+
+    // Fuzzy repost/duplicate check (second layer, on top of the exact
+    // saleId check above): fetched ONCE up front, same as existingSaleIds,
+    // and reused across the whole batch instead of querying per item. Items
+    // successfully imported within this same batch are appended as they
+    // land, so later items in the batch can also be flagged against
+    // earlier ones. Purely informational — never blocks the import, never
+    // auto-merges. See weverse_duplicate_detection.js.
+    const existingWeverseProducts = existingSnap.docs.map((doc) => ({
+      id: doc.id,
+      title: doc.data().title,
+      artistName: doc.data().artistName,
+      weverseSaleId: doc.data().weverseSaleId,
+    }));
 
     const importedProductIds = [];
     const existingProductIds = [];
@@ -115,6 +131,11 @@ exports.weverseBulkImportProducts = onCall(
 
             // AI enrichment is opt-in now (see "AI autofill" / post-time gap-fill).
 
+            const possibleDuplicates = findPossibleDuplicates(
+              { title: product.title, artistName: product.artistName, weverseSaleId: saleId },
+              existingWeverseProducts
+            );
+
             const docRef = db.collection("products").doc();
             const newProduct = buildNewProductDoc({
               userId: uid,
@@ -139,8 +160,26 @@ exports.weverseBulkImportProducts = onCall(
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             });
 
+            // buildNewProductDoc only emits its own explicit field
+            // allowlist, so the fuzzy-duplicate hint is attached after.
+            if (possibleDuplicates.length > 0) {
+              newProduct.possibleDuplicateOf = possibleDuplicates.map((m) => m.productId);
+            }
+
             await docRef.set(newProduct);
+
+            // Rule-based cross-posting: automatic, best-effort, never blocks
+            // the import — and only runs at all when this user has
+            // configured at least one crossPostRules doc. See cross_post.js.
+            await maybeApplyCrossPostRulesAfterImport(db, uid, docRef.id);
+
             importedProductIds.push(docRef.id);
+            existingWeverseProducts.push({
+              id: docRef.id,
+              title: product.title,
+              artistName: product.artistName,
+              weverseSaleId: saleId,
+            });
           } catch (err) {
             // Release the claim so this saleId isn't misreported as "existing"
             // when it never actually got created.
