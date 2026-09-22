@@ -104,6 +104,7 @@
 		9564C276DF5F092402E15D59 /* VariantsEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FE9929091CAFA925F82B309 /* VariantsEditorView.swift */; };
 		594361A78A13340A0FA618DC /* VariantsTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3A4C41A88F047E4519A86F0 /* VariantsTableView.swift */; };
 		5AE27094F4F4DED09BBA82BE /* VariantEditingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 570CA587E17CD5EDC122D8CE /* VariantEditingTests.swift */; };
+		460667840A20621A2C2DF35F /* VariantMercariPostQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E85E88794B38261E935C2BDC /* VariantMercariPostQueueTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -222,6 +223,7 @@
 		1FE9929091CAFA925F82B309 /* VariantsEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VariantsEditorView.swift; sourceTree = "<group>"; };
 		F3A4C41A88F047E4519A86F0 /* VariantsTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VariantsTableView.swift; sourceTree = "<group>"; };
 		570CA587E17CD5EDC122D8CE /* VariantEditingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VariantEditingTests.swift; sourceTree = "<group>"; };
+		E85E88794B38261E935C2BDC /* VariantMercariPostQueueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VariantMercariPostQueueTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -445,6 +447,7 @@
 				9F5B4C13E60AD7282C3F1B45 /* VisionTitlePolicyTests.swift */,
 				2C8E7F46193D0A5B5F624E78 /* AIQualityTrackingTests.swift */,
 				570CA587E17CD5EDC122D8CE /* VariantEditingTests.swift */,
+				E85E88794B38261E935C2BDC /* VariantMercariPostQueueTests.swift */,
 			);
 			name = wonniTests;
 			path = wonniTests;
@@ -677,6 +680,7 @@
 				0A6C5D24F71BE8393D402C56 /* VisionTitlePolicyTests.swift in Sources */,
 				1B7D6E35082CF94A4E513D67 /* AIQualityTrackingTests.swift in Sources */,
 				5AE27094F4F4DED09BBA82BE /* VariantEditingTests.swift in Sources */,
+				460667840A20621A2C2DF35F /* VariantMercariPostQueueTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
