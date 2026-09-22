@@ -54,8 +54,10 @@ struct BackendContracts: Codable, Sendable {
     let markSoldOutAndCascadeRequest: MarkSoldOutAndCascadeRequest?
     let markSoldOutAndCascadeResponse: MarkSoldOutAndCascadeResponse?
     let mercariScrapeItem: MercariScrapeItem?
+    let option: Option?
     let postToWonniRequest: PostToWonniRequest?
     let postToWonniResponse: PostToWonniResponse?
+    let productDoc: ProductDoc?
     let pushEbayQuantityUpdateRequest: PushEbayQuantityUpdateRequest?
     let pushEbayQuantityUpdateResponse: PushEbayQuantityUpdateResponse?
     let reassignSaleStageRequest: ReassignSaleStageRequest?
@@ -77,6 +79,7 @@ struct BackendContracts: Codable, Sendable {
     let updateSaleStagesResponse: UpdateSaleStagesResponse?
     let updateSaleStatusRequest: UpdateSaleStatusRequest?
     let updateSaleStatusResponse: UpdateSaleStatusResponse?
+    let variant: VariantClass?
 
     enum CodingKeys: String, CodingKey {
         case decrementAndCascadeRequest = "DecrementAndCascadeRequest"
@@ -125,8 +128,10 @@ struct BackendContracts: Codable, Sendable {
         case markSoldOutAndCascadeRequest = "MarkSoldOutAndCascadeRequest"
         case markSoldOutAndCascadeResponse = "MarkSoldOutAndCascadeResponse"
         case mercariScrapeItem = "MercariScrapeItem"
+        case option = "Option"
         case postToWonniRequest = "PostToWonniRequest"
         case postToWonniResponse = "PostToWonniResponse"
+        case productDoc = "ProductDoc"
         case pushEbayQuantityUpdateRequest = "PushEbayQuantityUpdateRequest"
         case pushEbayQuantityUpdateResponse = "PushEbayQuantityUpdateResponse"
         case reassignSaleStageRequest = "ReassignSaleStageRequest"
@@ -148,6 +153,7 @@ struct BackendContracts: Codable, Sendable {
         case updateSaleStagesResponse = "UpdateSaleStagesResponse"
         case updateSaleStatusRequest = "UpdateSaleStatusRequest"
         case updateSaleStatusResponse = "UpdateSaleStatusResponse"
+        case variant = "Variant"
     }
 }
 
@@ -216,8 +222,10 @@ extension BackendContracts {
         markSoldOutAndCascadeRequest: MarkSoldOutAndCascadeRequest?? = nil,
         markSoldOutAndCascadeResponse: MarkSoldOutAndCascadeResponse?? = nil,
         mercariScrapeItem: MercariScrapeItem?? = nil,
+        option: Option?? = nil,
         postToWonniRequest: PostToWonniRequest?? = nil,
         postToWonniResponse: PostToWonniResponse?? = nil,
+        productDoc: ProductDoc?? = nil,
         pushEbayQuantityUpdateRequest: PushEbayQuantityUpdateRequest?? = nil,
         pushEbayQuantityUpdateResponse: PushEbayQuantityUpdateResponse?? = nil,
         reassignSaleStageRequest: ReassignSaleStageRequest?? = nil,
@@ -238,7 +246,8 @@ extension BackendContracts {
         updateSaleStagesRequest: UpdateSaleStagesRequest?? = nil,
         updateSaleStagesResponse: UpdateSaleStagesResponse?? = nil,
         updateSaleStatusRequest: UpdateSaleStatusRequest?? = nil,
-        updateSaleStatusResponse: UpdateSaleStatusResponse?? = nil
+        updateSaleStatusResponse: UpdateSaleStatusResponse?? = nil,
+        variant: VariantClass?? = nil
     ) -> BackendContracts {
         return BackendContracts(
             decrementAndCascadeRequest: decrementAndCascadeRequest ?? self.decrementAndCascadeRequest,
@@ -287,8 +296,10 @@ extension BackendContracts {
             markSoldOutAndCascadeRequest: markSoldOutAndCascadeRequest ?? self.markSoldOutAndCascadeRequest,
             markSoldOutAndCascadeResponse: markSoldOutAndCascadeResponse ?? self.markSoldOutAndCascadeResponse,
             mercariScrapeItem: mercariScrapeItem ?? self.mercariScrapeItem,
+            option: option ?? self.option,
             postToWonniRequest: postToWonniRequest ?? self.postToWonniRequest,
             postToWonniResponse: postToWonniResponse ?? self.postToWonniResponse,
+            productDoc: productDoc ?? self.productDoc,
             pushEbayQuantityUpdateRequest: pushEbayQuantityUpdateRequest ?? self.pushEbayQuantityUpdateRequest,
             pushEbayQuantityUpdateResponse: pushEbayQuantityUpdateResponse ?? self.pushEbayQuantityUpdateResponse,
             reassignSaleStageRequest: reassignSaleStageRequest ?? self.reassignSaleStageRequest,
@@ -309,7 +320,8 @@ extension BackendContracts {
             updateSaleStagesRequest: updateSaleStagesRequest ?? self.updateSaleStagesRequest,
             updateSaleStagesResponse: updateSaleStagesResponse ?? self.updateSaleStagesResponse,
             updateSaleStatusRequest: updateSaleStatusRequest ?? self.updateSaleStatusRequest,
-            updateSaleStatusResponse: updateSaleStatusResponse ?? self.updateSaleStatusResponse
+            updateSaleStatusResponse: updateSaleStatusResponse ?? self.updateSaleStatusResponse,
+            variant: variant ?? self.variant
         )
     }
 
@@ -4020,6 +4032,58 @@ enum SoldAtUnion: Codable, Sendable {
     }
 }
 
+// MARK: - Option
+struct Option: Codable, Sendable {
+    let id: String?
+    let name: String
+    let values: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case id = "id"
+        case name = "name"
+        case values = "values"
+    }
+}
+
+// MARK: Option convenience initializers and mutators
+
+extension Option {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(Option.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        id: String?? = nil,
+        name: String? = nil,
+        values: [String]? = nil
+    ) -> Option {
+        return Option(
+            id: id ?? self.id,
+            name: name ?? self.name,
+            values: values ?? self.values
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
 // MARK: - PostToWonniRequest
 struct PostToWonniRequest: Codable, Sendable {
     let productId: String
@@ -4104,6 +4168,318 @@ extension PostToWonniResponse {
             alreadyPosted: alreadyPosted ?? self.alreadyPosted,
             listingId: listingId ?? self.listingId,
             skipped: skipped ?? self.skipped
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - ProductDoc
+struct ProductDoc: Codable, Sendable {
+    let hasVariants: Bool?
+    let options: [OptionElement]?
+    let quantityVariesByVariant: Bool?
+    let variants: [Variant]?
+
+    enum CodingKeys: String, CodingKey {
+        case hasVariants = "hasVariants"
+        case options = "options"
+        case quantityVariesByVariant = "quantityVariesByVariant"
+        case variants = "variants"
+    }
+}
+
+// MARK: ProductDoc convenience initializers and mutators
+
+extension ProductDoc {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(ProductDoc.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        hasVariants: Bool?? = nil,
+        options: [OptionElement]?? = nil,
+        quantityVariesByVariant: Bool?? = nil,
+        variants: [Variant]?? = nil
+    ) -> ProductDoc {
+        return ProductDoc(
+            hasVariants: hasVariants ?? self.hasVariants,
+            options: options ?? self.options,
+            quantityVariesByVariant: quantityVariesByVariant ?? self.quantityVariesByVariant,
+            variants: variants ?? self.variants
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - OptionElement
+struct OptionElement: Codable, Sendable {
+    let id: String?
+    let name: String
+    let values: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case id = "id"
+        case name = "name"
+        case values = "values"
+    }
+}
+
+// MARK: OptionElement convenience initializers and mutators
+
+extension OptionElement {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(OptionElement.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        id: String?? = nil,
+        name: String? = nil,
+        values: [String]? = nil
+    ) -> OptionElement {
+        return OptionElement(
+            id: id ?? self.id,
+            name: name ?? self.name,
+            values: values ?? self.values
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - Variant
+struct Variant: Codable, Sendable {
+    let active: Bool
+    let crossPostListingIds: VariantCrossPostListingIds
+    let crossPostStatus: VariantCrossPostStatus
+    let id: String
+    let mercariUrl: String?
+    let optionValues: [String: String]
+    let pendingMercariDeactivation: Bool?
+    let pendingMercariRelist: Bool?
+    let price: Double?
+    let quantity: Int
+    let sku: String?
+    let sourcePrice: Double?
+    let sourceVariantId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case active = "active"
+        case crossPostListingIds = "crossPostListingIds"
+        case crossPostStatus = "crossPostStatus"
+        case id = "id"
+        case mercariUrl = "mercariUrl"
+        case optionValues = "optionValues"
+        case pendingMercariDeactivation = "pendingMercariDeactivation"
+        case pendingMercariRelist = "pendingMercariRelist"
+        case price = "price"
+        case quantity = "quantity"
+        case sku = "sku"
+        case sourcePrice = "sourcePrice"
+        case sourceVariantId = "sourceVariantId"
+    }
+}
+
+// MARK: Variant convenience initializers and mutators
+
+extension Variant {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(Variant.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        active: Bool? = nil,
+        crossPostListingIds: VariantCrossPostListingIds? = nil,
+        crossPostStatus: VariantCrossPostStatus? = nil,
+        id: String? = nil,
+        mercariUrl: String?? = nil,
+        optionValues: [String: String]? = nil,
+        pendingMercariDeactivation: Bool?? = nil,
+        pendingMercariRelist: Bool?? = nil,
+        price: Double?? = nil,
+        quantity: Int? = nil,
+        sku: String?? = nil,
+        sourcePrice: Double?? = nil,
+        sourceVariantId: String?? = nil
+    ) -> Variant {
+        return Variant(
+            active: active ?? self.active,
+            crossPostListingIds: crossPostListingIds ?? self.crossPostListingIds,
+            crossPostStatus: crossPostStatus ?? self.crossPostStatus,
+            id: id ?? self.id,
+            mercariUrl: mercariUrl ?? self.mercariUrl,
+            optionValues: optionValues ?? self.optionValues,
+            pendingMercariDeactivation: pendingMercariDeactivation ?? self.pendingMercariDeactivation,
+            pendingMercariRelist: pendingMercariRelist ?? self.pendingMercariRelist,
+            price: price ?? self.price,
+            quantity: quantity ?? self.quantity,
+            sku: sku ?? self.sku,
+            sourcePrice: sourcePrice ?? self.sourcePrice,
+            sourceVariantId: sourceVariantId ?? self.sourceVariantId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - VariantCrossPostListingIds
+struct VariantCrossPostListingIds: Codable, Sendable {
+    let ebay: String?
+    let etsy: String?
+    let mercari: String?
+    let tiktok: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ebay = "ebay"
+        case etsy = "etsy"
+        case mercari = "mercari"
+        case tiktok = "tiktok"
+    }
+}
+
+// MARK: VariantCrossPostListingIds convenience initializers and mutators
+
+extension VariantCrossPostListingIds {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(VariantCrossPostListingIds.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        ebay: String?? = nil,
+        etsy: String?? = nil,
+        mercari: String?? = nil,
+        tiktok: String?? = nil
+    ) -> VariantCrossPostListingIds {
+        return VariantCrossPostListingIds(
+            ebay: ebay ?? self.ebay,
+            etsy: etsy ?? self.etsy,
+            mercari: mercari ?? self.mercari,
+            tiktok: tiktok ?? self.tiktok
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - VariantCrossPostStatus
+struct VariantCrossPostStatus: Codable, Sendable {
+    let ebay: String?
+    let etsy: String?
+    let mercari: String?
+    let tiktok: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ebay = "ebay"
+        case etsy = "etsy"
+        case mercari = "mercari"
+        case tiktok = "tiktok"
+    }
+}
+
+// MARK: VariantCrossPostStatus convenience initializers and mutators
+
+extension VariantCrossPostStatus {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(VariantCrossPostStatus.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        ebay: String?? = nil,
+        etsy: String?? = nil,
+        mercari: String?? = nil,
+        tiktok: String?? = nil
+    ) -> VariantCrossPostStatus {
+        return VariantCrossPostStatus(
+            ebay: ebay ?? self.ebay,
+            etsy: etsy ?? self.etsy,
+            mercari: mercari ?? self.mercari,
+            tiktok: tiktok ?? self.tiktok
         )
     }
 
@@ -6053,6 +6429,210 @@ extension UpdateSaleStatusResponse {
     ) -> UpdateSaleStatusResponse {
         return UpdateSaleStatusResponse(
             success: success ?? self.success
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - VariantClass
+struct VariantClass: Codable, Sendable {
+    let active: Bool
+    let crossPostListingIds: VariantCrossPostListingIdsClass
+    let crossPostStatus: VariantCrossPostStatusClass
+    let id: String
+    let mercariUrl: String?
+    let optionValues: [String: String]
+    let pendingMercariDeactivation: Bool?
+    let pendingMercariRelist: Bool?
+    let price: Double?
+    let quantity: Int
+    let sku: String?
+    let sourcePrice: Double?
+    let sourceVariantId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case active = "active"
+        case crossPostListingIds = "crossPostListingIds"
+        case crossPostStatus = "crossPostStatus"
+        case id = "id"
+        case mercariUrl = "mercariUrl"
+        case optionValues = "optionValues"
+        case pendingMercariDeactivation = "pendingMercariDeactivation"
+        case pendingMercariRelist = "pendingMercariRelist"
+        case price = "price"
+        case quantity = "quantity"
+        case sku = "sku"
+        case sourcePrice = "sourcePrice"
+        case sourceVariantId = "sourceVariantId"
+    }
+}
+
+// MARK: VariantClass convenience initializers and mutators
+
+extension VariantClass {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(VariantClass.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        active: Bool? = nil,
+        crossPostListingIds: VariantCrossPostListingIdsClass? = nil,
+        crossPostStatus: VariantCrossPostStatusClass? = nil,
+        id: String? = nil,
+        mercariUrl: String?? = nil,
+        optionValues: [String: String]? = nil,
+        pendingMercariDeactivation: Bool?? = nil,
+        pendingMercariRelist: Bool?? = nil,
+        price: Double?? = nil,
+        quantity: Int? = nil,
+        sku: String?? = nil,
+        sourcePrice: Double?? = nil,
+        sourceVariantId: String?? = nil
+    ) -> VariantClass {
+        return VariantClass(
+            active: active ?? self.active,
+            crossPostListingIds: crossPostListingIds ?? self.crossPostListingIds,
+            crossPostStatus: crossPostStatus ?? self.crossPostStatus,
+            id: id ?? self.id,
+            mercariUrl: mercariUrl ?? self.mercariUrl,
+            optionValues: optionValues ?? self.optionValues,
+            pendingMercariDeactivation: pendingMercariDeactivation ?? self.pendingMercariDeactivation,
+            pendingMercariRelist: pendingMercariRelist ?? self.pendingMercariRelist,
+            price: price ?? self.price,
+            quantity: quantity ?? self.quantity,
+            sku: sku ?? self.sku,
+            sourcePrice: sourcePrice ?? self.sourcePrice,
+            sourceVariantId: sourceVariantId ?? self.sourceVariantId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - VariantCrossPostListingIdsClass
+struct VariantCrossPostListingIdsClass: Codable, Sendable {
+    let ebay: String?
+    let etsy: String?
+    let mercari: String?
+    let tiktok: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ebay = "ebay"
+        case etsy = "etsy"
+        case mercari = "mercari"
+        case tiktok = "tiktok"
+    }
+}
+
+// MARK: VariantCrossPostListingIdsClass convenience initializers and mutators
+
+extension VariantCrossPostListingIdsClass {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(VariantCrossPostListingIdsClass.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        ebay: String?? = nil,
+        etsy: String?? = nil,
+        mercari: String?? = nil,
+        tiktok: String?? = nil
+    ) -> VariantCrossPostListingIdsClass {
+        return VariantCrossPostListingIdsClass(
+            ebay: ebay ?? self.ebay,
+            etsy: etsy ?? self.etsy,
+            mercari: mercari ?? self.mercari,
+            tiktok: tiktok ?? self.tiktok
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - VariantCrossPostStatusClass
+struct VariantCrossPostStatusClass: Codable, Sendable {
+    let ebay: String?
+    let etsy: String?
+    let mercari: String?
+    let tiktok: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ebay = "ebay"
+        case etsy = "etsy"
+        case mercari = "mercari"
+        case tiktok = "tiktok"
+    }
+}
+
+// MARK: VariantCrossPostStatusClass convenience initializers and mutators
+
+extension VariantCrossPostStatusClass {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(VariantCrossPostStatusClass.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        ebay: String?? = nil,
+        etsy: String?? = nil,
+        mercari: String?? = nil,
+        tiktok: String?? = nil
+    ) -> VariantCrossPostStatusClass {
+        return VariantCrossPostStatusClass(
+            ebay: ebay ?? self.ebay,
+            etsy: etsy ?? self.etsy,
+            mercari: mercari ?? self.mercari,
+            tiktok: tiktok ?? self.tiktok
         )
     }
 

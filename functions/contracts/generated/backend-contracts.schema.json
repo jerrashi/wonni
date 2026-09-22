@@ -210,6 +210,15 @@
     },
     "ListingFields": {
       "$ref": "#/definitions/ListingFields"
+    },
+    "Option": {
+      "$ref": "#/definitions/Option"
+    },
+    "Variant": {
+      "$ref": "#/definitions/Variant"
+    },
+    "ProductDoc": {
+      "$ref": "#/definitions/ProductDoc"
     }
   },
   "definitions": {
@@ -3203,6 +3212,346 @@
           "type": "number",
           "minimum": 0,
           "maximum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "Option": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "values"
+      ],
+      "additionalProperties": false
+    },
+    "Variant": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "optionValues": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "sku": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourcePrice": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "price": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "quantity": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "sourceVariantId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crossPostStatus": {
+          "type": "object",
+          "properties": {
+            "ebay": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "etsy": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mercari": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tiktok": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "crossPostListingIds": {
+          "type": "object",
+          "properties": {
+            "ebay": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "etsy": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mercari": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tiktok": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "mercariUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pendingMercariDeactivation": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "pendingMercariRelist": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "optionValues",
+        "quantity",
+        "active",
+        "crossPostStatus",
+        "crossPostListingIds"
+      ],
+      "additionalProperties": false
+    },
+    "ProductDoc": {
+      "type": "object",
+      "properties": {
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "name",
+              "values"
+            ],
+            "additionalProperties": false
+          },
+          "default": []
+        },
+        "variants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "optionValues": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "sku": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sourcePrice": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "price": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "quantity": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "sourceVariantId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "crossPostStatus": {
+                "type": "object",
+                "properties": {
+                  "ebay": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "etsy": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "mercari": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "tiktok": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              "crossPostListingIds": {
+                "type": "object",
+                "properties": {
+                  "ebay": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "etsy": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "mercari": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "tiktok": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              "mercariUrl": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "pendingMercariDeactivation": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "pendingMercariRelist": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "optionValues",
+              "quantity",
+              "active",
+              "crossPostStatus",
+              "crossPostListingIds"
+            ],
+            "additionalProperties": false
+          },
+          "default": []
+        },
+        "hasVariants": {
+          "type": "boolean",
+          "default": false
+        },
+        "quantityVariesByVariant": {
+          "type": "boolean",
+          "default": false
         }
       },
       "additionalProperties": false

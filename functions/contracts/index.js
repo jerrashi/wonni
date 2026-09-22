@@ -28,6 +28,7 @@ const ebay = require("./ebay");
 const etsy = require("./etsy");
 const enrichment = require("./enrichment");
 const settings = require("./settings");
+const products = require("./products");
 
 const domains = { sales, mercari, listings, ebay, etsy, enrichment, settings };
 
@@ -85,6 +86,9 @@ module.exports = {
   SaleDocSchema: sales.SaleDocSchema,
   MercariScrapeItemSchema: mercari.MercariScrapeItemSchema,
   ListingFieldsSchema: enrichment.ListingFieldsSchema,
+  OptionSchema: products.OptionSchema,
+  VariantSchema: products.VariantSchema,
+  ProductDocSchema: products.ProductDocSchema,
   ALL,
   RequestSchemas,
   ResponseSchemas,
