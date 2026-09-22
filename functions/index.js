@@ -49,6 +49,7 @@ const {
 const { recordMercariSalesBatch } = require("./mercari_sales");
 const { syncSales, getOrderTakeHome } = require("./sale_poller");
 const { postToWonni } = require("./wonni_listing");
+const { watchStockSourcesScheduled } = require("./stock_watch");
 
 module.exports = {
   // Auth
@@ -129,4 +130,7 @@ module.exports = {
   updateSaleStatus,
   reassignSaleStage,
   postToWonni,
+
+  // Stock watcher
+  watchStockSourcesScheduled,
 };
