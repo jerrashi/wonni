@@ -55,6 +55,29 @@ class ProductRepository: ObservableObject {
         return try snap.data(as: ProductDoc.self)
     }
 
+    /// Typed read of `products/{id}.imageAssets[]` — the per-photo array
+    /// `variantTags` live on (see `VariantEditing.swift`'s `ProductImageAsset`/
+    /// `variantPhotos` for the matching rules). Not part of the generated
+    /// `ProductDoc` contract (only the variant subset is covered there — see
+    /// `functions/contracts/products.js`'s file header), so this decodes the
+    /// field straight out of the raw dict `fetchProduct` already returns
+    /// rather than adding a second network round-trip.
+    func fetchProductImageAssets(productId: String) async throws -> [ProductImageAsset] {
+        guard let data = try await fetchProduct(productId: productId) else { return [] }
+        guard let raw = data["imageAssets"] as? [[String: Any]] else { return [] }
+        let jsonData = try JSONSerialization.data(withJSONObject: raw)
+        return try JSONDecoder().decode([ProductImageAsset].self, from: jsonData)
+    }
+
+    /// Merge-writes the WHOLE `imageAssets` array — same whole-array-replace
+    /// rule as `syncVariants` (see that method's doc comment): never patch a
+    /// single element by dotted path.
+    func syncProductImageAssets(productId: String, imageAssets: [ProductImageAsset]) async throws {
+        let jsonData = try JSONEncoder().encode(imageAssets)
+        let array = try JSONSerialization.jsonObject(with: jsonData) as? [[String: Any]] ?? []
+        try await syncProduct(productId: productId, data: ["imageAssets": array])
+    }
+
     /// "Desktop Drafts" — dropship (web-originated) products still in progress
     /// (`isDraft != false`), for the iOS side of the "start on one client, finish on
     /// the other" flow. Filters out `source == "ios"` client-side rather than adding a

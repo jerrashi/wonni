@@ -1389,6 +1389,7 @@ struct DraftEditSheet: View {
 
     @State private var showTemplatePicker = false
     @State private var isApplyingTemplate = false
+    @State private var showVariantsEditor = false
 
     var body: some View {
         NavigationStack {
@@ -1478,6 +1479,27 @@ struct DraftEditSheet: View {
                 Section("Description") {
                     TextEditor(text: $description)
                         .frame(minHeight: 80)
+                }
+
+                // Variant editing (Style/Size dimensions, per-variant price/SKU/
+                // quantity) writes through ProductRepository against the shared
+                // `products/{id}` doc — it needs a real backend id, which a draft
+                // only has once `firestoreListingId` is set (see UploadManager's
+                // `syncProductDataAwaiting`/`adoptProduct`). A brand-new, not-yet-
+                // synced draft has nowhere to persist variants yet, so the entry
+                // point is hidden rather than opening onto an id that doesn't
+                // exist server-side.
+                if let productId = item.firestoreListingId {
+                    Section {
+                        Button {
+                            showVariantsEditor = true
+                        } label: {
+                            Label("Manage Variations", systemImage: "square.stack.3d.up")
+                        }
+                    }
+                    .sheet(isPresented: $showVariantsEditor) {
+                        VariantsEditorView(productId: productId, listingPrice: item.userEditedPrice ?? item.aiSuggestedPrice)
+                    }
                 }
 
                 Section("Condition") {
