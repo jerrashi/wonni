@@ -81,6 +81,14 @@ final class VariantEditingTests: XCTestCase {
         XCTAssertEqual(VariantLogic.cartesianOptionValues([]), [[:]])
     }
 
+    /// The degenerate "single option, single value" case — a product with
+    /// exactly one variation dimension that (so far) only has one value
+    /// typed. Still a real, single-row cartesian result, not the "no values
+    /// yet" ignore-path above.
+    func test_cartesian_singleOptionSingleValue_returnsOneCombo() {
+        XCTAssertEqual(VariantLogic.cartesianOptionValues([option("Style", ["RM"])]), [["Style": "RM"]])
+    }
+
     // MARK: - applyOptionRename
 
     func test_rename_dimensionNameOnly_preservesPriceAndSku() {
@@ -113,6 +121,45 @@ final class VariantEditingTests: XCTestCase {
         XCTAssertEqual(renamed, [v])
     }
 
+    /// Web's `applyOptionRename` (ProductDetail.jsx) applies its `renameMap`
+    /// with a single `Map.get` per variant — no re-lookup of the *renamed*
+    /// value. So a rename dict describing a chain (A -> B, B -> C) does NOT
+    /// transitively chase A all the way to C: a variant that was "A" lands on
+    /// "B" (not "C"), and a variant that was already "B" independently lands
+    /// on "C". Swift's `valueRenames[oldValue] ?? oldValue` is the same
+    /// single dictionary lookup, so it must match exactly.
+    func test_rename_chainedValueRenames_isSinglePassNotTransitive() {
+        let wasA = makeVariant(optionValues: ["Style": "A"])
+        let wasB = makeVariant(optionValues: ["Style": "B"])
+        let renamed = VariantLogic.applyOptionRename(
+            [wasA, wasB], optionName: "Style", newOptionName: "Style",
+            valueRenames: ["A": "B", "B": "C"]
+        )
+        XCTAssertEqual(renamed.first { $0.id == wasA.id }?.optionValues, ["Style": "B"])
+        XCTAssertEqual(renamed.first { $0.id == wasB.id }?.optionValues, ["Style": "C"])
+    }
+
+    /// Neither web's `applyOptionRename` nor this port guards against two
+    /// *different* source values being renamed to the same new text — that
+    /// collision is only prevented one layer up, by the "Manage variations"
+    /// UI's save guard (web: `new Set(values).size !== values.length` in
+    /// `saveDraft`; iOS: the equivalent check in `VariantsEditorView`'s
+    /// `saveDraft`, both of which block the save entirely before calling into
+    /// this function). Calling the pure function directly with a colliding
+    /// rename map — as could happen if a caller ever bypassed that UI guard —
+    /// silently produces two variant rows sharing the identical
+    /// `optionValues` combo. This test pins down that real (if UI-guarded)
+    /// behavior rather than assuming the pure layer defends against it.
+    func test_rename_twoValuesRenamedToSameText_collidesIntoDuplicateOptionValues() {
+        let wasRM = makeVariant(optionValues: ["Style": "RM"])
+        let wasJimin = makeVariant(optionValues: ["Style": "Jimin"])
+        let renamed = VariantLogic.applyOptionRename(
+            [wasRM, wasJimin], optionName: "Style", newOptionName: "Style",
+            valueRenames: ["RM": "Member", "Jimin": "Member"]
+        )
+        XCTAssertEqual(renamed.map { $0.optionValues }, [["Style": "Member"], ["Style": "Member"]])
+    }
+
     // MARK: - removeOptionValues (hard delete)
 
     func test_removeOptionValues_hardDeletesMatchingRows() {
@@ -125,6 +172,28 @@ final class VariantEditingTests: XCTestCase {
     func test_removeOptionValues_emptyRemovedList_isNoOp() {
         let v = makeVariant(optionValues: ["Style": "RM"])
         XCTAssertEqual(VariantLogic.removeOptionValues([v], optionName: "Style", removedValues: []), [v])
+    }
+
+    /// Removing the *only* remaining value of a dimension is blocked one
+    /// layer up — both web's `saveDraft` (`if (!name || !values.length ||
+    /// values.some((v) => !v)) return;`, ProductDetail.jsx) and iOS's
+    /// `VariantsEditorView.saveDraft` (the equivalent
+    /// `guard !name.isEmpty, !values.isEmpty, ... else { return false }`)
+    /// refuse to submit an edit that would leave an option with zero values;
+    /// the only way to actually drop a dimension to nothing is the trash-icon
+    /// "delete option entirely" path (`removeOptionEntirely`), which also
+    /// drops the option out of `nextOptions` so `hasVariants` (`nextOptions.
+    /// length > 0` / iOS's `!nextOptions.isEmpty`) correctly collapses to
+    /// false. This function itself has no such guard — it just does what
+    /// it's told — so this test documents that the *pure* `removeOptionValues`
+    /// will happily hard-delete every row for a dimension if asked (leaving
+    /// the option's `values` array, if the caller still supplies one, as the
+    /// caller's problem, not this function's).
+    func test_removeOptionValues_removingEveryValue_dropsEveryRowForThatDimension() {
+        let a = makeVariant(optionValues: ["Style": "OnlyValue"], sourceVariantId: "w1")
+        let b = makeVariant(optionValues: ["Style": "OnlyValue"], sku: "p-2")
+        let result = VariantLogic.removeOptionValues([a, b], optionName: "Style", removedValues: ["OnlyValue"])
+        XCTAssertEqual(result, [])
     }
 
     // MARK: - removeOptionEntirely (hard delete)
@@ -214,6 +283,21 @@ final class VariantEditingTests: XCTestCase {
         XCTAssertEqual(newRows.count, 2)
         XCTAssertTrue(newRows.contains { $0.optionValues == ["Style": "RM", "Size": "M"] })
         XCTAssertTrue(newRows.contains { $0.optionValues == ["Style": "Jimin", "Size": "M"] })
+    }
+
+    /// A single-value new dimension (e.g. the very first value typed, or a
+    /// dimension that will only ever have one value) must not fabricate any
+    /// extra blank rows — `restValues` is empty, so every active existing row
+    /// just becomes that one value in place, one-for-one, exactly like web's
+    /// `[firstValue, ...restValues] = values` destructure with an
+    /// empty `restValues`.
+    func test_addNewOptionDimension_singleValueOnly_everyActiveRowBecomesItInPlace_noExtraRows() {
+        let a = makeVariant(optionValues: ["Style": "RM"], sku: "a")
+        let b = makeVariant(optionValues: ["Style": "Jimin"], sku: "b")
+        let next = VariantLogic.addNewOptionDimension([a, b], optionName: "Size", values: ["OneSize"], productId: "p")
+        XCTAssertEqual(next.count, 2)
+        XCTAssertEqual(next.first { $0.id == a.id }?.optionValues, ["Style": "RM", "Size": "OneSize"])
+        XCTAssertEqual(next.first { $0.id == b.id }?.optionValues, ["Style": "Jimin", "Size": "OneSize"])
     }
 
     func test_addNewOptionDimension_inactiveRowsAreLeftAsIs() {
@@ -314,6 +398,49 @@ final class VariantEditingTests: XCTestCase {
         let photo = ProductImageAsset(id: "1", url: "u", variantTags: nil)
         let variant = makeVariant(optionValues: ["Style": "RM"])
         XCTAssertEqual(VariantLogic.variantPhotos(variant, imageAssets: [photo]), [])
+    }
+
+    /// A photo tagged with an option NAME that no longer exists on the
+    /// product — e.g. it was tagged "Color: Red" before "Color" was renamed
+    /// to "Style" via the Manage Variations rename flow, and the photo's tag
+    /// was never re-applied (nothing in `applyOptionRename` touches
+    /// `imageAssets[].variantTags`; renaming a dimension only relabels
+    /// `variants[].optionValues`, on both web and iOS). `variant.
+    /// optionValues[tag.optionName]` is then nil for every variant (no
+    /// variant carries a "Color" key any more), which never equals the tag's
+    /// non-nil `value`, so `variantPhotos` matches nothing for ANY variant —
+    /// not just the ones that used to be "Red". This is real, observable
+    /// parity behavior on both platforms (not a bug in this port), and worth
+    /// pinning down since a stale tag silently orphans a photo rather than
+    /// erroring or falling back to "shared".
+    func test_variantPhotos_staleTagOptionNameNoLongerOnProduct_matchesNoVariant() {
+        let stalePhoto = ProductImageAsset(
+            id: "1", url: "u",
+            variantTags: [VariantPhotoTag(optionName: "Color", value: "Red")]
+        )
+        let variant = makeVariant(optionValues: ["Style": "Red"]) // renamed dimension; no "Color" key survives
+        XCTAssertEqual(VariantLogic.variantPhotos(variant, imageAssets: [stalePhoto]), [])
+    }
+
+    /// The same stale-tagged photo is also excluded from `sharedPhotos`
+    /// (its `variantTags` is non-empty, so it fails the "no tags at all"
+    /// shared-photo test) — so after a dimension rename with no photo
+    /// re-tagging, a previously-assigned photo becomes invisible to every
+    /// variant AND is not folded back into the shared pool. It doesn't
+    /// silently disappear from `imageAssets` itself (still present, still
+    /// shown in the product's general photo grid) — just unreachable through
+    /// either per-variant path until someone re-tags it.
+    func test_sharedPhotos_photoWithStaleTags_isExcludedNotFoldedIntoShared() {
+        let stalePhoto = ProductImageAsset(
+            id: "1", url: "u",
+            variantTags: [VariantPhotoTag(optionName: "Color", value: "Red")]
+        )
+        XCTAssertEqual(VariantLogic.sharedPhotos([stalePhoto]), [])
+    }
+
+    func test_resolvedMercariPhotoURLs_emptyImageAssets_returnsEmpty() {
+        let variant = makeVariant(optionValues: ["Style": "RM"])
+        XCTAssertEqual(VariantLogic.resolvedMercariPhotoURLs(variant: variant, imageAssets: []), [])
     }
 
     func test_photosTagged_directValueMatch() {
