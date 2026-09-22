@@ -722,9 +722,7 @@ struct ProfileView: View {
             sourceAssetIdentifiers: [],
             geminiIdentificationConfirmed: false,
             sellingProfileId: original.sellingProfileId,
-            ebayCategory: original.ebayCategory,
-            variations: original.variations,
-            variationStrategy: original.variationStrategy
+            ebayCategory: original.ebayCategory
         )
 
         // Copy brand / category / tags / personalNote
