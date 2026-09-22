@@ -208,6 +208,18 @@
     "ApplyCrossPostRulesResponse": {
       "$ref": "#/definitions/ApplyCrossPostRulesResponse"
     },
+    "RecordWeverseOrderPlacedRequest": {
+      "$ref": "#/definitions/RecordWeverseOrderPlacedRequest"
+    },
+    "RecordWeverseOrderPlacedResponse": {
+      "$ref": "#/definitions/RecordWeverseOrderPlacedResponse"
+    },
+    "ListWeverseOrderTasksRequest": {
+      "$ref": "#/definitions/ListWeverseOrderTasksRequest"
+    },
+    "ListWeverseOrderTasksResponse": {
+      "$ref": "#/definitions/ListWeverseOrderTasksResponse"
+    },
     "SaleDoc": {
       "$ref": "#/definitions/SaleDoc"
     },
@@ -2729,6 +2741,234 @@
       ],
       "additionalProperties": false
     },
+    "RecordWeverseOrderPlacedRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "orderNumber": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "costPaid": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "required": [
+        "taskId",
+        "orderNumber",
+        "costPaid"
+      ],
+      "additionalProperties": false
+    },
+    "RecordWeverseOrderPlacedResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": false
+    },
+    "ListWeverseOrderTasksRequest": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "pending",
+                "ordered",
+                "cancelled"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ListWeverseOrderTasksResponse": {
+      "type": "object",
+      "properties": {
+        "tasks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "userId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "productId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "variantId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "saleId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "weverseSaleId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "weverseUrl": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "listingTitle": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "thumbnailUrl": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "ordered",
+                  "cancelled"
+                ]
+              },
+              "orderNumber": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "costPaid": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "type": "object",
+                "properties": {
+                  "_seconds": {
+                    "type": "integer"
+                  },
+                  "_nanoseconds": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "_seconds",
+                  "_nanoseconds"
+                ],
+                "additionalProperties": false
+              },
+              "orderedAt": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "_seconds": {
+                        "type": "integer"
+                      },
+                      "_nanoseconds": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "_seconds",
+                      "_nanoseconds"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "userId",
+              "productId",
+              "saleId",
+              "status",
+              "createdAt",
+              "id"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "tasks",
+        "nextCursor"
+      ],
+      "additionalProperties": false
+    },
     "SaleDoc": {
       "type": "object",
       "properties": {
@@ -2861,6 +3101,17 @@
           "type": "integer",
           "exclusiveMinimum": 0,
           "default": 1
+        },
+        "actualCostPaid": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "buyerName": {
           "type": [

@@ -53,6 +53,8 @@ struct BackendContracts: Codable, Sendable {
     let importMercariPullSyncRequest: ImportMercariPullSyncRequest?
     let importMercariPullSyncResponse: ImportMercariPullSyncResponse?
     let listingFields: ListingFields?
+    let listWeverseOrderTasksRequest: ListWeverseOrderTasksRequest?
+    let listWeverseOrderTasksResponse: ListWeverseOrderTasksResponse?
     let markSoldOutAndCascadeRequest: MarkSoldOutAndCascadeRequest?
     let markSoldOutAndCascadeResponse: MarkSoldOutAndCascadeResponse?
     let mercariScrapeItem: MercariScrapeItem?
@@ -68,6 +70,8 @@ struct BackendContracts: Codable, Sendable {
     let recordMercariSalesBatchResponse: RecordMercariSalesBatchResponse?
     let recordSaleRequest: RecordSaleRequest?
     let recordSaleResponse: RecordSaleResponse?
+    let recordWeverseOrderPlacedRequest: RecordWeverseOrderPlacedRequest?
+    let recordWeverseOrderPlacedResponse: RecordWeverseOrderPlacedResponse?
     let restockAndCascadeRequest: RestockAndCascadeRequest?
     let restockAndCascadeResponse: RestockAndCascadeResponse?
     let saleDoc: SaleDoc?
@@ -129,6 +133,8 @@ struct BackendContracts: Codable, Sendable {
         case importMercariPullSyncRequest = "ImportMercariPullSyncRequest"
         case importMercariPullSyncResponse = "ImportMercariPullSyncResponse"
         case listingFields = "ListingFields"
+        case listWeverseOrderTasksRequest = "ListWeverseOrderTasksRequest"
+        case listWeverseOrderTasksResponse = "ListWeverseOrderTasksResponse"
         case markSoldOutAndCascadeRequest = "MarkSoldOutAndCascadeRequest"
         case markSoldOutAndCascadeResponse = "MarkSoldOutAndCascadeResponse"
         case mercariScrapeItem = "MercariScrapeItem"
@@ -144,6 +150,8 @@ struct BackendContracts: Codable, Sendable {
         case recordMercariSalesBatchResponse = "RecordMercariSalesBatchResponse"
         case recordSaleRequest = "RecordSaleRequest"
         case recordSaleResponse = "RecordSaleResponse"
+        case recordWeverseOrderPlacedRequest = "RecordWeverseOrderPlacedRequest"
+        case recordWeverseOrderPlacedResponse = "RecordWeverseOrderPlacedResponse"
         case restockAndCascadeRequest = "RestockAndCascadeRequest"
         case restockAndCascadeResponse = "RestockAndCascadeResponse"
         case saleDoc = "SaleDoc"
@@ -225,6 +233,8 @@ extension BackendContracts {
         importMercariPullSyncRequest: ImportMercariPullSyncRequest?? = nil,
         importMercariPullSyncResponse: ImportMercariPullSyncResponse?? = nil,
         listingFields: ListingFields?? = nil,
+        listWeverseOrderTasksRequest: ListWeverseOrderTasksRequest?? = nil,
+        listWeverseOrderTasksResponse: ListWeverseOrderTasksResponse?? = nil,
         markSoldOutAndCascadeRequest: MarkSoldOutAndCascadeRequest?? = nil,
         markSoldOutAndCascadeResponse: MarkSoldOutAndCascadeResponse?? = nil,
         mercariScrapeItem: MercariScrapeItem?? = nil,
@@ -240,6 +250,8 @@ extension BackendContracts {
         recordMercariSalesBatchResponse: RecordMercariSalesBatchResponse?? = nil,
         recordSaleRequest: RecordSaleRequest?? = nil,
         recordSaleResponse: RecordSaleResponse?? = nil,
+        recordWeverseOrderPlacedRequest: RecordWeverseOrderPlacedRequest?? = nil,
+        recordWeverseOrderPlacedResponse: RecordWeverseOrderPlacedResponse?? = nil,
         restockAndCascadeRequest: RestockAndCascadeRequest?? = nil,
         restockAndCascadeResponse: RestockAndCascadeResponse?? = nil,
         saleDoc: SaleDoc?? = nil,
@@ -301,6 +313,8 @@ extension BackendContracts {
             importMercariPullSyncRequest: importMercariPullSyncRequest ?? self.importMercariPullSyncRequest,
             importMercariPullSyncResponse: importMercariPullSyncResponse ?? self.importMercariPullSyncResponse,
             listingFields: listingFields ?? self.listingFields,
+            listWeverseOrderTasksRequest: listWeverseOrderTasksRequest ?? self.listWeverseOrderTasksRequest,
+            listWeverseOrderTasksResponse: listWeverseOrderTasksResponse ?? self.listWeverseOrderTasksResponse,
             markSoldOutAndCascadeRequest: markSoldOutAndCascadeRequest ?? self.markSoldOutAndCascadeRequest,
             markSoldOutAndCascadeResponse: markSoldOutAndCascadeResponse ?? self.markSoldOutAndCascadeResponse,
             mercariScrapeItem: mercariScrapeItem ?? self.mercariScrapeItem,
@@ -316,6 +330,8 @@ extension BackendContracts {
             recordMercariSalesBatchResponse: recordMercariSalesBatchResponse ?? self.recordMercariSalesBatchResponse,
             recordSaleRequest: recordSaleRequest ?? self.recordSaleRequest,
             recordSaleResponse: recordSaleResponse ?? self.recordSaleResponse,
+            recordWeverseOrderPlacedRequest: recordWeverseOrderPlacedRequest ?? self.recordWeverseOrderPlacedRequest,
+            recordWeverseOrderPlacedResponse: recordWeverseOrderPlacedResponse ?? self.recordWeverseOrderPlacedResponse,
             restockAndCascadeRequest: restockAndCascadeRequest ?? self.restockAndCascadeRequest,
             restockAndCascadeResponse: restockAndCascadeResponse ?? self.restockAndCascadeResponse,
             saleDoc: saleDoc ?? self.saleDoc,
@@ -3833,6 +3849,304 @@ extension ImportMercariPullSyncResponse {
     }
 }
 
+// MARK: - ListWeverseOrderTasksRequest
+struct ListWeverseOrderTasksRequest: Codable, Sendable {
+    let cursor: String?
+    let limit: Int?
+    let status: ListWeverseOrderTasksRequestStatus?
+
+    enum CodingKeys: String, CodingKey {
+        case cursor = "cursor"
+        case limit = "limit"
+        case status = "status"
+    }
+}
+
+// MARK: ListWeverseOrderTasksRequest convenience initializers and mutators
+
+extension ListWeverseOrderTasksRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(ListWeverseOrderTasksRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        cursor: String?? = nil,
+        limit: Int?? = nil,
+        status: ListWeverseOrderTasksRequestStatus?? = nil
+    ) -> ListWeverseOrderTasksRequest {
+        return ListWeverseOrderTasksRequest(
+            cursor: cursor ?? self.cursor,
+            limit: limit ?? self.limit,
+            status: status ?? self.status
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+enum ListWeverseOrderTasksRequestStatus: String, Codable, Sendable {
+    case cancelled = "cancelled"
+    case ordered = "ordered"
+    case pending = "pending"
+}
+
+// MARK: - ListWeverseOrderTasksResponse
+struct ListWeverseOrderTasksResponse: Codable, Sendable {
+    let nextCursor: String?
+    let tasks: [Task]
+
+    enum CodingKeys: String, CodingKey {
+        case nextCursor = "nextCursor"
+        case tasks = "tasks"
+    }
+}
+
+// MARK: ListWeverseOrderTasksResponse convenience initializers and mutators
+
+extension ListWeverseOrderTasksResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(ListWeverseOrderTasksResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        nextCursor: String?? = nil,
+        tasks: [Task]? = nil
+    ) -> ListWeverseOrderTasksResponse {
+        return ListWeverseOrderTasksResponse(
+            nextCursor: nextCursor ?? self.nextCursor,
+            tasks: tasks ?? self.tasks
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - Task
+struct Task: Codable, Sendable {
+    let costPaid: Double?
+    let createdAt: TaskCreatedAt
+    let id: String
+    let listingTitle: String?
+    let orderedAt: OrderedAt?
+    let orderNumber: String?
+    let productId: String
+    let saleId: String
+    let status: ListWeverseOrderTasksRequestStatus
+    let thumbnailUrl: String?
+    let userId: String
+    let variantId: String?
+    let weverseSaleId: String?
+    let weverseUrl: String?
+
+    enum CodingKeys: String, CodingKey {
+        case costPaid = "costPaid"
+        case createdAt = "createdAt"
+        case id = "id"
+        case listingTitle = "listingTitle"
+        case orderedAt = "orderedAt"
+        case orderNumber = "orderNumber"
+        case productId = "productId"
+        case saleId = "saleId"
+        case status = "status"
+        case thumbnailUrl = "thumbnailUrl"
+        case userId = "userId"
+        case variantId = "variantId"
+        case weverseSaleId = "weverseSaleId"
+        case weverseUrl = "weverseUrl"
+    }
+}
+
+// MARK: Task convenience initializers and mutators
+
+extension Task {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(Task.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        costPaid: Double?? = nil,
+        createdAt: TaskCreatedAt? = nil,
+        id: String? = nil,
+        listingTitle: String?? = nil,
+        orderedAt: OrderedAt?? = nil,
+        orderNumber: String?? = nil,
+        productId: String? = nil,
+        saleId: String? = nil,
+        status: ListWeverseOrderTasksRequestStatus? = nil,
+        thumbnailUrl: String?? = nil,
+        userId: String? = nil,
+        variantId: String?? = nil,
+        weverseSaleId: String?? = nil,
+        weverseUrl: String?? = nil
+    ) -> Task {
+        return Task(
+            costPaid: costPaid ?? self.costPaid,
+            createdAt: createdAt ?? self.createdAt,
+            id: id ?? self.id,
+            listingTitle: listingTitle ?? self.listingTitle,
+            orderedAt: orderedAt ?? self.orderedAt,
+            orderNumber: orderNumber ?? self.orderNumber,
+            productId: productId ?? self.productId,
+            saleId: saleId ?? self.saleId,
+            status: status ?? self.status,
+            thumbnailUrl: thumbnailUrl ?? self.thumbnailUrl,
+            userId: userId ?? self.userId,
+            variantId: variantId ?? self.variantId,
+            weverseSaleId: weverseSaleId ?? self.weverseSaleId,
+            weverseUrl: weverseUrl ?? self.weverseUrl
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - TaskCreatedAt
+struct TaskCreatedAt: Codable, Sendable {
+    let nanoseconds: Int
+    let seconds: Int
+
+    enum CodingKeys: String, CodingKey {
+        case nanoseconds = "_nanoseconds"
+        case seconds = "_seconds"
+    }
+}
+
+// MARK: TaskCreatedAt convenience initializers and mutators
+
+extension TaskCreatedAt {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(TaskCreatedAt.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        nanoseconds: Int? = nil,
+        seconds: Int? = nil
+    ) -> TaskCreatedAt {
+        return TaskCreatedAt(
+            nanoseconds: nanoseconds ?? self.nanoseconds,
+            seconds: seconds ?? self.seconds
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - OrderedAt
+struct OrderedAt: Codable, Sendable {
+    let nanoseconds: Int
+    let seconds: Int
+
+    enum CodingKeys: String, CodingKey {
+        case nanoseconds = "_nanoseconds"
+        case seconds = "_seconds"
+    }
+}
+
+// MARK: OrderedAt convenience initializers and mutators
+
+extension OrderedAt {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(OrderedAt.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        nanoseconds: Int? = nil,
+        seconds: Int? = nil
+    ) -> OrderedAt {
+        return OrderedAt(
+            nanoseconds: nanoseconds ?? self.nanoseconds,
+            seconds: seconds ?? self.seconds
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
 // MARK: - ListingFields
 struct ListingFields: Codable, Sendable {
     let brand: String?
@@ -5357,6 +5671,102 @@ extension RecordSaleResponseCascade {
     }
 }
 
+// MARK: - RecordWeverseOrderPlacedRequest
+struct RecordWeverseOrderPlacedRequest: Codable, Sendable {
+    let costPaid: Double
+    let orderNumber: String
+    let taskId: String
+
+    enum CodingKeys: String, CodingKey {
+        case costPaid = "costPaid"
+        case orderNumber = "orderNumber"
+        case taskId = "taskId"
+    }
+}
+
+// MARK: RecordWeverseOrderPlacedRequest convenience initializers and mutators
+
+extension RecordWeverseOrderPlacedRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(RecordWeverseOrderPlacedRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        costPaid: Double? = nil,
+        orderNumber: String? = nil,
+        taskId: String? = nil
+    ) -> RecordWeverseOrderPlacedRequest {
+        return RecordWeverseOrderPlacedRequest(
+            costPaid: costPaid ?? self.costPaid,
+            orderNumber: orderNumber ?? self.orderNumber,
+            taskId: taskId ?? self.taskId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+// MARK: - RecordWeverseOrderPlacedResponse
+struct RecordWeverseOrderPlacedResponse: Codable, Sendable {
+    let success: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case success = "success"
+    }
+}
+
+// MARK: RecordWeverseOrderPlacedResponse convenience initializers and mutators
+
+extension RecordWeverseOrderPlacedResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(RecordWeverseOrderPlacedResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        success: Bool? = nil
+    ) -> RecordWeverseOrderPlacedResponse {
+        return RecordWeverseOrderPlacedResponse(
+            success: success ?? self.success
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
 // MARK: - RestockAndCascadeRequest
 struct RestockAndCascadeRequest: Codable, Sendable {
     let productId: String
@@ -5455,11 +5865,12 @@ extension RestockAndCascadeResponse {
 
 // MARK: - SaleDoc
 struct SaleDoc: Codable, Sendable {
+    let actualCostPaid: Double?
     let buyerAddress: SaleDocBuyerAddress?
     let buyerName: String?
     let carrier: Carrier?
     let coverPhotoPath: String?
-    let createdAt: CreatedAt
+    let createdAt: SaleDocCreatedAt
     let deletedAt: DeletedAt?
     let externalUrl: String?
     let isDeleted: Bool?
@@ -5487,6 +5898,7 @@ struct SaleDoc: Codable, Sendable {
     let variantSku: String?
 
     enum CodingKeys: String, CodingKey {
+        case actualCostPaid = "actualCostPaid"
         case buyerAddress = "buyerAddress"
         case buyerName = "buyerName"
         case carrier = "carrier"
@@ -5539,11 +5951,12 @@ extension SaleDoc {
     }
 
     func with(
+        actualCostPaid: Double?? = nil,
         buyerAddress: SaleDocBuyerAddress?? = nil,
         buyerName: String?? = nil,
         carrier: Carrier?? = nil,
         coverPhotoPath: String?? = nil,
-        createdAt: CreatedAt? = nil,
+        createdAt: SaleDocCreatedAt? = nil,
         deletedAt: DeletedAt?? = nil,
         externalUrl: String?? = nil,
         isDeleted: Bool?? = nil,
@@ -5571,6 +5984,7 @@ extension SaleDoc {
         variantSku: String?? = nil
     ) -> SaleDoc {
         return SaleDoc(
+            actualCostPaid: actualCostPaid ?? self.actualCostPaid,
             buyerAddress: buyerAddress ?? self.buyerAddress,
             buyerName: buyerName ?? self.buyerName,
             carrier: carrier ?? self.carrier,
@@ -5681,8 +6095,8 @@ extension SaleDocBuyerAddress {
     }
 }
 
-// MARK: - CreatedAt
-struct CreatedAt: Codable, Sendable {
+// MARK: - SaleDocCreatedAt
+struct SaleDocCreatedAt: Codable, Sendable {
     let nanoseconds: Int
     let seconds: Int
 
@@ -5692,11 +6106,11 @@ struct CreatedAt: Codable, Sendable {
     }
 }
 
-// MARK: CreatedAt convenience initializers and mutators
+// MARK: SaleDocCreatedAt convenience initializers and mutators
 
-extension CreatedAt {
+extension SaleDocCreatedAt {
     init(data: Data) throws {
-        self = try newJSONDecoder().decode(CreatedAt.self, from: data)
+        self = try newJSONDecoder().decode(SaleDocCreatedAt.self, from: data)
     }
 
     init(_ json: String, using encoding: String.Encoding = .utf8) throws {
@@ -5713,8 +6127,8 @@ extension CreatedAt {
     func with(
         nanoseconds: Int? = nil,
         seconds: Int? = nil
-    ) -> CreatedAt {
-        return CreatedAt(
+    ) -> SaleDocCreatedAt {
+        return SaleDocCreatedAt(
             nanoseconds: nanoseconds ?? self.nanoseconds,
             seconds: seconds ?? self.seconds
         )
