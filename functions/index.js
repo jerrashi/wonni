@@ -5,6 +5,7 @@ const { aliexpressExchangeToken } = require("./aliexpress_auth");
 const { aliexpressImportProduct } = require("./aliexpress_product");
 const { weverseImportProduct } = require("./weverse_product");
 const { weverseBulkImportProducts } = require("./weverse_bulk_import");
+const { weverseShopPreview } = require("./weverse_shop");
 const { splitProductImage } = require("./split_image");
 const { identifyProductsInImage } = require("./identify_products");
 const { placeAliexpressOrder, confirmTiktokShipment, pollAliexpressTracking } = require("./aliexpress_order");
@@ -64,6 +65,7 @@ module.exports = {
   aliexpressImportProduct,
   weverseImportProduct,
   weverseBulkImportProducts,
+  weverseShopPreview,
   splitProductImage,
   identifyProductsInImage,
   generateProductDescription,

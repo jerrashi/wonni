@@ -20,9 +20,11 @@ function chunkArray(array, size) {
 }
 
 // Bulk import a list of Weverse items (up to 25 per request).
-// Expects: { items: [{ productUrl, saleId, title, orderSheetNumber? }] }
+// Expects: { items: [{ productUrl, saleId, title, orderSheetNumber?, shippingCost? }] }
 // orderSheetNumber (present when importing from Order History) is the
-// user-facing order number, kept for accounting reconciliation.
+// user-facing order number, kept for accounting reconciliation. shippingCost
+// (present when the client already ran a per-item shipping estimate, e.g.
+// the extension's cart/checkout probe) is stored as sourceShippingCost.
 exports.weverseBulkImportProducts = onCall(
   // Bumped from 120s: each item now also does a best-effort Gemini call
   // (capped at 15s) on top of the existing scrape/image work.
@@ -145,6 +147,7 @@ exports.weverseBulkImportProducts = onCall(
               title: product.title,
               description: product.description,
               sourcePrice: product.price,
+              sourceShippingCost: typeof item.shippingCost === "number" ? item.shippingCost : null,
               sourceImages,
               images: finalImages,
               imageAssets: storedImageAssets.length ? storedImageAssets : product.imageAssets,
