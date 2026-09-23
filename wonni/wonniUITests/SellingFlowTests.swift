@@ -120,9 +120,11 @@ final class SellingFlowTests: XCTestCase {
         // 15. Tap Mercari toggle to select it
         mercariToggle.tap()
 
-        // 16. Verify toggle is now ON
-        let isOn = mercariToggle.value as? NSNumber
-        XCTAssertEqual(isOn?.boolValue, true, "Mercari toggle should be ON after tapping")
+        // 16. Verify toggle is now ON. A Switch's accessibility `.value` comes back
+        // as a String ("0"/"1"), not NSNumber, on the iOS 18+ simulators this CI
+        // runs against — casting straight to NSNumber always returned nil here,
+        // failing the assertion regardless of the toggle's actual (correct) state.
+        XCTAssertEqual(switchIsOn(mercariToggle), true, "Mercari toggle should be ON after tapping")
 
         // 17. Tap Publish button in confirmation sheet
         let confirmPublishButton = app.buttons.matching(NSPredicate(format: "label == 'Publish'")).firstMatch
@@ -153,19 +155,19 @@ final class SellingFlowTests: XCTestCase {
             // Test Mercari toggle
             let mercariToggle = app.switches.matching(NSPredicate(format: "label CONTAINS 'Mercari'")).firstMatch
             if mercariToggle.exists {
-                let initialState = mercariToggle.value as? NSNumber
+                let initialState = switchIsOn(mercariToggle)
                 mercariToggle.tap()
-                let newState = mercariToggle.value as? NSNumber
-                XCTAssertNotEqual(initialState?.boolValue, newState?.boolValue, "Toggle should change state")
+                let newState = switchIsOn(mercariToggle)
+                XCTAssertNotEqual(initialState, newState, "Toggle should change state")
             }
 
             // Test eBay toggle
             let ebayToggle = app.switches.matching(NSPredicate(format: "label CONTAINS 'eBay'")).firstMatch
             if ebayToggle.exists {
-                let initialState = ebayToggle.value as? NSNumber
+                let initialState = switchIsOn(ebayToggle)
                 ebayToggle.tap()
-                let newState = ebayToggle.value as? NSNumber
-                XCTAssertNotEqual(initialState?.boolValue, newState?.boolValue, "eBay toggle should change state")
+                let newState = switchIsOn(ebayToggle)
+                XCTAssertNotEqual(initialState, newState, "eBay toggle should change state")
             }
         }
     }
@@ -361,5 +363,16 @@ final class SellingFlowTests: XCTestCase {
                 XCTAssert(!errorAlert.exists, "No error should appear after editing fields")
             }
         }
+    }
+
+    /// A Switch's accessibility `.value` is documented as "0"/"1"/"mixed", exposed
+    /// as a String on the iOS 18+ simulators this CI runs against — casting it
+    /// straight to NSNumber (as this file previously did) silently returns nil
+    /// regardless of the switch's actual state. Handles both representations so a
+    /// future OS/XCTest revision that reports NSNumber again keeps working too.
+    private func switchIsOn(_ element: XCUIElement) -> Bool? {
+        if let number = element.value as? NSNumber { return number.boolValue }
+        if let string = element.value as? String { return string == "1" }
+        return nil
     }
 }
