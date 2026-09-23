@@ -452,8 +452,10 @@ final class VariantEditingTests: XCTestCase {
     // MARK: - Mercari per-variant listing resolution (Phase 3)
 
     func test_defaultMercariTitle_appendsSortedOptionValues() {
+        // Sorted by option name ("Size" < "Style"), matching the doc comment's
+        // own example ("Color"/"Size" -> "Black L").
         let variant = makeVariant(optionValues: ["Size": "L", "Style": "RM"])
-        XCTAssertEqual(VariantLogic.defaultMercariTitle(baseTitle: "Cool Hoodie", variant: variant), "Cool Hoodie - RM L")
+        XCTAssertEqual(VariantLogic.defaultMercariTitle(baseTitle: "Cool Hoodie", variant: variant), "Cool Hoodie - L RM")
     }
 
     func test_defaultMercariTitle_noOptionValues_fallsBackToBaseTitle() {
