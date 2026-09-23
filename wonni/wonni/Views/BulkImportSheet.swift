@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import FirebaseFunctions
 
 struct BulkImportSheet: View {
     @Environment(\.dismiss) var dismiss
@@ -15,6 +16,7 @@ struct BulkImportSheet: View {
     
     @State private var availableItems: [ListingPreview] = []
     @State private var selectedItemUrls: Set<String> = []
+    @State private var isWeverseSource: Bool = false
     
     @StateObject private var urlExtractor = URLExtractor()
     
@@ -26,7 +28,7 @@ struct BulkImportSheet: View {
         NavigationStack {
             VStack(spacing: 0) {
                 Form {
-                    Section(header: Text("Mercari Profile URL"), footer: Text("Enter a link to a Mercari profile (e.g. mercari.com/u/123456789/)")) {
+                    Section(header: Text("Profile / Shop URL"), footer: Text("Enter a Mercari profile (e.g. mercari.com/u/123456789/) or a Weverse Shop artist page (e.g. shop.weverse.io/en/shop/USD/artists/255)")) {
                         HStack {
                             TextField("https://...", text: $profileUrlString)
                                 .keyboardType(.URL)
@@ -175,20 +177,55 @@ struct BulkImportSheet: View {
         
         do {
             let url = profileUrlString.trimmingCharacters(in: .whitespacesAndNewlines)
-            let items = try await urlExtractor.extractProfileListings(from: url)
+            let items: [ListingPreview]
+            if url.lowercased().contains("weverse.io") {
+                isWeverseSource = true
+                items = try await fetchWeverseShopPreview(shopUrl: url)
+            } else {
+                isWeverseSource = false
+                items = try await urlExtractor.extractProfileListings(from: url)
+            }
             availableItems = items
             // Select all by default
             selectedItemUrls = Set(items.map { $0.url })
         } catch {
             analysisError = error.localizedDescription
         }
-        
+
         isAnalyzing = false
     }
-    
+
+    // Weverse shop/artist pages are fetched server-side (functions/weverse_shop.js),
+    // unlike Mercari profiles which are scraped client-side via URLExtractor —
+    // Weverse's HTML embeds a Next.js dehydrated-state JSON blob that's much
+    // simpler to parse from a trusted server than from an in-app WKWebView.
+    private func fetchWeverseShopPreview(shopUrl: String) async throws -> [ListingPreview] {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[ListingPreview], Error>) in
+            Functions.functions().httpsCallable("weverseShopPreview").call(["shopUrl": shopUrl]) { result, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                guard let data = result?.data as? [String: Any],
+                      let itemsArray = data["items"] as? [[String: Any]] else {
+                    continuation.resume(throwing: URLError(.badServerResponse))
+                    return
+                }
+                let previews = itemsArray.compactMap { item -> ListingPreview? in
+                    guard let url = item["productUrl"] as? String,
+                          let title = item["title"] as? String else { return nil }
+                    let price = item["price"] as? Double ?? 0.0
+                    let thumbnailUrl = item["thumbnailUrl"] as? String ?? ""
+                    return ListingPreview(title: title, price: price, thumbnailUrl: thumbnailUrl, url: url, description: nil)
+                }
+                continuation.resume(returning: previews)
+            }
+        }
+    }
+
     private func startImport() {
         let itemsToImport = availableItems.filter { selectedItemUrls.contains($0.url) }
-        importManager.startImporting(previews: itemsToImport)
+        importManager.startImporting(previews: itemsToImport, source: isWeverseSource ? .weverse : .mercari)
         dismiss()
     }
 }

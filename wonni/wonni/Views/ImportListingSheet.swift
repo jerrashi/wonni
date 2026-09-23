@@ -90,6 +90,17 @@ struct ImportListingSheet: View {
         let url = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
 
         do {
+            if url.lowercased().contains("shop.weverse.io") {
+                guard weverseSaleId(from: url) != nil else {
+                    throw URLError(.badURL, userInfo: [NSLocalizedDescriptionKey: "That looks like a Weverse shop/artist page, not a single item. Use Bulk Import to pull in multiple items from it."])
+                }
+                importStatus = "Importing from Weverse..."
+                try await importWeverseProduct(productUrl: url)
+                dismiss()
+                isImporting = false
+                return
+            }
+
             var extracted: ExtractedListing
             var ebayItemId: String? = nil
 
@@ -202,6 +213,29 @@ struct ImportListingSheet: View {
         }
     }
     
+    // Mirrors functions/weverse_shop.js parseWeverseUrl: only a sale page
+    // (…/artists/{id}/sales/{id}) is a single importable item; a bare
+    // shop/artist listing page has no sale id and needs Bulk Import instead.
+    private func weverseSaleId(from urlString: String) -> String? {
+        guard let range = urlString.range(of: #"/artists/\d+/sales/(\d+)"#, options: .regularExpression) else {
+            return nil
+        }
+        let match = String(urlString[range])
+        return match.components(separatedBy: "/sales/").last
+    }
+
+    private func importWeverseProduct(productUrl: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            Functions.functions().httpsCallable("weverseImportProduct").call(["productUrl": productUrl]) { _, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
     private func extractMercariItemId(from url: String) -> String? {
         if let range = url.range(of: #"/item/(m[A-Za-z0-9]+)"#, options: .regularExpression) {
             return String(url[range]).replacingOccurrences(of: "/item/", with: "")

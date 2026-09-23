@@ -7,12 +7,18 @@ import SwiftUI
 import Combine
 import FirebaseAuth
 import FirebaseFirestore
+import FirebaseFunctions
 
 enum BulkImportStatus {
     case pending
     case extracting
     case failed
     case done
+}
+
+enum BulkImportSource {
+    case mercari
+    case weverse
 }
 
 struct BulkImportJob: Identifiable {
@@ -42,12 +48,14 @@ class BulkImportManager: ObservableObject {
 
     @Published var urlExtractor = URLExtractor()
     private var importTaskId = UUID()
+    private var source: BulkImportSource = .mercari
 
-    func startImporting(previews: [ListingPreview]) {
+    func startImporting(previews: [ListingPreview], source: BulkImportSource = .mercari) {
         self.jobs = previews.map { BulkImportJob(preview: $0) }
         self.totalCount = previews.count
         self.currentIndex = 0
         self.isPillVisible = true
+        self.source = source
         importTaskId = UUID()
         AppTaskQueue.shared.begin(
             id: importTaskId,
@@ -59,7 +67,77 @@ class BulkImportManager: ObservableObject {
         )
 
         Task {
-            await processQueue()
+            if source == .weverse {
+                await processWeverseQueue()
+            } else {
+                await processQueue()
+            }
+        }
+    }
+
+    // Weverse items are imported entirely server-side (functions/weverse_bulk_import.js
+    // writes straight into `products`, no client-side scrape/upload needed) — one
+    // batched callable per up-to-25 items, rather than the per-item loop below.
+    private func processWeverseQueue() async {
+        for i in jobs.indices { jobs[i].status = .extracting }
+
+        let batchLimit = 25
+        var failedTitles = Set<String>()
+
+        for start in stride(from: 0, to: jobs.count, by: batchLimit) {
+            let end = min(start + batchLimit, jobs.count)
+            let batch = Array(jobs[start..<end])
+            let items = batch.map { ["productUrl": $0.preview.url, "title": $0.preview.title] }
+
+            do {
+                let data = try await callWeverseBulkImport(items: items)
+                let errors = data["errors"] as? [[String: Any]] ?? []
+                for err in errors {
+                    if let title = err["title"] as? String { failedTitles.insert(title) }
+                }
+            } catch {
+                print("Weverse bulk import batch failed: \(error)")
+                for item in batch {
+                    if let title = item["title"] { failedTitles.insert(title) }
+                }
+            }
+
+            for (offset, index) in (start..<end).enumerated() {
+                jobs[index].status = failedTitles.contains(batch[offset].preview.title) ? .failed : .done
+                currentIndex = index + 1
+                AppTaskQueue.shared.update(
+                    id: importTaskId,
+                    detail: "\(index + 1) of \(totalCount)",
+                    progress: Double(index + 1) / Double(max(totalCount, 1))
+                )
+            }
+        }
+
+        finishIfDone()
+    }
+
+    private func callWeverseBulkImport(items: [[String: String]]) async throws -> [String: Any] {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String: Any], Error>) in
+            Functions.functions().httpsCallable("weverseBulkImportProducts").call(["items": items]) { result, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                guard let data = result?.data as? [String: Any] else {
+                    continuation.resume(throwing: URLError(.badServerResponse))
+                    return
+                }
+                continuation.resume(returning: data)
+            }
+        }
+    }
+
+    private func finishIfDone() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+            if self.jobs.allSatisfy({ $0.status == .done || $0.status == .failed }) {
+                withAnimation { self.isPillVisible = false }
+                AppTaskQueue.shared.complete(id: self.importTaskId)
+            }
         }
     }
 
@@ -85,12 +163,7 @@ class BulkImportManager: ObservableObject {
             }
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-            if self.jobs.allSatisfy({ $0.status == .done || $0.status == .failed }) {
-                withAnimation { self.isPillVisible = false }
-                AppTaskQueue.shared.complete(id: self.importTaskId)
-            }
-        }
+        finishIfDone()
     }
 
     private func createListing(from extracted: ExtractedListing, preview: ListingPreview) async throws {
