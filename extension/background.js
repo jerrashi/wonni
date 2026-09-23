@@ -258,9 +258,11 @@ async function handleImport(productData, source) {
     throw new Error("Sign in to Wonni Drop first.");
   }
 
-  // Weverse: server re-scrapes from the URL. AliExpress: send scraped page data.
+  // Weverse: server re-scrapes from the URL (plus an optional client-probed
+  // shipping estimate — see weverse_content.js's probeShippingCost). AliExpress:
+  // send scraped page data.
   const payload = source === "weverse"
-    ? { productUrl: productData.productUrl }
+    ? { productUrl: productData.productUrl, shippingCost: productData.shippingCost ?? null }
     : { scrapedData: productData };
 
   const response = await fetch(IMPORT_FUNCTIONS[source] ?? IMPORT_FUNCTIONS.aliexpress, {

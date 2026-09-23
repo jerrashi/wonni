@@ -172,6 +172,107 @@
     };
   }
 
+  // ── Shipping-cost probe ───────────────────────────────────────────────────
+  // Estimates what Weverse will actually charge for shipping a given sale by
+  // briefly adding it to the signed-in user's real cart and reading the
+  // delivery fee off the order-sheet preview Weverse computes for checkout —
+  // then removing it again. This never proceeds past that preview: no
+  // shipping/contact form is filled, no "place order"/payment step is ever
+  // touched (see extension/weverse_order_fill.js for why that boundary is
+  // deliberate and stays manual).
+  //
+  // CAVEAT: shop.weverse.io's cart/order-sheet API is undocumented. The
+  // endpoint paths and field names below were inferred by pattern-matching
+  // ORDER_HISTORY_ENDPOINT above (the one endpoint on this page that's
+  // actually confirmed against production) — same host, same
+  // "/api/wvs/internal/<service>/api/v1/<resource>" shape, same "order
+  // sheet" terminology the confirmed endpoint already returns
+  // (orderSheetNumber/orderSheetGroupNumber). They have NOT been verified
+  // against the live site from this sandboxed environment. Every step below
+  // is defensive on purpose: unexpected status codes, missing fields, or a
+  // wrong response shape all fall through to `{ shippingCost: null, error }`
+  // rather than throwing, so a wrong guess here degrades to "no estimate"
+  // instead of breaking import. If a step fails, this function does its best
+  // to still remove anything it added to the cart before returning.
+  const CART_BASE = "https://shop.weverse.io/api/wvs/internal/cart/api/v1/cart";
+  const ORDER_SHEET_PREVIEW_ENDPOINT = "https://shop.weverse.io/api/wvs/internal/order/api/v1/order/sheet";
+
+  async function addToCartForProbe(saleId, optionId) {
+    const body = optionId != null ? { saleId, optionId, quantity: 1 } : { saleId, quantity: 1 };
+    const response = await fetch(`${CART_BASE}/items`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      throw new Error(`Add-to-cart failed (${response.status}).`);
+    }
+    const json = await response.json();
+    const cartItemId = json?.cartItemId ?? json?.id ?? json?.data?.cartItemId ?? json?.data?.id;
+    if (cartItemId == null) {
+      throw new Error("Add-to-cart response had no cart item id.");
+    }
+    return cartItemId;
+  }
+
+  async function removeFromCartForProbe(cartItemId) {
+    try {
+      await fetch(`${CART_BASE}/items/${cartItemId}`, { method: "DELETE", credentials: "include" });
+    } catch {
+      // Best-effort cleanup — a leftover cart item is a minor annoyance, not
+      // something worth surfacing as a probe failure.
+    }
+  }
+
+  async function previewOrderSheetFee(cartItemId) {
+    const response = await fetch(ORDER_SHEET_PREVIEW_ENDPOINT, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cartItemIds: [cartItemId] }),
+    });
+    if (!response.ok) {
+      throw new Error(`Order-sheet preview failed (${response.status}).`);
+    }
+    const sheet = await response.json();
+    const groups = sheet?.orderGroups ?? sheet?.data?.orderGroups ?? [sheet?.data ?? sheet];
+    for (const group of groups) {
+      const fee = group?.deliveryFee ?? group?.shippingFee ?? group?.deliveryPrice
+        ?? group?.delivery?.fee ?? group?.shipping?.fee;
+      if (typeof fee === "number") return fee;
+    }
+    throw new Error("Order-sheet response had no recognizable delivery fee field.");
+  }
+
+  async function probeShippingCost(saleId) {
+    // Pick the first available option, when this sale has variants — the
+    // cart-add endpoint likely requires one, and any concrete option's
+    // delivery fee is a reasonable single-item shipping estimate.
+    const sale = scrapeSingleSale(saleId);
+    const optionId = sale?.optionId
+      ?? getNextData()?.props?.pageProps?.$dehydratedState?.queries
+        ?.flatMap((q) => q?.state?.data?.option?.options ?? [])
+        ?.find((o) => o?.id != null)?.id
+      ?? null;
+
+    let cartItemId;
+    try {
+      cartItemId = await addToCartForProbe(saleId, optionId);
+    } catch (err) {
+      return { shippingCost: null, error: err.message };
+    }
+
+    try {
+      const shippingCost = await previewOrderSheetFee(cartItemId);
+      return { shippingCost };
+    } catch (err) {
+      return { shippingCost: null, error: err.message };
+    } finally {
+      await removeFromCartForProbe(cartItemId);
+    }
+  }
+
   // ── Message handling (popup, whether opened from the toolbar icon or the
   //    in-page iframe, calls into this content script for page-derived data) ─
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -189,6 +290,12 @@
       fetchOrderHistory()
         .then((items) => sendResponse({ items }))
         .catch((err) => sendResponse({ error: err.message }));
+      return true; // async
+    }
+    if (message.type === "PROBE_SHIPPING_COST") {
+      probeShippingCost(message.saleId)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ shippingCost: null, error: err.message }));
       return true; // async
     }
   });
