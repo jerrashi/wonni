@@ -164,7 +164,7 @@ final class VariantEditingTests: XCTestCase {
 
     func test_removeOptionValues_hardDeletesMatchingRows() {
         let keep = makeVariant(optionValues: ["Style": "Jimin"])
-        let drop = makeVariant(optionValues: ["Style": "RM"], sourceVariantId: "w123", price: 20)
+        let drop = makeVariant(optionValues: ["Style": "RM"], price: 20, sourceVariantId: "w123")
         let result = VariantLogic.removeOptionValues([keep, drop], optionName: "Style", removedValues: ["RM"])
         XCTAssertEqual(result.map(\.id), [keep.id])
     }
@@ -301,7 +301,7 @@ final class VariantEditingTests: XCTestCase {
     }
 
     func test_addNewOptionDimension_inactiveRowsAreLeftAsIs() {
-        let inactive = makeVariant(optionValues: [:], active: false, sku: "gone")
+        let inactive = makeVariant(optionValues: [:], sku: "gone", active: false)
         let next = VariantLogic.addNewOptionDimension([inactive], optionName: "Size", values: ["S"], productId: "p")
         // No active rows to carry data over from, so every value is blank —
         // the inactive row passes through untouched (it's excluded from

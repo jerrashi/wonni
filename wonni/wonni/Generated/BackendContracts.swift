@@ -12,6 +12,9 @@
 //   Result   -> ContractResult  (shadows Swift's Result<Success, Failure>)
 //   Error    -> ContractError   (shadows Swift's Error protocol)
 //   Group    -> ContractGroup   (shadows SwiftUI's Group<Content>)
+// Also re-add Equatable to Variant/VariantCrossPostListingIds/
+// VariantCrossPostStatus — wonniTests/VariantEditingTests.swift compares
+// Variant values directly with XCTAssertEqual.
 
 import Foundation
 
@@ -4721,7 +4724,7 @@ extension OptionElement {
 }
 
 // MARK: - Variant
-struct Variant: Codable, Sendable {
+struct Variant: Codable, Sendable, Equatable {
     let active: Bool
     let crossPostListingIds: VariantCrossPostListingIds
     let crossPostStatus: VariantCrossPostStatus
@@ -4813,7 +4816,7 @@ extension Variant {
 }
 
 // MARK: - VariantCrossPostListingIds
-struct VariantCrossPostListingIds: Codable, Sendable {
+struct VariantCrossPostListingIds: Codable, Sendable, Equatable {
     let ebay: String?
     let etsy: String?
     let mercari: String?
@@ -4869,7 +4872,7 @@ extension VariantCrossPostListingIds {
 }
 
 // MARK: - VariantCrossPostStatus
-struct VariantCrossPostStatus: Codable, Sendable {
+struct VariantCrossPostStatus: Codable, Sendable, Equatable {
     let ebay: String?
     let etsy: String?
     let mercari: String?
