@@ -197,6 +197,20 @@
   const CART_BASE = "https://shop.weverse.io/api/wvs/internal/cart/api/v1/cart";
   const ORDER_SHEET_PREVIEW_ENDPOINT = "https://shop.weverse.io/api/wvs/internal/order/api/v1/order/sheet";
 
+  // Best-effort classification of *why* a probe step failed, so the caller
+  // (WeverseShopImportModal.jsx) can react differently — retry the next item
+  // on an out-of-stock sale, or prompt the user to fill in a Weverse shipping
+  // address, instead of just giving up. Pattern-matches common wording in
+  // whatever error message/body Weverse's (unverified) API returns; falls
+  // back to "UNKNOWN" when nothing matches, which the caller treats the same
+  // as any other unclassified failure.
+  function classifyProbeError(message) {
+    const haystack = (message ?? "").toLowerCase();
+    if (/sold ?out|out of stock|no stock|inventory/.test(haystack)) return "OUT_OF_STOCK";
+    if (/address|shipping information|delivery info/.test(haystack)) return "MISSING_ADDRESS";
+    return "UNKNOWN";
+  }
+
   async function addToCartForProbe(saleId, optionId) {
     const body = optionId != null ? { saleId, optionId, quantity: 1 } : { saleId, quantity: 1 };
     const response = await fetch(`${CART_BASE}/items`, {
@@ -206,12 +220,17 @@
       body: JSON.stringify(body),
     });
     if (!response.ok) {
-      throw new Error(`Add-to-cart failed (${response.status}).`);
+      const bodyText = await response.text().catch(() => "");
+      const err = new Error(`Add-to-cart failed (${response.status}).`);
+      err.errorCode = classifyProbeError(`${bodyText} ${response.status}`);
+      throw err;
     }
     const json = await response.json();
     const cartItemId = json?.cartItemId ?? json?.id ?? json?.data?.cartItemId ?? json?.data?.id;
     if (cartItemId == null) {
-      throw new Error("Add-to-cart response had no cart item id.");
+      const err = new Error("Add-to-cart response had no cart item id.");
+      err.errorCode = "UNKNOWN";
+      throw err;
     }
     return cartItemId;
   }
@@ -233,16 +252,34 @@
       body: JSON.stringify({ cartItemIds: [cartItemId] }),
     });
     if (!response.ok) {
-      throw new Error(`Order-sheet preview failed (${response.status}).`);
+      const bodyText = await response.text().catch(() => "");
+      const err = new Error(`Order-sheet preview failed (${response.status}).`);
+      err.errorCode = classifyProbeError(`${bodyText} ${response.status}`);
+      throw err;
     }
     const sheet = await response.json();
+    // No saved delivery address: the (unverified) order-sheet response is
+    // expected to either omit any address entirely, or carry an explicit
+    // flag/null for it — check both shapes before falling through to "no fee
+    // field found," since an address-less sheet legitimately has no fee yet.
+    const hasAddress = sheet?.hasDeliveryAddress ?? sheet?.data?.hasDeliveryAddress
+      ?? (sheet?.deliveryAddress !== undefined ? sheet.deliveryAddress != null : undefined)
+      ?? (sheet?.data?.deliveryAddress !== undefined ? sheet.data.deliveryAddress != null : undefined);
+    if (hasAddress === false) {
+      const err = new Error("No shipping address saved on this Weverse account.");
+      err.errorCode = "MISSING_ADDRESS";
+      throw err;
+    }
+
     const groups = sheet?.orderGroups ?? sheet?.data?.orderGroups ?? [sheet?.data ?? sheet];
     for (const group of groups) {
       const fee = group?.deliveryFee ?? group?.shippingFee ?? group?.deliveryPrice
         ?? group?.delivery?.fee ?? group?.shipping?.fee;
       if (typeof fee === "number") return fee;
     }
-    throw new Error("Order-sheet response had no recognizable delivery fee field.");
+    const err = new Error("Order-sheet response had no recognizable delivery fee field.");
+    err.errorCode = "UNKNOWN";
+    throw err;
   }
 
   async function probeShippingCost(saleId) {
@@ -260,14 +297,14 @@
     try {
       cartItemId = await addToCartForProbe(saleId, optionId);
     } catch (err) {
-      return { shippingCost: null, error: err.message };
+      return { shippingCost: null, error: err.message, errorCode: err.errorCode ?? "UNKNOWN" };
     }
 
     try {
       const shippingCost = await previewOrderSheetFee(cartItemId);
       return { shippingCost };
     } catch (err) {
-      return { shippingCost: null, error: err.message };
+      return { shippingCost: null, error: err.message, errorCode: err.errorCode ?? "UNKNOWN" };
     } finally {
       await removeFromCartForProbe(cartItemId);
     }
