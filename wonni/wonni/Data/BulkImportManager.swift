@@ -43,6 +43,11 @@ class BulkImportManager: ObservableObject {
     @Published var isPillVisible = false
     @Published var showProgressSheet = false
 
+    // Set by wonniApp's onOpenURL for a wonni://import?url=... deep link (e.g. an iOS
+    // Shortcuts "Share to Wonni" action) — MainView presents ImportListingSheet
+    // pre-filled with this URL and clears it back to nil once presented.
+    @Published var pendingDeepLinkImportUrl: String?
+
     @Published var currentIndex = 0
     @Published var totalCount = 0
 

@@ -11,6 +11,16 @@ import FirebaseFirestore
 struct ImportListingSheet: View {
     @Environment(\.dismiss) var dismiss
 
+    // Non-empty when opened via a wonni://import?url=... deep link (see
+    // wonniApp.swift's onOpenURL) — pre-fills the field and auto-imports
+    // instead of waiting for the user to tap Import.
+    private let initialUrlString: String
+
+    init(initialUrlString: String = "") {
+        self.initialUrlString = initialUrlString
+        _urlString = State(initialValue: initialUrlString)
+    }
+
     @State private var urlString: String = ""
     @State private var isImporting: Bool = false
     @State private var importStatus: String = ""
@@ -67,6 +77,11 @@ struct ImportListingSheet: View {
             .onReceive(urlExtractor.$currentStatus) { status in
                 if !status.isEmpty {
                     self.importStatus = status
+                }
+            }
+            .task {
+                if !initialUrlString.isEmpty {
+                    await performImport()
                 }
             }
             .background(
