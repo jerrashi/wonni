@@ -53,7 +53,7 @@ final class SellingFlowTests: XCTestCase {
         app.tap() // flush the permission-alert interruption monitor if it fired
 
         let firstPhoto = app.descendants(matching: .any).matching(identifier: "photoGridItem").firstMatch
-        XCTAssert(firstPhoto.waitForExistence(timeout: 30), "At least one photo grid item should load")
+        XCTAssert(firstPhoto.waitForExistence(timeout: 90), "At least one photo grid item should load")
         firstPhoto.tap()
 
         let commitButton = app.buttons.matching(identifier: "draftsCarousel").firstMatch
@@ -120,18 +120,33 @@ final class SellingFlowTests: XCTestCase {
         // 15. Tap Mercari toggle to select it
         mercariToggle.tap()
 
-        // 16. Verify toggle is now ON
-        let isOn = mercariToggle.value as? NSNumber
-        XCTAssertEqual(isOn?.boolValue, true, "Mercari toggle should be ON after tapping")
+        // 16. Verify toggle is now ON. A Switch's accessibility `.value` comes back
+        // as a String ("0"/"1"), not NSNumber, on the iOS 18+ simulators this CI
+        // runs against — casting straight to NSNumber always returned nil here,
+        // failing the assertion regardless of the toggle's actual (correct) state.
+        XCTAssertEqual(switchIsOn(mercariToggle), true, "Mercari toggle should be ON after tapping")
 
         // 17. Tap Publish button in confirmation sheet
         let confirmPublishButton = app.buttons.matching(NSPredicate(format: "label == 'Publish'")).firstMatch
         XCTAssert(confirmPublishButton.exists, "Publish confirmation button should exist")
         confirmPublishButton.tap()
 
-        // 18. Wait for publishing to start (progress indicator)
-        let publishingIndicator = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Publishing' OR label CONTAINS 'posting'")).firstMatch
-        XCTAssert(publishingIndicator.waitForExistence(timeout: 5), "Publishing should start")
+        // 18. Deliberately NOT asserting on the transient "Publishing…" button
+        // label here. UploadManager.publishDrafts's own doc comment (see
+        // UploadManager.swift, ~line 1002) warns that when a publish finishes
+        // fast — e.g. photos already uploaded, exactly this test's single-item
+        // case — `isPublishing` can flip true -> false before an observer ever
+        // catches the true state. That's precisely what made this assertion
+        // flaky here (confirmed: it failed even after two earlier fixes to the
+        // *selector*, because the real problem was never the selector — the
+        // state genuinely might never be observable within the wait window).
+        // Fixing the selector twice for a state that isn't reliably there to
+        // find would just be re-raising a timeout on the wrong problem, same
+        // mistake as re-raising firstPhoto's timeout for what was actually a
+        // permission race (see that fix above). The real, stable signal that
+        // publish happened is CrossPostStatusView appearing next — that's
+        // already asserted below with a generous timeout, so this step just
+        // proceeds straight to it.
 
         // 19. Wait for CrossPostStatusView to appear (final status screen)
         let statusTitle = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Status' OR label CONTAINS 'published'")).firstMatch
@@ -153,19 +168,19 @@ final class SellingFlowTests: XCTestCase {
             // Test Mercari toggle
             let mercariToggle = app.switches.matching(NSPredicate(format: "label CONTAINS 'Mercari'")).firstMatch
             if mercariToggle.exists {
-                let initialState = mercariToggle.value as? NSNumber
+                let initialState = switchIsOn(mercariToggle)
                 mercariToggle.tap()
-                let newState = mercariToggle.value as? NSNumber
-                XCTAssertNotEqual(initialState?.boolValue, newState?.boolValue, "Toggle should change state")
+                let newState = switchIsOn(mercariToggle)
+                XCTAssertNotEqual(initialState, newState, "Toggle should change state")
             }
 
             // Test eBay toggle
             let ebayToggle = app.switches.matching(NSPredicate(format: "label CONTAINS 'eBay'")).firstMatch
             if ebayToggle.exists {
-                let initialState = ebayToggle.value as? NSNumber
+                let initialState = switchIsOn(ebayToggle)
                 ebayToggle.tap()
-                let newState = ebayToggle.value as? NSNumber
-                XCTAssertNotEqual(initialState?.boolValue, newState?.boolValue, "eBay toggle should change state")
+                let newState = switchIsOn(ebayToggle)
+                XCTAssertNotEqual(initialState, newState, "eBay toggle should change state")
             }
         }
     }
@@ -203,9 +218,13 @@ final class SellingFlowTests: XCTestCase {
         // its overlay image becomes the combined accessibility trait), not "Other" —
         // match by identifier across all element types rather than assuming a type.
         let firstPhoto = app.descendants(matching: .any).matching(identifier: "photoGridItem").firstMatch
-        // Generous timeout: the permission alert + PHPhotoLibrary fetch can take a
-        // while on a simulator, especially right after a fresh install/grant.
-        XCTAssert(firstPhoto.waitForExistence(timeout: 30), "At least one photo grid item should load")
+        // Real tail-latency variance, not a fixed cold-start cost: 60s passed
+        // cleanly in 3 straight CI runs, then timed out once more under
+        // heavier CI load. Paired with the CI workflow now giving photo
+        // indexing a head start in setup (see test.yml's seed step), 90s is
+        // headroom for that tail, not a guess — the common case still
+        // finishes in seconds either way.
+        XCTAssert(firstPhoto.waitForExistence(timeout: 90), "At least one photo grid item should load")
         firstPhoto.tap()
 
         // The Button's own "commitDraftButton" identifier gets clobbered by the
@@ -294,7 +313,7 @@ final class SellingFlowTests: XCTestCase {
             app.tap()
 
             let firstPhoto = app.descendants(matching: .any).matching(identifier: "photoGridItem").firstMatch
-            XCTAssert(firstPhoto.waitForExistence(timeout: 30), "At least one photo grid item should load")
+            XCTAssert(firstPhoto.waitForExistence(timeout: 90), "At least one photo grid item should load")
             firstPhoto.tap()
 
             let commitButton = app.buttons.matching(identifier: "draftsCarousel").firstMatch
@@ -361,5 +380,16 @@ final class SellingFlowTests: XCTestCase {
                 XCTAssert(!errorAlert.exists, "No error should appear after editing fields")
             }
         }
+    }
+
+    /// A Switch's accessibility `.value` is documented as "0"/"1"/"mixed", exposed
+    /// as a String on the iOS 18+ simulators this CI runs against — casting it
+    /// straight to NSNumber (as this file previously did) silently returns nil
+    /// regardless of the switch's actual state. Handles both representations so a
+    /// future OS/XCTest revision that reports NSNumber again keeps working too.
+    private func switchIsOn(_ element: XCUIElement) -> Bool? {
+        if let number = element.value as? NSNumber { return number.boolValue }
+        if let string = element.value as? String { return string == "1" }
+        return nil
     }
 }

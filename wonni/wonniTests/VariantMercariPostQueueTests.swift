@@ -59,6 +59,7 @@
 import XCTest
 @testable import wonni
 
+@MainActor
 final class VariantMercariPostQueueTests: XCTestCase {
 
     // MARK: - Helpers

@@ -164,7 +164,7 @@ final class VariantEditingTests: XCTestCase {
 
     func test_removeOptionValues_hardDeletesMatchingRows() {
         let keep = makeVariant(optionValues: ["Style": "Jimin"])
-        let drop = makeVariant(optionValues: ["Style": "RM"], sourceVariantId: "w123", price: 20)
+        let drop = makeVariant(optionValues: ["Style": "RM"], price: 20, sourceVariantId: "w123")
         let result = VariantLogic.removeOptionValues([keep, drop], optionName: "Style", removedValues: ["RM"])
         XCTAssertEqual(result.map(\.id), [keep.id])
     }
@@ -301,7 +301,7 @@ final class VariantEditingTests: XCTestCase {
     }
 
     func test_addNewOptionDimension_inactiveRowsAreLeftAsIs() {
-        let inactive = makeVariant(optionValues: [:], active: false, sku: "gone")
+        let inactive = makeVariant(optionValues: [:], sku: "gone", active: false)
         let next = VariantLogic.addNewOptionDimension([inactive], optionName: "Size", values: ["S"], productId: "p")
         // No active rows to carry data over from, so every value is blank —
         // the inactive row passes through untouched (it's excluded from
@@ -452,8 +452,10 @@ final class VariantEditingTests: XCTestCase {
     // MARK: - Mercari per-variant listing resolution (Phase 3)
 
     func test_defaultMercariTitle_appendsSortedOptionValues() {
+        // Sorted by option name ("Size" < "Style"), matching the doc comment's
+        // own example ("Color"/"Size" -> "Black L").
         let variant = makeVariant(optionValues: ["Size": "L", "Style": "RM"])
-        XCTAssertEqual(VariantLogic.defaultMercariTitle(baseTitle: "Cool Hoodie", variant: variant), "Cool Hoodie - RM L")
+        XCTAssertEqual(VariantLogic.defaultMercariTitle(baseTitle: "Cool Hoodie", variant: variant), "Cool Hoodie - L RM")
     }
 
     func test_defaultMercariTitle_noOptionValues_fallsBackToBaseTitle() {

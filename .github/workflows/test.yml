@@ -114,6 +114,26 @@ jobs:
               f.write(png)
           '
           xcrun simctl addmedia "$UDID" /tmp/seed-photo.png
+          # Pre-grant Photos access instead of relying on each UI test's
+          # addUIInterruptionMonitor to catch and dismiss the system permission
+          # alert. That interruption-monitor callback only fires on the test's
+          # NEXT UI query/action after the alert appears — a race whichever
+          # test happens to run first (testExecutionOrdering is "random" in
+          # SellingFlow.xctestplan) can lose, since the alert can appear a beat
+          # after the single flush tap. Granting it here, before the app ever
+          # launches, removes that race outright.
+          xcrun simctl privacy "$UDID" grant photos io.github.jerrashi.wonni
+          # Give the simulator's photo indexing a head start here, in setup,
+          # instead of paying that cold-start cost mid-test. Across the CI runs
+          # that led to this fix, "At least one photo grid item should load"
+          # (60s wait, inside the test) passed cleanly 3 times in a row and
+          # then timed out once more under heavier CI load — real tail-latency
+          # variance, not a deterministic bug, so a blind timeout bump alone
+          # would just be gambling on the next run's luck. There's no simctl
+          # subcommand to positively confirm indexing is done, so this is a
+          # flat wait, not a poll — but any time spent here is time the actual
+          # test's own (already-generous) wait doesn't have to cover.
+          sleep 15
 
       - name: Run selling flow UI tests
         run: |

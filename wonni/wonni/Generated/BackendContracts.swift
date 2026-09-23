@@ -2,6 +2,19 @@
 // To parse the JSON, add this file to your project and do:
 //
 //   let backendContracts = try BackendContracts(json)
+//
+// NOTE: on next regen, re-apply these renames — the generated names
+// collide with either the app's own top-level types or Swift/SwiftUI
+// built-ins, and this file is compiled into the app target:
+//   Item     -> ContractItem    (app's SwiftData model, Models/Listing.swift)
+//   Carrier  -> ContractCarrier (app's shipping-carrier enum, Views/CrossPostWebView.swift)
+//   Task     -> ContractTask    (shadows Swift's Task<Success, Failure>)
+//   Result   -> ContractResult  (shadows Swift's Result<Success, Failure>)
+//   Error    -> ContractError   (shadows Swift's Error protocol)
+//   Group    -> ContractGroup   (shadows SwiftUI's Group<Content>)
+// Also re-add Equatable to Variant/VariantCrossPostListingIds/
+// VariantCrossPostStatus — wonniTests/VariantEditingTests.swift compares
+// Variant values directly with XCTAssertEqual.
 
 import Foundation
 
@@ -1558,7 +1571,7 @@ extension EbayGetListingRequest {
 
 // MARK: - EbayGetListingResponse
 struct EbayGetListingResponse: Codable, Sendable {
-    let group: Group?
+    let group: ContractGroup?
     let listingId: String?
     let productId: String
     let status: String
@@ -1592,7 +1605,7 @@ extension EbayGetListingResponse {
     }
 
     func with(
-        group: Group?? = nil,
+        group: ContractGroup?? = nil,
         listingId: String?? = nil,
         productId: String? = nil,
         status: String? = nil,
@@ -1616,8 +1629,8 @@ extension EbayGetListingResponse {
     }
 }
 
-// MARK: - Group
-struct Group: Codable, Sendable {
+// MARK: - ContractGroup
+struct ContractGroup: Codable, Sendable {
     let title: String?
     let variantSkus: [String]?
     let variesBy: [String]?
@@ -1629,11 +1642,11 @@ struct Group: Codable, Sendable {
     }
 }
 
-// MARK: Group convenience initializers and mutators
+// MARK: ContractGroup convenience initializers and mutators
 
-extension Group {
+extension ContractGroup {
     init(data: Data) throws {
-        self = try newJSONDecoder().decode(Group.self, from: data)
+        self = try newJSONDecoder().decode(ContractGroup.self, from: data)
     }
 
     init(_ json: String, using encoding: String.Encoding = .utf8) throws {
@@ -1651,8 +1664,8 @@ extension Group {
         title: String?? = nil,
         variantSkus: [String]?? = nil,
         variesBy: [String]?? = nil
-    ) -> Group {
-        return Group(
+    ) -> ContractGroup {
+        return ContractGroup(
             title: title ?? self.title,
             variantSkus: variantSkus ?? self.variantSkus,
             variesBy: variesBy ?? self.variesBy
@@ -3910,7 +3923,7 @@ enum ListWeverseOrderTasksRequestStatus: String, Codable, Sendable {
 // MARK: - ListWeverseOrderTasksResponse
 struct ListWeverseOrderTasksResponse: Codable, Sendable {
     let nextCursor: String?
-    let tasks: [Task]
+    let tasks: [ContractTask]
 
     enum CodingKeys: String, CodingKey {
         case nextCursor = "nextCursor"
@@ -3938,7 +3951,7 @@ extension ListWeverseOrderTasksResponse {
 
     func with(
         nextCursor: String?? = nil,
-        tasks: [Task]? = nil
+        tasks: [ContractTask]? = nil
     ) -> ListWeverseOrderTasksResponse {
         return ListWeverseOrderTasksResponse(
             nextCursor: nextCursor ?? self.nextCursor,
@@ -3955,8 +3968,8 @@ extension ListWeverseOrderTasksResponse {
     }
 }
 
-// MARK: - Task
-struct Task: Codable, Sendable {
+// MARK: - ContractTask
+struct ContractTask: Codable, Sendable {
     let costPaid: Double?
     let createdAt: TaskCreatedAt
     let id: String
@@ -3990,11 +4003,11 @@ struct Task: Codable, Sendable {
     }
 }
 
-// MARK: Task convenience initializers and mutators
+// MARK: ContractTask convenience initializers and mutators
 
-extension Task {
+extension ContractTask {
     init(data: Data) throws {
-        self = try newJSONDecoder().decode(Task.self, from: data)
+        self = try newJSONDecoder().decode(ContractTask.self, from: data)
     }
 
     init(_ json: String, using encoding: String.Encoding = .utf8) throws {
@@ -4023,8 +4036,8 @@ extension Task {
         variantId: String?? = nil,
         weverseSaleId: String?? = nil,
         weverseUrl: String?? = nil
-    ) -> Task {
-        return Task(
+    ) -> ContractTask {
+        return ContractTask(
             costPaid: costPaid ?? self.costPaid,
             createdAt: createdAt ?? self.createdAt,
             id: id ?? self.id,
@@ -4711,7 +4724,7 @@ extension OptionElement {
 }
 
 // MARK: - Variant
-struct Variant: Codable, Sendable {
+struct Variant: Codable, Sendable, Equatable {
     let active: Bool
     let crossPostListingIds: VariantCrossPostListingIds
     let crossPostStatus: VariantCrossPostStatus
@@ -4803,7 +4816,7 @@ extension Variant {
 }
 
 // MARK: - VariantCrossPostListingIds
-struct VariantCrossPostListingIds: Codable, Sendable {
+struct VariantCrossPostListingIds: Codable, Sendable, Equatable {
     let ebay: String?
     let etsy: String?
     let mercari: String?
@@ -4859,7 +4872,7 @@ extension VariantCrossPostListingIds {
 }
 
 // MARK: - VariantCrossPostStatus
-struct VariantCrossPostStatus: Codable, Sendable {
+struct VariantCrossPostStatus: Codable, Sendable, Equatable {
     let ebay: String?
     let etsy: String?
     let mercari: String?
@@ -5110,7 +5123,7 @@ extension ReassignSaleStageResponse {
 
 // MARK: - RecordMercariSalesBatchRequest
 struct RecordMercariSalesBatchRequest: Codable, Sendable {
-    let items: [Item]?
+    let items: [ContractItem]?
     let rawItems: [RawItem]?
 
     enum CodingKeys: String, CodingKey {
@@ -5138,7 +5151,7 @@ extension RecordMercariSalesBatchRequest {
     }
 
     func with(
-        items: [Item]?? = nil,
+        items: [ContractItem]?? = nil,
         rawItems: [RawItem]?? = nil
     ) -> RecordMercariSalesBatchRequest {
         return RecordMercariSalesBatchRequest(
@@ -5156,8 +5169,8 @@ extension RecordMercariSalesBatchRequest {
     }
 }
 
-// MARK: - Item
-struct Item: Codable, Sendable {
+// MARK: - ContractItem
+struct ContractItem: Codable, Sendable {
     let mercariItemId: String
 
     enum CodingKeys: String, CodingKey {
@@ -5165,11 +5178,11 @@ struct Item: Codable, Sendable {
     }
 }
 
-// MARK: Item convenience initializers and mutators
+// MARK: ContractItem convenience initializers and mutators
 
-extension Item {
+extension ContractItem {
     init(data: Data) throws {
-        self = try newJSONDecoder().decode(Item.self, from: data)
+        self = try newJSONDecoder().decode(ContractItem.self, from: data)
     }
 
     init(_ json: String, using encoding: String.Encoding = .utf8) throws {
@@ -5185,8 +5198,8 @@ extension Item {
 
     func with(
         mercariItemId: String? = nil
-    ) -> Item {
-        return Item(
+    ) -> ContractItem {
+        return ContractItem(
             mercariItemId: mercariItemId ?? self.mercariItemId
         )
     }
@@ -5248,7 +5261,7 @@ extension RawItem {
 struct RecordMercariSalesBatchResponse: Codable, Sendable {
     let duplicates: Int
     let recorded: Int
-    let results: [Result]
+    let results: [ContractResult]
     let unmatched: Int
 
     enum CodingKeys: String, CodingKey {
@@ -5280,7 +5293,7 @@ extension RecordMercariSalesBatchResponse {
     func with(
         duplicates: Int? = nil,
         recorded: Int? = nil,
-        results: [Result]? = nil,
+        results: [ContractResult]? = nil,
         unmatched: Int? = nil
     ) -> RecordMercariSalesBatchResponse {
         return RecordMercariSalesBatchResponse(
@@ -5300,8 +5313,8 @@ extension RecordMercariSalesBatchResponse {
     }
 }
 
-// MARK: - Result
-struct Result: Codable, Sendable {
+// MARK: - ContractResult
+struct ContractResult: Codable, Sendable {
     let mercariItemId: String
     let outcome: ResultOutcome
     let productId: String?
@@ -5317,11 +5330,11 @@ struct Result: Codable, Sendable {
     }
 }
 
-// MARK: Result convenience initializers and mutators
+// MARK: ContractResult convenience initializers and mutators
 
-extension Result {
+extension ContractResult {
     init(data: Data) throws {
-        self = try newJSONDecoder().decode(Result.self, from: data)
+        self = try newJSONDecoder().decode(ContractResult.self, from: data)
     }
 
     init(_ json: String, using encoding: String.Encoding = .utf8) throws {
@@ -5341,8 +5354,8 @@ extension Result {
         productId: String?? = nil,
         saleId: String?? = nil,
         warning: String?? = nil
-    ) -> Result {
-        return Result(
+    ) -> ContractResult {
+        return ContractResult(
             mercariItemId: mercariItemId ?? self.mercariItemId,
             outcome: outcome ?? self.outcome,
             productId: productId ?? self.productId,
@@ -5371,7 +5384,7 @@ enum ResultOutcome: String, Codable, Sendable {
 struct RecordSaleRequest: Codable, Sendable {
     let buyerAddress: RecordSaleRequestBuyerAddress?
     let buyerName: String?
-    let carrier: Carrier?
+    let carrier: ContractCarrier?
     let cascade: Bool?
     let externalUrl: String?
     let listingTitle: String?
@@ -5433,7 +5446,7 @@ extension RecordSaleRequest {
     func with(
         buyerAddress: RecordSaleRequestBuyerAddress?? = nil,
         buyerName: String?? = nil,
-        carrier: Carrier?? = nil,
+        carrier: ContractCarrier?? = nil,
         cascade: Bool?? = nil,
         externalUrl: String?? = nil,
         listingTitle: String?? = nil,
@@ -5551,7 +5564,7 @@ extension RecordSaleRequestBuyerAddress {
     }
 }
 
-enum Carrier: String, Codable, Sendable {
+enum ContractCarrier: String, Codable, Sendable {
     case dhl = "DHL"
     case fedEx = "FedEx"
     case other = "other"
@@ -5868,7 +5881,7 @@ struct SaleDoc: Codable, Sendable {
     let actualCostPaid: Double?
     let buyerAddress: SaleDocBuyerAddress?
     let buyerName: String?
-    let carrier: Carrier?
+    let carrier: ContractCarrier?
     let coverPhotoPath: String?
     let createdAt: SaleDocCreatedAt
     let deletedAt: DeletedAt?
@@ -5954,7 +5967,7 @@ extension SaleDoc {
         actualCostPaid: Double?? = nil,
         buyerAddress: SaleDocBuyerAddress?? = nil,
         buyerName: String?? = nil,
-        carrier: Carrier?? = nil,
+        carrier: ContractCarrier?? = nil,
         coverPhotoPath: String?? = nil,
         createdAt: SaleDocCreatedAt? = nil,
         deletedAt: DeletedAt?? = nil,
@@ -6493,7 +6506,7 @@ extension SyncSalesRequest {
 
 // MARK: - SyncSalesResponse
 struct SyncSalesResponse: Codable, Sendable {
-    let errors: [Error]
+    let errors: [ContractError]
     let imported: Int
     let saleIds: [String]
     let skipped: Int
@@ -6525,7 +6538,7 @@ extension SyncSalesResponse {
     }
 
     func with(
-        errors: [Error]? = nil,
+        errors: [ContractError]? = nil,
         imported: Int? = nil,
         saleIds: [String]? = nil,
         skipped: Int? = nil
@@ -6547,8 +6560,8 @@ extension SyncSalesResponse {
     }
 }
 
-// MARK: - Error
-struct Error: Codable, Sendable {
+// MARK: - ContractError
+struct ContractError: Codable, Sendable {
     let message: String
     let platform: String
 
@@ -6558,11 +6571,11 @@ struct Error: Codable, Sendable {
     }
 }
 
-// MARK: Error convenience initializers and mutators
+// MARK: ContractError convenience initializers and mutators
 
-extension Error {
+extension ContractError {
     init(data: Data) throws {
-        self = try newJSONDecoder().decode(Error.self, from: data)
+        self = try newJSONDecoder().decode(ContractError.self, from: data)
     }
 
     init(_ json: String, using encoding: String.Encoding = .utf8) throws {
@@ -6579,8 +6592,8 @@ extension Error {
     func with(
         message: String? = nil,
         platform: String? = nil
-    ) -> Error {
-        return Error(
+    ) -> ContractError {
+        return ContractError(
             message: message ?? self.message,
             platform: platform ?? self.platform
         )
