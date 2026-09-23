@@ -131,8 +131,15 @@ final class SellingFlowTests: XCTestCase {
         XCTAssert(confirmPublishButton.exists, "Publish confirmation button should exist")
         confirmPublishButton.tap()
 
-        // 18. Wait for publishing to start (progress indicator)
-        let publishingIndicator = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Publishing' OR label CONTAINS 'posting'")).firstMatch
+        // 18. Wait for publishing to start (progress indicator). "Publishing…" only
+        // ever renders as a Text inside the bottom Publish Button itself (see
+        // CreateListingView.swift's ProgressView + Text(buttonLabel) HStack) —
+        // SwiftUI exposes that whole HStack as a single Button-typed accessibility
+        // element, never a separate StaticText, so match by label across all
+        // element types instead of assuming staticTexts (same fix already applied
+        // to firstPhoto above, for the same underlying reason).
+        let publishingIndicator = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS 'Publishing' OR label CONTAINS 'posting'")).firstMatch
         XCTAssert(publishingIndicator.waitForExistence(timeout: 5), "Publishing should start")
 
         // 19. Wait for CrossPostStatusView to appear (final status screen)
