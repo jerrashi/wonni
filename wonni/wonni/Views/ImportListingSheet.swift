@@ -213,17 +213,6 @@ struct ImportListingSheet: View {
         }
     }
     
-    // Mirrors functions/weverse_shop.js parseWeverseUrl: only a sale page
-    // (…/artists/{id}/sales/{id}) is a single importable item; a bare
-    // shop/artist listing page has no sale id and needs Bulk Import instead.
-    private func weverseSaleId(from urlString: String) -> String? {
-        guard let range = urlString.range(of: #"/artists/\d+/sales/(\d+)"#, options: .regularExpression) else {
-            return nil
-        }
-        let match = String(urlString[range])
-        return match.components(separatedBy: "/sales/").last
-    }
-
     private func importWeverseProduct(productUrl: String) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             Functions.functions().httpsCallable("weverseImportProduct").call(["productUrl": productUrl]) { _, error in

@@ -49,13 +49,27 @@ class BulkImportManager: ObservableObject {
     @Published var urlExtractor = URLExtractor()
     private var importTaskId = UUID()
     private var source: BulkImportSource = .mercari
+    // Weverse only — keyed by ListingPreview.url. See BulkImportSheet's
+    // runShippingEstimatePipeline, which resolves these before calling
+    // startImporting: every item gets an itemType, but only the one item per
+    // type whose probe actually succeeded gets a shippingCost (the server
+    // resolves the final per-type value from just that one probed item).
+    private var weverseItemTypes: [String: String] = [:]
+    private var weverseShippingCosts: [String: Double] = [:]
 
-    func startImporting(previews: [ListingPreview], source: BulkImportSource = .mercari) {
+    func startImporting(
+        previews: [ListingPreview],
+        source: BulkImportSource = .mercari,
+        itemTypes: [String: String] = [:],
+        shippingCosts: [String: Double] = [:]
+    ) {
         self.jobs = previews.map { BulkImportJob(preview: $0) }
         self.totalCount = previews.count
         self.currentIndex = 0
         self.isPillVisible = true
         self.source = source
+        self.weverseItemTypes = itemTypes
+        self.weverseShippingCosts = shippingCosts
         importTaskId = UUID()
         AppTaskQueue.shared.begin(
             id: importTaskId,
@@ -87,7 +101,12 @@ class BulkImportManager: ObservableObject {
         for start in stride(from: 0, to: jobs.count, by: batchLimit) {
             let end = min(start + batchLimit, jobs.count)
             let batch = Array(jobs[start..<end])
-            let items = batch.map { ["productUrl": $0.preview.url, "title": $0.preview.title] }
+            let items: [[String: Any]] = batch.map { job in
+                var item: [String: Any] = ["productUrl": job.preview.url, "title": job.preview.title]
+                if let itemType = weverseItemTypes[job.preview.url] { item["itemType"] = itemType }
+                if let shippingCost = weverseShippingCosts[job.preview.url] { item["shippingCost"] = shippingCost }
+                return item
+            }
 
             do {
                 let data = try await callWeverseBulkImport(items: items)
@@ -98,7 +117,7 @@ class BulkImportManager: ObservableObject {
             } catch {
                 print("Weverse bulk import batch failed: \(error)")
                 for item in batch {
-                    if let title = item["title"] { failedTitles.insert(title) }
+                    failedTitles.insert(item.preview.title)
                 }
             }
 
@@ -116,7 +135,7 @@ class BulkImportManager: ObservableObject {
         finishIfDone()
     }
 
-    private func callWeverseBulkImport(items: [[String: String]]) async throws -> [String: Any] {
+    private func callWeverseBulkImport(items: [[String: Any]]) async throws -> [String: Any] {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String: Any], Error>) in
             Functions.functions().httpsCallable("weverseBulkImportProducts").call(["items": items]) { result, error in
                 if let error = error {
