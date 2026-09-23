@@ -131,16 +131,22 @@ final class SellingFlowTests: XCTestCase {
         XCTAssert(confirmPublishButton.exists, "Publish confirmation button should exist")
         confirmPublishButton.tap()
 
-        // 18. Wait for publishing to start (progress indicator). "Publishing…" only
-        // ever renders as a Text inside the bottom Publish Button itself (see
-        // CreateListingView.swift's ProgressView + Text(buttonLabel) HStack) —
-        // SwiftUI exposes that whole HStack as a single Button-typed accessibility
-        // element, never a separate StaticText, so match by label across all
-        // element types instead of assuming staticTexts (same fix already applied
-        // to firstPhoto above, for the same underlying reason).
-        let publishingIndicator = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS 'Publishing' OR label CONTAINS 'posting'")).firstMatch
-        XCTAssert(publishingIndicator.waitForExistence(timeout: 5), "Publishing should start")
+        // 18. Deliberately NOT asserting on the transient "Publishing…" button
+        // label here. UploadManager.publishDrafts's own doc comment (see
+        // UploadManager.swift, ~line 1002) warns that when a publish finishes
+        // fast — e.g. photos already uploaded, exactly this test's single-item
+        // case — `isPublishing` can flip true -> false before an observer ever
+        // catches the true state. That's precisely what made this assertion
+        // flaky here (confirmed: it failed even after two earlier fixes to the
+        // *selector*, because the real problem was never the selector — the
+        // state genuinely might never be observable within the wait window).
+        // Fixing the selector twice for a state that isn't reliably there to
+        // find would just be re-raising a timeout on the wrong problem, same
+        // mistake as re-raising firstPhoto's timeout for what was actually a
+        // permission race (see that fix above). The real, stable signal that
+        // publish happened is CrossPostStatusView appearing next — that's
+        // already asserted below with a generous timeout, so this step just
+        // proceeds straight to it.
 
         // 19. Wait for CrossPostStatusView to appear (final status screen)
         let statusTitle = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Status' OR label CONTAINS 'published'")).firstMatch
