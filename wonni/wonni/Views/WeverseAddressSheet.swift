@@ -18,9 +18,9 @@ struct WeverseAddressSheet: View {
     @State private var webView: WKWebView = {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
-        let wv = WKWebView(frame: .zero, configuration: config)
-        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-        return wv
+        let newWebView = WKWebView(frame: .zero, configuration: config)
+        newWebView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        return newWebView
     }()
 
     var body: some View {

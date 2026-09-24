@@ -36,10 +36,10 @@ final class WeverseShippingProbe {
     init() {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
-        let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
-        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-        wv.navigationDelegate = navDelegate
-        self.webView = wv
+        let hiddenWebView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
+        hiddenWebView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        hiddenWebView.navigationDelegate = navDelegate
+        self.webView = hiddenWebView
     }
 
     func probeShippingCost(saleUrl: String, saleId: String) async throws -> Double {
@@ -177,9 +177,9 @@ private class ProbeNavDelegate: NSObject, WKNavigationDelegate {
             self.continuation = cont
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                if let c = self.continuation {
+                if let pending = self.continuation {
                     self.continuation = nil
-                    c.resume(returning: false)
+                    pending.resume(returning: false)
                 }
             }
         }
@@ -187,17 +187,17 @@ private class ProbeNavDelegate: NSObject, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         didFinish = true
-        if let c = continuation {
+        if let pending = continuation {
             continuation = nil
-            c.resume(returning: true)
+            pending.resume(returning: true)
         }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         didFinish = true
-        if let c = continuation {
+        if let pending = continuation {
             continuation = nil
-            c.resume(returning: false)
+            pending.resume(returning: false)
         }
     }
 }
