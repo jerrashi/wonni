@@ -67,7 +67,6 @@
 		61FAA56E2FAE227F001C28CE /* GeminiService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA5682FAE227F001C28CE /* GeminiService.swift */; };
 		61FAA56F2FAE227F001C28CE /* StorageService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA56B2FAE227F001C28CE /* StorageService.swift */; };
 		61FAA5712FAE2290001C28CE /* IdentificationConfirmationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA5702FAE2290001C28CE /* IdentificationConfirmationView.swift */; };
-		61FAA5722FAE2290001C28CE /* FirebaseAI in Frameworks */ = {isa = PBXBuildFile; productRef = 61FAA5732FAE2290001C28CE /* FirebaseAI */; };
 		61FAA5812FAF22A0001C28CE /* AuthManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA5802FAF22A0001C28CE /* AuthManager.swift */; };
 		61FAA5832FAF22A0001C28CE /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA5822FAF22A0001C28CE /* SignInView.swift */; };
 		61FAA5852FAF22A0001C28CE /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61FAA5842FAF22A0001C28CE /* OnboardingView.swift */; };
@@ -253,7 +252,6 @@
 				61FAA54C2FAA8F80001C28CE /* FirebaseFirestore in Frameworks */,
 				6134E1532FB77702007C3979 /* FirebaseFunctions in Frameworks */,
 				61FAA54E2FAA8F80001C28CE /* FirebaseStorage in Frameworks */,
-				61FAA5722FAE2290001C28CE /* FirebaseAI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1071,11 +1069,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 61FAA5482FAA8F80001C28CE /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseStorage;
-		};
-		61FAA5732FAE2290001C28CE /* FirebaseAI */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 61FAA5482FAA8F80001C28CE /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseAI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
