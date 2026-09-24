@@ -42,6 +42,58 @@ function titleCase(s) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+// quicktype's `--protocol equatable` has a known gap: it declares `Equatable`
+// on a struct even when one of its stored properties is `JSONAny` (its own
+// generated comment admits the compiler can't synthesize `==` for those —
+// it just doesn't act on that when deciding what to declare). That struct
+// then doesn't actually conform to the protocol it claims, which fails to
+// compile — and it cascades: any other Equatable struct that embeds this one
+// (directly, via `[T]`, or via `[String: T]`) breaks the same way, one level
+// up. Fix this generically: find every struct that can't really be Equatable
+// (starting from JSONAny, then propagating to fixpoint) and strip the
+// conformance from all of them, so this self-corrects on every regen instead
+// of needing a hand-edit.
+function fixupEquatableCascade(swiftPath) {
+  const src = fs.readFileSync(swiftPath, "utf8");
+  const structRe = /^struct (\w+): ([^\n{]+)\{\n([\s\S]*?)\n\}\n/gm;
+  const structs = [...src.matchAll(structRe)].map((m) => ({
+    name: m[1],
+    protocols: m[2].split(",").map((p) => p.trim()),
+    body: m[3],
+  }));
+  const structNames = new Set(structs.map((s) => s.name));
+
+  const notEquatable = new Set(
+    structs.filter((s) => /\bJSONAny\b/.test(s.body)).map((s) => s.name)
+  );
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const s of structs) {
+      if (!s.protocols.includes("Equatable") || notEquatable.has(s.name)) continue;
+      // Field type references: `Type`, `Type?`, `[Type]`, `[Type]?`,
+      // `[String: Type]`, `[String: Type]?` — collect the bare type name.
+      const fieldTypes = [...s.body.matchAll(/^\s*let \w+: \[?(?:String\s*:\s*)?(\w+)[\]?]*/gm)]
+        .map((m) => m[1]);
+      if (fieldTypes.some((t) => structNames.has(t) && notEquatable.has(t))) {
+        notEquatable.add(s.name);
+        changed = true;
+      }
+    }
+  }
+
+  const fixed = src.replace(structRe, (block, name, protocolsRaw, body) => {
+    if (!notEquatable.has(name)) return block;
+    const fixedProtocols = protocolsRaw
+      .split(",")
+      .map((p) => p.trim())
+      .filter((p) => p !== "Equatable")
+      .join(", ");
+    return `struct ${name}: ${fixedProtocols} {\n${body}\n}\n`;
+  });
+  fs.writeFileSync(swiftPath, fixed);
+}
+
 const definitions = {};
 // `refs` names recurring nested schemas so quicktype emits a $ref'd type with
 // that name, instead of inferring one from the enclosing property (e.g. an
@@ -118,11 +170,13 @@ try {
       "--lang", "swift",
       "--acronym-style", "camel",
       "--sendable",
+      "--protocol", "equatable",
       "-o", SWIFT_OUT,
       SCHEMA_PATH,
     ],
     { stdio: "inherit" }
   );
+  fixupEquatableCascade(SWIFT_OUT);
   console.log(`✓ wrote ${path.relative(process.cwd(), SWIFT_OUT)}`);
 } catch (err) {
   console.warn(

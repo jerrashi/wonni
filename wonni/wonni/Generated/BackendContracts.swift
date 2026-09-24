@@ -3,6 +3,12 @@
 //
 //   let backendContracts = try BackendContracts(json)
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 import Foundation
 
 /// Generated from functions/contracts/. Do not edit by hand.
@@ -382,8 +388,14 @@ extension BackendContracts {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - ApplyCrossPostRulesRequest
-struct ApplyCrossPostRulesRequest: Codable, Sendable {
+struct ApplyCrossPostRulesRequest: Codable, Equatable, Sendable {
     let productId: String
 
     enum CodingKeys: String, CodingKey {
@@ -426,8 +438,14 @@ extension ApplyCrossPostRulesRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - ApplyCrossPostRulesResponse
-struct ApplyCrossPostRulesResponse: Codable, Sendable {
+struct ApplyCrossPostRulesResponse: Codable, Equatable, Sendable {
     let listingPrice: Double?
     let matched: Bool
     let platforms: [String: String]?
@@ -482,8 +500,14 @@ extension ApplyCrossPostRulesResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - DecrementAndCascadeRequest
-struct DecrementAndCascadeRequest: Codable, Sendable {
+struct DecrementAndCascadeRequest: Codable, Equatable, Sendable {
     let platform: DecrementAndCascadeRequestPlatform
     let productId: String
     let variantSku: String?
@@ -534,7 +558,7 @@ extension DecrementAndCascadeRequest {
     }
 }
 
-enum DecrementAndCascadeRequestPlatform: String, Codable, Sendable {
+enum DecrementAndCascadeRequestPlatform: String, Codable, Equatable, Sendable {
     case ebay = "ebay"
     case etsy = "etsy"
     case manual = "manual"
@@ -543,8 +567,14 @@ enum DecrementAndCascadeRequestPlatform: String, Codable, Sendable {
     case wonni = "wonni"
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - DecrementAndCascadeResponse
-struct DecrementAndCascadeResponse: Codable, Sendable {
+struct DecrementAndCascadeResponse: Codable, Equatable, Sendable {
     let cascade: DecrementAndCascadeResponseCascade
     let success: Bool
 
@@ -591,8 +621,14 @@ extension DecrementAndCascadeResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - DecrementAndCascadeResponseCascade
-struct DecrementAndCascadeResponseCascade: Codable, Sendable {
+struct DecrementAndCascadeResponseCascade: Codable, Equatable, Sendable {
     let newQuantity: Int?
     let platforms: [String: PlatformValue]
     let previousQuantity: Int?
@@ -651,15 +687,21 @@ extension DecrementAndCascadeResponseCascade {
     }
 }
 
-enum PlatformValue: String, Codable, Sendable {
+enum PlatformValue: String, Codable, Equatable, Sendable {
     case failed = "failed"
     case pendingManual = "pending-manual"
     case skipped = "skipped"
     case updated = "updated"
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - DetectMercariPullSyncDiffRequest
-struct DetectMercariPullSyncDiffRequest: Codable, Sendable {
+struct DetectMercariPullSyncDiffRequest: Codable, Equatable, Sendable {
     let productId: String
     let scraped: DetectMercariPullSyncDiffRequestScraped
 
@@ -706,8 +748,14 @@ extension DetectMercariPullSyncDiffRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - DetectMercariPullSyncDiffRequestScraped
-struct DetectMercariPullSyncDiffRequestScraped: Codable, Sendable {
+struct DetectMercariPullSyncDiffRequestScraped: Codable, Equatable, Sendable {
     let description: String?
     let photoUrls: [String]?
     let price: Double?
@@ -766,6 +814,12 @@ extension DetectMercariPullSyncDiffRequestScraped {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - DetectMercariPullSyncDiffResponse
 struct DetectMercariPullSyncDiffResponse: Codable, Sendable {
     let diffs: [DetectMercariPullSyncDiffResponseDiff]
@@ -817,6 +871,12 @@ extension DetectMercariPullSyncDiffResponse {
         return String(data: try self.jsonData(), encoding: encoding)
     }
 }
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
 
 // MARK: - DetectMercariPullSyncDiffResponseDiff
 struct DetectMercariPullSyncDiffResponseDiff: Codable, Sendable {
@@ -870,7 +930,7 @@ extension DetectMercariPullSyncDiffResponseDiff {
     }
 }
 
-enum Field: String, Codable, Sendable {
+enum Field: String, Codable, Equatable, Sendable {
     case description = "description"
     case photos = "photos"
     case price = "price"
@@ -878,8 +938,14 @@ enum Field: String, Codable, Sendable {
     case title = "title"
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayApplyDriftRequest
-struct EbayApplyDriftRequest: Codable, Sendable {
+struct EbayApplyDriftRequest: Codable, Equatable, Sendable {
     let fields: EbayApplyDriftRequestFields
     let productId: String
 
@@ -926,8 +992,14 @@ extension EbayApplyDriftRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayApplyDriftRequestFields
-struct EbayApplyDriftRequestFields: Codable, Sendable {
+struct EbayApplyDriftRequestFields: Codable, Equatable, Sendable {
     let price: Double?
     let quantity: Int?
     let title: String?
@@ -978,8 +1050,14 @@ extension EbayApplyDriftRequestFields {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayApplyDriftResponse
-struct EbayApplyDriftResponse: Codable, Sendable {
+struct EbayApplyDriftResponse: Codable, Equatable, Sendable {
     let applied: [String]
     let ok: Bool
 
@@ -1026,8 +1104,14 @@ extension EbayApplyDriftResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayCheckDriftRequest
-struct EbayCheckDriftRequest: Codable, Sendable {
+struct EbayCheckDriftRequest: Codable, Equatable, Sendable {
     let productId: String
 
     enum CodingKeys: String, CodingKey {
@@ -1070,8 +1154,14 @@ extension EbayCheckDriftRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayCheckDriftResponse
-struct EbayCheckDriftResponse: Codable, Sendable {
+struct EbayCheckDriftResponse: Codable, Equatable, Sendable {
     let diff: [EbayCheckDriftResponseDiff]
     let ebayData: EbayData
     let hasDrift: Bool
@@ -1126,8 +1216,14 @@ extension EbayCheckDriftResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayCheckDriftResponseDiff
-struct EbayCheckDriftResponseDiff: Codable, Sendable {
+struct EbayCheckDriftResponseDiff: Codable, Equatable, Sendable {
     let external: String
     let field: String
     let key: Key
@@ -1186,13 +1282,13 @@ extension EbayCheckDriftResponseDiff {
     }
 }
 
-enum Key: String, Codable, Sendable {
+enum Key: String, Codable, Equatable, Sendable {
     case price = "price"
     case quantity = "quantity"
     case title = "title"
 }
 
-enum Value: Codable, Sendable {
+enum Value: Codable, Equatable, Sendable {
     case double(Double)
     case string(String)
 
@@ -1220,8 +1316,14 @@ enum Value: Codable, Sendable {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayData
-struct EbayData: Codable, Sendable {
+struct EbayData: Codable, Equatable, Sendable {
     let listingId: String?
     let price: Double?
     let quantity: Double?
@@ -1280,8 +1382,14 @@ extension EbayData {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayCheckDriftResponseWonniData
-struct EbayCheckDriftResponseWonniData: Codable, Sendable {
+struct EbayCheckDriftResponseWonniData: Codable, Equatable, Sendable {
     let price: Double
     let quantity: Double
     let status: String
@@ -1336,8 +1444,14 @@ extension EbayCheckDriftResponseWonniData {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayCreateListingRequest
-struct EbayCreateListingRequest: Codable, Sendable {
+struct EbayCreateListingRequest: Codable, Equatable, Sendable {
     let productId: String
     let skipAutofill: Bool?
     let titleOverride: String?
@@ -1388,8 +1502,14 @@ extension EbayCreateListingRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayCreateListingResponse
-struct EbayCreateListingResponse: Codable, Sendable {
+struct EbayCreateListingResponse: Codable, Equatable, Sendable {
     let inventoryItemGroupKey: String?
     let listingId: String
     let listingUrl: String
@@ -1448,8 +1568,14 @@ extension EbayCreateListingResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayDeleteListingRequest
-struct EbayDeleteListingRequest: Codable, Sendable {
+struct EbayDeleteListingRequest: Codable, Equatable, Sendable {
     let productId: String
 
     enum CodingKeys: String, CodingKey {
@@ -1492,8 +1618,14 @@ extension EbayDeleteListingRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayDeleteListingResponse
-struct EbayDeleteListingResponse: Codable, Sendable {
+struct EbayDeleteListingResponse: Codable, Equatable, Sendable {
     let ok: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -1536,8 +1668,14 @@ extension EbayDeleteListingResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayGetListingRequest
-struct EbayGetListingRequest: Codable, Sendable {
+struct EbayGetListingRequest: Codable, Equatable, Sendable {
     let productId: String
 
     enum CodingKeys: String, CodingKey {
@@ -1580,8 +1718,14 @@ extension EbayGetListingRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayGetListingResponse
-struct EbayGetListingResponse: Codable, Sendable {
+struct EbayGetListingResponse: Codable, Equatable, Sendable {
     let group: EbayVariantGroup?
     let listingId: String?
     let productId: String
@@ -1640,8 +1784,14 @@ extension EbayGetListingResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayVariantGroup
-struct EbayVariantGroup: Codable, Sendable {
+struct EbayVariantGroup: Codable, Equatable, Sendable {
     let title: String?
     let variantSkus: [String]?
     let variesBy: [String]?
@@ -1692,8 +1842,14 @@ extension EbayVariantGroup {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayImportListingRequest
-struct EbayImportListingRequest: Codable, Sendable {
+struct EbayImportListingRequest: Codable, Equatable, Sendable {
     let itemId: String
 
     enum CodingKeys: String, CodingKey {
@@ -1736,8 +1892,14 @@ extension EbayImportListingRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayImportListingResponse
-struct EbayImportListingResponse: Codable, Sendable {
+struct EbayImportListingResponse: Codable, Equatable, Sendable {
     let condition: String
     let description: String
     let imageUrls: [String]
@@ -1796,8 +1958,14 @@ extension EbayImportListingResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayUpdateListingRequest
-struct EbayUpdateListingRequest: Codable, Sendable {
+struct EbayUpdateListingRequest: Codable, Equatable, Sendable {
     let productId: String
 
     enum CodingKeys: String, CodingKey {
@@ -1840,8 +2008,14 @@ extension EbayUpdateListingRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EbayUpdateListingResponse
-struct EbayUpdateListingResponse: Codable, Sendable {
+struct EbayUpdateListingResponse: Codable, Equatable, Sendable {
     let listingId: String?
     let platform: EbayUpdateListingResponsePlatform
     let productId: String
@@ -1896,7 +2070,7 @@ extension EbayUpdateListingResponse {
     }
 }
 
-enum EbayUpdateListingResponsePlatform: String, Codable, Sendable {
+enum EbayUpdateListingResponsePlatform: String, Codable, Equatable, Sendable {
     case ebay = "ebay"
     case etsy = "etsy"
     case mercari = "mercari"
@@ -1904,7 +2078,7 @@ enum EbayUpdateListingResponsePlatform: String, Codable, Sendable {
     case wonni = "wonni"
 }
 
-enum EbayUpdateListingResponseStatus: String, Codable, Sendable {
+enum EbayUpdateListingResponseStatus: String, Codable, Equatable, Sendable {
     case active = "active"
     case error = "error"
     case inactive = "inactive"
@@ -1912,8 +2086,14 @@ enum EbayUpdateListingResponseStatus: String, Codable, Sendable {
     case sold = "sold"
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EnrichListingRequest
-struct EnrichListingRequest: Codable, Sendable {
+struct EnrichListingRequest: Codable, Equatable, Sendable {
     let hints: Hints?
     let images: [String]?
     let mode: Mode
@@ -1976,8 +2156,14 @@ extension EnrichListingRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - Hints
-struct Hints: Codable, Sendable {
+struct Hints: Codable, Equatable, Sendable {
     let description: String?
     let price: Double?
     let title: String?
@@ -2028,13 +2214,19 @@ extension Hints {
     }
 }
 
-enum Mode: String, Codable, Sendable {
+enum Mode: String, Codable, Equatable, Sendable {
     case draft = "draft"
     case product = "product"
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EnrichListingResponse
-struct EnrichListingResponse: Codable, Sendable {
+struct EnrichListingResponse: Codable, Equatable, Sendable {
     let aiModel: String
     let aiPromptVersion: String
     let applied: [String]
@@ -2097,8 +2289,14 @@ extension EnrichListingResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - Proposals
-struct Proposals: Codable, Sendable {
+struct Proposals: Codable, Equatable, Sendable {
     let description: String?
     let title: String?
 
@@ -2145,8 +2343,14 @@ extension Proposals {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - Suggested
-struct Suggested: Codable, Sendable {
+struct Suggested: Codable, Equatable, Sendable {
     let brand: String?
     let category: String?
     let condition: Condition?
@@ -2241,7 +2445,7 @@ extension Suggested {
     }
 }
 
-enum Condition: String, Codable, Sendable {
+enum Condition: String, Codable, Equatable, Sendable {
     case fair = "fair"
     case good = "good"
     case likenew = "likenew"
@@ -2249,8 +2453,14 @@ enum Condition: String, Codable, Sendable {
     case poor = "poor"
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - Writes
-struct Writes: Codable, Sendable {
+struct Writes: Codable, Equatable, Sendable {
     let brand: String?
     let category: String?
     let condition: Condition?
@@ -2345,8 +2555,14 @@ extension Writes {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EtsyCheckShopSetupRequest
-struct EtsyCheckShopSetupRequest: Codable, Sendable {
+struct EtsyCheckShopSetupRequest: Codable, Equatable, Sendable {
     let credentialSet: String?
 
     enum CodingKeys: String, CodingKey {
@@ -2389,8 +2605,14 @@ extension EtsyCheckShopSetupRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EtsyCheckShopSetupResponse
-struct EtsyCheckShopSetupResponse: Codable, Sendable {
+struct EtsyCheckShopSetupResponse: Codable, Equatable, Sendable {
     let hasReturnPolicy: Bool
     let hasShippingProfile: Bool
 
@@ -2437,8 +2659,14 @@ extension EtsyCheckShopSetupResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EtsyCreateListingRequest
-struct EtsyCreateListingRequest: Codable, Sendable {
+struct EtsyCreateListingRequest: Codable, Equatable, Sendable {
     let credentialSet: String?
     let productId: String
     let returnPolicyId: ReturnPolicyId?
@@ -2497,7 +2725,7 @@ extension EtsyCreateListingRequest {
     }
 }
 
-enum ReturnPolicyId: Codable, Sendable {
+enum ReturnPolicyId: Codable, Equatable, Sendable {
     case double(Double)
     case string(String)
     case null
@@ -2532,8 +2760,14 @@ enum ReturnPolicyId: Codable, Sendable {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EtsyCreateListingResponse
-struct EtsyCreateListingResponse: Codable, Sendable {
+struct EtsyCreateListingResponse: Codable, Equatable, Sendable {
     let listingId: String
     let success: Bool
 
@@ -2580,8 +2814,14 @@ extension EtsyCreateListingResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EtsyDeleteListingRequest
-struct EtsyDeleteListingRequest: Codable, Sendable {
+struct EtsyDeleteListingRequest: Codable, Equatable, Sendable {
     let credentialSet: String?
     let productId: String
 
@@ -2628,8 +2868,14 @@ extension EtsyDeleteListingRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EtsyDeleteListingResponse
-struct EtsyDeleteListingResponse: Codable, Sendable {
+struct EtsyDeleteListingResponse: Codable, Equatable, Sendable {
     let success: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -2672,8 +2918,14 @@ extension EtsyDeleteListingResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EtsyImportPullSyncRequest
-struct EtsyImportPullSyncRequest: Codable, Sendable {
+struct EtsyImportPullSyncRequest: Codable, Equatable, Sendable {
     let credentialSet: String?
     let fields: EtsyImportPullSyncRequestFields
     let productId: String
@@ -2724,8 +2976,14 @@ extension EtsyImportPullSyncRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EtsyImportPullSyncRequestFields
-struct EtsyImportPullSyncRequestFields: Codable, Sendable {
+struct EtsyImportPullSyncRequestFields: Codable, Equatable, Sendable {
     let price: Double?
     let quantity: Int?
     let title: String?
@@ -2776,8 +3034,14 @@ extension EtsyImportPullSyncRequestFields {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EtsyImportPullSyncResponse
-struct EtsyImportPullSyncResponse: Codable, Sendable {
+struct EtsyImportPullSyncResponse: Codable, Equatable, Sendable {
     let success: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -2820,8 +3084,14 @@ extension EtsyImportPullSyncResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EtsyPullSyncRequest
-struct EtsyPullSyncRequest: Codable, Sendable {
+struct EtsyPullSyncRequest: Codable, Equatable, Sendable {
     let credentialSet: String?
     let productId: String
 
@@ -2868,8 +3138,14 @@ extension EtsyPullSyncRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EtsyPullSyncResponse
-struct EtsyPullSyncResponse: Codable, Sendable {
+struct EtsyPullSyncResponse: Codable, Equatable, Sendable {
     let diff: [EtsyPullSyncResponseDiff]
     let etsyData: EtsyData
     let hasDrift: Bool
@@ -2924,8 +3200,14 @@ extension EtsyPullSyncResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EtsyPullSyncResponseDiff
-struct EtsyPullSyncResponseDiff: Codable, Sendable {
+struct EtsyPullSyncResponseDiff: Codable, Equatable, Sendable {
     let external: String
     let field: String
     let key: Key
@@ -2984,8 +3266,14 @@ extension EtsyPullSyncResponseDiff {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EtsyData
-struct EtsyData: Codable, Sendable {
+struct EtsyData: Codable, Equatable, Sendable {
     let listingId: String
     let price: Double?
     let quantity: Double?
@@ -3044,8 +3332,14 @@ extension EtsyData {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EtsyPullSyncResponseWonniData
-struct EtsyPullSyncResponseWonniData: Codable, Sendable {
+struct EtsyPullSyncResponseWonniData: Codable, Equatable, Sendable {
     let price: Double
     let quantity: Double
     let status: String
@@ -3100,8 +3394,14 @@ extension EtsyPullSyncResponseWonniData {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EtsyUpdateListingRequest
-struct EtsyUpdateListingRequest: Codable, Sendable {
+struct EtsyUpdateListingRequest: Codable, Equatable, Sendable {
     let credentialSet: String?
     let productId: String
 
@@ -3148,8 +3448,14 @@ extension EtsyUpdateListingRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - EtsyUpdateListingResponse
-struct EtsyUpdateListingResponse: Codable, Sendable {
+struct EtsyUpdateListingResponse: Codable, Equatable, Sendable {
     let success: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -3192,8 +3498,14 @@ extension EtsyUpdateListingResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - GetEtsyCategoriesRequest
-struct GetEtsyCategoriesRequest: Codable, Sendable {
+struct GetEtsyCategoriesRequest: Codable, Equatable, Sendable {
     let credentialSet: String?
 
     enum CodingKeys: String, CodingKey {
@@ -3236,8 +3548,14 @@ extension GetEtsyCategoriesRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - GetEtsyCategoriesResponse
-struct GetEtsyCategoriesResponse: Codable, Sendable {
+struct GetEtsyCategoriesResponse: Codable, Equatable, Sendable {
     let categories: [Category]
 
     enum CodingKeys: String, CodingKey {
@@ -3280,8 +3598,14 @@ extension GetEtsyCategoriesResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - Category
-struct Category: Codable, Sendable {
+struct Category: Codable, Equatable, Sendable {
     let id: Double
     let name: String
 
@@ -3328,8 +3652,14 @@ extension Category {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - GetEtsyReturnPoliciesRequest
-struct GetEtsyReturnPoliciesRequest: Codable, Sendable {
+struct GetEtsyReturnPoliciesRequest: Codable, Equatable, Sendable {
     let credentialSet: String?
 
     enum CodingKeys: String, CodingKey {
@@ -3372,8 +3702,14 @@ extension GetEtsyReturnPoliciesRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - GetEtsyReturnPoliciesResponse
-struct GetEtsyReturnPoliciesResponse: Codable, Sendable {
+struct GetEtsyReturnPoliciesResponse: Codable, Equatable, Sendable {
     let policies: [Policy]
 
     enum CodingKeys: String, CodingKey {
@@ -3416,8 +3752,14 @@ extension GetEtsyReturnPoliciesResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - Policy
-struct Policy: Codable, Sendable {
+struct Policy: Codable, Equatable, Sendable {
     let id: Value
     let name: String
 
@@ -3464,8 +3806,14 @@ extension Policy {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - GetEtsyShippingProfilesRequest
-struct GetEtsyShippingProfilesRequest: Codable, Sendable {
+struct GetEtsyShippingProfilesRequest: Codable, Equatable, Sendable {
     let credentialSet: String?
 
     enum CodingKeys: String, CodingKey {
@@ -3508,8 +3856,14 @@ extension GetEtsyShippingProfilesRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - GetEtsyShippingProfilesResponse
-struct GetEtsyShippingProfilesResponse: Codable, Sendable {
+struct GetEtsyShippingProfilesResponse: Codable, Equatable, Sendable {
     let profiles: [Profile]
 
     enum CodingKeys: String, CodingKey {
@@ -3552,8 +3906,14 @@ extension GetEtsyShippingProfilesResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - Profile
-struct Profile: Codable, Sendable {
+struct Profile: Codable, Equatable, Sendable {
     let id: Value
     let title: String
 
@@ -3600,8 +3960,14 @@ extension Profile {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - GetOrderTakeHomeRequest
-struct GetOrderTakeHomeRequest: Codable, Sendable {
+struct GetOrderTakeHomeRequest: Codable, Equatable, Sendable {
     let platform: GetOrderTakeHomeRequestPlatform?
     let platformOrderId: String?
     let saleId: String?
@@ -3652,13 +4018,19 @@ extension GetOrderTakeHomeRequest {
     }
 }
 
-enum GetOrderTakeHomeRequestPlatform: String, Codable, Sendable {
+enum GetOrderTakeHomeRequestPlatform: String, Codable, Equatable, Sendable {
     case ebay = "ebay"
     case etsy = "etsy"
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - GetOrderTakeHomeResponse
-struct GetOrderTakeHomeResponse: Codable, Sendable {
+struct GetOrderTakeHomeResponse: Codable, Equatable, Sendable {
     let fees: Double?
     let provisional: Bool
     let shippingLabelCost: Double?
@@ -3713,8 +4085,14 @@ extension GetOrderTakeHomeResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - ImportMercariPullSyncRequest
-struct ImportMercariPullSyncRequest: Codable, Sendable {
+struct ImportMercariPullSyncRequest: Codable, Equatable, Sendable {
     let fields: [Field]
     let productId: String
     let scraped: ImportMercariPullSyncRequestScraped
@@ -3765,8 +4143,14 @@ extension ImportMercariPullSyncRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - ImportMercariPullSyncRequestScraped
-struct ImportMercariPullSyncRequestScraped: Codable, Sendable {
+struct ImportMercariPullSyncRequestScraped: Codable, Equatable, Sendable {
     let description: String?
     let photoUrls: [String]?
     let price: Double?
@@ -3825,8 +4209,14 @@ extension ImportMercariPullSyncRequestScraped {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - ImportMercariPullSyncResponse
-struct ImportMercariPullSyncResponse: Codable, Sendable {
+struct ImportMercariPullSyncResponse: Codable, Equatable, Sendable {
     let ok: Bool
     let updated: [String]
 
@@ -3873,8 +4263,14 @@ extension ImportMercariPullSyncResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - ListWeverseOrderTasksRequest
-struct ListWeverseOrderTasksRequest: Codable, Sendable {
+struct ListWeverseOrderTasksRequest: Codable, Equatable, Sendable {
     let cursor: String?
     let limit: Int?
     let status: ListWeverseOrderTasksRequestStatus?
@@ -3925,14 +4321,20 @@ extension ListWeverseOrderTasksRequest {
     }
 }
 
-enum ListWeverseOrderTasksRequestStatus: String, Codable, Sendable {
+enum ListWeverseOrderTasksRequestStatus: String, Codable, Equatable, Sendable {
     case cancelled = "cancelled"
     case ordered = "ordered"
     case pending = "pending"
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - ListWeverseOrderTasksResponse
-struct ListWeverseOrderTasksResponse: Codable, Sendable {
+struct ListWeverseOrderTasksResponse: Codable, Equatable, Sendable {
     let nextCursor: String?
     let tasks: [WeverseOrderTaskWithId]
 
@@ -3979,8 +4381,14 @@ extension ListWeverseOrderTasksResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - WeverseOrderTaskWithId
-struct WeverseOrderTaskWithId: Codable, Sendable {
+struct WeverseOrderTaskWithId: Codable, Equatable, Sendable {
     let costPaid: Double?
     let createdAt: CreatedAt
     let id: String
@@ -4075,8 +4483,14 @@ extension WeverseOrderTaskWithId {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - CreatedAt
-struct CreatedAt: Codable, Sendable {
+struct CreatedAt: Codable, Equatable, Sendable {
     let nanoseconds: Int
     let seconds: Int
 
@@ -4123,8 +4537,14 @@ extension CreatedAt {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - ListingFields
-struct ListingFields: Codable, Sendable {
+struct ListingFields: Codable, Equatable, Sendable {
     let brand: String?
     let category: String?
     let condition: Condition?
@@ -4219,8 +4639,14 @@ extension ListingFields {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - MarkSoldOutAndCascadeRequest
-struct MarkSoldOutAndCascadeRequest: Codable, Sendable {
+struct MarkSoldOutAndCascadeRequest: Codable, Equatable, Sendable {
     let productId: String
 
     enum CodingKeys: String, CodingKey {
@@ -4263,8 +4689,14 @@ extension MarkSoldOutAndCascadeRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - MarkSoldOutAndCascadeResponse
-struct MarkSoldOutAndCascadeResponse: Codable, Sendable {
+struct MarkSoldOutAndCascadeResponse: Codable, Equatable, Sendable {
     let success: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -4307,8 +4739,14 @@ extension MarkSoldOutAndCascadeResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - MercariBatchResult
-struct MercariBatchResult: Codable, Sendable {
+struct MercariBatchResult: Codable, Equatable, Sendable {
     let mercariItemId: String
     let outcome: MercariBatchResultOutcome
     let productId: String?
@@ -4367,15 +4805,21 @@ extension MercariBatchResult {
     }
 }
 
-enum MercariBatchResultOutcome: String, Codable, Sendable {
+enum MercariBatchResultOutcome: String, Codable, Equatable, Sendable {
     case duplicate = "duplicate"
     case noMatch = "no-match"
     case parseFailed = "parse-failed"
     case recorded = "recorded"
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - MercariBatchRow
-struct MercariBatchRow: Codable, Sendable {
+struct MercariBatchRow: Codable, Equatable, Sendable {
     let mercariItemId: String
 
     enum CodingKeys: String, CodingKey {
@@ -4418,8 +4862,14 @@ extension MercariBatchRow {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - MercariScrapeItem
-struct MercariScrapeItem: Codable, Sendable {
+struct MercariScrapeItem: Codable, Equatable, Sendable {
     let buyerName: String?
     let mercariItemId: String
     let mercariOrderId: String?
@@ -4506,7 +4956,7 @@ extension MercariScrapeItem {
     }
 }
 
-enum SoldAt: Codable, Sendable {
+enum SoldAt: Codable, Equatable, Sendable {
     case dateTime(Date)
     case integer(Int)
     case null
@@ -4541,8 +4991,14 @@ enum SoldAt: Codable, Sendable {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - Option
-struct Option: Codable, Sendable {
+struct Option: Codable, Equatable, Sendable {
     let id: String?
     let name: String
     let values: [String]
@@ -4593,8 +5049,14 @@ extension Option {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - PostToWonniRequest
-struct PostToWonniRequest: Codable, Sendable {
+struct PostToWonniRequest: Codable, Equatable, Sendable {
     let productId: String
 
     enum CodingKeys: String, CodingKey {
@@ -4637,8 +5099,14 @@ extension PostToWonniRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - PostToWonniResponse
-struct PostToWonniResponse: Codable, Sendable {
+struct PostToWonniResponse: Codable, Equatable, Sendable {
     let alreadyPosted: Bool
     let listingId: String
     let skipped: Bool?
@@ -4689,8 +5157,14 @@ extension PostToWonniResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - ProductDoc
-struct ProductDoc: Codable, Sendable {
+struct ProductDoc: Codable, Equatable, Sendable {
     let hasVariants: Bool?
     let options: [OptionElement]?
     let quantityVariesByVariant: Bool?
@@ -4745,8 +5219,14 @@ extension ProductDoc {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - OptionElement
-struct OptionElement: Codable, Sendable {
+struct OptionElement: Codable, Equatable, Sendable {
     let id: String?
     let name: String
     let values: [String]
@@ -4797,8 +5277,14 @@ extension OptionElement {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - Variant
-struct Variant: Codable, Sendable {
+struct Variant: Codable, Equatable, Sendable {
     let active: Bool
     let crossPostListingIds: VariantCrossPostListingIds
     let crossPostStatus: VariantCrossPostStatus
@@ -4889,8 +5375,14 @@ extension Variant {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - VariantCrossPostListingIds
-struct VariantCrossPostListingIds: Codable, Sendable {
+struct VariantCrossPostListingIds: Codable, Equatable, Sendable {
     let ebay: String?
     let etsy: String?
     let mercari: String?
@@ -4945,8 +5437,14 @@ extension VariantCrossPostListingIds {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - VariantCrossPostStatus
-struct VariantCrossPostStatus: Codable, Sendable {
+struct VariantCrossPostStatus: Codable, Equatable, Sendable {
     let ebay: String?
     let etsy: String?
     let mercari: String?
@@ -5001,8 +5499,14 @@ extension VariantCrossPostStatus {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - PushEbayQuantityUpdateRequest
-struct PushEbayQuantityUpdateRequest: Codable, Sendable {
+struct PushEbayQuantityUpdateRequest: Codable, Equatable, Sendable {
     let productId: String
     let variantSku: String?
 
@@ -5049,8 +5553,14 @@ extension PushEbayQuantityUpdateRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - PushEbayQuantityUpdateResponse
-struct PushEbayQuantityUpdateResponse: Codable, Sendable {
+struct PushEbayQuantityUpdateResponse: Codable, Equatable, Sendable {
     let outcome: PushEbayQuantityUpdateResponseOutcome
 
     enum CodingKeys: String, CodingKey {
@@ -5093,14 +5603,20 @@ extension PushEbayQuantityUpdateResponse {
     }
 }
 
-enum PushEbayQuantityUpdateResponseOutcome: String, Codable, Sendable {
+enum PushEbayQuantityUpdateResponseOutcome: String, Codable, Equatable, Sendable {
     case failed = "failed"
     case skipped = "skipped"
     case updated = "updated"
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - ReassignSaleStageRequest
-struct ReassignSaleStageRequest: Codable, Sendable {
+struct ReassignSaleStageRequest: Codable, Equatable, Sendable {
     let fromKey: String
     let toKey: String
 
@@ -5147,8 +5663,14 @@ extension ReassignSaleStageRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - ReassignSaleStageResponse
-struct ReassignSaleStageResponse: Codable, Sendable {
+struct ReassignSaleStageResponse: Codable, Equatable, Sendable {
     let count: Int
     let success: Bool
 
@@ -5195,8 +5717,14 @@ extension ReassignSaleStageResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - RecordMercariSalesBatchRequest
-struct RecordMercariSalesBatchRequest: Codable, Sendable {
+struct RecordMercariSalesBatchRequest: Codable, Equatable, Sendable {
     let items: [MercariBatchRow]?
     let rawItems: [MercariBatchRow]?
 
@@ -5243,8 +5771,14 @@ extension RecordMercariSalesBatchRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - RecordMercariSalesBatchResponse
-struct RecordMercariSalesBatchResponse: Codable, Sendable {
+struct RecordMercariSalesBatchResponse: Codable, Equatable, Sendable {
     let duplicates: Int
     let recorded: Int
     let results: [MercariBatchResult]
@@ -5299,8 +5833,14 @@ extension RecordMercariSalesBatchResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - RecordSaleRequest
-struct RecordSaleRequest: Codable, Sendable {
+struct RecordSaleRequest: Codable, Equatable, Sendable {
     let buyerAddress: RecordSaleRequestBuyerAddress?
     let buyerName: String?
     let carrier: SaleCarrier?
@@ -5415,8 +5955,14 @@ extension RecordSaleRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - RecordSaleRequestBuyerAddress
-struct RecordSaleRequestBuyerAddress: Codable, Sendable {
+struct RecordSaleRequestBuyerAddress: Codable, Equatable, Sendable {
     let city: String?
     let country: String?
     let line1: String?
@@ -5483,7 +6029,7 @@ extension RecordSaleRequestBuyerAddress {
     }
 }
 
-enum SaleCarrier: String, Codable, Sendable {
+enum SaleCarrier: String, Codable, Equatable, Sendable {
     case dhl = "DHL"
     case fedEx = "FedEx"
     case other = "other"
@@ -5491,8 +6037,14 @@ enum SaleCarrier: String, Codable, Sendable {
     case usps = "USPS"
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - RecordSaleResponse
-struct RecordSaleResponse: Codable, Sendable {
+struct RecordSaleResponse: Codable, Equatable, Sendable {
     let cascade: RecordSaleResponseCascade?
     let created: Bool
     let saleId: String
@@ -5543,8 +6095,14 @@ extension RecordSaleResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - RecordSaleResponseCascade
-struct RecordSaleResponseCascade: Codable, Sendable {
+struct RecordSaleResponseCascade: Codable, Equatable, Sendable {
     let newQuantity: Int?
     let platforms: [String: PlatformValue]
     let previousQuantity: Int?
@@ -5603,8 +6161,14 @@ extension RecordSaleResponseCascade {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - RecordWeverseOrderPlacedRequest
-struct RecordWeverseOrderPlacedRequest: Codable, Sendable {
+struct RecordWeverseOrderPlacedRequest: Codable, Equatable, Sendable {
     let costPaid: Double
     let orderNumber: String
     let taskId: String
@@ -5655,8 +6219,14 @@ extension RecordWeverseOrderPlacedRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - RecordWeverseOrderPlacedResponse
-struct RecordWeverseOrderPlacedResponse: Codable, Sendable {
+struct RecordWeverseOrderPlacedResponse: Codable, Equatable, Sendable {
     let success: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -5699,8 +6269,14 @@ extension RecordWeverseOrderPlacedResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - RestockAndCascadeRequest
-struct RestockAndCascadeRequest: Codable, Sendable {
+struct RestockAndCascadeRequest: Codable, Equatable, Sendable {
     let productId: String
     let quantity: Int
     let variantSku: String?
@@ -5751,8 +6327,14 @@ extension RestockAndCascadeRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - RestockAndCascadeResponse
-struct RestockAndCascadeResponse: Codable, Sendable {
+struct RestockAndCascadeResponse: Codable, Equatable, Sendable {
     let success: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -5795,8 +6377,14 @@ extension RestockAndCascadeResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - SaleDoc
-struct SaleDoc: Codable, Sendable {
+struct SaleDoc: Codable, Equatable, Sendable {
     let actualCostPaid: Double?
     let buyerAddress: SaleDocBuyerAddress?
     let buyerName: String?
@@ -5959,8 +6547,14 @@ extension SaleDoc {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - SaleDocBuyerAddress
-struct SaleDocBuyerAddress: Codable, Sendable {
+struct SaleDocBuyerAddress: Codable, Equatable, Sendable {
     let city: String?
     let country: String?
     let line1: String?
@@ -6027,8 +6621,14 @@ extension SaleDocBuyerAddress {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - SoldAtClass
-struct SoldAtClass: Codable, Sendable {
+struct SoldAtClass: Codable, Equatable, Sendable {
     let nanoseconds: Int
     let seconds: Int
 
@@ -6075,7 +6675,7 @@ extension SoldAtClass {
     }
 }
 
-enum Source: String, Codable, Sendable {
+enum Source: String, Codable, Equatable, Sendable {
     case crossPostDrift = "cross-post-drift"
     case ebayPoll = "ebay-poll"
     case etsyPoll = "etsy-poll"
@@ -6083,8 +6683,14 @@ enum Source: String, Codable, Sendable {
     case mercariScan = "mercari-scan"
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - SuggestEtsyCategoryRequest
-struct SuggestEtsyCategoryRequest: Codable, Sendable {
+struct SuggestEtsyCategoryRequest: Codable, Equatable, Sendable {
     let category: String?
     let credentialSet: String?
     let title: String?
@@ -6135,8 +6741,14 @@ extension SuggestEtsyCategoryRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - SuggestEtsyCategoryResponse
-struct SuggestEtsyCategoryResponse: Codable, Sendable {
+struct SuggestEtsyCategoryResponse: Codable, Equatable, Sendable {
     let taxonomyId: Double
     let taxonomyName: String
 
@@ -6183,8 +6795,14 @@ extension SuggestEtsyCategoryResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - SyncSalesPlatformError
-struct SyncSalesPlatformError: Codable, Sendable {
+struct SyncSalesPlatformError: Codable, Equatable, Sendable {
     let message: String
     let platform: String
 
@@ -6231,8 +6849,14 @@ extension SyncSalesPlatformError {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - SyncSalesRequest
-struct SyncSalesRequest: Codable, Sendable {
+struct SyncSalesRequest: Codable, Equatable, Sendable {
     let platform: GetOrderTakeHomeRequestPlatform?
     let since: SoldAt?
 
@@ -6279,8 +6903,14 @@ extension SyncSalesRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - SyncSalesResponse
-struct SyncSalesResponse: Codable, Sendable {
+struct SyncSalesResponse: Codable, Equatable, Sendable {
     let errors: [SyncSalesPlatformError]
     let imported: Int
     let saleIds: [String]
@@ -6335,8 +6965,14 @@ extension SyncSalesResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - UpdateMercariListingStatusRequest
-struct UpdateMercariListingStatusRequest: Codable, Sendable {
+struct UpdateMercariListingStatusRequest: Codable, Equatable, Sendable {
     let category: String?
     let error: String?
     let listingId: String?
@@ -6419,7 +7055,7 @@ extension UpdateMercariListingStatusRequest {
     }
 }
 
-enum UpdateMercariListingStatusRequestStatus: String, Codable, Sendable {
+enum UpdateMercariListingStatusRequestStatus: String, Codable, Equatable, Sendable {
     case active = "active"
     case draft = "draft"
     case error = "error"
@@ -6427,8 +7063,14 @@ enum UpdateMercariListingStatusRequestStatus: String, Codable, Sendable {
     case sold = "sold"
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - UpdateMercariListingStatusResponse
-struct UpdateMercariListingStatusResponse: Codable, Sendable {
+struct UpdateMercariListingStatusResponse: Codable, Equatable, Sendable {
     let ok: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -6471,8 +7113,14 @@ extension UpdateMercariListingStatusResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - UpdateSaleStagesRequest
-struct UpdateSaleStagesRequest: Codable, Sendable {
+struct UpdateSaleStagesRequest: Codable, Equatable, Sendable {
     let stages: [Stage]
 
     enum CodingKeys: String, CodingKey {
@@ -6515,8 +7163,14 @@ extension UpdateSaleStagesRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - Stage
-struct Stage: Codable, Sendable {
+struct Stage: Codable, Equatable, Sendable {
     let builtIn: Bool?
     let key: String
     let label: String
@@ -6567,8 +7221,14 @@ extension Stage {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - UpdateSaleStagesResponse
-struct UpdateSaleStagesResponse: Codable, Sendable {
+struct UpdateSaleStagesResponse: Codable, Equatable, Sendable {
     let ok: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -6611,8 +7271,14 @@ extension UpdateSaleStagesResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - UpdateSaleStatusRequest
-struct UpdateSaleStatusRequest: Codable, Sendable {
+struct UpdateSaleStatusRequest: Codable, Equatable, Sendable {
     let saleId: String
     let status: String
 
@@ -6659,8 +7325,14 @@ extension UpdateSaleStatusRequest {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - UpdateSaleStatusResponse
-struct UpdateSaleStatusResponse: Codable, Sendable {
+struct UpdateSaleStatusResponse: Codable, Equatable, Sendable {
     let success: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -6703,8 +7375,14 @@ extension UpdateSaleStatusResponse {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - VariantClass
-struct VariantClass: Codable, Sendable {
+struct VariantClass: Codable, Equatable, Sendable {
     let active: Bool
     let crossPostListingIds: VariantCrossPostListingIdsClass
     let crossPostStatus: VariantCrossPostStatusClass
@@ -6795,8 +7473,14 @@ extension VariantClass {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - VariantCrossPostListingIdsClass
-struct VariantCrossPostListingIdsClass: Codable, Sendable {
+struct VariantCrossPostListingIdsClass: Codable, Equatable, Sendable {
     let ebay: String?
     let etsy: String?
     let mercari: String?
@@ -6851,8 +7535,14 @@ extension VariantCrossPostListingIdsClass {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - VariantCrossPostStatusClass
-struct VariantCrossPostStatusClass: Codable, Sendable {
+struct VariantCrossPostStatusClass: Codable, Equatable, Sendable {
     let ebay: String?
     let etsy: String?
     let mercari: String?
