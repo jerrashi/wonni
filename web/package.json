@@ -6,7 +6,7 @@
   "scripts": {
     "predev": "node ../scripts/check-no-obfuscated-code.js",
     "dev": "vite",
-    "prebuild": "node ../scripts/check-no-obfuscated-code.js",
+    "prebuild": "node ../scripts/check-no-obfuscated-code.js && rm -rf ../public/assets",
     "build": "vite build",
     "preview": "vite preview"
   },
