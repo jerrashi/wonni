@@ -57,6 +57,7 @@ struct BackendContracts: Codable, Sendable {
     let listWeverseOrderTasksResponse: ListWeverseOrderTasksResponse?
     let markSoldOutAndCascadeRequest: MarkSoldOutAndCascadeRequest?
     let markSoldOutAndCascadeResponse: MarkSoldOutAndCascadeResponse?
+    let mercariBatchRow: MercariBatchRow?
     let mercariScrapeItem: MercariScrapeItem?
     let option: Option?
     let postToWonniRequest: PostToWonniRequest?
@@ -137,6 +138,7 @@ struct BackendContracts: Codable, Sendable {
         case listWeverseOrderTasksResponse = "ListWeverseOrderTasksResponse"
         case markSoldOutAndCascadeRequest = "MarkSoldOutAndCascadeRequest"
         case markSoldOutAndCascadeResponse = "MarkSoldOutAndCascadeResponse"
+        case mercariBatchRow = "MercariBatchRow"
         case mercariScrapeItem = "MercariScrapeItem"
         case option = "Option"
         case postToWonniRequest = "PostToWonniRequest"
@@ -237,6 +239,7 @@ extension BackendContracts {
         listWeverseOrderTasksResponse: ListWeverseOrderTasksResponse?? = nil,
         markSoldOutAndCascadeRequest: MarkSoldOutAndCascadeRequest?? = nil,
         markSoldOutAndCascadeResponse: MarkSoldOutAndCascadeResponse?? = nil,
+        mercariBatchRow: MercariBatchRow?? = nil,
         mercariScrapeItem: MercariScrapeItem?? = nil,
         option: Option?? = nil,
         postToWonniRequest: PostToWonniRequest?? = nil,
@@ -317,6 +320,7 @@ extension BackendContracts {
             listWeverseOrderTasksResponse: listWeverseOrderTasksResponse ?? self.listWeverseOrderTasksResponse,
             markSoldOutAndCascadeRequest: markSoldOutAndCascadeRequest ?? self.markSoldOutAndCascadeRequest,
             markSoldOutAndCascadeResponse: markSoldOutAndCascadeResponse ?? self.markSoldOutAndCascadeResponse,
+            mercariBatchRow: mercariBatchRow ?? self.mercariBatchRow,
             mercariScrapeItem: mercariScrapeItem ?? self.mercariScrapeItem,
             option: option ?? self.option,
             postToWonniRequest: postToWonniRequest ?? self.postToWonniRequest,
@@ -4331,6 +4335,50 @@ extension MarkSoldOutAndCascadeResponse {
     }
 }
 
+// MARK: - MercariBatchRow
+struct MercariBatchRow: Codable, Sendable {
+    let mercariItemId: String
+
+    enum CodingKeys: String, CodingKey {
+        case mercariItemId = "mercariItemId"
+    }
+}
+
+// MARK: MercariBatchRow convenience initializers and mutators
+
+extension MercariBatchRow {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(MercariBatchRow.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        mercariItemId: String? = nil
+    ) -> MercariBatchRow {
+        return MercariBatchRow(
+            mercariItemId: mercariItemId ?? self.mercariItemId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
 // MARK: - MercariScrapeItem
 struct MercariScrapeItem: Codable, Sendable {
     let buyerName: String?
@@ -5110,8 +5158,8 @@ extension ReassignSaleStageResponse {
 
 // MARK: - RecordMercariSalesBatchRequest
 struct RecordMercariSalesBatchRequest: Codable, Sendable {
-    let items: [Item]?
-    let rawItems: [RawItem]?
+    let items: [MercariBatchRow]?
+    let rawItems: [MercariBatchRow]?
 
     enum CodingKeys: String, CodingKey {
         case items = "items"
@@ -5138,100 +5186,12 @@ extension RecordMercariSalesBatchRequest {
     }
 
     func with(
-        items: [Item]?? = nil,
-        rawItems: [RawItem]?? = nil
+        items: [MercariBatchRow]?? = nil,
+        rawItems: [MercariBatchRow]?? = nil
     ) -> RecordMercariSalesBatchRequest {
         return RecordMercariSalesBatchRequest(
             items: items ?? self.items,
             rawItems: rawItems ?? self.rawItems
-        )
-    }
-
-    func jsonData() throws -> Data {
-        return try newJSONEncoder().encode(self)
-    }
-
-    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
-        return String(data: try self.jsonData(), encoding: encoding)
-    }
-}
-
-// MARK: - Item
-struct Item: Codable, Sendable {
-    let mercariItemId: String
-
-    enum CodingKeys: String, CodingKey {
-        case mercariItemId = "mercariItemId"
-    }
-}
-
-// MARK: Item convenience initializers and mutators
-
-extension Item {
-    init(data: Data) throws {
-        self = try newJSONDecoder().decode(Item.self, from: data)
-    }
-
-    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
-        guard let data = json.data(using: encoding) else {
-            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
-        }
-        try self.init(data: data)
-    }
-
-    init(fromURL url: URL) throws {
-        try self.init(data: try Data(contentsOf: url))
-    }
-
-    func with(
-        mercariItemId: String? = nil
-    ) -> Item {
-        return Item(
-            mercariItemId: mercariItemId ?? self.mercariItemId
-        )
-    }
-
-    func jsonData() throws -> Data {
-        return try newJSONEncoder().encode(self)
-    }
-
-    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
-        return String(data: try self.jsonData(), encoding: encoding)
-    }
-}
-
-// MARK: - RawItem
-struct RawItem: Codable, Sendable {
-    let mercariItemId: String
-
-    enum CodingKeys: String, CodingKey {
-        case mercariItemId = "mercariItemId"
-    }
-}
-
-// MARK: RawItem convenience initializers and mutators
-
-extension RawItem {
-    init(data: Data) throws {
-        self = try newJSONDecoder().decode(RawItem.self, from: data)
-    }
-
-    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
-        guard let data = json.data(using: encoding) else {
-            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
-        }
-        try self.init(data: data)
-    }
-
-    init(fromURL url: URL) throws {
-        try self.init(data: try Data(contentsOf: url))
-    }
-
-    func with(
-        mercariItemId: String? = nil
-    ) -> RawItem {
-        return RawItem(
-            mercariItemId: mercariItemId ?? self.mercariItemId
         )
     }
 

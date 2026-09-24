@@ -87,6 +87,7 @@ module.exports = {
   ...shared,
   SaleDocSchema: sales.SaleDocSchema,
   MercariScrapeItemSchema: mercari.MercariScrapeItemSchema,
+  MercariRowLooseSchema: mercari.MercariRowLooseSchema,
   ListingFieldsSchema: enrichment.ListingFieldsSchema,
   OptionSchema: products.OptionSchema,
   VariantSchema: products.VariantSchema,

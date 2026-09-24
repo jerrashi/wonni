@@ -19,6 +19,7 @@ const {
   ALL,
   SaleDocSchema,
   MercariScrapeItemSchema,
+  MercariRowLooseSchema,
   ListingFieldsSchema,
   OptionSchema,
   VariantSchema,
@@ -37,15 +38,31 @@ function titleCase(s) {
 }
 
 const definitions = {};
-function add(name, schema) {
-  const js = zodToJsonSchema(schema, { name, target: "jsonSchema7", $refStrategy: "none" });
+// `refs` names recurring nested schemas so quicktype emits a $ref'd type with
+// that name, instead of inferring one from the enclosing property (e.g. an
+// `items` array field would otherwise synthesize a class literally named
+// "Item", colliding with the app's own SwiftData `Item` model).
+function add(name, schema, refs) {
+  const js = zodToJsonSchema(schema, {
+    name,
+    target: "jsonSchema7",
+    // "none" never emits $refs (even for pre-named `definitions`), so a
+    // schema passed via `refs` needs "root" to actually get referenced by
+    // name instead of inlined-and-renamed at each occurrence.
+    $refStrategy: refs ? "root" : "none",
+    ...(refs ? { definitions: refs } : {}),
+  });
   // zodToJsonSchema nests the named schema under definitions[name]; hoist it.
   const body = js.definitions?.[name] ?? js;
   definitions[name] = body;
+  for (const refName of Object.keys(refs ?? {})) {
+    if (js.definitions?.[refName]) definitions[refName] = js.definitions[refName];
+  }
 }
 
 for (const c of ALL) {
-  add(`${titleCase(c.name)}Request`, c.request);
+  const refs = c.name === "recordMercariSalesBatch" ? { MercariBatchRow: MercariRowLooseSchema } : undefined;
+  add(`${titleCase(c.name)}Request`, c.request, refs);
   add(`${titleCase(c.name)}Response`, c.response);
 }
 add("SaleDoc", SaleDocSchema);

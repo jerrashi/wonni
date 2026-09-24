@@ -123,6 +123,7 @@ const UpdateMercariListingStatusRequestSchema = z.object({
 
 module.exports = {
   MercariScrapeItemSchema,
+  MercariRowLooseSchema,
   contracts: [
     {
       name: "recordMercariSalesBatch",

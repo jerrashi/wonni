@@ -61,6 +61,9 @@
     "RecordMercariSalesBatchRequest": {
       "$ref": "#/definitions/RecordMercariSalesBatchRequest"
     },
+    "MercariBatchRow": {
+      "$ref": "#/definitions/MercariBatchRow"
+    },
     "RecordMercariSalesBatchResponse": {
       "$ref": "#/definitions/RecordMercariSalesBatchResponse"
     },
@@ -958,39 +961,32 @@
         "items": {
           "type": "array",
           "items": {
-            "type": "object",
-            "properties": {
-              "mercariItemId": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "required": [
-              "mercariItemId"
-            ],
-            "additionalProperties": true
+            "$ref": "#/definitions/MercariBatchRow"
           },
           "maxItems": 200
         },
         "rawItems": {
           "type": "array",
           "items": {
-            "type": "object",
-            "properties": {
-              "mercariItemId": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "required": [
-              "mercariItemId"
-            ],
-            "additionalProperties": true
+            "$ref": "#/definitions/MercariBatchRow"
           },
           "maxItems": 200
         }
       },
       "additionalProperties": false
+    },
+    "MercariBatchRow": {
+      "type": "object",
+      "properties": {
+        "mercariItemId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "mercariItemId"
+      ],
+      "additionalProperties": true
     },
     "RecordMercariSalesBatchResponse": {
       "type": "object",
