@@ -86,6 +86,7 @@ module.exports = {
   z,
   ...shared,
   SaleDocSchema: sales.SaleDocSchema,
+  SyncSalesPlatformErrorSchema: sales.SyncSalesPlatformErrorSchema,
   MercariScrapeItemSchema: mercari.MercariScrapeItemSchema,
   MercariRowLooseSchema: mercari.MercariRowLooseSchema,
   MercariBatchResultSchema: mercari.MercariBatchResultSchema,

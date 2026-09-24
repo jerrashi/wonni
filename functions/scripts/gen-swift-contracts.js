@@ -27,6 +27,7 @@ const {
   ProductDocSchema,
   WeverseOrderTaskWithIdSchema,
   CarrierSchema,
+  SyncSalesPlatformErrorSchema,
 } = require("../contracts");
 
 const OUT_DIR = path.join(__dirname, "..", "contracts", "generated");
@@ -75,6 +76,7 @@ const REQUEST_REFS = {
 const RESPONSE_REFS = {
   recordMercariSalesBatch: { MercariBatchResult: MercariBatchResultSchema },
   listWeverseOrderTasks: { WeverseOrderTaskWithId: WeverseOrderTaskWithIdSchema },
+  syncSales: { SyncSalesPlatformError: SyncSalesPlatformErrorSchema },
 };
 
 for (const c of ALL) {

@@ -80,6 +80,7 @@ struct BackendContracts: Codable, Sendable {
     let saleDoc: SaleDoc?
     let suggestEtsyCategoryRequest: SuggestEtsyCategoryRequest?
     let suggestEtsyCategoryResponse: SuggestEtsyCategoryResponse?
+    let syncSalesPlatformError: SyncSalesPlatformError?
     let syncSalesRequest: SyncSalesRequest?
     let syncSalesResponse: SyncSalesResponse?
     let updateMercariListingStatusRequest: UpdateMercariListingStatusRequest?
@@ -164,6 +165,7 @@ struct BackendContracts: Codable, Sendable {
         case saleDoc = "SaleDoc"
         case suggestEtsyCategoryRequest = "SuggestEtsyCategoryRequest"
         case suggestEtsyCategoryResponse = "SuggestEtsyCategoryResponse"
+        case syncSalesPlatformError = "SyncSalesPlatformError"
         case syncSalesRequest = "SyncSalesRequest"
         case syncSalesResponse = "SyncSalesResponse"
         case updateMercariListingStatusRequest = "UpdateMercariListingStatusRequest"
@@ -268,6 +270,7 @@ extension BackendContracts {
         saleDoc: SaleDoc?? = nil,
         suggestEtsyCategoryRequest: SuggestEtsyCategoryRequest?? = nil,
         suggestEtsyCategoryResponse: SuggestEtsyCategoryResponse?? = nil,
+        syncSalesPlatformError: SyncSalesPlatformError?? = nil,
         syncSalesRequest: SyncSalesRequest?? = nil,
         syncSalesResponse: SyncSalesResponse?? = nil,
         updateMercariListingStatusRequest: UpdateMercariListingStatusRequest?? = nil,
@@ -352,6 +355,7 @@ extension BackendContracts {
             saleDoc: saleDoc ?? self.saleDoc,
             suggestEtsyCategoryRequest: suggestEtsyCategoryRequest ?? self.suggestEtsyCategoryRequest,
             suggestEtsyCategoryResponse: suggestEtsyCategoryResponse ?? self.suggestEtsyCategoryResponse,
+            syncSalesPlatformError: syncSalesPlatformError ?? self.syncSalesPlatformError,
             syncSalesRequest: syncSalesRequest ?? self.syncSalesRequest,
             syncSalesResponse: syncSalesResponse ?? self.syncSalesResponse,
             updateMercariListingStatusRequest: updateMercariListingStatusRequest ?? self.updateMercariListingStatusRequest,
@@ -6175,6 +6179,54 @@ extension SuggestEtsyCategoryResponse {
     }
 }
 
+// MARK: - SyncSalesPlatformError
+struct SyncSalesPlatformError: Codable, Sendable {
+    let message: String
+    let platform: String
+
+    enum CodingKeys: String, CodingKey {
+        case message = "message"
+        case platform = "platform"
+    }
+}
+
+// MARK: SyncSalesPlatformError convenience initializers and mutators
+
+extension SyncSalesPlatformError {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(SyncSalesPlatformError.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        message: String? = nil,
+        platform: String? = nil
+    ) -> SyncSalesPlatformError {
+        return SyncSalesPlatformError(
+            message: message ?? self.message,
+            platform: platform ?? self.platform
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
 // MARK: - SyncSalesRequest
 struct SyncSalesRequest: Codable, Sendable {
     let platform: GetOrderTakeHomeRequestPlatform?
@@ -6225,7 +6277,7 @@ extension SyncSalesRequest {
 
 // MARK: - SyncSalesResponse
 struct SyncSalesResponse: Codable, Sendable {
-    let errors: [Error]
+    let errors: [SyncSalesPlatformError]
     let imported: Int
     let saleIds: [String]
     let skipped: Int
@@ -6257,7 +6309,7 @@ extension SyncSalesResponse {
     }
 
     func with(
-        errors: [Error]? = nil,
+        errors: [SyncSalesPlatformError]? = nil,
         imported: Int? = nil,
         saleIds: [String]? = nil,
         skipped: Int? = nil
@@ -6267,54 +6319,6 @@ extension SyncSalesResponse {
             imported: imported ?? self.imported,
             saleIds: saleIds ?? self.saleIds,
             skipped: skipped ?? self.skipped
-        )
-    }
-
-    func jsonData() throws -> Data {
-        return try newJSONEncoder().encode(self)
-    }
-
-    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
-        return String(data: try self.jsonData(), encoding: encoding)
-    }
-}
-
-// MARK: - Error
-struct Error: Codable, Sendable {
-    let message: String
-    let platform: String
-
-    enum CodingKeys: String, CodingKey {
-        case message = "message"
-        case platform = "platform"
-    }
-}
-
-// MARK: Error convenience initializers and mutators
-
-extension Error {
-    init(data: Data) throws {
-        self = try newJSONDecoder().decode(Error.self, from: data)
-    }
-
-    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
-        guard let data = json.data(using: encoding) else {
-            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
-        }
-        try self.init(data: data)
-    }
-
-    init(fromURL url: URL) throws {
-        try self.init(data: try Data(contentsOf: url))
-    }
-
-    func with(
-        message: String? = nil,
-        platform: String? = nil
-    ) -> Error {
-        return Error(
-            message: message ?? self.message,
-            platform: platform ?? self.platform
         )
     }
 

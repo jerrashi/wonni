@@ -37,6 +37,9 @@
     "SyncSalesResponse": {
       "$ref": "#/definitions/SyncSalesResponse"
     },
+    "SyncSalesPlatformError": {
+      "$ref": "#/definitions/SyncSalesPlatformError"
+    },
     "GetOrderTakeHomeRequest": {
       "$ref": "#/definitions/GetOrderTakeHomeRequest"
     },
@@ -783,20 +786,7 @@
         "errors": {
           "type": "array",
           "items": {
-            "type": "object",
-            "properties": {
-              "platform": {
-                "type": "string"
-              },
-              "message": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "platform",
-              "message"
-            ],
-            "additionalProperties": false
+            "$ref": "#/definitions/SyncSalesPlatformError"
           }
         }
       },
@@ -805,6 +795,22 @@
         "skipped",
         "saleIds",
         "errors"
+      ],
+      "additionalProperties": false
+    },
+    "SyncSalesPlatformError": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "platform",
+        "message"
       ],
       "additionalProperties": false
     },

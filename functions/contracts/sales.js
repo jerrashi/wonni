@@ -187,11 +187,13 @@ const SyncSalesRequestSchema = z.object({
   since: TimestampInputSchema.nullish(),
 });
 
+const SyncSalesPlatformErrorSchema = z.object({ platform: z.string(), message: z.string() });
+
 const SyncSalesResponseSchema = z.object({
   imported: z.number().int(),
   skipped: z.number().int(),
   saleIds: z.array(z.string()),
-  errors: z.array(z.object({ platform: z.string(), message: z.string() })),
+  errors: z.array(SyncSalesPlatformErrorSchema),
 });
 
 // ── updateSaleStatus — move one sale to a stage-board bucket ────────────────
@@ -241,6 +243,7 @@ const GetOrderTakeHomeResponseSchema = z.object({
 
 module.exports = {
   SaleDocSchema,
+  SyncSalesPlatformErrorSchema,
   contracts: [
     {
       name: "recordSale",
