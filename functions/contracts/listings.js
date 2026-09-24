@@ -36,16 +36,18 @@ const EbayCreateListingResponseSchema = z.object({
   listingUrl: z.string().url(),
 });
 
+const EbayListingVariantGroupSchema = z.object({
+  title: z.string().nullish(),
+  variesBy: z.array(z.string()).nullish(),
+  variantSkus: z.array(z.string()).nullish(),
+});
+
 const EbayGetListingResponseSchema = z.object({
   productId: ProductIdSchema,
   listingId: z.string().nullable(),
   status: z.string(),
   totalSold: z.number().int(),
-  group: z.object({
-    title: z.string().nullish(),
-    variesBy: z.array(z.string()).nullish(),
-    variantSkus: z.array(z.string()).nullish(),
-  }).nullish(),
+  group: EbayListingVariantGroupSchema.nullish(),
 });
 
 const CrossPostStatusResponseSchema = z.object({
@@ -57,6 +59,7 @@ const CrossPostStatusResponseSchema = z.object({
 
 module.exports = {
   ProductRefRequestSchema,
+  EbayListingVariantGroupSchema,
   contracts: [
     {
       name: "ebayCreateListing",

@@ -112,6 +112,9 @@
     "EbayGetListingResponse": {
       "$ref": "#/definitions/EbayGetListingResponse"
     },
+    "EbayVariantGroup": {
+      "$ref": "#/definitions/EbayVariantGroup"
+    },
     "EbayUpdateListingRequest": {
       "$ref": "#/definitions/EbayUpdateListingRequest"
     },
@@ -1515,42 +1518,7 @@
         "group": {
           "anyOf": [
             {
-              "type": "object",
-              "properties": {
-                "title": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "variesBy": {
-                  "anyOf": [
-                    {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "variantSkus": {
-                  "anyOf": [
-                    {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "additionalProperties": false
+              "$ref": "#/definitions/EbayVariantGroup"
             },
             {
               "type": "null"
@@ -1564,6 +1532,44 @@
         "status",
         "totalSold"
       ],
+      "additionalProperties": false
+    },
+    "EbayVariantGroup": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "variesBy": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "variantSkus": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
       "additionalProperties": false
     },
     "EbayUpdateListingRequest": {

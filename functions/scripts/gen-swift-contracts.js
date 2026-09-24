@@ -28,6 +28,7 @@ const {
   WeverseOrderTaskWithIdSchema,
   CarrierSchema,
   SyncSalesPlatformErrorSchema,
+  EbayListingVariantGroupSchema,
 } = require("../contracts");
 
 const OUT_DIR = path.join(__dirname, "..", "contracts", "generated");
@@ -77,6 +78,7 @@ const RESPONSE_REFS = {
   recordMercariSalesBatch: { MercariBatchResult: MercariBatchResultSchema },
   listWeverseOrderTasks: { WeverseOrderTaskWithId: WeverseOrderTaskWithIdSchema },
   syncSales: { SyncSalesPlatformError: SyncSalesPlatformErrorSchema },
+  ebayGetListing: { EbayVariantGroup: EbayListingVariantGroupSchema },
 };
 
 for (const c of ALL) {

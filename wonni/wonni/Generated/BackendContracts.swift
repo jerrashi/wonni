@@ -28,6 +28,7 @@ struct BackendContracts: Codable, Sendable {
     let ebayImportListingResponse: EbayImportListingResponse?
     let ebayUpdateListingRequest: EbayUpdateListingRequest?
     let ebayUpdateListingResponse: EbayUpdateListingResponse?
+    let ebayVariantGroup: EbayVariantGroup?
     let enrichListingRequest: EnrichListingRequest?
     let enrichListingResponse: EnrichListingResponse?
     let etsyCheckShopSetupRequest: EtsyCheckShopSetupRequest?
@@ -113,6 +114,7 @@ struct BackendContracts: Codable, Sendable {
         case ebayImportListingResponse = "EbayImportListingResponse"
         case ebayUpdateListingRequest = "EbayUpdateListingRequest"
         case ebayUpdateListingResponse = "EbayUpdateListingResponse"
+        case ebayVariantGroup = "EbayVariantGroup"
         case enrichListingRequest = "EnrichListingRequest"
         case enrichListingResponse = "EnrichListingResponse"
         case etsyCheckShopSetupRequest = "EtsyCheckShopSetupRequest"
@@ -218,6 +220,7 @@ extension BackendContracts {
         ebayImportListingResponse: EbayImportListingResponse?? = nil,
         ebayUpdateListingRequest: EbayUpdateListingRequest?? = nil,
         ebayUpdateListingResponse: EbayUpdateListingResponse?? = nil,
+        ebayVariantGroup: EbayVariantGroup?? = nil,
         enrichListingRequest: EnrichListingRequest?? = nil,
         enrichListingResponse: EnrichListingResponse?? = nil,
         etsyCheckShopSetupRequest: EtsyCheckShopSetupRequest?? = nil,
@@ -303,6 +306,7 @@ extension BackendContracts {
             ebayImportListingResponse: ebayImportListingResponse ?? self.ebayImportListingResponse,
             ebayUpdateListingRequest: ebayUpdateListingRequest ?? self.ebayUpdateListingRequest,
             ebayUpdateListingResponse: ebayUpdateListingResponse ?? self.ebayUpdateListingResponse,
+            ebayVariantGroup: ebayVariantGroup ?? self.ebayVariantGroup,
             enrichListingRequest: enrichListingRequest ?? self.enrichListingRequest,
             enrichListingResponse: enrichListingResponse ?? self.enrichListingResponse,
             etsyCheckShopSetupRequest: etsyCheckShopSetupRequest ?? self.etsyCheckShopSetupRequest,
@@ -1578,7 +1582,7 @@ extension EbayGetListingRequest {
 
 // MARK: - EbayGetListingResponse
 struct EbayGetListingResponse: Codable, Sendable {
-    let group: Group?
+    let group: EbayVariantGroup?
     let listingId: String?
     let productId: String
     let status: String
@@ -1612,7 +1616,7 @@ extension EbayGetListingResponse {
     }
 
     func with(
-        group: Group?? = nil,
+        group: EbayVariantGroup?? = nil,
         listingId: String?? = nil,
         productId: String? = nil,
         status: String? = nil,
@@ -1636,8 +1640,8 @@ extension EbayGetListingResponse {
     }
 }
 
-// MARK: - Group
-struct Group: Codable, Sendable {
+// MARK: - EbayVariantGroup
+struct EbayVariantGroup: Codable, Sendable {
     let title: String?
     let variantSkus: [String]?
     let variesBy: [String]?
@@ -1649,11 +1653,11 @@ struct Group: Codable, Sendable {
     }
 }
 
-// MARK: Group convenience initializers and mutators
+// MARK: EbayVariantGroup convenience initializers and mutators
 
-extension Group {
+extension EbayVariantGroup {
     init(data: Data) throws {
-        self = try newJSONDecoder().decode(Group.self, from: data)
+        self = try newJSONDecoder().decode(EbayVariantGroup.self, from: data)
     }
 
     init(_ json: String, using encoding: String.Encoding = .utf8) throws {
@@ -1671,8 +1675,8 @@ extension Group {
         title: String?? = nil,
         variantSkus: [String]?? = nil,
         variesBy: [String]?? = nil
-    ) -> Group {
-        return Group(
+    ) -> EbayVariantGroup {
+        return EbayVariantGroup(
             title: title ?? self.title,
             variantSkus: variantSkus ?? self.variantSkus,
             variesBy: variesBy ?? self.variesBy
