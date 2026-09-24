@@ -20,10 +20,13 @@ const {
   SaleDocSchema,
   MercariScrapeItemSchema,
   MercariRowLooseSchema,
+  MercariBatchResultSchema,
   ListingFieldsSchema,
   OptionSchema,
   VariantSchema,
   ProductDocSchema,
+  WeverseOrderTaskWithIdSchema,
+  CarrierSchema,
 } = require("../contracts");
 
 const OUT_DIR = path.join(__dirname, "..", "contracts", "generated");
@@ -60,12 +63,25 @@ function add(name, schema, refs) {
   }
 }
 
+// Per-contract nested schemas that need an explicit name (see `add` above).
+// Keyed by contract name; each entry names the request/response's recurring
+// nested schema(s) so quicktype doesn't synthesize a type name from the
+// enclosing property that happens to collide with a Swift/Foundation type
+// (`Result`, `Task`) or an app type (`Carrier` in CrossPostWebView.swift).
+const REQUEST_REFS = {
+  recordSale: { SaleCarrier: CarrierSchema },
+  recordMercariSalesBatch: { MercariBatchRow: MercariRowLooseSchema },
+};
+const RESPONSE_REFS = {
+  recordMercariSalesBatch: { MercariBatchResult: MercariBatchResultSchema },
+  listWeverseOrderTasks: { WeverseOrderTaskWithId: WeverseOrderTaskWithIdSchema },
+};
+
 for (const c of ALL) {
-  const refs = c.name === "recordMercariSalesBatch" ? { MercariBatchRow: MercariRowLooseSchema } : undefined;
-  add(`${titleCase(c.name)}Request`, c.request, refs);
-  add(`${titleCase(c.name)}Response`, c.response);
+  add(`${titleCase(c.name)}Request`, c.request, REQUEST_REFS[c.name]);
+  add(`${titleCase(c.name)}Response`, c.response, RESPONSE_REFS[c.name]);
 }
-add("SaleDoc", SaleDocSchema);
+add("SaleDoc", SaleDocSchema, { SaleCarrier: CarrierSchema });
 add("MercariScrapeItem", MercariScrapeItemSchema);
 add("ListingFields", ListingFieldsSchema);
 add("Option", OptionSchema);

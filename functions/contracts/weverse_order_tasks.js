@@ -86,13 +86,16 @@ const ListWeverseOrderTasksRequestSchema = z.object({
   cursor: z.string().nullish(),
 });
 
+const WeverseOrderTaskWithIdSchema = WeverseOrderTaskDocSchema.extend({ id: z.string() });
+
 const ListWeverseOrderTasksResponseSchema = z.object({
-  tasks: z.array(WeverseOrderTaskDocSchema.extend({ id: z.string() })),
+  tasks: z.array(WeverseOrderTaskWithIdSchema),
   nextCursor: z.string().nullable(),
 });
 
 module.exports = {
   WeverseOrderTaskDocSchema,
+  WeverseOrderTaskWithIdSchema,
   WeverseOrderTaskStatusSchema,
   contracts: [
     {

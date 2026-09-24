@@ -57,6 +57,7 @@ struct BackendContracts: Codable, Sendable {
     let listWeverseOrderTasksResponse: ListWeverseOrderTasksResponse?
     let markSoldOutAndCascadeRequest: MarkSoldOutAndCascadeRequest?
     let markSoldOutAndCascadeResponse: MarkSoldOutAndCascadeResponse?
+    let mercariBatchResult: MercariBatchResult?
     let mercariBatchRow: MercariBatchRow?
     let mercariScrapeItem: MercariScrapeItem?
     let option: Option?
@@ -75,6 +76,7 @@ struct BackendContracts: Codable, Sendable {
     let recordWeverseOrderPlacedResponse: RecordWeverseOrderPlacedResponse?
     let restockAndCascadeRequest: RestockAndCascadeRequest?
     let restockAndCascadeResponse: RestockAndCascadeResponse?
+    let saleCarrier: SaleCarrier?
     let saleDoc: SaleDoc?
     let suggestEtsyCategoryRequest: SuggestEtsyCategoryRequest?
     let suggestEtsyCategoryResponse: SuggestEtsyCategoryResponse?
@@ -87,6 +89,7 @@ struct BackendContracts: Codable, Sendable {
     let updateSaleStatusRequest: UpdateSaleStatusRequest?
     let updateSaleStatusResponse: UpdateSaleStatusResponse?
     let variant: VariantClass?
+    let weverseOrderTaskWithId: WeverseOrderTaskWithId?
 
     enum CodingKeys: String, CodingKey {
         case applyCrossPostRulesRequest = "ApplyCrossPostRulesRequest"
@@ -138,6 +141,7 @@ struct BackendContracts: Codable, Sendable {
         case listWeverseOrderTasksResponse = "ListWeverseOrderTasksResponse"
         case markSoldOutAndCascadeRequest = "MarkSoldOutAndCascadeRequest"
         case markSoldOutAndCascadeResponse = "MarkSoldOutAndCascadeResponse"
+        case mercariBatchResult = "MercariBatchResult"
         case mercariBatchRow = "MercariBatchRow"
         case mercariScrapeItem = "MercariScrapeItem"
         case option = "Option"
@@ -156,6 +160,7 @@ struct BackendContracts: Codable, Sendable {
         case recordWeverseOrderPlacedResponse = "RecordWeverseOrderPlacedResponse"
         case restockAndCascadeRequest = "RestockAndCascadeRequest"
         case restockAndCascadeResponse = "RestockAndCascadeResponse"
+        case saleCarrier = "SaleCarrier"
         case saleDoc = "SaleDoc"
         case suggestEtsyCategoryRequest = "SuggestEtsyCategoryRequest"
         case suggestEtsyCategoryResponse = "SuggestEtsyCategoryResponse"
@@ -168,6 +173,7 @@ struct BackendContracts: Codable, Sendable {
         case updateSaleStatusRequest = "UpdateSaleStatusRequest"
         case updateSaleStatusResponse = "UpdateSaleStatusResponse"
         case variant = "Variant"
+        case weverseOrderTaskWithId = "WeverseOrderTaskWithId"
     }
 }
 
@@ -239,6 +245,7 @@ extension BackendContracts {
         listWeverseOrderTasksResponse: ListWeverseOrderTasksResponse?? = nil,
         markSoldOutAndCascadeRequest: MarkSoldOutAndCascadeRequest?? = nil,
         markSoldOutAndCascadeResponse: MarkSoldOutAndCascadeResponse?? = nil,
+        mercariBatchResult: MercariBatchResult?? = nil,
         mercariBatchRow: MercariBatchRow?? = nil,
         mercariScrapeItem: MercariScrapeItem?? = nil,
         option: Option?? = nil,
@@ -257,6 +264,7 @@ extension BackendContracts {
         recordWeverseOrderPlacedResponse: RecordWeverseOrderPlacedResponse?? = nil,
         restockAndCascadeRequest: RestockAndCascadeRequest?? = nil,
         restockAndCascadeResponse: RestockAndCascadeResponse?? = nil,
+        saleCarrier: SaleCarrier?? = nil,
         saleDoc: SaleDoc?? = nil,
         suggestEtsyCategoryRequest: SuggestEtsyCategoryRequest?? = nil,
         suggestEtsyCategoryResponse: SuggestEtsyCategoryResponse?? = nil,
@@ -268,7 +276,8 @@ extension BackendContracts {
         updateSaleStagesResponse: UpdateSaleStagesResponse?? = nil,
         updateSaleStatusRequest: UpdateSaleStatusRequest?? = nil,
         updateSaleStatusResponse: UpdateSaleStatusResponse?? = nil,
-        variant: VariantClass?? = nil
+        variant: VariantClass?? = nil,
+        weverseOrderTaskWithId: WeverseOrderTaskWithId?? = nil
     ) -> BackendContracts {
         return BackendContracts(
             applyCrossPostRulesRequest: applyCrossPostRulesRequest ?? self.applyCrossPostRulesRequest,
@@ -320,6 +329,7 @@ extension BackendContracts {
             listWeverseOrderTasksResponse: listWeverseOrderTasksResponse ?? self.listWeverseOrderTasksResponse,
             markSoldOutAndCascadeRequest: markSoldOutAndCascadeRequest ?? self.markSoldOutAndCascadeRequest,
             markSoldOutAndCascadeResponse: markSoldOutAndCascadeResponse ?? self.markSoldOutAndCascadeResponse,
+            mercariBatchResult: mercariBatchResult ?? self.mercariBatchResult,
             mercariBatchRow: mercariBatchRow ?? self.mercariBatchRow,
             mercariScrapeItem: mercariScrapeItem ?? self.mercariScrapeItem,
             option: option ?? self.option,
@@ -338,6 +348,7 @@ extension BackendContracts {
             recordWeverseOrderPlacedResponse: recordWeverseOrderPlacedResponse ?? self.recordWeverseOrderPlacedResponse,
             restockAndCascadeRequest: restockAndCascadeRequest ?? self.restockAndCascadeRequest,
             restockAndCascadeResponse: restockAndCascadeResponse ?? self.restockAndCascadeResponse,
+            saleCarrier: saleCarrier ?? self.saleCarrier,
             saleDoc: saleDoc ?? self.saleDoc,
             suggestEtsyCategoryRequest: suggestEtsyCategoryRequest ?? self.suggestEtsyCategoryRequest,
             suggestEtsyCategoryResponse: suggestEtsyCategoryResponse ?? self.suggestEtsyCategoryResponse,
@@ -349,7 +360,8 @@ extension BackendContracts {
             updateSaleStagesResponse: updateSaleStagesResponse ?? self.updateSaleStagesResponse,
             updateSaleStatusRequest: updateSaleStatusRequest ?? self.updateSaleStatusRequest,
             updateSaleStatusResponse: updateSaleStatusResponse ?? self.updateSaleStatusResponse,
-            variant: variant ?? self.variant
+            variant: variant ?? self.variant,
+            weverseOrderTaskWithId: weverseOrderTaskWithId ?? self.weverseOrderTaskWithId
         )
     }
 
@@ -3914,7 +3926,7 @@ enum ListWeverseOrderTasksRequestStatus: String, Codable, Sendable {
 // MARK: - ListWeverseOrderTasksResponse
 struct ListWeverseOrderTasksResponse: Codable, Sendable {
     let nextCursor: String?
-    let tasks: [Task]
+    let tasks: [WeverseOrderTaskWithId]
 
     enum CodingKeys: String, CodingKey {
         case nextCursor = "nextCursor"
@@ -3942,7 +3954,7 @@ extension ListWeverseOrderTasksResponse {
 
     func with(
         nextCursor: String?? = nil,
-        tasks: [Task]? = nil
+        tasks: [WeverseOrderTaskWithId]? = nil
     ) -> ListWeverseOrderTasksResponse {
         return ListWeverseOrderTasksResponse(
             nextCursor: nextCursor ?? self.nextCursor,
@@ -3959,13 +3971,13 @@ extension ListWeverseOrderTasksResponse {
     }
 }
 
-// MARK: - Task
-struct Task: Codable, Sendable {
+// MARK: - WeverseOrderTaskWithId
+struct WeverseOrderTaskWithId: Codable, Sendable {
     let costPaid: Double?
-    let createdAt: TaskCreatedAt
+    let createdAt: CreatedAt
     let id: String
     let listingTitle: String?
-    let orderedAt: OrderedAt?
+    let orderedAt: CreatedAt?
     let orderNumber: String?
     let productId: String
     let saleId: String
@@ -3994,11 +4006,11 @@ struct Task: Codable, Sendable {
     }
 }
 
-// MARK: Task convenience initializers and mutators
+// MARK: WeverseOrderTaskWithId convenience initializers and mutators
 
-extension Task {
+extension WeverseOrderTaskWithId {
     init(data: Data) throws {
-        self = try newJSONDecoder().decode(Task.self, from: data)
+        self = try newJSONDecoder().decode(WeverseOrderTaskWithId.self, from: data)
     }
 
     init(_ json: String, using encoding: String.Encoding = .utf8) throws {
@@ -4014,10 +4026,10 @@ extension Task {
 
     func with(
         costPaid: Double?? = nil,
-        createdAt: TaskCreatedAt? = nil,
+        createdAt: CreatedAt? = nil,
         id: String? = nil,
         listingTitle: String?? = nil,
-        orderedAt: OrderedAt?? = nil,
+        orderedAt: CreatedAt?? = nil,
         orderNumber: String?? = nil,
         productId: String? = nil,
         saleId: String? = nil,
@@ -4027,8 +4039,8 @@ extension Task {
         variantId: String?? = nil,
         weverseSaleId: String?? = nil,
         weverseUrl: String?? = nil
-    ) -> Task {
-        return Task(
+    ) -> WeverseOrderTaskWithId {
+        return WeverseOrderTaskWithId(
             costPaid: costPaid ?? self.costPaid,
             createdAt: createdAt ?? self.createdAt,
             id: id ?? self.id,
@@ -4055,8 +4067,8 @@ extension Task {
     }
 }
 
-// MARK: - TaskCreatedAt
-struct TaskCreatedAt: Codable, Sendable {
+// MARK: - CreatedAt
+struct CreatedAt: Codable, Sendable {
     let nanoseconds: Int
     let seconds: Int
 
@@ -4066,11 +4078,11 @@ struct TaskCreatedAt: Codable, Sendable {
     }
 }
 
-// MARK: TaskCreatedAt convenience initializers and mutators
+// MARK: CreatedAt convenience initializers and mutators
 
-extension TaskCreatedAt {
+extension CreatedAt {
     init(data: Data) throws {
-        self = try newJSONDecoder().decode(TaskCreatedAt.self, from: data)
+        self = try newJSONDecoder().decode(CreatedAt.self, from: data)
     }
 
     init(_ json: String, using encoding: String.Encoding = .utf8) throws {
@@ -4087,56 +4099,8 @@ extension TaskCreatedAt {
     func with(
         nanoseconds: Int? = nil,
         seconds: Int? = nil
-    ) -> TaskCreatedAt {
-        return TaskCreatedAt(
-            nanoseconds: nanoseconds ?? self.nanoseconds,
-            seconds: seconds ?? self.seconds
-        )
-    }
-
-    func jsonData() throws -> Data {
-        return try newJSONEncoder().encode(self)
-    }
-
-    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
-        return String(data: try self.jsonData(), encoding: encoding)
-    }
-}
-
-// MARK: - OrderedAt
-struct OrderedAt: Codable, Sendable {
-    let nanoseconds: Int
-    let seconds: Int
-
-    enum CodingKeys: String, CodingKey {
-        case nanoseconds = "_nanoseconds"
-        case seconds = "_seconds"
-    }
-}
-
-// MARK: OrderedAt convenience initializers and mutators
-
-extension OrderedAt {
-    init(data: Data) throws {
-        self = try newJSONDecoder().decode(OrderedAt.self, from: data)
-    }
-
-    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
-        guard let data = json.data(using: encoding) else {
-            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
-        }
-        try self.init(data: data)
-    }
-
-    init(fromURL url: URL) throws {
-        try self.init(data: try Data(contentsOf: url))
-    }
-
-    func with(
-        nanoseconds: Int? = nil,
-        seconds: Int? = nil
-    ) -> OrderedAt {
-        return OrderedAt(
+    ) -> CreatedAt {
+        return CreatedAt(
             nanoseconds: nanoseconds ?? self.nanoseconds,
             seconds: seconds ?? self.seconds
         )
@@ -4335,6 +4299,73 @@ extension MarkSoldOutAndCascadeResponse {
     }
 }
 
+// MARK: - MercariBatchResult
+struct MercariBatchResult: Codable, Sendable {
+    let mercariItemId: String
+    let outcome: MercariBatchResultOutcome
+    let productId: String?
+    let saleId: String?
+    let warning: String?
+
+    enum CodingKeys: String, CodingKey {
+        case mercariItemId = "mercariItemId"
+        case outcome = "outcome"
+        case productId = "productId"
+        case saleId = "saleId"
+        case warning = "warning"
+    }
+}
+
+// MARK: MercariBatchResult convenience initializers and mutators
+
+extension MercariBatchResult {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(MercariBatchResult.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        mercariItemId: String? = nil,
+        outcome: MercariBatchResultOutcome? = nil,
+        productId: String?? = nil,
+        saleId: String?? = nil,
+        warning: String?? = nil
+    ) -> MercariBatchResult {
+        return MercariBatchResult(
+            mercariItemId: mercariItemId ?? self.mercariItemId,
+            outcome: outcome ?? self.outcome,
+            productId: productId ?? self.productId,
+            saleId: saleId ?? self.saleId,
+            warning: warning ?? self.warning
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+enum MercariBatchResultOutcome: String, Codable, Sendable {
+    case duplicate = "duplicate"
+    case noMatch = "no-match"
+    case parseFailed = "parse-failed"
+    case recorded = "recorded"
+}
+
 // MARK: - MercariBatchRow
 struct MercariBatchRow: Codable, Sendable {
     let mercariItemId: String
@@ -4386,7 +4417,7 @@ struct MercariScrapeItem: Codable, Sendable {
     let mercariOrderId: String?
     let priceSoldFor: Double
     let shippingRevenue: Double?
-    let soldAt: SoldAtUnion?
+    let soldAt: SoldAt?
     let soldDate: String?
     let soldDateText: String?
     let takeHome: Double?
@@ -4434,7 +4465,7 @@ extension MercariScrapeItem {
         mercariOrderId: String?? = nil,
         priceSoldFor: Double? = nil,
         shippingRevenue: Double?? = nil,
-        soldAt: SoldAtUnion?? = nil,
+        soldAt: SoldAt?? = nil,
         soldDate: String?? = nil,
         soldDateText: String?? = nil,
         takeHome: Double?? = nil,
@@ -4467,7 +4498,7 @@ extension MercariScrapeItem {
     }
 }
 
-enum SoldAtUnion: Codable, Sendable {
+enum SoldAt: Codable, Sendable {
     case dateTime(Date)
     case integer(Int)
     case null
@@ -4486,7 +4517,7 @@ enum SoldAtUnion: Codable, Sendable {
             self = .null
             return
         }
-        throw DecodingError.typeMismatch(SoldAtUnion.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Wrong type for SoldAtUnion"))
+        throw DecodingError.typeMismatch(SoldAt.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Wrong type for SoldAt"))
     }
 
     func encode(to encoder: Encoder) throws {
@@ -5208,7 +5239,7 @@ extension RecordMercariSalesBatchRequest {
 struct RecordMercariSalesBatchResponse: Codable, Sendable {
     let duplicates: Int
     let recorded: Int
-    let results: [Result]
+    let results: [MercariBatchResult]
     let unmatched: Int
 
     enum CodingKeys: String, CodingKey {
@@ -5240,7 +5271,7 @@ extension RecordMercariSalesBatchResponse {
     func with(
         duplicates: Int? = nil,
         recorded: Int? = nil,
-        results: [Result]? = nil,
+        results: [MercariBatchResult]? = nil,
         unmatched: Int? = nil
     ) -> RecordMercariSalesBatchResponse {
         return RecordMercariSalesBatchResponse(
@@ -5260,78 +5291,11 @@ extension RecordMercariSalesBatchResponse {
     }
 }
 
-// MARK: - Result
-struct Result: Codable, Sendable {
-    let mercariItemId: String
-    let outcome: ResultOutcome
-    let productId: String?
-    let saleId: String?
-    let warning: String?
-
-    enum CodingKeys: String, CodingKey {
-        case mercariItemId = "mercariItemId"
-        case outcome = "outcome"
-        case productId = "productId"
-        case saleId = "saleId"
-        case warning = "warning"
-    }
-}
-
-// MARK: Result convenience initializers and mutators
-
-extension Result {
-    init(data: Data) throws {
-        self = try newJSONDecoder().decode(Result.self, from: data)
-    }
-
-    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
-        guard let data = json.data(using: encoding) else {
-            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
-        }
-        try self.init(data: data)
-    }
-
-    init(fromURL url: URL) throws {
-        try self.init(data: try Data(contentsOf: url))
-    }
-
-    func with(
-        mercariItemId: String? = nil,
-        outcome: ResultOutcome? = nil,
-        productId: String?? = nil,
-        saleId: String?? = nil,
-        warning: String?? = nil
-    ) -> Result {
-        return Result(
-            mercariItemId: mercariItemId ?? self.mercariItemId,
-            outcome: outcome ?? self.outcome,
-            productId: productId ?? self.productId,
-            saleId: saleId ?? self.saleId,
-            warning: warning ?? self.warning
-        )
-    }
-
-    func jsonData() throws -> Data {
-        return try newJSONEncoder().encode(self)
-    }
-
-    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
-        return String(data: try self.jsonData(), encoding: encoding)
-    }
-}
-
-enum ResultOutcome: String, Codable, Sendable {
-    case duplicate = "duplicate"
-    case noMatch = "no-match"
-    case parseFailed = "parse-failed"
-    case recorded = "recorded"
-}
-
 // MARK: - RecordSaleRequest
 struct RecordSaleRequest: Codable, Sendable {
     let buyerAddress: RecordSaleRequestBuyerAddress?
     let buyerName: String?
-    let carrier: Carrier?
+    let carrier: SaleCarrier?
     let cascade: Bool?
     let externalUrl: String?
     let listingTitle: String?
@@ -5343,7 +5307,7 @@ struct RecordSaleRequest: Codable, Sendable {
     let quantity: Int?
     let shippingLabelCost: Double?
     let shippingRevenue: Double?
-    let soldAt: SoldAtUnion?
+    let soldAt: SoldAt?
     let soldPrice: Double
     let takeHome: Double?
     let trackingNumber: String?
@@ -5393,7 +5357,7 @@ extension RecordSaleRequest {
     func with(
         buyerAddress: RecordSaleRequestBuyerAddress?? = nil,
         buyerName: String?? = nil,
-        carrier: Carrier?? = nil,
+        carrier: SaleCarrier?? = nil,
         cascade: Bool?? = nil,
         externalUrl: String?? = nil,
         listingTitle: String?? = nil,
@@ -5405,7 +5369,7 @@ extension RecordSaleRequest {
         quantity: Int?? = nil,
         shippingLabelCost: Double?? = nil,
         shippingRevenue: Double?? = nil,
-        soldAt: SoldAtUnion?? = nil,
+        soldAt: SoldAt?? = nil,
         soldPrice: Double? = nil,
         takeHome: Double?? = nil,
         trackingNumber: String?? = nil,
@@ -5511,7 +5475,7 @@ extension RecordSaleRequestBuyerAddress {
     }
 }
 
-enum Carrier: String, Codable, Sendable {
+enum SaleCarrier: String, Codable, Sendable {
     case dhl = "DHL"
     case fedEx = "FedEx"
     case other = "other"
@@ -5828,10 +5792,10 @@ struct SaleDoc: Codable, Sendable {
     let actualCostPaid: Double?
     let buyerAddress: SaleDocBuyerAddress?
     let buyerName: String?
-    let carrier: Carrier?
+    let carrier: SaleCarrier?
     let coverPhotoPath: String?
-    let createdAt: SaleDocCreatedAt
-    let deletedAt: DeletedAt?
+    let createdAt: SoldAtClass
+    let deletedAt: SoldAtClass?
     let externalUrl: String?
     let isDeleted: Bool?
     let listingTitle: String?
@@ -5843,16 +5807,16 @@ struct SaleDoc: Codable, Sendable {
     let productId: String?
     let productTags: [String]?
     let quantity: Int?
-    let shippedAt: ShippedAt?
+    let shippedAt: SoldAtClass?
     let shippingLabelCost: Double?
     let shippingRevenue: Double?
-    let soldAt: SoldAt
+    let soldAt: SoldAtClass
     let source: Source?
     let status: String
     let takeHome: Double?
     let thumbnailUrl: String?
     let trackingNumber: String?
-    let updatedAt: UpdatedAt
+    let updatedAt: SoldAtClass
     let userId: String
     let variantOptionValues: [String: String]?
     let variantSku: String?
@@ -5914,10 +5878,10 @@ extension SaleDoc {
         actualCostPaid: Double?? = nil,
         buyerAddress: SaleDocBuyerAddress?? = nil,
         buyerName: String?? = nil,
-        carrier: Carrier?? = nil,
+        carrier: SaleCarrier?? = nil,
         coverPhotoPath: String?? = nil,
-        createdAt: SaleDocCreatedAt? = nil,
-        deletedAt: DeletedAt?? = nil,
+        createdAt: SoldAtClass? = nil,
+        deletedAt: SoldAtClass?? = nil,
         externalUrl: String?? = nil,
         isDeleted: Bool?? = nil,
         listingTitle: String?? = nil,
@@ -5929,16 +5893,16 @@ extension SaleDoc {
         productId: String?? = nil,
         productTags: [String]?? = nil,
         quantity: Int?? = nil,
-        shippedAt: ShippedAt?? = nil,
+        shippedAt: SoldAtClass?? = nil,
         shippingLabelCost: Double?? = nil,
         shippingRevenue: Double?? = nil,
-        soldAt: SoldAt? = nil,
+        soldAt: SoldAtClass? = nil,
         source: Source?? = nil,
         status: String? = nil,
         takeHome: Double?? = nil,
         thumbnailUrl: String?? = nil,
         trackingNumber: String?? = nil,
-        updatedAt: UpdatedAt? = nil,
+        updatedAt: SoldAtClass? = nil,
         userId: String? = nil,
         variantOptionValues: [String: String]?? = nil,
         variantSku: String?? = nil
@@ -6055,8 +6019,8 @@ extension SaleDocBuyerAddress {
     }
 }
 
-// MARK: - SaleDocCreatedAt
-struct SaleDocCreatedAt: Codable, Sendable {
+// MARK: - SoldAtClass
+struct SoldAtClass: Codable, Sendable {
     let nanoseconds: Int
     let seconds: Int
 
@@ -6066,11 +6030,11 @@ struct SaleDocCreatedAt: Codable, Sendable {
     }
 }
 
-// MARK: SaleDocCreatedAt convenience initializers and mutators
+// MARK: SoldAtClass convenience initializers and mutators
 
-extension SaleDocCreatedAt {
+extension SoldAtClass {
     init(data: Data) throws {
-        self = try newJSONDecoder().decode(SaleDocCreatedAt.self, from: data)
+        self = try newJSONDecoder().decode(SoldAtClass.self, from: data)
     }
 
     init(_ json: String, using encoding: String.Encoding = .utf8) throws {
@@ -6087,152 +6051,8 @@ extension SaleDocCreatedAt {
     func with(
         nanoseconds: Int? = nil,
         seconds: Int? = nil
-    ) -> SaleDocCreatedAt {
-        return SaleDocCreatedAt(
-            nanoseconds: nanoseconds ?? self.nanoseconds,
-            seconds: seconds ?? self.seconds
-        )
-    }
-
-    func jsonData() throws -> Data {
-        return try newJSONEncoder().encode(self)
-    }
-
-    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
-        return String(data: try self.jsonData(), encoding: encoding)
-    }
-}
-
-// MARK: - DeletedAt
-struct DeletedAt: Codable, Sendable {
-    let nanoseconds: Int
-    let seconds: Int
-
-    enum CodingKeys: String, CodingKey {
-        case nanoseconds = "_nanoseconds"
-        case seconds = "_seconds"
-    }
-}
-
-// MARK: DeletedAt convenience initializers and mutators
-
-extension DeletedAt {
-    init(data: Data) throws {
-        self = try newJSONDecoder().decode(DeletedAt.self, from: data)
-    }
-
-    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
-        guard let data = json.data(using: encoding) else {
-            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
-        }
-        try self.init(data: data)
-    }
-
-    init(fromURL url: URL) throws {
-        try self.init(data: try Data(contentsOf: url))
-    }
-
-    func with(
-        nanoseconds: Int? = nil,
-        seconds: Int? = nil
-    ) -> DeletedAt {
-        return DeletedAt(
-            nanoseconds: nanoseconds ?? self.nanoseconds,
-            seconds: seconds ?? self.seconds
-        )
-    }
-
-    func jsonData() throws -> Data {
-        return try newJSONEncoder().encode(self)
-    }
-
-    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
-        return String(data: try self.jsonData(), encoding: encoding)
-    }
-}
-
-// MARK: - ShippedAt
-struct ShippedAt: Codable, Sendable {
-    let nanoseconds: Int
-    let seconds: Int
-
-    enum CodingKeys: String, CodingKey {
-        case nanoseconds = "_nanoseconds"
-        case seconds = "_seconds"
-    }
-}
-
-// MARK: ShippedAt convenience initializers and mutators
-
-extension ShippedAt {
-    init(data: Data) throws {
-        self = try newJSONDecoder().decode(ShippedAt.self, from: data)
-    }
-
-    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
-        guard let data = json.data(using: encoding) else {
-            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
-        }
-        try self.init(data: data)
-    }
-
-    init(fromURL url: URL) throws {
-        try self.init(data: try Data(contentsOf: url))
-    }
-
-    func with(
-        nanoseconds: Int? = nil,
-        seconds: Int? = nil
-    ) -> ShippedAt {
-        return ShippedAt(
-            nanoseconds: nanoseconds ?? self.nanoseconds,
-            seconds: seconds ?? self.seconds
-        )
-    }
-
-    func jsonData() throws -> Data {
-        return try newJSONEncoder().encode(self)
-    }
-
-    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
-        return String(data: try self.jsonData(), encoding: encoding)
-    }
-}
-
-// MARK: - SoldAt
-struct SoldAt: Codable, Sendable {
-    let nanoseconds: Int
-    let seconds: Int
-
-    enum CodingKeys: String, CodingKey {
-        case nanoseconds = "_nanoseconds"
-        case seconds = "_seconds"
-    }
-}
-
-// MARK: SoldAt convenience initializers and mutators
-
-extension SoldAt {
-    init(data: Data) throws {
-        self = try newJSONDecoder().decode(SoldAt.self, from: data)
-    }
-
-    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
-        guard let data = json.data(using: encoding) else {
-            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
-        }
-        try self.init(data: data)
-    }
-
-    init(fromURL url: URL) throws {
-        try self.init(data: try Data(contentsOf: url))
-    }
-
-    func with(
-        nanoseconds: Int? = nil,
-        seconds: Int? = nil
-    ) -> SoldAt {
-        return SoldAt(
+    ) -> SoldAtClass {
+        return SoldAtClass(
             nanoseconds: nanoseconds ?? self.nanoseconds,
             seconds: seconds ?? self.seconds
         )
@@ -6253,54 +6073,6 @@ enum Source: String, Codable, Sendable {
     case etsyPoll = "etsy-poll"
     case manual = "manual"
     case mercariScan = "mercari-scan"
-}
-
-// MARK: - UpdatedAt
-struct UpdatedAt: Codable, Sendable {
-    let nanoseconds: Int
-    let seconds: Int
-
-    enum CodingKeys: String, CodingKey {
-        case nanoseconds = "_nanoseconds"
-        case seconds = "_seconds"
-    }
-}
-
-// MARK: UpdatedAt convenience initializers and mutators
-
-extension UpdatedAt {
-    init(data: Data) throws {
-        self = try newJSONDecoder().decode(UpdatedAt.self, from: data)
-    }
-
-    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
-        guard let data = json.data(using: encoding) else {
-            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
-        }
-        try self.init(data: data)
-    }
-
-    init(fromURL url: URL) throws {
-        try self.init(data: try Data(contentsOf: url))
-    }
-
-    func with(
-        nanoseconds: Int? = nil,
-        seconds: Int? = nil
-    ) -> UpdatedAt {
-        return UpdatedAt(
-            nanoseconds: nanoseconds ?? self.nanoseconds,
-            seconds: seconds ?? self.seconds
-        )
-    }
-
-    func jsonData() throws -> Data {
-        return try newJSONEncoder().encode(self)
-    }
-
-    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
-        return String(data: try self.jsonData(), encoding: encoding)
-    }
 }
 
 // MARK: - SuggestEtsyCategoryRequest
@@ -6406,7 +6178,7 @@ extension SuggestEtsyCategoryResponse {
 // MARK: - SyncSalesRequest
 struct SyncSalesRequest: Codable, Sendable {
     let platform: GetOrderTakeHomeRequestPlatform?
-    let since: SoldAtUnion?
+    let since: SoldAt?
 
     enum CodingKeys: String, CodingKey {
         case platform = "platform"
@@ -6434,7 +6206,7 @@ extension SyncSalesRequest {
 
     func with(
         platform: GetOrderTakeHomeRequestPlatform?? = nil,
-        since: SoldAtUnion?? = nil
+        since: SoldAt?? = nil
     ) -> SyncSalesRequest {
         return SyncSalesRequest(
             platform: platform ?? self.platform,

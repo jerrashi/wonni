@@ -7,6 +7,9 @@
     "RecordSaleRequest": {
       "$ref": "#/definitions/RecordSaleRequest"
     },
+    "SaleCarrier": {
+      "$ref": "#/definitions/SaleCarrier"
+    },
     "RecordSaleResponse": {
       "$ref": "#/definitions/RecordSaleResponse"
     },
@@ -66,6 +69,9 @@
     },
     "RecordMercariSalesBatchResponse": {
       "$ref": "#/definitions/RecordMercariSalesBatchResponse"
+    },
+    "MercariBatchResult": {
+      "$ref": "#/definitions/MercariBatchResult"
     },
     "DetectMercariPullSyncDiffRequest": {
       "$ref": "#/definitions/DetectMercariPullSyncDiffRequest"
@@ -223,6 +229,9 @@
     "ListWeverseOrderTasksResponse": {
       "$ref": "#/definitions/ListWeverseOrderTasksResponse"
     },
+    "WeverseOrderTaskWithId": {
+      "$ref": "#/definitions/WeverseOrderTaskWithId"
+    },
     "SaleDoc": {
       "$ref": "#/definitions/SaleDoc"
     },
@@ -303,8 +312,7 @@
         "shippingLabelCost": {
           "anyOf": [
             {
-              "type": "number",
-              "minimum": 0
+              "$ref": "#/definitions/RecordSaleRequest/properties/shippingRevenue/anyOf/0"
             },
             {
               "type": "null"
@@ -423,14 +431,7 @@
         "carrier": {
           "anyOf": [
             {
-              "type": "string",
-              "enum": [
-                "USPS",
-                "UPS",
-                "FedEx",
-                "DHL",
-                "other"
-              ]
+              "$ref": "#/definitions/SaleCarrier"
             },
             {
               "type": "null"
@@ -464,6 +465,16 @@
         "soldPrice"
       ],
       "additionalProperties": false
+    },
+    "SaleCarrier": {
+      "type": "string",
+      "enum": [
+        "USPS",
+        "UPS",
+        "FedEx",
+        "DHL",
+        "other"
+      ]
     },
     "RecordSaleResponse": {
       "type": "object",
@@ -994,49 +1005,7 @@
         "results": {
           "type": "array",
           "items": {
-            "type": "object",
-            "properties": {
-              "mercariItemId": {
-                "type": "string"
-              },
-              "outcome": {
-                "type": "string",
-                "enum": [
-                  "recorded",
-                  "duplicate",
-                  "no-match",
-                  "parse-failed"
-                ]
-              },
-              "saleId": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "productId": {
-                "anyOf": [
-                  {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "warning": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              }
-            },
-            "required": [
-              "mercariItemId",
-              "outcome"
-            ],
-            "additionalProperties": false
+            "$ref": "#/definitions/MercariBatchResult"
           }
         },
         "recorded": {
@@ -1054,6 +1023,51 @@
         "recorded",
         "duplicates",
         "unmatched"
+      ],
+      "additionalProperties": false
+    },
+    "MercariBatchResult": {
+      "type": "object",
+      "properties": {
+        "mercariItemId": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "recorded",
+            "duplicate",
+            "no-match",
+            "parse-failed"
+          ]
+        },
+        "saleId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "productId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "warning": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "mercariItemId",
+        "outcome"
       ],
       "additionalProperties": false
     },
@@ -2819,137 +2833,7 @@
         "tasks": {
           "type": "array",
           "items": {
-            "type": "object",
-            "properties": {
-              "userId": {
-                "type": "string",
-                "minLength": 1
-              },
-              "productId": {
-                "type": "string",
-                "minLength": 1
-              },
-              "variantId": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "saleId": {
-                "type": "string",
-                "minLength": 1
-              },
-              "weverseSaleId": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "weverseUrl": {
-                "anyOf": [
-                  {
-                    "type": "string",
-                    "format": "uri"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "listingTitle": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "thumbnailUrl": {
-                "anyOf": [
-                  {
-                    "type": "string",
-                    "format": "uri"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "status": {
-                "type": "string",
-                "enum": [
-                  "pending",
-                  "ordered",
-                  "cancelled"
-                ]
-              },
-              "orderNumber": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "costPaid": {
-                "anyOf": [
-                  {
-                    "type": "number",
-                    "minimum": 0
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "createdAt": {
-                "type": "object",
-                "properties": {
-                  "_seconds": {
-                    "type": "integer"
-                  },
-                  "_nanoseconds": {
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "_seconds",
-                  "_nanoseconds"
-                ],
-                "additionalProperties": false
-              },
-              "orderedAt": {
-                "anyOf": [
-                  {
-                    "type": "object",
-                    "properties": {
-                      "_seconds": {
-                        "type": "integer"
-                      },
-                      "_nanoseconds": {
-                        "type": "integer"
-                      }
-                    },
-                    "required": [
-                      "_seconds",
-                      "_nanoseconds"
-                    ],
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "id": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "userId",
-              "productId",
-              "saleId",
-              "status",
-              "createdAt",
-              "id"
-            ],
-            "additionalProperties": false
+            "$ref": "#/definitions/WeverseOrderTaskWithId"
           }
         },
         "nextCursor": {
@@ -2962,6 +2846,126 @@
       "required": [
         "tasks",
         "nextCursor"
+      ],
+      "additionalProperties": false
+    },
+    "WeverseOrderTaskWithId": {
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "variantId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "saleId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "weverseSaleId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "weverseUrl": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uri"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "listingTitle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thumbnailUrl": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uri"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "ordered",
+            "cancelled"
+          ]
+        },
+        "orderNumber": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "costPaid": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "type": "object",
+          "properties": {
+            "_seconds": {
+              "type": "integer"
+            },
+            "_nanoseconds": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "_seconds",
+            "_nanoseconds"
+          ],
+          "additionalProperties": false
+        },
+        "orderedAt": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WeverseOrderTaskWithId/properties/createdAt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "userId",
+        "productId",
+        "saleId",
+        "status",
+        "createdAt",
+        "id"
       ],
       "additionalProperties": false
     },
@@ -3079,8 +3083,7 @@
         "shippingLabelCost": {
           "anyOf": [
             {
-              "type": "number",
-              "minimum": 0
+              "$ref": "#/definitions/SaleDoc/properties/shippingRevenue/anyOf/0"
             },
             {
               "type": "null"
@@ -3101,8 +3104,7 @@
         "actualCostPaid": {
           "anyOf": [
             {
-              "type": "number",
-              "minimum": 0
+              "$ref": "#/definitions/SaleDoc/properties/shippingRevenue/anyOf/0"
             },
             {
               "type": "null"
@@ -3179,14 +3181,7 @@
         "carrier": {
           "anyOf": [
             {
-              "type": "string",
-              "enum": [
-                "USPS",
-                "UPS",
-                "FedEx",
-                "DHL",
-                "other"
-              ]
+              "$ref": "#/definitions/SaleCarrier"
             },
             {
               "type": "null"
@@ -3217,20 +3212,7 @@
         "shippedAt": {
           "anyOf": [
             {
-              "type": "object",
-              "properties": {
-                "_seconds": {
-                  "type": "integer"
-                },
-                "_nanoseconds": {
-                  "type": "integer"
-                }
-              },
-              "required": [
-                "_seconds",
-                "_nanoseconds"
-              ],
-              "additionalProperties": false
+              "$ref": "#/definitions/SaleDoc/properties/soldAt"
             },
             {
               "type": "null"
@@ -3238,36 +3220,10 @@
           ]
         },
         "createdAt": {
-          "type": "object",
-          "properties": {
-            "_seconds": {
-              "type": "integer"
-            },
-            "_nanoseconds": {
-              "type": "integer"
-            }
-          },
-          "required": [
-            "_seconds",
-            "_nanoseconds"
-          ],
-          "additionalProperties": false
+          "$ref": "#/definitions/SaleDoc/properties/soldAt"
         },
         "updatedAt": {
-          "type": "object",
-          "properties": {
-            "_seconds": {
-              "type": "integer"
-            },
-            "_nanoseconds": {
-              "type": "integer"
-            }
-          },
-          "required": [
-            "_seconds",
-            "_nanoseconds"
-          ],
-          "additionalProperties": false
+          "$ref": "#/definitions/SaleDoc/properties/soldAt"
         },
         "notes": {
           "type": [
@@ -3295,20 +3251,7 @@
         "deletedAt": {
           "anyOf": [
             {
-              "type": "object",
-              "properties": {
-                "_seconds": {
-                  "type": "integer"
-                },
-                "_nanoseconds": {
-                  "type": "integer"
-                }
-              },
-              "required": [
-                "_seconds",
-                "_nanoseconds"
-              ],
-              "additionalProperties": false
+              "$ref": "#/definitions/SaleDoc/properties/soldAt"
             },
             {
               "type": "null"
