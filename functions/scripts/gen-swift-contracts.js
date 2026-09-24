@@ -19,10 +19,16 @@ const {
   ALL,
   SaleDocSchema,
   MercariScrapeItemSchema,
+  MercariRowLooseSchema,
+  MercariBatchResultSchema,
   ListingFieldsSchema,
   OptionSchema,
   VariantSchema,
   ProductDocSchema,
+  WeverseOrderTaskWithIdSchema,
+  CarrierSchema,
+  SyncSalesPlatformErrorSchema,
+  EbayListingVariantGroupSchema,
 } = require("../contracts");
 
 const OUT_DIR = path.join(__dirname, "..", "contracts", "generated");
@@ -36,19 +42,102 @@ function titleCase(s) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+// quicktype's `--protocol equatable` has a known gap: it declares `Equatable`
+// on a struct even when one of its stored properties is `JSONAny` (its own
+// generated comment admits the compiler can't synthesize `==` for those —
+// it just doesn't act on that when deciding what to declare). That struct
+// then doesn't actually conform to the protocol it claims, which fails to
+// compile — and it cascades: any other Equatable struct that embeds this one
+// (directly, via `[T]`, or via `[String: T]`) breaks the same way, one level
+// up. Fix this generically: find every struct that can't really be Equatable
+// (starting from JSONAny, then propagating to fixpoint) and strip the
+// conformance from all of them, so this self-corrects on every regen instead
+// of needing a hand-edit.
+function fixupEquatableCascade(swiftPath) {
+  const src = fs.readFileSync(swiftPath, "utf8");
+  const structRe = /^struct (\w+): ([^\n{]+)\{\n([\s\S]*?)\n\}\n/gm;
+  const structs = [...src.matchAll(structRe)].map((m) => ({
+    name: m[1],
+    protocols: m[2].split(",").map((p) => p.trim()),
+    body: m[3],
+  }));
+  const structNames = new Set(structs.map((s) => s.name));
+
+  const notEquatable = new Set(
+    structs.filter((s) => /\bJSONAny\b/.test(s.body)).map((s) => s.name)
+  );
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const s of structs) {
+      if (!s.protocols.includes("Equatable") || notEquatable.has(s.name)) continue;
+      // Field type references: `Type`, `Type?`, `[Type]`, `[Type]?`,
+      // `[String: Type]`, `[String: Type]?` — collect the bare type name.
+      const fieldTypes = [...s.body.matchAll(/^\s*let \w+: \[?(?:String\s*:\s*)?(\w+)[\]?]*/gm)]
+        .map((m) => m[1]);
+      if (fieldTypes.some((t) => structNames.has(t) && notEquatable.has(t))) {
+        notEquatable.add(s.name);
+        changed = true;
+      }
+    }
+  }
+
+  const fixed = src.replace(structRe, (block, name, protocolsRaw, body) => {
+    if (!notEquatable.has(name)) return block;
+    const fixedProtocols = protocolsRaw
+      .split(",")
+      .map((p) => p.trim())
+      .filter((p) => p !== "Equatable")
+      .join(", ");
+    return `struct ${name}: ${fixedProtocols} {\n${body}\n}\n`;
+  });
+  fs.writeFileSync(swiftPath, fixed);
+}
+
 const definitions = {};
-function add(name, schema) {
-  const js = zodToJsonSchema(schema, { name, target: "jsonSchema7", $refStrategy: "none" });
+// `refs` names recurring nested schemas so quicktype emits a $ref'd type with
+// that name, instead of inferring one from the enclosing property (e.g. an
+// `items` array field would otherwise synthesize a class literally named
+// "Item", colliding with the app's own SwiftData `Item` model).
+function add(name, schema, refs) {
+  const js = zodToJsonSchema(schema, {
+    name,
+    target: "jsonSchema7",
+    // "none" never emits $refs (even for pre-named `definitions`), so a
+    // schema passed via `refs` needs "root" to actually get referenced by
+    // name instead of inlined-and-renamed at each occurrence.
+    $refStrategy: refs ? "root" : "none",
+    ...(refs ? { definitions: refs } : {}),
+  });
   // zodToJsonSchema nests the named schema under definitions[name]; hoist it.
   const body = js.definitions?.[name] ?? js;
   definitions[name] = body;
+  for (const refName of Object.keys(refs ?? {})) {
+    if (js.definitions?.[refName]) definitions[refName] = js.definitions[refName];
+  }
 }
 
+// Per-contract nested schemas that need an explicit name (see `add` above).
+// Keyed by contract name; each entry names the request/response's recurring
+// nested schema(s) so quicktype doesn't synthesize a type name from the
+// enclosing property that happens to collide with a Swift/Foundation type
+// (`Result`, `Task`) or an app type (`Carrier` in CrossPostWebView.swift).
+const REQUEST_REFS = {
+  recordSale: { SaleCarrier: CarrierSchema },
+  recordMercariSalesBatch: { MercariBatchRow: MercariRowLooseSchema },
+};
+const RESPONSE_REFS = {
+  recordMercariSalesBatch: { MercariBatchResult: MercariBatchResultSchema },
+  listWeverseOrderTasks: { WeverseOrderTaskWithId: WeverseOrderTaskWithIdSchema },
+  syncSales: { SyncSalesPlatformError: SyncSalesPlatformErrorSchema },
+  ebayGetListing: { EbayVariantGroup: EbayListingVariantGroupSchema },
+};
+
 for (const c of ALL) {
-  add(`${titleCase(c.name)}Request`, c.request);
-  add(`${titleCase(c.name)}Response`, c.response);
+  add(`${titleCase(c.name)}Request`, c.request, REQUEST_REFS[c.name]);
+  add(`${titleCase(c.name)}Response`, c.response, RESPONSE_REFS[c.name]);
 }
-add("SaleDoc", SaleDocSchema);
+add("SaleDoc", SaleDocSchema, { SaleCarrier: CarrierSchema });
 add("MercariScrapeItem", MercariScrapeItemSchema);
 add("ListingFields", ListingFieldsSchema);
 add("Option", OptionSchema);
@@ -81,11 +170,13 @@ try {
       "--lang", "swift",
       "--acronym-style", "camel",
       "--sendable",
+      "--protocol", "equatable",
       "-o", SWIFT_OUT,
       SCHEMA_PATH,
     ],
     { stdio: "inherit" }
   );
+  fixupEquatableCascade(SWIFT_OUT);
   console.log(`✓ wrote ${path.relative(process.cwd(), SWIFT_OUT)}`);
 } catch (err) {
   console.warn(
