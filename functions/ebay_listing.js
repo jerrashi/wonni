@@ -82,6 +82,13 @@ async function getOfferOrNull(uid, offerId) {
   }
 }
 
+// Wonni's own total stock for diffing against eBay. Shared pool =
+// one master number; otherwise sum the per-variant buckets.
+function wonniTotalQuantity(product) {
+  if (product.quantityVariesByVariant === false) return product.quantity ?? 0;
+  return product.variants?.reduce((sum, v) => sum + (v.quantity ?? 0), 0) ?? (product.quantity ?? 1);
+}
+
 // Live title/price/quantity for a multi-variant listing, read directly from
 // the doc's own stored pointers (inventory_item_group + each variant's own
 // offer) — mirrors the already-correct pattern in `ebayGetListing`.
@@ -105,6 +112,22 @@ async function readMultiVariantEbayData(uid, product) {
       : null,
     Promise.all(variants.map((v) => (v.ebayOfferId ? getOfferOrNull(uid, v.ebayOfferId) : null))),
   ]);
+  // Stock for variation listings lives on each variant's INVENTORY ITEM
+  // (`availability.shipToLocationAvailability.quantity`); an offer's
+  // `availableQuantity` is often absent, which made the old offer-only sum
+  // read 0 for a listing that was actually in stock. Inventory item first,
+  // offer as fallback.
+  const perVariantItems = await Promise.all(variants.map((v) => (
+    v.ebayVariantSku
+      ? ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(v.ebayVariantSku)}`)
+          .catch((e) => { if (e.status !== 404) throw e; return null; })
+      : null
+  )));
+  const perVariantQty = variants.map((_, i) => {
+    const q = perVariantItems[i]?.availability?.shipToLocationAvailability?.quantity
+      ?? perVariantOffers[i]?.availableQuantity;
+    return typeof q === "number" ? q : 0;
+  });
   const firstOffer = perVariantOffers.find(Boolean) || null;
   // "Ended" = the user (or eBay) took the listing down directly on eBay,
   // outside Wonni — none of the offers we know about are still published.
@@ -118,7 +141,11 @@ async function readMultiVariantEbayData(uid, product) {
     description: firstOffer?.listingDescription ?? group?.description ?? "",
     photoCount: group?.imageUrls?.length ?? 0,
     price: firstOffer?.pricingSummary?.price?.value != null ? parseFloat(firstOffer.pricingSummary.price.value) : null,
-    quantity: perVariantOffers.reduce((sum, o) => sum + (o?.availableQuantity ?? 0), 0),
+    // Shared pool: every variant offer carries the same master number, so
+    // summing would multiply it by the variant count.
+    quantity: product.quantityVariesByVariant === false
+      ? Math.max(0, ...perVariantQty)
+      : perVariantQty.reduce((sum, q) => sum + q, 0),
     offerId: firstOffer?.offerId ?? null,
     listingId: firstOffer?.listing?.listingId ?? product.ebayListingId ?? null,
     ended,
@@ -1229,7 +1256,7 @@ exports.ebayGetListingDetails = onCall(
       title: product.title ?? "",
       description: canonicalDescription(product),
       price: Number.isFinite(Number(product.listingPrice)) ? Number(product.listingPrice) : null,
-      quantity: product.variants?.reduce((sum, v) => sum + (v.quantity ?? 0), 0) ?? (product.quantity ?? 1),
+      quantity: wonniTotalQuantity(product),
       photoCount: wonniPhotos.length,
       handlingTimeDays: product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays ?? null,
     };
@@ -1630,7 +1657,7 @@ exports.ebayPullSync = onCall(
 
       const localTitle = product.title ?? "";
       const localPrice = Number(product.listingPrice);
-      const localQuantity = product.variants?.reduce((sum, v) => sum + (v.quantity ?? 0), 0) ?? (product.quantity ?? 1);
+      const localQuantity = wonniTotalQuantity(product);
 
       // Ended (taken down directly on eBay): title/price of a gone listing
       // aren't meaningful drift — surface only the quantity→0 row, so
