@@ -9,6 +9,10 @@ concurrency:
   group: testflight-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
+# Least privilege: the default GITHUB_TOKEN can only read repo contents.
+permissions:
+  contents: read
+
 jobs:
   archive-and-upload:
     name: Archive & Upload to TestFlight

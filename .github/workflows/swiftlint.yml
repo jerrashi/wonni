@@ -4,6 +4,10 @@ on:
   pull_request:
     paths: [wonni/wonni/**/*.swift]
 
+# Least privilege: the default GITHUB_TOKEN can only read repo contents.
+permissions:
+  contents: read
+
 jobs:
   swiftlint:
     name: SwiftLint

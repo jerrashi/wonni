@@ -116,3 +116,7 @@ temp_interactive_push.bat
 *.pem
 *service-account*.json
 *firebase-adminsdk*.json
+
+# macOS
+.DS_Store
+**/.DS_Store

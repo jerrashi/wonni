@@ -16,7 +16,7 @@ fi
 # Secret scan — blocks a commit that stages API keys / tokens / private keys.
 # Install once:  brew install gitleaks     (skipped with a notice if absent)
 if command -v gitleaks >/dev/null 2>&1; then
-  gitleaks protect --staged --redact --no-banner || {
+  gitleaks protect --staged --redact --no-banner --config .gitleaks.toml || {
     echo
     echo "✗ pre-commit: gitleaks found a possible secret in the staged changes."
     echo "  Remove it (and rotate it if it was ever pushed), or bypass with --no-verify."

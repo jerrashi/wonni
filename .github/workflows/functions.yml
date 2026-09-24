@@ -8,6 +8,10 @@ on:
     branches: [main, backend-consolidation]
     paths: [functions/**]
 
+# Least privilege: the default GITHUB_TOKEN can only read repo contents.
+permissions:
+  contents: read
+
 jobs:
   lint-and-test:
     name: Lint & Test
@@ -46,7 +50,7 @@ jobs:
       - run: npm ci
         working-directory: functions
 
-      - run: npm install -g firebase-tools
+      - run: npm install -g firebase-tools@15.28.2   # pinned: don't float to whatever 'latest' is on deploy day
 
       - name: Configure eBay function params
         # firebase deploy resolves defineString/defineSecret params from

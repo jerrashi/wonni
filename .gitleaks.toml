@@ -1,0 +1,17 @@
+# gitleaks config — keeps scans meaningful by allow-listing known non-secrets.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known false positives / public-by-design values"
+paths = [
+  '''wonni/wonni/Generated/BackendContracts\.swift''',   # Swift enum names like etsyCreateListingRequest
+  '''functions/test/weverse-duplicate-detection\.test\.js''',
+  '''(^|/)package-lock\.json$''',
+]
+regexes = [
+  # Firebase web/iOS API keys are public by design (restricted by referrer/bundle ID in GCP)
+  '''AIzaSyCrroW6RXSl15a4j9FPeAUOqkiNCx3g2Lk''',
+  '''AIzaSyB7QQahI-DxHsDE7OKaxtXfdQucr1sSxfU''',
+  '''AIzaSyDgW26vaekf0qssk3pkHgS9u6R9IcpgL6A''',
+]
