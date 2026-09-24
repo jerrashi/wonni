@@ -11,6 +11,16 @@ import FirebaseFirestore
 struct ImportListingSheet: View {
     @Environment(\.dismiss) var dismiss
 
+    // Non-empty when opened via a wonni://import?url=... deep link (see
+    // wonniApp.swift's onOpenURL) — pre-fills the field and auto-imports
+    // instead of waiting for the user to tap Import.
+    private let initialUrlString: String
+
+    init(initialUrlString: String = "") {
+        self.initialUrlString = initialUrlString
+        _urlString = State(initialValue: initialUrlString)
+    }
+
     @State private var urlString: String = ""
     @State private var isImporting: Bool = false
     @State private var importStatus: String = ""
@@ -69,6 +79,11 @@ struct ImportListingSheet: View {
                     self.importStatus = status
                 }
             }
+            .task {
+                if !initialUrlString.isEmpty {
+                    await performImport()
+                }
+            }
             .background(
                 MercariSheetWebView(webView: urlExtractor.webView)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -90,6 +105,17 @@ struct ImportListingSheet: View {
         let url = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
 
         do {
+            if url.lowercased().contains("shop.weverse.io") {
+                guard weverseSaleId(from: url) != nil else {
+                    throw URLError(.badURL, userInfo: [NSLocalizedDescriptionKey: "That looks like a Weverse shop/artist page, not a single item. Use Bulk Import to pull in multiple items from it."])
+                }
+                importStatus = "Importing from Weverse..."
+                try await importWeverseProduct(productUrl: url)
+                dismiss()
+                isImporting = false
+                return
+            }
+
             var extracted: ExtractedListing
             var ebayItemId: String? = nil
 
@@ -202,6 +228,18 @@ struct ImportListingSheet: View {
         }
     }
     
+    private func importWeverseProduct(productUrl: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            Functions.functions().httpsCallable("weverseImportProduct").call(["productUrl": productUrl]) { _, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
     private func extractMercariItemId(from url: String) -> String? {
         if let range = url.range(of: #"/item/(m[A-Za-z0-9]+)"#, options: .regularExpression) {
             return String(url[range]).replacingOccurrences(of: "/item/", with: "")

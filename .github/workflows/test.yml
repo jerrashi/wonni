@@ -22,7 +22,7 @@ jobs:
         run: |
           cd wonni
           if which swiftlint > /dev/null; then
-            swiftlint
+            swiftlint --config .swiftlint.yml wonni/
           else
             echo "SwiftLint not installed, skipping"
           fi

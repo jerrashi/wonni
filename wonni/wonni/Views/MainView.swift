@@ -89,6 +89,14 @@ struct MainView: View {
             NavigationStack { MercariSyncProgressSheet() }
                 .environmentObject(mercariSyncManager)
         }
+        // wonni://import?url=... deep link (see wonniApp's onOpenURL) — opens straight
+        // into ImportListingSheet pre-filled with the shared URL and auto-imports.
+        .sheet(isPresented: Binding(
+            get: { bulkImportManager.pendingDeepLinkImportUrl != nil },
+            set: { if !$0 { bulkImportManager.pendingDeepLinkImportUrl = nil } }
+        )) {
+            ImportListingSheet(initialUrlString: bulkImportManager.pendingDeepLinkImportUrl ?? "")
+        }
         // When AI processing finishes, show the publish overview globally.
         // The 0.5 s delay lets any open cover/sheet (ProcessProgressView fullScreenCover
         // or pill sheet) finish its dismiss animation before the results view appears —

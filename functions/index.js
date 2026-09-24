@@ -53,6 +53,7 @@ const { postToWonni } = require("./wonni_listing");
 const { watchStockSourcesScheduled } = require("./stock_watch");
 const { applyCrossPostRules } = require("./cross_post");
 const { recordWeverseOrderPlaced, listWeverseOrderTasks } = require("./weverse_order_tasks");
+const { classifyWeverseItemTypes } = require("./weverse_shipping_estimate");
 
 module.exports = {
   // Auth
@@ -144,4 +145,7 @@ module.exports = {
   // Weverse re-order tasks (fulfill a resale sale by re-buying on Weverse)
   recordWeverseOrderPlaced,
   listWeverseOrderTasks,
+
+  // Weverse shipping estimate (per-user, per-item-type lookup table)
+  classifyWeverseItemTypes,
 };

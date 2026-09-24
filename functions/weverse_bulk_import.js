@@ -5,6 +5,7 @@ const { downloadBuffer, savePublicBuffer } = require("./product_media");
 const { fetchWeverseSale, validateSaleForImport, mapSaleToProduct, parseWeverseUrl } = require("./weverse_product");
 const { geminiApiKey } = require("./gemini_identify");
 const { buildNewProductDoc, extractSourceImages } = require("./product_schema");
+const { mergeShippingEstimate, getStoredEstimate } = require("./weverse_shipping_estimate");
 const { findPossibleDuplicates } = require("./weverse_duplicate_detection");
 const { maybeApplyCrossPostRulesAfterImport } = require("./cross_post");
 
@@ -72,6 +73,39 @@ exports.weverseBulkImportProducts = onCall(
     const importedProductIds = [];
     const existingProductIds = [];
     const errors = [];
+
+    // Resolve per-item-type shipping cost UP FRONT, before any concurrent
+    // item processing starts — see weverse_shipping_estimate.js for the
+    // (userId, platform, itemType) lookup-table design. Doing this in one
+    // sequential pass (rather than per-item inside the concurrency chunks
+    // below) avoids a race where an item of a type gets processed in an
+    // earlier chunk than the batch's one probed item of that same type,
+    // which would otherwise read the stale pre-merge value.
+    //
+    // Client contract: at most one item per distinct itemType in a batch
+    // carries a numeric `shippingCost` (the one the client actually probed,
+    // after any out-of-stock retry — see WeverseShopImportModal.jsx); that
+    // value is merged (max) into the stored estimate for its type. Every
+    // item sharing that itemType — probed or not — gets the resulting
+    // resolved value. An item with no `itemType` at all (extension not
+    // installed / classification skipped) falls back to the old per-item
+    // `shippingCost`-or-null behavior.
+    const resolvedTypeShippingCost = {};
+    const probedByType = new Map();
+    for (const item of rawItems) {
+      if (item.itemType && typeof item.shippingCost === "number" && !probedByType.has(item.itemType)) {
+        probedByType.set(item.itemType, item.shippingCost);
+      }
+    }
+    for (const [itemType, newCost] of probedByType) {
+      resolvedTypeShippingCost[itemType] = await mergeShippingEstimate(db, uid, "weverse", itemType, newCost);
+    }
+    const typesNeedingLookup = new Set(
+      rawItems.map((it) => it.itemType).filter((t) => t && !(t in resolvedTypeShippingCost))
+    );
+    for (const itemType of typesNeedingLookup) {
+      resolvedTypeShippingCost[itemType] = await getStoredEstimate(db, uid, "weverse", itemType);
+    }
 
     // Process items in concurrency chunks of 4 to prevent server spikes
     const itemChunks = chunkArray(rawItems, CONCURRENCY_CHUNK_SIZE);
@@ -147,7 +181,10 @@ exports.weverseBulkImportProducts = onCall(
               title: product.title,
               description: product.description,
               sourcePrice: product.price,
-              sourceShippingCost: typeof item.shippingCost === "number" ? item.shippingCost : null,
+              sourceShippingCost: item.itemType
+                ? (resolvedTypeShippingCost[item.itemType] ?? null)
+                : (typeof item.shippingCost === "number" ? item.shippingCost : null),
+              weverseItemType: item.itemType ?? null,
               sourceImages,
               images: finalImages,
               imageAssets: storedImageAssets.length ? storedImageAssets : product.imageAssets,

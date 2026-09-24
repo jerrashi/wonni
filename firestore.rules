@@ -198,6 +198,15 @@ service cloud.firestore {
       match /listingTemplates/{templateId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
+
+      // Per-item-type shipping cost estimates (weverse_shipping_estimate.js) —
+      // owner-readable so the import UI can show known types, but the
+      // max-merge write logic must stay server-only (Admin SDK bypasses
+      // these rules) to keep the "only ratchets up" invariant trustworthy.
+      match /shippingEstimates/{estimateId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if false;
+      }
     }
   }
 

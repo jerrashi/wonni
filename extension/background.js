@@ -137,6 +137,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ok: true });
     return true;
   }
+  if (message.type === "ESTIMATE_SHIPPING_COST") {
+    handleEstimateShippingCost(message.productUrl)
+      .then((result) => sendResponse(result))
+      .catch((e) => sendResponse({ shippingCost: null, error: e.message, errorCode: "UNKNOWN" }));
+    return true;
+  }
+  if (message.type === "OPEN_WEVERSE_ADDRESS_PAGE") {
+    // Guessed URL — shop.weverse.io's account/shipping-address settings page
+    // isn't documented, so this is a best-effort deep link (same caveat as
+    // weverse_content.js's probe endpoints). If it's wrong, the user still
+    // lands on the Weverse site and can navigate to their address settings
+    // by hand from there.
+    chrome.tabs.create({ url: "https://shop.weverse.io/en/my/delivery-address", active: true });
+    sendResponse({ ok: true });
+    return true;
+  }
 });
 
 // Content scripts' own fetch()/XHR calls are still subject to the PAGE's CORS policy
@@ -258,9 +274,11 @@ async function handleImport(productData, source) {
     throw new Error("Sign in to Wonni Drop first.");
   }
 
-  // Weverse: server re-scrapes from the URL. AliExpress: send scraped page data.
+  // Weverse: server re-scrapes from the URL (plus an optional client-probed
+  // shipping estimate — see weverse_content.js's probeShippingCost). AliExpress:
+  // send scraped page data.
   const payload = source === "weverse"
-    ? { productUrl: productData.productUrl }
+    ? { productUrl: productData.productUrl, shippingCost: productData.shippingCost ?? null }
     : { scrapedData: productData };
 
   const response = await fetch(IMPORT_FUNCTIONS[source] ?? IMPORT_FUNCTIONS.aliexpress, {
@@ -489,4 +507,46 @@ async function handleRecordWeverseOrderPlaced(payload) {
   }
 
   return await response.json();
+}
+
+// Opens a Weverse sale page in a background tab so weverse_content.js's
+// probeShippingCost() can run there (it needs the user's real, authenticated
+// shop.weverse.io session — a bare service-worker fetch() doesn't get that),
+// then relays the result back to the dashboard page via
+// dashboard_bridge_content.js. Mirrors handleCheckMercariPullSync's
+// open-tab-and-poll pattern; see weverse_content.js for the probe's own
+// unverified-API caveat.
+async function handleEstimateShippingCost(productUrl) {
+  const saleMatch = String(productUrl ?? "").match(/\/artists\/(\d+)\/sales\/(\d+)/);
+  if (!saleMatch) {
+    return { shippingCost: null, error: "Not a recognizable Weverse sale URL.", errorCode: "UNKNOWN" };
+  }
+  const saleId = saleMatch[2];
+
+  const tab = await chrome.tabs.create({ url: productUrl, active: false });
+
+  return new Promise((resolve) => {
+    const cleanupAndResolve = (result) => {
+      clearInterval(pollId);
+      clearTimeout(timeoutId);
+      chrome.tabs.remove(tab.id).catch(() => {});
+      resolve(result);
+    };
+
+    // Generous timeout: page load + weverse_content.js's own two network
+    // round trips (add-to-cart, order-sheet preview) can take a while.
+    const timeoutId = setTimeout(() => {
+      cleanupAndResolve({ shippingCost: null, error: "Shipping probe timed out.", errorCode: "UNKNOWN" });
+    }, 30000);
+
+    const pollId = setInterval(() => {
+      chrome.tabs.sendMessage(tab.id, { type: "PROBE_SHIPPING_COST", saleId }, (response) => {
+        if (chrome.runtime.lastError || !response) {
+          // Content script not ready yet on this tab — keep polling.
+          return;
+        }
+        cleanupAndResolve(response);
+      });
+    }, 1000);
+  });
 }

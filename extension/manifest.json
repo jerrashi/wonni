@@ -50,6 +50,17 @@
       "matches": ["https://www.mercari.com/us/item/m*", "https://mercari.com/us/item/m*"],
       "js": ["mercari_pull_sync_content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://wonni-app.web.app/*",
+        "http://localhost:5173/*",
+        "http://localhost:5174/*",
+        "http://localhost:5175/*",
+        "http://localhost:5176/*"
+      ],
+      "js": ["dashboard_bridge_content.js"],
+      "run_at": "document_start"
     }
   ],
   "externally_connectable": {

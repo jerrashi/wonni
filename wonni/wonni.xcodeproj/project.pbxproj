@@ -91,6 +91,10 @@
 		D09C14F1968D71BC4CF4F0E6 /* PendingMercariSaleRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 520B53ED7B01C7E414B50230 /* PendingMercariSaleRepository.swift */; };
 		D2FF825E4990E0C83AE448A4 /* MercariScanJS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56EC85A21B130DB43A7EB01C /* MercariScanJS.swift */; };
 		D66414564520B94BD62B1EEE /* BulkImportManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09C400D2D0AB7F825F735BF1 /* BulkImportManager.swift */; };
+		10C28802920C6151581A6530 /* WeverseURL.swift in Sources */ = {isa = PBXBuildFile; fileRef = A01EEF505FA085AC4A238CA4 /* WeverseURL.swift */; };
+		DA9ECA7987D11F72D1370CFF /* WeverseShippingProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = B511C7FE2120552C67E7C065 /* WeverseShippingProbe.swift */; };
+		7B6ADB7B0457F8278D2780CF /* WeverseAddressSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED9650D738F4AD52EEDDC8BF /* WeverseAddressSheet.swift */; };
+		03A410AD6C5D2EE94E518114 /* WeverseSubSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = D433929DDE2859253F273096 /* WeverseSubSheets.swift */; };
 		E638B2296070470221FCA204 /* ImportListingSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67BC65BADBDD92E27F2C170A /* ImportListingSheet.swift */; };
 		EC4CE9E74B3D4A44A464E4A6 /* SalesDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */; };
 		8F58F429D31BD8040DE57F5C /* SalesInsightsViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F58C9187109B0A023CF5811 /* SalesInsightsViews.swift */; };
@@ -129,6 +133,10 @@
 		00EE85F19AD747589FB21EB0 /* UploadPillView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadPillView.swift; sourceTree = "<group>"; };
 		03D0C11455159C543D7730AA /* MercariFlagCriteriaTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MercariFlagCriteriaTests.swift; sourceTree = "<group>"; };
 		09C400D2D0AB7F825F735BF1 /* BulkImportManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BulkImportManager.swift; sourceTree = "<group>"; };
+		A01EEF505FA085AC4A238CA4 /* WeverseURL.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WeverseURL.swift; sourceTree = "<group>"; };
+		B511C7FE2120552C67E7C065 /* WeverseShippingProbe.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WeverseShippingProbe.swift; sourceTree = "<group>"; };
+		ED9650D738F4AD52EEDDC8BF /* WeverseAddressSheet.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WeverseAddressSheet.swift; sourceTree = "<group>"; };
+		D433929DDE2859253F273096 /* WeverseSubSheets.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WeverseSubSheets.swift; sourceTree = "<group>"; };
 		0D7C98D7BE92AB470D733EB9 /* wonniTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = wonniTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		170EF2F9EA31030386E584A7 /* AddSaleSheet.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AddSaleSheet.swift; sourceTree = "<group>"; };
 		209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordSaleSheet.swift; sourceTree = "<group>"; };
@@ -390,6 +398,8 @@
 				1FE9929091CAFA925F82B309 /* VariantsEditorView.swift */,
 				F3A4C41A88F047E4519A86F0 /* VariantsTableView.swift */,
 				7762ADBFA03A7B250644DDDF /* VariantMercariBatchPostView.swift */,
+				ED9650D738F4AD52EEDDC8BF /* WeverseAddressSheet.swift */,
+				D433929DDE2859253F273096 /* WeverseSubSheets.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -433,6 +443,8 @@
 				56EC85A21B130DB43A7EB01C /* MercariScanJS.swift */,
 				5D644DAF7C5E9A560EE40662 /* VariantEditing.swift */,
 				404AC380FE28D2DF6F916397 /* VariantMercariPostQueue.swift */,
+				A01EEF505FA085AC4A238CA4 /* WeverseURL.swift */,
+				B511C7FE2120552C67E7C065 /* WeverseShippingProbe.swift */,
 			);
 			path = Data;
 			sourceTree = "<group>";
@@ -659,6 +671,10 @@
 				9944CB339CA5802F7C51CEEB /* URLExtractor.swift in Sources */,
 				E638B2296070470221FCA204 /* ImportListingSheet.swift in Sources */,
 				D66414564520B94BD62B1EEE /* BulkImportManager.swift in Sources */,
+				10C28802920C6151581A6530 /* WeverseURL.swift in Sources */,
+				DA9ECA7987D11F72D1370CFF /* WeverseShippingProbe.swift in Sources */,
+				7B6ADB7B0457F8278D2780CF /* WeverseAddressSheet.swift in Sources */,
+				03A410AD6C5D2EE94E518114 /* WeverseSubSheets.swift in Sources */,
 				AABB00112233445566778802 /* AppTaskQueue.swift in Sources */,
 				CCDD00112233445566778801 /* ListingTemplate.swift in Sources */,
 				CCDD00112233445566778803 /* ListingTemplatesView.swift in Sources */,

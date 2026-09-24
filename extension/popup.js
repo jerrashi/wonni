@@ -49,6 +49,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   const singlePhoto = document.getElementById("single-photo");
   const singleTitle = document.getElementById("single-title");
   const singleMeta = document.getElementById("single-meta");
+  const singleShippingEstimate = document.getElementById("single-shipping-estimate");
+  const estimateShippingBtn = document.getElementById("estimate-shipping-btn");
   const singleImportBtn = document.getElementById("single-import-btn");
 
   const checklistSection = document.getElementById("checklist-section");
@@ -152,7 +154,28 @@ document.addEventListener("DOMContentLoaded", async () => {
       single.variantCount ? `${single.variantCount} variant${single.variantCount === 1 ? "" : "s"}` : null,
     ].filter(Boolean).join(" · ");
 
-    singleImportBtn.onclick = () => importSingleItem(single, singleImportBtn);
+    let shippingCost = null;
+    singleImportBtn.onclick = () => importSingleItem(single, shippingCost, singleImportBtn);
+
+    // Best-effort — see weverse_content.js's probeShippingCost for the caveat
+    // that this is an unverified guess at Weverse's cart/order-sheet API and
+    // may simply fail; a failure here never blocks importing without an
+    // estimate.
+    estimateShippingBtn.onclick = () => {
+      estimateShippingBtn.disabled = true;
+      estimateShippingBtn.textContent = "Estimating…";
+      chrome.tabs.sendMessage(tabId, { type: "PROBE_SHIPPING_COST", saleId: single.saleId }, (response) => {
+        estimateShippingBtn.disabled = false;
+        if (chrome.runtime.lastError || response?.shippingCost == null) {
+          estimateShippingBtn.textContent = "Estimate Shipping";
+          singleShippingEstimate.textContent = response?.error ?? "Could not estimate shipping for this item.";
+          return;
+        }
+        shippingCost = response.shippingCost;
+        estimateShippingBtn.textContent = "Re-estimate Shipping";
+        singleShippingEstimate.textContent = `Estimated shipping: $${shippingCost}`;
+      });
+    };
 
     // Secondary block: other items found elsewhere on this page.
     chrome.tabs.sendMessage(tabId, { type: "SCRAPE_PAGE_ITEMS" }, (response) => {
@@ -171,11 +194,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     renderChecklist({ items, gated: true, header: `${items.length} ${noun} Found` });
   }
 
-  function importSingleItem(single, btnEl) {
+  function importSingleItem(single, shippingCost, btnEl) {
     btnEl.disabled = true;
     btnEl.textContent = "Importing…";
     chrome.runtime.sendMessage(
-      { type: "IMPORT_PRODUCT", source: "weverse", data: { productUrl: single.productUrl, title: single.title } },
+      {
+        type: "IMPORT_PRODUCT",
+        source: "weverse",
+        data: { productUrl: single.productUrl, title: single.title, shippingCost },
+      },
       (response) => {
         if (chrome.runtime.lastError || response?.error) {
           btnEl.disabled = false;
