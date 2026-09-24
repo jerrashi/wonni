@@ -210,3 +210,17 @@ jobs:
         run: |
           echo "⚠️  Build or tests failed. Review the logs above."
           exit 1
+
+  # Fails the run if an obfuscated infostealer (or variant) is present in tracked
+  # source — see scripts/check-no-obfuscated-code.js. Read-only; never executes repo code.
+  malware-guard:
+    name: Malware guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Scan for obfuscated / suspicious code
+        run: node scripts/check-no-obfuscated-code.js

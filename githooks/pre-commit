@@ -25,3 +25,6 @@ if command -v gitleaks >/dev/null 2>&1; then
 else
   echo "· pre-commit: gitleaks not installed — secret scan skipped (brew install gitleaks)"
 fi
+
+# Malware tripwire (see scripts/check-no-obfuscated-code.js) — cheap, read-only.
+node scripts/check-no-obfuscated-code.js || exit 1

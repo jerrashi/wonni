@@ -1,0 +1,8 @@
+#!/bin/sh
+# Runs after every `git pull` / merge. If the vite.config.js infostealer (or a
+# variant) rides in on a merge, say so loudly BEFORE anyone runs npm dev/build.
+node scripts/check-no-obfuscated-code.js || {
+  echo
+  echo "✗✗ A merge just brought suspicious code into your working tree. Do NOT run npm dev/build."
+  exit 1
+}
