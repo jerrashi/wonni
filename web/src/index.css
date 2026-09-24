@@ -145,6 +145,10 @@ a:hover { color: var(--accent-hover); }
   display: none;
 }
 
+.sidebar-public-link {
+  opacity: 0.85;
+}
+
 .main-content {
   padding: var(--spacing-xl);
   overflow-y: auto;
