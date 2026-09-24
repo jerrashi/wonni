@@ -34,6 +34,10 @@ function buildNewProductDoc(rawData) {
     // `listingPrice` = the required cross-platform list price.
     sourcePrice: rawData.sourcePrice || null,
     listingPrice: rawData.listingPrice || null,
+    // What it costs to get the item from the source to us (e.g. a Weverse
+    // shop's own shipping fee) — distinct from `handlingFee`, which is the
+    // buyer-facing fee set later at listing time via toShippingInfo().
+    sourceShippingCost: rawData.sourceShippingCost ?? null,
 
     // Images
     sourceImages: rawData.sourceImages || [], // Original source URLs (Weverse CDN, AliExpress, etc.)
@@ -87,6 +91,10 @@ function buildNewProductDoc(rawData) {
       ...(rawData.weverseArtistId && { weverseArtistId: rawData.weverseArtistId }),
       weverseInfoTable: rawData.weverseInfoTable || [],
       ...(rawData.artistName && { artistName: rawData.artistName }),
+      // The shipping-estimate item type (e.g. "Album/CD") this item was
+      // classified/confirmed as at import time — see weverse_shipping_estimate.js.
+      // Kept on the product doc for debugging/display, not just the lookup table.
+      ...(rawData.weverseItemType && { weverseItemType: rawData.weverseItemType }),
     }),
     ...(rawData.source === "aliexpress" && {
       ...(rawData.aliexpressProductId && { aliexpressProductId: rawData.aliexpressProductId }),

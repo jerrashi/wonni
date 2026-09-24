@@ -52,6 +52,16 @@ const SaleDocSchema = z.object({
   takeHome: z.number().nullish(),         // net after fees + label; may be provisional
   quantity: z.number().int().positive().default(1),
 
+  /** Real amount actually spent to fulfill this specific sale (e.g. a
+   *  Weverse re-order placed to cover a resale) — set by
+   *  `recordWeverseOrderPlaced` (contracts/weverse_order_tasks.js). Distinct
+   *  from `product.sourcePrice`, which `sales_metrics.js`'s `saleFinancials`
+   *  uses as an ESTIMATED per-unit cost when this isn't set. A future pass
+   *  should have `saleFinancials` prefer this real figure over the estimate
+   *  when present (and mirror that change into web/src/lib/salesMetrics.js +
+   *  wonni/wonni/Data/SalesMetrics.swift, which are hand-kept in lockstep). */
+  actualCostPaid: MoneySchema.nullish(),
+
   buyerName: z.string().nullish(),
   buyerAddress: SaleAddressSchema.nullish(),
   trackingNumber: z.string().nullish(),

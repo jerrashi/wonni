@@ -7,12 +7,18 @@ import SwiftUI
 import Combine
 import FirebaseAuth
 import FirebaseFirestore
+import FirebaseFunctions
 
 enum BulkImportStatus {
     case pending
     case extracting
     case failed
     case done
+}
+
+enum BulkImportSource {
+    case mercari
+    case weverse
 }
 
 struct BulkImportJob: Identifiable {
@@ -37,17 +43,38 @@ class BulkImportManager: ObservableObject {
     @Published var isPillVisible = false
     @Published var showProgressSheet = false
 
+    // Set by wonniApp's onOpenURL for a wonni://import?url=... deep link (e.g. an iOS
+    // Shortcuts "Share to Wonni" action) — MainView presents ImportListingSheet
+    // pre-filled with this URL and clears it back to nil once presented.
+    @Published var pendingDeepLinkImportUrl: String?
+
     @Published var currentIndex = 0
     @Published var totalCount = 0
 
     @Published var urlExtractor = URLExtractor()
     private var importTaskId = UUID()
+    private var source: BulkImportSource = .mercari
+    // Weverse only — keyed by ListingPreview.url. See BulkImportSheet's
+    // runShippingEstimatePipeline, which resolves these before calling
+    // startImporting: every item gets an itemType, but only the one item per
+    // type whose probe actually succeeded gets a shippingCost (the server
+    // resolves the final per-type value from just that one probed item).
+    private var weverseItemTypes: [String: String] = [:]
+    private var weverseShippingCosts: [String: Double] = [:]
 
-    func startImporting(previews: [ListingPreview]) {
+    func startImporting(
+        previews: [ListingPreview],
+        source: BulkImportSource = .mercari,
+        itemTypes: [String: String] = [:],
+        shippingCosts: [String: Double] = [:]
+    ) {
         self.jobs = previews.map { BulkImportJob(preview: $0) }
         self.totalCount = previews.count
         self.currentIndex = 0
         self.isPillVisible = true
+        self.source = source
+        self.weverseItemTypes = itemTypes
+        self.weverseShippingCosts = shippingCosts
         importTaskId = UUID()
         AppTaskQueue.shared.begin(
             id: importTaskId,
@@ -59,7 +86,82 @@ class BulkImportManager: ObservableObject {
         )
 
         Task {
-            await processQueue()
+            if source == .weverse {
+                await processWeverseQueue()
+            } else {
+                await processQueue()
+            }
+        }
+    }
+
+    // Weverse items are imported entirely server-side (functions/weverse_bulk_import.js
+    // writes straight into `products`, no client-side scrape/upload needed) — one
+    // batched callable per up-to-25 items, rather than the per-item loop below.
+    private func processWeverseQueue() async {
+        for i in jobs.indices { jobs[i].status = .extracting }
+
+        let batchLimit = 25
+        var failedTitles = Set<String>()
+
+        for start in stride(from: 0, to: jobs.count, by: batchLimit) {
+            let end = min(start + batchLimit, jobs.count)
+            let batch = Array(jobs[start..<end])
+            let items: [[String: Any]] = batch.map { job in
+                var item: [String: Any] = ["productUrl": job.preview.url, "title": job.preview.title]
+                if let itemType = weverseItemTypes[job.preview.url] { item["itemType"] = itemType }
+                if let shippingCost = weverseShippingCosts[job.preview.url] { item["shippingCost"] = shippingCost }
+                return item
+            }
+
+            do {
+                let data = try await callWeverseBulkImport(items: items)
+                let errors = data["errors"] as? [[String: Any]] ?? []
+                for err in errors {
+                    if let title = err["title"] as? String { failedTitles.insert(title) }
+                }
+            } catch {
+                print("Weverse bulk import batch failed: \(error)")
+                for item in batch {
+                    failedTitles.insert(item.preview.title)
+                }
+            }
+
+            for (offset, index) in (start..<end).enumerated() {
+                jobs[index].status = failedTitles.contains(batch[offset].preview.title) ? .failed : .done
+                currentIndex = index + 1
+                AppTaskQueue.shared.update(
+                    id: importTaskId,
+                    detail: "\(index + 1) of \(totalCount)",
+                    progress: Double(index + 1) / Double(max(totalCount, 1))
+                )
+            }
+        }
+
+        finishIfDone()
+    }
+
+    private func callWeverseBulkImport(items: [[String: Any]]) async throws -> [String: Any] {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String: Any], Error>) in
+            Functions.functions().httpsCallable("weverseBulkImportProducts").call(["items": items]) { result, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                guard let data = result?.data as? [String: Any] else {
+                    continuation.resume(throwing: URLError(.badServerResponse))
+                    return
+                }
+                continuation.resume(returning: data)
+            }
+        }
+    }
+
+    private func finishIfDone() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+            if self.jobs.allSatisfy({ $0.status == .done || $0.status == .failed }) {
+                withAnimation { self.isPillVisible = false }
+                AppTaskQueue.shared.complete(id: self.importTaskId)
+            }
         }
     }
 
@@ -85,12 +187,7 @@ class BulkImportManager: ObservableObject {
             }
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-            if self.jobs.allSatisfy({ $0.status == .done || $0.status == .failed }) {
-                withAnimation { self.isPillVisible = false }
-                AppTaskQueue.shared.complete(id: self.importTaskId)
-            }
-        }
+        finishIfDone()
     }
 
     private func createListing(from extracted: ExtractedListing, preview: ListingPreview) async throws {

@@ -49,6 +49,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   const singlePhoto = document.getElementById("single-photo");
   const singleTitle = document.getElementById("single-title");
   const singleMeta = document.getElementById("single-meta");
+  const singleShippingEstimate = document.getElementById("single-shipping-estimate");
+  const estimateShippingBtn = document.getElementById("estimate-shipping-btn");
   const singleImportBtn = document.getElementById("single-import-btn");
 
   const checklistSection = document.getElementById("checklist-section");
@@ -94,6 +96,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     authBtn.onclick = () => openDashboard("/login");
     return;
   }
+
+  // Independent of which page the popup happened to open on — a sale can
+  // land while the user is browsing eBay/Etsy, not Weverse, so this loads
+  // regardless of the shop.weverse.io check just below.
+  loadWeverseOrderTasks();
 
   // Detect active tab and branch on page type
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -147,7 +154,28 @@ document.addEventListener("DOMContentLoaded", async () => {
       single.variantCount ? `${single.variantCount} variant${single.variantCount === 1 ? "" : "s"}` : null,
     ].filter(Boolean).join(" · ");
 
-    singleImportBtn.onclick = () => importSingleItem(single, singleImportBtn);
+    let shippingCost = null;
+    singleImportBtn.onclick = () => importSingleItem(single, shippingCost, singleImportBtn);
+
+    // Best-effort — see weverse_content.js's probeShippingCost for the caveat
+    // that this is an unverified guess at Weverse's cart/order-sheet API and
+    // may simply fail; a failure here never blocks importing without an
+    // estimate.
+    estimateShippingBtn.onclick = () => {
+      estimateShippingBtn.disabled = true;
+      estimateShippingBtn.textContent = "Estimating…";
+      chrome.tabs.sendMessage(tabId, { type: "PROBE_SHIPPING_COST", saleId: single.saleId }, (response) => {
+        estimateShippingBtn.disabled = false;
+        if (chrome.runtime.lastError || response?.shippingCost == null) {
+          estimateShippingBtn.textContent = "Estimate Shipping";
+          singleShippingEstimate.textContent = response?.error ?? "Could not estimate shipping for this item.";
+          return;
+        }
+        shippingCost = response.shippingCost;
+        estimateShippingBtn.textContent = "Re-estimate Shipping";
+        singleShippingEstimate.textContent = `Estimated shipping: $${shippingCost}`;
+      });
+    };
 
     // Secondary block: other items found elsewhere on this page.
     chrome.tabs.sendMessage(tabId, { type: "SCRAPE_PAGE_ITEMS" }, (response) => {
@@ -166,11 +194,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     renderChecklist({ items, gated: true, header: `${items.length} ${noun} Found` });
   }
 
-  function importSingleItem(single, btnEl) {
+  function importSingleItem(single, shippingCost, btnEl) {
     btnEl.disabled = true;
     btnEl.textContent = "Importing…";
     chrome.runtime.sendMessage(
-      { type: "IMPORT_PRODUCT", source: "weverse", data: { productUrl: single.productUrl, title: single.title } },
+      {
+        type: "IMPORT_PRODUCT",
+        source: "weverse",
+        data: { productUrl: single.productUrl, title: single.title, shippingCost },
+      },
       (response) => {
         if (chrome.runtime.lastError || response?.error) {
           btnEl.disabled = false;
@@ -337,5 +369,115 @@ document.addEventListener("DOMContentLoaded", async () => {
       openDashboard();
       closePopup();
     }, 1500);
+  }
+
+  // ── Weverse re-order tasks ────────────────────────────────────────────
+  // Surfacing + deep-link + manual confirmation only. This never fills a
+  // Weverse cart or checks out automatically — see
+  // extension/weverse_order_fill.js's header for the full explanation of
+  // that scope boundary. The only actions here are "open the Weverse sale
+  // page" (a plain link, in a new tab) and "Mark as ordered" (a manual
+  // confirmation the human sends after they've actually placed the order
+  // themselves).
+  const weverseTasksSection = document.getElementById("weverse-tasks-section");
+  const weverseTasksCount = document.getElementById("weverse-tasks-count");
+  const weverseTasksList = document.getElementById("weverse-tasks-list");
+
+  function loadWeverseOrderTasks() {
+    chrome.runtime.sendMessage({ type: "LIST_WEVERSE_ORDER_TASKS", status: "pending" }, (response) => {
+      if (chrome.runtime.lastError || response?.error) {
+        // Non-fatal — the rest of the popup still works without this section.
+        console.warn("[Wonni Drop] Failed to load Weverse re-order tasks:", response?.error);
+        return;
+      }
+      renderWeverseOrderTasks(response?.tasks ?? []);
+    });
+  }
+
+  function renderWeverseOrderTasks(tasks) {
+    if (!tasks.length) {
+      weverseTasksSection.style.display = "none";
+      return;
+    }
+    weverseTasksSection.style.display = "block";
+    weverseTasksCount.textContent = String(tasks.length);
+    weverseTasksList.innerHTML = "";
+
+    tasks.forEach((task) => {
+      const row = document.createElement("div");
+      row.className = "weverse-task";
+
+      const img = document.createElement("img");
+      img.src = task.thumbnailUrl || "";
+      img.alt = "";
+
+      const info = document.createElement("div");
+      info.className = "weverse-task-info";
+
+      const title = document.createElement("div");
+      title.className = "weverse-task-title";
+      title.textContent = task.listingTitle || task.productId || "Weverse order";
+
+      const meta = document.createElement("div");
+      meta.className = "weverse-task-meta";
+      meta.textContent = task.variantId ? `Variant: ${task.variantId}` : "Sold — needs re-order";
+
+      const actions = document.createElement("div");
+      actions.className = "weverse-task-actions";
+
+      const openLink = document.createElement("a");
+      openLink.href = "#";
+      openLink.textContent = "Open on Weverse";
+      openLink.onclick = (e) => {
+        e.preventDefault();
+        if (!task.weverseUrl) return;
+        chrome.runtime.sendMessage({ type: "OPEN_WEVERSE_ORDER_URL", url: task.weverseUrl });
+      };
+      if (!task.weverseUrl) {
+        openLink.style.opacity = "0.4";
+        openLink.style.pointerEvents = "none";
+      }
+
+      const markBtn = document.createElement("button");
+      markBtn.className = "mark-ordered-btn";
+      markBtn.textContent = "Mark as ordered";
+      markBtn.onclick = () => promptMarkOrdered(task, markBtn);
+
+      actions.appendChild(openLink);
+      actions.appendChild(markBtn);
+      info.appendChild(title);
+      info.appendChild(meta);
+      info.appendChild(actions);
+      row.appendChild(img);
+      row.appendChild(info);
+      weverseTasksList.appendChild(row);
+    });
+  }
+
+  function promptMarkOrdered(task, btnEl) {
+    const orderNumber = window.prompt("Weverse order number:");
+    if (!orderNumber) return;
+    const costPaidRaw = window.prompt("Amount you paid on Weverse (USD):");
+    if (costPaidRaw == null) return;
+    const costPaid = Number(costPaidRaw);
+    if (!Number.isFinite(costPaid) || costPaid <= 0) {
+      window.alert("Enter a valid amount paid, e.g. 18.50");
+      return;
+    }
+
+    btnEl.disabled = true;
+    btnEl.textContent = "Saving…";
+    chrome.runtime.sendMessage(
+      { type: "RECORD_WEVERSE_ORDER_PLACED", payload: { taskId: task.id, orderNumber, costPaid } },
+      (response) => {
+        if (chrome.runtime.lastError || response?.error) {
+          btnEl.disabled = false;
+          btnEl.textContent = "Mark as ordered";
+          window.alert(response?.error ?? "Failed to record the order — try again.");
+          return;
+        }
+        loadWeverseOrderTasks();
+      }
+    );
   }
 });

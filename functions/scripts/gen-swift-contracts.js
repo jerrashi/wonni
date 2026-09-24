@@ -15,7 +15,15 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const { zodToJsonSchema } = require("zod-to-json-schema");
 
-const { ALL, SaleDocSchema, MercariScrapeItemSchema, ListingFieldsSchema } = require("../contracts");
+const {
+  ALL,
+  SaleDocSchema,
+  MercariScrapeItemSchema,
+  ListingFieldsSchema,
+  OptionSchema,
+  VariantSchema,
+  ProductDocSchema,
+} = require("../contracts");
 
 const OUT_DIR = path.join(__dirname, "..", "contracts", "generated");
 const SCHEMA_PATH = path.join(OUT_DIR, "backend-contracts.schema.json");
@@ -43,6 +51,9 @@ for (const c of ALL) {
 add("SaleDoc", SaleDocSchema);
 add("MercariScrapeItem", MercariScrapeItemSchema);
 add("ListingFields", ListingFieldsSchema);
+add("Option", OptionSchema);
+add("Variant", VariantSchema);
+add("ProductDoc", ProductDocSchema);
 
 const bundle = {
   $schema: "http://json-schema.org/draft-07/schema#",

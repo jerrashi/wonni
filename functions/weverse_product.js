@@ -4,6 +4,8 @@ const admin = require("firebase-admin");
 const { downloadBuffer, savePublicBuffer } = require("./product_media");
 const { geminiApiKey } = require("./gemini_identify");
 const { buildNewProductDoc, extractSourceImages } = require("./product_schema");
+const { findPossibleDuplicates } = require("./weverse_duplicate_detection");
+const { maybeApplyCrossPostRulesAfterImport } = require("./cross_post");
 
 const MAX_IMAGES = 24;
 const USER_AGENT =
@@ -268,6 +270,12 @@ module.exports.parseWeverseUrl = parseWeverseUrl;
 module.exports.fetchWeverseSale = fetchWeverseSale;
 module.exports.validateSaleForImport = validateSaleForImport;
 module.exports.mapSaleToProduct = mapSaleToProduct;
+module.exports.mapWeverseVariantsToOptions = mapWeverseVariantsToOptions;
+module.exports.isAllowedImageUrl = isAllowedImageUrl;
+module.exports.normalizeInfoTable = normalizeInfoTable;
+module.exports.buildDescriptionFromInfoTable = buildDescriptionFromInfoTable;
+module.exports.cleanText = cleanText;
+module.exports.USER_AGENT = USER_AGENT;
 
 // Import a product from a Weverse Shop sale URL (URL-paste flow, no extension needed)
 exports.weverseImportProduct = onCall(
@@ -301,6 +309,26 @@ exports.weverseImportProduct = onCall(
       .limit(1)
       .get();
     if (!existing.empty) return { productId: existing.docs[0].id, existing: true };
+
+    // Fuzzy repost/duplicate check (second layer, on top of the exact
+    // saleId check above): same artist + similar title against the user's
+    // other Weverse imports. Purely informational — never blocks the
+    // import, never auto-merges. See weverse_duplicate_detection.js.
+    const existingWeverseSnap = await db
+      .collection("products")
+      .where("userId", "==", uid)
+      .where("source", "==", "weverse")
+      .get();
+    const existingWeverseProducts = existingWeverseSnap.docs.map((doc) => ({
+      id: doc.id,
+      title: doc.data().title,
+      artistName: doc.data().artistName,
+      weverseSaleId: doc.data().weverseSaleId,
+    }));
+    const possibleDuplicates = findPossibleDuplicates(
+      { title: product.title, artistName: product.artistName, weverseSaleId: parsed.saleId },
+      existingWeverseProducts
+    );
 
     // Re-host images in Firebase Storage so listings don't depend on Weverse CDN
     const storedImages = [];
@@ -336,6 +364,7 @@ exports.weverseImportProduct = onCall(
       title: product.title,
       description: product.description,
       sourcePrice: product.price,
+      sourceShippingCost: typeof request.data?.shippingCost === "number" ? request.data.shippingCost : null,
       listingPrice: null,
       sourceImages,
       images: finalImages,
@@ -352,7 +381,23 @@ exports.weverseImportProduct = onCall(
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    // buildNewProductDoc only emits its own explicit field allowlist, so the
+    // fuzzy-duplicate hint is attached after building the doc.
+    if (possibleDuplicates.length > 0) {
+      newProduct.possibleDuplicateOf = possibleDuplicates.map((m) => m.productId);
+    }
+
     await docRef.set(newProduct);
-    return { productId: docRef.id };
+
+    // Rule-based cross-posting: automatic, best-effort, never blocks the
+    // import — and only runs at all when this user has configured at least
+    // one crossPostRules doc, so nothing changes for a user who hasn't set
+    // up rules yet. See cross_post.js.
+    await maybeApplyCrossPostRulesAfterImport(db, uid, docRef.id);
+
+    return {
+      productId: docRef.id,
+      ...(possibleDuplicates.length > 0 && { possibleDuplicates }),
+    };
   }
 );

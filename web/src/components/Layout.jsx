@@ -33,7 +33,7 @@ export default function Layout({ children }) {
         <NavLink to="/sell/sales">Sales</NavLink>
         <NavLink to="/sell/settings">Settings</NavLink>
         {auth.currentUser && (
-          <NavLink to={`/profile/${auth.currentUser.uid}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13, marginTop: 12, opacity: 0.85 }}>
+          <NavLink to={`/profile/${auth.currentUser.uid}`} target="_blank" rel="noopener noreferrer" className="sidebar-public-link" style={{ fontSize: 13, marginTop: 12 }}>
             ↗ View Public Store
           </NavLink>
         )}

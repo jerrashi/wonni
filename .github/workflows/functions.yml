@@ -48,6 +48,23 @@ jobs:
 
       - run: npm install -g firebase-tools
 
+      - name: Configure eBay function params
+        # firebase deploy resolves defineString/defineSecret params from
+        # functions/.env.<project-id> in non-interactive (CI) runs — it
+        # won't fall back to an in-code default there. EBAY_RU_NAME has no
+        # default (it's per-environment config, not a secret, but still not
+        # committed) so it must come from a repo secret; add EBAY_RU_NAME
+        # under Settings → Secrets and variables → Actions for this deploy
+        # to succeed. EBAY_ENV defaults to production if unset.
+        run: |
+          {
+            echo "EBAY_RU_NAME=${EBAY_RU_NAME}"
+            echo "EBAY_ENV=${EBAY_ENV:-production}"
+          } > functions/.env.wonni-app
+        env:
+          EBAY_RU_NAME: ${{ secrets.EBAY_RU_NAME }}
+          EBAY_ENV: ${{ vars.EBAY_ENV }}
+
       - run: firebase deploy --only functions --project wonni-app
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}

@@ -57,7 +57,15 @@ function saleFinancials(sale, product) {
   const shippingRevenue = Number(sale?.shippingRevenue) || 0;
   const revenue = round2(itemRevenue + shippingRevenue);
 
-  const cost = round2((Number(product?.sourcePrice) || 0) * quantity);
+  // `actualCostPaid` (set via recordWeverseOrderPlaced) is the real total
+  // spent to fulfill THIS sale — not a per-unit price, so it's used as-is
+  // rather than multiplied by quantity. Falls back to the estimated
+  // per-unit `product.sourcePrice * quantity` when not present (the common
+  // case — most sales don't go through the Weverse re-order flow).
+  const hasActualCostPaid = typeof sale?.actualCostPaid === "number" && Number.isFinite(sale.actualCostPaid);
+  const cost = hasActualCostPaid
+    ? round2(sale.actualCostPaid)
+    : round2((Number(product?.sourcePrice) || 0) * quantity);
 
   const hasRealTakeHome = typeof sale?.takeHome === "number" && Number.isFinite(sale.takeHome);
   let net;

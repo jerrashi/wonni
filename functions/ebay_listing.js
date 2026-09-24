@@ -1055,56 +1055,63 @@ async function postMultiVariant(ctx) {
 
 // One-click list a product on eBay. Single- or multi-variation; re-posting a
 // previously-withdrawn product reuses its stable offer(s).
+// Core create-listing logic, shared by the `ebayCreateListing` callable and
+// any other server-side caller (e.g. cross_post.js's rule-driven cross-post)
+// that needs to post to eBay without going through another Cloud Function
+// over HTTP. Assumes `uid`/`productId` are already validated/authenticated —
+// mirrors the `recordSale` / `recordSaleCore` split in sales.js.
+async function ebayCreateListingCore(uid, productId) {
+  if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
+
+  const db = admin.firestore();
+  const docRef = db.collection("products").doc(productId);
+  const snap = await docRef.get();
+  if (!snap.exists) throw new HttpsError("not-found", "Product not found.");
+
+  const product = snap.data();
+  if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
+  if (product.crossPostStatus?.ebay === "active") {
+    return { listingId: product.crossPostListingIds?.ebay, alreadyListed: true };
+  }
+
+  // Fill any blank shared fields (description/brand/condition/tags/category
+  // hint) with one Gemini call, persisted for later cross-posts. Best-effort.
+  await fillBlankFieldsInline(product, productId);
+
+  const title = (product.title ?? "").slice(0, 80); // eBay title limit
+  const description = canonicalDescription(product);
+  const basePrice = resolveListingPrice(product);
+
+  const [merchantLocationKey, listingPolicies, categoryId] = await Promise.all([
+    getMerchantLocationKey(uid),
+    getListingPolicies(uid, product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays),
+    suggestCategoryId(uid, title, product.geminiCategory || product.category),
+  ]);
+
+  // Fill eBay's category-required fields the user left blank: item aspects
+  // (Brand/Type/…) from the title + known brands, and a category-valid
+  // condition. Both degrade gracefully — the publish retry loop is the net.
+  const [categoryAspects, allowedConditionIds] = await Promise.all([
+    getCategoryAspects(categoryId),
+    getAllowedConditionIds(uid, categoryId),
+  ]);
+  const brand = resolveBrand(product);
+  const conditionEnum = resolveCondition(productConditionToEbayEnum(product), allowedConditionIds);
+
+  const ctx = {
+    uid, product, productId, docRef, basePrice, categoryId, listingPolicies,
+    merchantLocationKey, title, description, categoryAspects, brand, conditionEnum,
+  };
+  const hasVariations = buildEbayVariations(product) !== null;
+  return hasVariations ? postMultiVariant(ctx) : postSingleVariant(ctx);
+}
+
 exports.ebayCreateListing = onCall(
   { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, geminiApiKey], timeoutSeconds: 120, memory: "512MiB" },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
-
-    const { productId } = request.data;
-    if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
-
-    const db = admin.firestore();
-    const docRef = db.collection("products").doc(productId);
-    const snap = await docRef.get();
-    if (!snap.exists) throw new HttpsError("not-found", "Product not found.");
-
-    const product = snap.data();
-    if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
-    if (product.crossPostStatus?.ebay === "active") {
-      return { listingId: product.crossPostListingIds?.ebay, alreadyListed: true };
-    }
-
-    // Fill any blank shared fields (description/brand/condition/tags/category
-    // hint) with one Gemini call, persisted for later cross-posts. Best-effort.
-    await fillBlankFieldsInline(product, productId);
-
-    const title = (product.title ?? "").slice(0, 80); // eBay title limit
-    const description = canonicalDescription(product);
-    const basePrice = resolveListingPrice(product);
-
-    const [merchantLocationKey, listingPolicies, categoryId] = await Promise.all([
-      getMerchantLocationKey(uid),
-      getListingPolicies(uid, product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays),
-      suggestCategoryId(uid, title, product.geminiCategory || product.category),
-    ]);
-
-    // Fill eBay's category-required fields the user left blank: item aspects
-    // (Brand/Type/…) from the title + known brands, and a category-valid
-    // condition. Both degrade gracefully — the publish retry loop is the net.
-    const [categoryAspects, allowedConditionIds] = await Promise.all([
-      getCategoryAspects(categoryId),
-      getAllowedConditionIds(uid, categoryId),
-    ]);
-    const brand = resolveBrand(product);
-    const conditionEnum = resolveCondition(productConditionToEbayEnum(product), allowedConditionIds);
-
-    const ctx = {
-      uid, product, productId, docRef, basePrice, categoryId, listingPolicies,
-      merchantLocationKey, title, description, categoryAspects, brand, conditionEnum,
-    };
-    const hasVariations = buildEbayVariations(product) !== null;
-    return hasVariations ? postMultiVariant(ctx) : postSingleVariant(ctx);
+    return ebayCreateListingCore(uid, request.data?.productId);
   }
 );
 
@@ -1893,5 +1900,5 @@ module.exports = {
   variantSkuFor,
   ebayPackageWeightAndSize,
   // testable core (used by functions/test/ebay_import_listing.test.js)
-  _internal: { ebayImportListingCore },
+  _internal: { ebayImportListingCore, ebayCreateListingCore },
 };

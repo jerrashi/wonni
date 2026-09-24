@@ -43,6 +43,15 @@ struct CrossPostJob: Identifiable {
     let lengthIn: Double?
     let widthIn: Double?
     let heightIn: Double?
+    /// When set, this job's Mercari success/pending writes go to
+    /// `products/{variantProductId}.variants[variantId]` (a whole-array `syncVariants`
+    /// read-modify-write via `ProductRepository`) instead of the flat
+    /// `listings/{listingId}` doc `listingId` would otherwise target — the per-variant
+    /// analog of the product-level "re-list on Mercari" flow, for a variant product
+    /// where each variant is its own one-item-one-size Mercari listing. Both nil or
+    /// both non-nil; never mixed with a non-nil `listingId`.
+    let variantProductId: String?
+    let variantId: String?
 
     init(
         platform: String,
@@ -59,7 +68,9 @@ struct CrossPostJob: Identifiable {
         weightLbs: Double? = nil,
         lengthIn: Double? = nil,
         widthIn: Double? = nil,
-        heightIn: Double? = nil
+        heightIn: Double? = nil,
+        variantProductId: String? = nil,
+        variantId: String? = nil
     ) {
         self.platform = platform
         self.title = title
@@ -76,6 +87,8 @@ struct CrossPostJob: Identifiable {
         self.lengthIn = lengthIn
         self.widthIn = widthIn
         self.heightIn = heightIn
+        self.variantProductId = variantProductId
+        self.variantId = variantId
     }
 }
 
@@ -2171,9 +2184,28 @@ struct MercariShippingPreferencesView: View {
 
 // MARK: - MercariAutoPosterView
 
+/// Terminal result of one headless posting attempt, reported to `onOutcome` when
+/// `headless == true` (see `VariantMercariPostQueue`, Phase 3). Unused when
+/// `headless == false` — the legacy foreground flows (single relist, draft publish)
+/// keep surfacing the full-screen WebView on failure instead.
+enum MercariPostOutcome {
+    case success(mercariItemId: String)
+    case failed(String)
+}
+
 struct MercariAutoPosterView: View {
     let job: CrossPostJob
     var onDismiss: () -> Void = {}
+    /// When true, this instance never auto-expands its full-screen WebView on a
+    /// failure or a review-required state (category pick, login) — it's being driven
+    /// unattended by `VariantMercariPostQueue`, which applies its own retry-then-skip
+    /// policy and timeout instead of blocking on user interaction. Defaults to false so
+    /// every existing call site (single relist, draft publish cross-post) is unaffected.
+    var headless: Bool = false
+    /// Fired once, only when `headless == true`, with the terminal outcome of this
+    /// attempt (a captured Mercari listing id, or a failure message). The queue uses
+    /// this instead of `onDismiss` to know whether to advance or retry.
+    var onOutcome: ((MercariPostOutcome) -> Void)? = nil
     @EnvironmentObject private var uploadManager: UploadManager
     @StateObject private var state = MercariPostingState()
     @State private var hasInjected = false
@@ -2383,16 +2415,17 @@ struct MercariAutoPosterView: View {
                 case .success:
                     Task {
                         await updateFirestore()
-                        guard state.mercariItemId?.isEmpty == false else {
+                        guard let confirmedId = state.mercariItemId, !confirmedId.isEmpty else {
                             await MainActor.run { state.status = .failed("Listing ID not confirmed — verify on Mercari") }
                             return
                         }
+                        if headless { onOutcome?(.success(mercariItemId: confirmedId)) }
                         // Q4: no lingering per-item success state — advance the queue
                         // immediately instead of holding the "Listed on Mercari!" screen.
                         isExpanded = false
                         onDismiss()
                     }
-                case .failed:
+                case .failed(let failureMessage):
                     // First pre-submit failure: retry once, silently, before surfacing the
                     // webview for manual completion. Post-submit failures (latestSubmitResult
                     // set) are excluded — the submission may have gone through without a
@@ -2402,12 +2435,17 @@ struct MercariAutoPosterView: View {
                         hasInjected = false
                         state.prepareForResume()
                         Task { await fetchPhotosAndResume() }
+                    } else if headless {
+                        // Batch queue (VariantMercariPostQueue): report the terminal failure
+                        // instead of surfacing the full-screen WebView — the queue applies its
+                        // own retry-then-skip policy and moves on to the next variant.
+                        onOutcome?(.failed(failureMessage))
                     }
                 default: break
                 }
             }
             .onChange(of: requiresUserInteraction) { _, needs in
-                guard needs, !isExpanded else { return }
+                guard needs, !isExpanded, !headless else { return }
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                     isExpanded = true
                 }
@@ -2432,12 +2470,20 @@ struct MercariAutoPosterView: View {
                     if state.mercariItemId?.isEmpty != false {
                         await MainActor.run {
                             state.injectionStep = ""
+                            // Cascades into the state.status onChange above, which reports
+                            // this to onOutcome when headless — do not also call onOutcome
+                            // here, that would fire it twice.
                             state.status = .failed("Submission not confirmed — verify your listing on Mercari")
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                isExpanded = true
+                            if !headless {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                    isExpanded = true
+                                }
                             }
                         }
                     } else {
+                        if headless, let confirmedId = state.mercariItemId {
+                            onOutcome?(.success(mercariItemId: confirmedId))
+                        }
                         isExpanded = false
                         onDismiss()
                     }
@@ -2558,7 +2604,15 @@ struct MercariAutoPosterView: View {
     private func loadPreferencesThenStart() async {
         // If this listing already has a Mercari ID (captured earlier, or linked by hand), it's
         // already live — accept it instead of posting a duplicate.
-        if let listingId = job.listingId,
+        if let productId = job.variantProductId, let variantId = job.variantId {
+            if let product = try? await ProductRepository.shared.fetchProductVariants(productId: productId),
+               let variant = product.variants?.first(where: { $0.id == variantId }),
+               let existingId = variant.crossPostListingIds.mercari, !existingId.isEmpty {
+                print("[MercariAutoPosterView] Variant already on Mercari (\(existingId)) — accepting, not re-posting")
+                state.acceptExisting(id: existingId)
+                return
+            }
+        } else if let listingId = job.listingId,
            let doc = try? await Firestore.firestore().collection("listings").document(listingId).getDocument(),
            let existingId = (doc.data()?["crossPostListingIds"] as? [String: String])?["mercari"],
            !existingId.isEmpty {
@@ -2702,7 +2756,6 @@ struct MercariAutoPosterView: View {
     }
 
     private func updateFirestore() async {
-        guard let listingId = job.listingId else { return }
         // Only mark Mercari as "posted" when we actually captured a valid listing ID/URL.
         // Without one we can't prove the item went live, and a false "posted" both lies to the
         // user and blocks re-posting. Leave the status as "pending" so the user can retry.
@@ -2710,6 +2763,17 @@ struct MercariAutoPosterView: View {
             print("[MercariAutoPosterView] No Mercari item ID captured — not marking posted")
             return
         }
+        if let productId = job.variantProductId, let variantId = job.variantId {
+            // Variant product: never a dotted "variants.N.crossPostListingIds.mercari" path —
+            // updateVariant read-modify-writes the WHOLE variants array (see
+            // ProductRepository.syncVariants's doc comment for why).
+            try? await ProductRepository.shared.updateVariant(productId: productId, variantId: variantId) { v in
+                v.withMercariListing(id: mercariId, status: "posted")
+            }
+            print("[MercariAutoPosterView] Firestore updated for variant \(variantId) of product \(productId) with Mercari ID \(mercariId)")
+            return
+        }
+        guard let listingId = job.listingId else { return }
         let update: [String: Any] = [
             "crossPostStatus.mercari": "posted",
             "crossPostListingIds.mercari": mercariId,
@@ -2723,6 +2787,14 @@ struct MercariAutoPosterView: View {
     /// Mercari uses React Router so the navigation delegate may never fire after submission —
     /// this ensures the badge appears even when URL-change detection is unreliable.
     private func writeMercariPending() async {
+        if let productId = job.variantProductId, let variantId = job.variantId {
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "mercariPendingStart_\(productId)_\(variantId)")
+            try? await ProductRepository.shared.updateVariant(productId: productId, variantId: variantId) { v in
+                v.withMercariStatus("pending")
+            }
+            print("[MercariAutoPosterView] Wrote mercari=pending for variant \(variantId) of product \(productId)")
+            return
+        }
         guard let listingId = job.listingId else { return }
         // Store start time locally so the timeout check (EditListingSheet) needs zero extra reads.
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "mercariPendingStart_\(listingId)")
@@ -3172,6 +3244,17 @@ struct MercariProfileSyncSheet: View {
     @State private var deactivateSelectMode = false
     @State private var selectedDeactivateIds: Set<String> = []
 
+    // Per-variant flagged rows (products/{id}.variants[i].pendingMercari*) — see
+    // ProductRepository.fetchPendingMercariVariantActions. Kept separate from the legacy
+    // `listings`-collection rows above rather than merged into one array/model: the two
+    // run on different collections (`listings` vs `products`) and different clear-flag
+    // write paths (a single dotted-path delete vs. a whole-array `syncVariants`), and the
+    // `listings`→`products` migration (BACKEND.md) isn't finished, so non-variant products
+    // still only ever show up here.
+    @State private var variantActions: [PendingMercariVariantAction] = []
+    @State private var variantToDeactivate: PendingMercariVariantAction?
+    @State private var variantRelistJob: CrossPostJob?
+
     private var pendingListings: [UserListing] {
         listings.filter { $0.pendingMercariDeactivation == true || $0.pendingMercariRelist == true }
     }
@@ -3185,7 +3268,7 @@ struct MercariProfileSyncSheet: View {
                 if isLoading {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if listings.isEmpty {
+                } else if listings.isEmpty && variantActions.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: "tag.slash").font(.largeTitle).foregroundStyle(.secondary)
                         Text("No Mercari-linked listings").font(.headline)
@@ -3196,10 +3279,17 @@ struct MercariProfileSyncSheet: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
-                        if !pendingListings.isEmpty {
+                        if !pendingListings.isEmpty || !variantActions.isEmpty {
                             Section {
                                 ForEach(pendingListings) { listing in
                                     pendingRow(listing)
+                                }
+                                // Per-variant rows (products/{id}.variants[i].pendingMercari*) —
+                                // no bulk "Select"/"Mark as Handled" for these yet; each needs its
+                                // own headless deactivate run against its own Mercari listing id,
+                                // unlike the legacy bulk path which only ever clears a flag.
+                                ForEach(variantActions) { action in
+                                    pendingVariantRow(action)
                                 }
                                 if deactivateSelectMode && !selectedDeactivateIds.isEmpty {
                                     Button {
@@ -3296,7 +3386,7 @@ struct MercariProfileSyncSheet: View {
             .sheet(item: $listingToDeactivate) { listing in
                 if let id = listing.crossPostListingIds?["mercari"] {
                     MercariAutoDeactivateSheet(
-                        listing: listing, mercariId: id,
+                        mercariId: id,
                         onHandled: {
                             Task {
                                 await clearFlag("pendingMercariDeactivation", for: listing.id ?? "")
@@ -3312,6 +3402,30 @@ struct MercariProfileSyncSheet: View {
                         Task {
                             if let id = job.listingId {
                                 await clearFlag("pendingMercariRelist", for: id)
+                                onComplete()
+                            }
+                            await reload()
+                        }
+                    }
+            }
+            .sheet(item: $variantToDeactivate) { action in
+                MercariAutoDeactivateSheet(
+                    mercariId: action.mercariId,
+                    onHandled: {
+                        Task {
+                            await clearVariantFlag(.deactivate, action: action)
+                            onComplete()
+                        }
+                    }
+                )
+            }
+            .sheet(item: $variantRelistJob) { job in
+                MercariAutoPosterView(job: job)
+                    .onDisappear {
+                        Task {
+                            if let productId = job.variantProductId, let variantId = job.variantId,
+                               let action = variantActions.first(where: { $0.productId == productId && $0.variantId == variantId }) {
+                                await clearVariantFlag(.relist, action: action)
                                 onComplete()
                             }
                             await reload()
@@ -3413,18 +3527,86 @@ struct MercariProfileSyncSheet: View {
         }
     }
 
+    @ViewBuilder private func pendingVariantRow(_ action: PendingMercariVariantAction) -> some View {
+        let isDeactivate = action.kind == .deactivate
+        HStack(alignment: .top, spacing: 10) {
+            Group {
+                if let urlString = action.photoURL, let url = URL(string: urlString) {
+                    AsyncImage(url: url) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        Color(.systemGray5)
+                    }
+                    .frame(width: 52, height: 52).clipped().cornerRadius(8)
+                } else {
+                    Color(.systemGray5).frame(width: 52, height: 52).cornerRadius(8)
+                }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(action.productTitle)
+                            .font(.subheadline.weight(.semibold)).lineLimit(1)
+                        if !action.variantLabel.isEmpty {
+                            Text(action.variantLabel).font(.caption2).foregroundStyle(.secondary)
+                        }
+                        if let price = action.price {
+                            Text(String(format: "$%.2f", price))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Label(
+                        isDeactivate ? "Deactivate needed" : "Re-list needed",
+                        systemImage: isDeactivate ? "minus.circle.fill" : "arrow.up.circle.fill"
+                    )
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(isDeactivate ? .red : .blue)
+                    .labelStyle(.iconOnly)
+                }
+                if isDeactivate {
+                    Text("Sold elsewhere (qty=0). Deactivate this variant's Mercari listing.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button {
+                        variantToDeactivate = action
+                    } label: {
+                        Label("Deactivate on Mercari", systemImage: "minus.circle")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red)
+                } else {
+                    Text("Sold on Mercari. Re-list since you still have stock.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button {
+                        Task { await startVariantRelist(action) }
+                    } label: {
+                        Label("Re-list on Mercari", systemImage: "arrow.up.circle")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
     private func reload() async {
         isLoading = true
         guard let userId = Auth.auth().currentUser?.uid else { isLoading = false; return }
         let db = Firestore.firestore()
         // Fetch all user listings that have a Mercari cross-post ID or a pending Mercari flag
-        let snap = try? await db.collection("listings")
+        async let listingsSnap = db.collection("listings")
             .whereField("userId", isEqualTo: userId)
             .getDocuments()
+        async let variantRows = ProductRepository.shared.fetchPendingMercariVariantActions(userId: userId)
+        let snap = try? await listingsSnap
         let all = snap?.documents.compactMap { try? $0.data(as: UserListing.self) } ?? []
         listings = all
             .filter { $0.crossPostListingIds?["mercari"] != nil }
             .sorted { ($0.updatedAt?.dateValue() ?? .distantPast) > ($1.updatedAt?.dateValue() ?? .distantPast) }
+        variantActions = (try? await variantRows) ?? []
         isLoading = false
     }
 
@@ -3433,6 +3615,45 @@ struct MercariProfileSyncSheet: View {
         try? await Firestore.firestore().collection("listings").document(listingId)
             .updateData([flag: FieldValue.delete()])
         await reload()
+    }
+
+    /// Clears one variant's pending flag via the whole-array `syncVariants` write —
+    /// never a dotted `variants.<index>.pendingMercari...` path (see that method's
+    /// doc comment for why).
+    private func clearVariantFlag(_ kind: PendingMercariVariantAction.Kind, action: PendingMercariVariantAction) async {
+        try? await ProductRepository.shared.updateVariant(productId: action.productId, variantId: action.variantId) { v in
+            switch kind {
+            case .deactivate: return v.clearingPendingMercariDeactivation()
+            case .relist: return v.clearingPendingMercariRelist()
+            }
+        }
+        await reload()
+    }
+
+    /// Builds and presents a `CrossPostJob` targeting this specific variant, the
+    /// per-variant analog of the legacy relist flow's `listingToRelist = CrossPostJob(...)`
+    /// above — reuses the same `MercariAutoPosterView` headless-posting engine, just
+    /// pointed at `products/{productId}.variants[variantId]` instead of a `listings/{id}`
+    /// doc for its Firestore writes (see `CrossPostJob.variantProductId`/`variantId`).
+    private func startVariantRelist(_ action: PendingMercariVariantAction) async {
+        let raw: [String: Any]? = (try? await ProductRepository.shared.fetchProduct(productId: action.productId)) ?? nil
+        let title = (raw?["title"] as? String) ?? action.productTitle
+        let description = (raw?["description"] as? String) ?? ""
+        let images = (raw?["images"] as? [String]) ?? []
+        let photoPaths = images.compactMap { StorageService.shared.path(fromPublicURL: $0) }
+        let buyerPaysShipping = (raw?["buyerPaysShipping"] as? Bool) ?? false
+        let conditionRaw = (raw?["condition"] as? String) ?? "good"
+        variantRelistJob = CrossPostJob(
+            platform: "mercari",
+            title: title,
+            description: description,
+            price: action.price ?? (raw?["listingPrice"] as? Double) ?? 0,
+            photoFirebasePaths: photoPaths,
+            buyerPaysShipping: buyerPaysShipping,
+            condition: conditionRaw,
+            variantProductId: action.productId,
+            variantId: action.variantId
+        )
     }
 }
 
@@ -3776,7 +3997,6 @@ final class MercariTakeHomeScraper: NSObject, WKNavigationDelegate {
 }
 
 private struct MercariDeactivateActionSheet: View {
-    let listing: UserListing
     let url: URL
     var onHandled: () -> Void
 
@@ -3822,7 +4042,6 @@ private struct MercariDeactivateActionSheet: View {
 /// it runs, mirroring MercariAutoEditSheet's UX — and only drops into the existing manual
 /// webview-and-confirm flow (MercariDeactivateActionSheet) if the automation can't complete.
 struct MercariAutoDeactivateSheet: View {
-    let listing: UserListing
     let mercariId: String
     var onHandled: () -> Void
 
@@ -3830,8 +4049,7 @@ struct MercariAutoDeactivateSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var sheetDetent: PresentationDetent = .height(80)
 
-    init(listing: UserListing, mercariId: String, onHandled: @escaping () -> Void) {
-        self.listing = listing
+    init(mercariId: String, onHandled: @escaping () -> Void) {
         self.mercariId = mercariId
         self.onHandled = onHandled
         _automator = StateObject(wrappedValue: MercariListingStateAutomator(mercariItemId: mercariId, action: .deactivate))
@@ -3846,7 +4064,7 @@ struct MercariAutoDeactivateSheet: View {
                 Color.clear
             case .manualFallback:
                 if let url = URL(string: "https://www.mercari.com/us/item/\(mercariId)/") {
-                    MercariDeactivateActionSheet(listing: listing, url: url, onHandled: onHandled)
+                    MercariDeactivateActionSheet(url: url, onHandled: onHandled)
                 } else {
                     Color.clear
                 }

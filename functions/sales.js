@@ -24,6 +24,7 @@ const { ebayRequest, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET } = require("./ebay_auth
 const { getValidEtsyToken, getEtsyClientId } = require("./etsy_auth");
 const { variantSkuFor } = require("./ebay_listing");
 const { loadSaleStages } = require("./sale_stages");
+const { createWeverseOrderTaskIfNeeded } = require("./weverse_order_tasks");
 
 const EBAY_SECRETS = [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET];
 
@@ -475,6 +476,22 @@ async function recordSaleCore(db, uid, fields, product) {
         variantSku, newQuantity: applied.newQuantity, soldOut: applied.soldOut, soldOnPlatform: platform,
       });
       cascadeResult.previousQuantity = applied.previousQuantity;
+    }
+  }
+
+  // Weverse re-order task: this product was originally sourced from Weverse,
+  // so fulfilling this sale means the user has to go manually re-buy it
+  // there (see weverse_order_tasks.js's header — no Weverse ordering API,
+  // never automated). Only on the sale's first write (mirrors the cascade's
+  // own `!existing.exists` guard above — a re-record shouldn't spawn a
+  // second task for the same sale). Best-effort, same as every per-platform
+  // push inside `cascade()` above: never blocks or rolls back the sale
+  // write that already landed.
+  if (productId && product && !existing.exists) {
+    try {
+      await createWeverseOrderTaskIfNeeded(db, uid, { product, productId, saleId, variantSku });
+    } catch (e) {
+      console.error(`[recordSaleCore] weverse order task creation failed for sale ${saleId}:`, e.message);
     }
   }
 

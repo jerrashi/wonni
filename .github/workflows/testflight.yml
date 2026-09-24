@@ -1,0 +1,111 @@
+name: TestFlight
+
+on:
+  push:
+    branches: [main]
+    paths: [wonni/**]
+
+concurrency:
+  group: testflight-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  archive-and-upload:
+    name: Archive & Upload to TestFlight
+    runs-on: macos-latest
+    timeout-minutes: 30
+    # Requires three repo secrets from an App Store Connect API key
+    # (App Store Connect → Users and Access → Integrations → Keys; the key
+    # needs at least "App Manager" role so automatic signing can manage
+    # certs/profiles on the runner):
+    #   APP_STORE_CONNECT_KEY_ID       — the key's Key ID
+    #   APP_STORE_CONNECT_ISSUER_ID    — the Issuer ID shown on the same page
+    #   APP_STORE_CONNECT_API_KEY_P8   — the *.p8 file's contents, base64-encoded
+    #                                    (e.g. `base64 -i AuthKey_XXXX.p8 | pbcopy`)
+    # This job intentionally does nothing (fails fast with a clear message)
+    # until those are set — see the "Check required secrets" step below.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required secrets
+        run: |
+          missing=()
+          [ -z "${{ secrets.APP_STORE_CONNECT_KEY_ID }}" ] && missing+=("APP_STORE_CONNECT_KEY_ID")
+          [ -z "${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}" ] && missing+=("APP_STORE_CONNECT_ISSUER_ID")
+          [ -z "${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}" ] && missing+=("APP_STORE_CONNECT_API_KEY_P8")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing required repo secret(s): ${missing[*]}"
+            echo "Add these under Settings → Secrets and variables → Actions."
+            echo "See the comment block at the top of this workflow file for how to get them."
+            exit 1
+          fi
+
+      - name: Select Xcode version
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Provide Secrets.xcconfig
+        # Same placeholder used by the existing test workflow (test.yml) —
+        # a real production Secrets.xcconfig is never committed. If the app
+        # needs real (non-placeholder) API keys baked into a TestFlight
+        # build, that's a separate decision (e.g. a dedicated encrypted
+        # Secrets.xcconfig secret) not made here.
+        run: cp wonni/wonni/Secrets.xcconfig.example wonni/wonni/Secrets.xcconfig
+
+      - name: Install App Store Connect API key
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "$APP_STORE_CONNECT_API_KEY_P8" | base64 --decode \
+            > ~/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8
+
+      - name: Bump build number
+        # Uses the GitHub Actions run number as the build number — simple,
+        # monotonically increasing across runs on this workflow, and needs
+        # no commit back to the repo (the bump only exists in this ephemeral
+        # checkout, matching how `wonni/scripts/testflight.sh`'s local
+        # `agvtool new-version` bump is also never committed).
+        run: |
+          cd wonni
+          agvtool new-version -all "$GITHUB_RUN_NUMBER"
+
+      - name: Archive
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          cd wonni
+          mkdir -p build
+          xcodebuild archive \
+            -project wonni.xcodeproj \
+            -scheme wonni \
+            -configuration Release \
+            -archivePath build/wonni.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8 \
+            -authenticationKeyID "$APP_STORE_CONNECT_KEY_ID" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
+
+      - name: Export & upload to TestFlight
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          cd wonni
+          xcodebuild -exportArchive \
+            -archivePath build/wonni.xcarchive \
+            -exportPath build \
+            -exportOptionsPlist ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8 \
+            -authenticationKeyID "$APP_STORE_CONNECT_KEY_ID" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
+
+      - name: Upload archive as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wonni-xcarchive
+          path: wonni/build/wonni.xcarchive
+          retention-days: 7

@@ -5,6 +5,7 @@ const { aliexpressExchangeToken } = require("./aliexpress_auth");
 const { aliexpressImportProduct } = require("./aliexpress_product");
 const { weverseImportProduct } = require("./weverse_product");
 const { weverseBulkImportProducts } = require("./weverse_bulk_import");
+const { weverseShopPreview } = require("./weverse_shop");
 const { splitProductImage } = require("./split_image");
 const { identifyProductsInImage } = require("./identify_products");
 const { placeAliexpressOrder, confirmTiktokShipment, pollAliexpressTracking } = require("./aliexpress_order");
@@ -49,6 +50,10 @@ const {
 const { recordMercariSalesBatch } = require("./mercari_sales");
 const { syncSales, getOrderTakeHome } = require("./sale_poller");
 const { postToWonni } = require("./wonni_listing");
+const { watchStockSourcesScheduled } = require("./stock_watch");
+const { applyCrossPostRules } = require("./cross_post");
+const { recordWeverseOrderPlaced, listWeverseOrderTasks } = require("./weverse_order_tasks");
+const { classifyWeverseItemTypes } = require("./weverse_shipping_estimate");
 
 module.exports = {
   // Auth
@@ -61,6 +66,7 @@ module.exports = {
   aliexpressImportProduct,
   weverseImportProduct,
   weverseBulkImportProducts,
+  weverseShopPreview,
   splitProductImage,
   identifyProductsInImage,
   generateProductDescription,
@@ -129,4 +135,17 @@ module.exports = {
   updateSaleStatus,
   reassignSaleStage,
   postToWonni,
+
+  // Stock watcher
+  watchStockSourcesScheduled,
+
+  // Cross-post rules engine
+  applyCrossPostRules,
+
+  // Weverse re-order tasks (fulfill a resale sale by re-buying on Weverse)
+  recordWeverseOrderPlaced,
+  listWeverseOrderTasks,
+
+  // Weverse shipping estimate (per-user, per-item-type lookup table)
+  classifyWeverseItemTypes,
 };

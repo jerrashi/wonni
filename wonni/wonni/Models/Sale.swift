@@ -95,6 +95,13 @@ struct Sale: Identifiable, Codable {
     var shippingRevenue: Double?       // shipping charged to buyer
     var takeHome: Double?              // net after platform fees and shipping label cost
     var shippingLabelCost: Double?     // eBay shipping label cost
+    /// Real total actually spent to fulfill this specific sale (e.g. a
+    /// Weverse re-order placed to cover a resale) — set by
+    /// `recordWeverseOrderPlaced`. Distinct from `product.sourcePrice`,
+    /// which `SalesMetrics.saleFinancials` uses as an estimated per-unit
+    /// cost when this isn't set. Mirrors `functions/contracts/sales.js`'s
+    /// `SaleDocSchema.actualCostPaid`.
+    var actualCostPaid: Double?
     var quantity: Int?                 // units sold; nil/absent means 1 (canonical default)
     var productTags: [String]?         // tag snapshot at sale time — drives the tag breakdown
 

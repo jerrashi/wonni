@@ -60,6 +60,21 @@ struct WonniApp: App {
                         print("[wonniApp] onOpenURL did not find 'code' query item")
                     }
                 }
+                .onOpenURL { url in
+                    // wonni://import?url=<percent-encoded product URL> — no Share Extension
+                    // target needed (a hand-authored PBXNativeTarget with no local Xcode to
+                    // compile-check it was judged too risky, see task #8's history); an iOS
+                    // Shortcuts action, or any other app, can hand a Weverse/Mercari/eBay URL
+                    // to Wonni this way and it opens straight into ImportListingSheet.
+                    guard url.scheme == "wonni", url.host == "import" else { return }
+                    let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+                    guard let productUrl = components?.queryItems?.first(where: { $0.name == "url" })?.value,
+                          !productUrl.isEmpty else {
+                        print("[wonniApp] onOpenURL import: missing 'url' query item")
+                        return
+                    }
+                    bulkImportManager.pendingDeepLinkImportUrl = productUrl
+                }
         }
         .modelContainer(for: [Item.self, Listing.self, Expense.self, Mileage.self])
     }
