@@ -184,24 +184,28 @@ jobs:
           # ahead of the test, rather than racing it. This is in addition to,
           # not instead of, the flat wait below: launching Photos.app kicks
           # indexing off earlier, it doesn't prove indexing finished (still no
-          # simctl subcommand for that — see prior note on this line).
+          # simctl subcommand for that — see prior note on this line). The
+          # foreground dwell here was 5s initially; the very first test to
+          # touch the picker in the next CI run still failed the 120s in-test
+          # wait outright (2026-09-25, ~176s total including prior steps) —
+          # 5s foreground time was apparently too short for Photos.app to
+          # meaningfully start indexing before being killed. Bumped to 20s.
           xcrun simctl launch "$UDID" com.apple.mobileslideshow > /dev/null 2>&1 || true
-          sleep 5
+          sleep 20
           xcrun simctl terminate "$UDID" com.apple.mobileslideshow > /dev/null 2>&1 || true
           # Give the simulator's photo indexing a head start here, in setup,
           # instead of paying that cold-start cost mid-test. Across the CI runs
           # that led to this fix, "At least one photo grid item should load"
-          # (now a 90s wait, inside the test) passed cleanly 3 times in a row
+          # (now a 120s wait, inside the test) passed cleanly 3 times in a row
           # and then timed out once more under heavier CI load — real
           # tail-latency variance, not a deterministic bug, so a blind timeout
           # bump alone would just be gambling on the next run's luck. There's
           # no simctl subcommand to positively confirm indexing is done, so
           # this is a flat wait, not a poll — but any time spent here is time
           # the actual test's own (already-generous) wait doesn't have to
-          # cover. Bumped from 15s -> 20s (2026-09-25, second consecutive CI
-          # failure on this same assertion) alongside the Photos.app
-          # pre-launch above — this alone did not previously fix it, so it's
-          # paired with the pre-launch rather than repeated as a solo fix.
+          # cover. Bumped 15s -> 20s -> (unchanged here, see Photos.app dwell
+          # bump above) across two consecutive CI failures on this same
+          # assertion (2026-09-25) — still a mitigation, not a guarantee.
           sleep 20
 
       - name: Run selling flow UI tests
