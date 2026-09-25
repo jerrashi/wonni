@@ -80,7 +80,13 @@ jobs:
   unit-tests:
     name: Unit Tests
     runs-on: macos-latest
-    timeout-minutes: 15
+    # Bumped from 15 (2026-09-25): two separate PR runs hit this ceiling under
+    # heavier CI load with every visible test case still passing right up to
+    # the cut — GitHub reports a timeout-kill as job conclusion "cancelled",
+    # not "failure"/"timed_out", which reads like an infra flake until you
+    # check the elapsed time against this limit. Not a test slowdown to chase;
+    # just matching the headroom already given to ui-tests below.
+    timeout-minutes: 25
     needs: detect-changes
     if: needs.detect-changes.outputs.code-changed == 'true'
     steps:
