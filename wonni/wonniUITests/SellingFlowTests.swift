@@ -17,6 +17,42 @@ final class SellingFlowTests: XCTestCase {
         app.launch()
     }
 
+    /// Waits for the picker's photo grid to populate; if it doesn't, closes and
+    /// reopens the picker once and waits again, instead of just waiting longer.
+    ///
+    /// Root cause (found 2026-09-25, after two rounds of CI-side sleep tuning
+    /// made zero-to-negative difference): CustomPhotoPickerView's
+    /// `PhotoCollection` (see PhotoCollection.swift) does a one-shot
+    /// `PHFetchResult` query in its `.task { load() }` and only refreshes
+    /// reactively via `PHPhotoLibraryChangeObserver` on a *subsequent*
+    /// library change. The CI-seeded photo is added via `simctl addmedia`
+    /// before the app ever launches, so that "change" already happened
+    /// before this observer registers — no later change event will ever
+    /// fire to trigger a refresh. Waiting longer than the first fetch's
+    /// snapshot therefore cannot help; only a fresh fetch can. Closing the
+    /// picker (`pickerBackButton`, always present regardless of selection
+    /// state) and reopening it recreates the view's `@StateObject
+    /// photoCollection` and re-runs `.task { load() }`, giving PhotoKit's
+    /// indexing another, later window to have finished by.
+    @discardableResult
+    private func waitForPhotoGridItem(reopeningVia galleryButton: XCUIElement, timeout: TimeInterval = 45) -> XCUIElement {
+        let firstPhoto = app.descendants(matching: .any).matching(identifier: "photoGridItem").firstMatch
+        if firstPhoto.waitForExistence(timeout: timeout) {
+            return firstPhoto
+        }
+
+        let backButton = app.buttons["pickerBackButton"]
+        if backButton.waitForExistence(timeout: 5) {
+            backButton.tap()
+        }
+        XCTAssert(galleryButton.waitForExistence(timeout: 5), "Camera view should reappear after picker retry")
+        galleryButton.tap()
+        app.tap() // flush the permission-alert interruption monitor if it fires again
+
+        XCTAssert(firstPhoto.waitForExistence(timeout: timeout), "At least one photo grid item should load (after one reopen retry)")
+        return firstPhoto
+    }
+
     /// Test the complete selling flow from camera to publish
     func testPublishSingleListing() throws {
         // Photos permission alert may appear the first time the picker touches the
@@ -52,8 +88,7 @@ final class SellingFlowTests: XCTestCase {
         galleryButton.tap()
         app.tap() // flush the permission-alert interruption monitor if it fired
 
-        let firstPhoto = app.descendants(matching: .any).matching(identifier: "photoGridItem").firstMatch
-        XCTAssert(firstPhoto.waitForExistence(timeout: 90), "At least one photo grid item should load")
+        let firstPhoto = waitForPhotoGridItem(reopeningVia: galleryButton)
         firstPhoto.tap()
 
         let commitButton = app.buttons.matching(identifier: "draftsCarousel").firstMatch
@@ -217,14 +252,7 @@ final class SellingFlowTests: XCTestCase {
         // SwiftUI exposes SelectablePhotoGridItem as an Image-typed AX element (since
         // its overlay image becomes the combined accessibility trait), not "Other" —
         // match by identifier across all element types rather than assuming a type.
-        let firstPhoto = app.descendants(matching: .any).matching(identifier: "photoGridItem").firstMatch
-        // Real tail-latency variance, not a fixed cold-start cost: 60s passed
-        // cleanly in 3 straight CI runs, then timed out once more under
-        // heavier CI load. Paired with the CI workflow now giving photo
-        // indexing a head start in setup (see test.yml's seed step), 90s is
-        // headroom for that tail, not a guess — the common case still
-        // finishes in seconds either way.
-        XCTAssert(firstPhoto.waitForExistence(timeout: 90), "At least one photo grid item should load")
+        let firstPhoto = waitForPhotoGridItem(reopeningVia: galleryButton)
         firstPhoto.tap()
 
         // The Button's own "commitDraftButton" identifier gets clobbered by the
@@ -312,8 +340,7 @@ final class SellingFlowTests: XCTestCase {
             galleryButton.tap()
             app.tap()
 
-            let firstPhoto = app.descendants(matching: .any).matching(identifier: "photoGridItem").firstMatch
-            XCTAssert(firstPhoto.waitForExistence(timeout: 90), "At least one photo grid item should load")
+            let firstPhoto = waitForPhotoGridItem(reopeningVia: galleryButton)
             firstPhoto.tap()
 
             let commitButton = app.buttons.matching(identifier: "draftsCarousel").firstMatch
