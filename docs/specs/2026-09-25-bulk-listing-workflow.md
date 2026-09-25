@@ -1,14 +1,37 @@
 # Bulk Listing Workflow — Acceptance Criteria
 
 Sep 25, 2026 · @Jerry
+_Updated Sep 25, 2026 — added per-category/per-goal pricing strategy profiles (§11), text and URL entry points on the start-listing flow (§12), and the guided single-photo split/bundle/lot confirm flow (§13)._
 
 ## Overview
 
 Bulk listing mode is a separate workflow layered on top of Wonni's existing single-item draft/listing pipeline, built for high-volume, low-attention sessions — an attic cleanout, a bulk box, a relative's estate — where the constraint isn't ability to sell, it's the brainpower cost of hundreds of per-item micro-decisions.
 
 - **Product vision**: Wonni acts as an AI agent for marketplaces that don't offer their own AI/MCP integration (eBay, Etsy, Mercari, Facebook Marketplace) — natural language in, structured listing/pricing/platform actions out, for power sellers who don't want to build or maintain their own integration.
-- **How the 8 features connect**: the intent form (§1) sets an anchor prompt used by platform AI-suggest (§2), description chip generation (§3), bulk photo split (§4) / photo generation (§5), and the pricing rules engine (§6). Bulk photo entry (§4) and bulk text entry (§7) are two input paths into the same draft-generation pipeline. Sales tracking (§8) closes the loop once items sell, tracking what still needs to be bought/shipped.
+- **How the 13 features connect**: the intent form (§1) sets an anchor prompt used by platform AI-suggest (§2), description chip generation (§3), bulk photo split (§4) / photo generation (§5), the pricing rules engine (§6), and the per-category/per-goal strategy profiles (§11) that feed it. §4 (auto-split), §7 (bulk text), §12 (URL import), and §13 (guided single-photo confirm flow) are four input paths into the same draft-generation pipeline, all landing on the same review/publish screen (§9). Sales tracking (§8) closes the loop once items sell, tracking what still needs to be bought/shipped.
 - **Scope**: this doc specifies the bulk-workflow layer only. It assumes the existing single-item draft → listing → cross-post pipeline as the primitive every bulk action ultimately produces (N drafts in, same per-draft publish flow out).
+
+## Roadmap & Prioritization
+
+Grouped by what unlocks the most brainpower-reduction per unit of build effort. Sequencing, not a commitment — re-prioritize as we learn.
+
+**P0 — Core entry + review loop.** Without these, nothing else in this doc has anywhere to land.
+- §1 Bulk Intent Capture — cheap to build, anchors every AI call below it
+- §7 / §12 Bulk Text Entry & start-flow text/URL input — the fastest new path to drafts, no vision pipeline required
+- §13 Guided single-photo confirm flow — turns the existing single-photo-per-draft default into the "individual / small bundles / one lot" decision point that most other features hang off of
+- §9 Sort/bulk-deselect on the review screen — the highest-leverage brainpower fix for the least engineering (sort + range-select on existing data)
+- §2 Platform Selection (All / AI Suggested / Manual) — needed before AI-suggest anything else has somewhere to write its output
+
+**P1 — Compounding AI value.** Depends on P0 being in place; this is where "reduce decisions per item" actually gets delivered.
+- §6 + §11 Pricing/listing strategy engine and per-category/per-goal profiles — the most-requested, highest-complexity piece; auction/BIN/offers/bulk-lot recommendation per platform
+- §3 Bracket → chip conversion — small, self-contained, high daily-use payoff
+- §5 Photo sourcing (generate/stock/bulk-apply/background removal) — meaningfully reduces photography time, which is most of the physical effort in a bulk session
+- §12 URL import — depends on scraping/parsing infra already partly built in the web app; mostly a reuse-and-wire-up job
+
+**P2 — Depth / polish, lower urgency.**
+- §10 AI-suggested bundling — high novelty, but only pays off once a user has enough duplicate/compatible inventory in a batch to matter
+- §8 Sales tracking (restock/shipping lists) — valuable but decoupled from the listing-creation flow; can ship independently, anytime
+- Background-removal cost/quality tuning, generation rate limits, and the other Open Questions items — refine after the core loop is validated
 
 ## 1. Bulk Intent Capture (Natural-Language Form)
 
@@ -133,16 +156,23 @@ Extends Wonni's existing cross-post rules concept to be settable via natural lan
 - [ ] Rules settable at account, batch, or single-item scope; acceptance criteria must define precedence (item > batch > account) and surface conflicts to the user when scopes disagree
 - [ ] Preview before bulk apply: before a rule set is applied across a batch, show a summary (e.g. "12 items → eBay auction, 8 → eBay BIN, all → Facebook @ −10%") so the user can sanity-check before committing
 
+**Structured recommendation output** (see §11 for the strategy layer that decides these values)
+
+- [ ] For every draft, the model returns one recommendation object per connected platform, not just a single price: `{platform, list_as_auction: bool, auction_start_price?, buy_it_now_price?, accepts_offers: bool, bulk_lot: bool, hold_timeline_days}` — this is the concrete shape behind "auction or not on eBay? BIN price? accept offers? bulk list on Facebook?"
+- [ ] Each field is independently overridable per platform per draft — accepting the eBay auction recommendation doesn't force-accept the Facebook bulk-lot recommendation
+
 ## 7. Bulk Text Entry (Typed List → Draft Listings)
 
 - [ ] Entry point: a text-input mode alongside bulk-photo entry, for items the user wants to list from memory or an inventory sheet rather than photographing first
 - [ ] Accepted shape (from the example): optional category header lines ("Pc games:", "N64 games:") followed by one item per line, with optional inline metadata like a year ("Halo (2003)")
 - [ ] Parser tolerates variation rather than requiring exact formatting: blank lines between groups, headers with or without a trailing colon, items with or without parenthetical metadata, extra whitespace
 - [ ] A category header applies to every item below it until the next header (items before any header, or with none given, get "no category")
-- [ ] Each parsed line becomes its own draft through the same title/description/price/category AI pipeline as a photo-sourced draft — this is an alternate entry point into the §4 pipeline, not a separate system; photos are added afterward via §5
+- [ ] Each parsed line becomes its own draft through the same title/description/price/category AI pipeline as a photo-sourced draft — this is an alternate entry point into the §4 pipeline, not a separate system
+- [ ] Photos are not purely a follow-up step: each text-sourced draft gets a system-suggested photo automatically (stock photo if the item is confidently identified, otherwise an AI-generated photo per §5) so a draft isn't blank/unpublishable immediately after parsing — user can accept, regenerate, replace, or add their own at any time
 - [ ] Ambiguous lines (can't confidently parse, or a likely duplicate) are flagged for review rather than silently dropped or silently guessed
 - [ ] After parsing, the same review UI as §4's photo-split review applies — merge/discard/edit before drafts finalize
 - [ ] The batch's NL intent (§1) applies identically to text-sourced drafts as to photo-sourced ones (same pricing stance, same platform-suggestion behavior)
+- [ ] Available directly from the start-listing screen as a third input mode alongside camera and photo-library (see §12) — not buried in a separate bulk-only menu
 
 ## 8. Sales Tracking: Restock / Shopping & Shipping List
 
@@ -203,6 +233,83 @@ Goal: for a batch containing multiple units of related/compatible items (e.g. 2 
 - [ ] Accepting a bundle merges the constituent item drafts into one bundle draft: combined title/description generated from the parts (not just concatenated), a bundle price suggestion (not necessarily the sum of individual estimates — may include a bundle discount, informed by the batch's pricing stance from §1), and a combined photo set (individual item photos carried over, plus the option to generate/take a new "whole bundle together" photo per §5)
 - [ ] Bundle drafts flow through the same platform-suggestion (§2) and pricing-rule (§6) logic as single-item drafts — bundles may skew toward different platforms than the individual pieces would have (e.g. local-pickup-friendly platforms for a bulky multi-item bundle)
 
+## 11. Per-Category / Per-Goal Pricing & Listing Strategy Profiles
+
+Extends §6's rule engine with the layer that actually decides what to recommend: the same item category can warrant a completely different strategy depending on the user's goal for that group of items (clear space fast vs. maximize return vs. just don't lose money), and that strategy typically varies **by platform** even for the same item. This is the "model returns its recommendation for each platform" concept, made concrete with three worked examples.
+
+**Why this needs its own layer, not just §6's raw NL parse**
+
+- [ ] A single free-text instruction (§6) captures explicit rules well ("Facebook = market − 10%") but doesn't by itself resolve holistic per-category strategy trade-offs (value vs. space vs. depreciation vs. built-in demand) — §11 is the reasoning layer that turns category + goal + platform norms into the structured recommendation from §6
+- [ ] Strategy is computed **per category group within a batch**, not per individual item — items sharing a detected category (e.g. all "PC games") get the same strategy profile by default, with per-item override always available
+
+**Worked examples (acceptance target: the engine reproduces this reasoning, not necessarily these exact numbers)**
+
+- [ ] **Low-value bulk group, space isn't a constraint** (e.g. PC games, individually worth little): eBay → $0.99-start auction, no reserve, "fine ending near $1"; Mercari → mid-market fixed price (e.g. $3–8) to catch the Buy-It-Now/budget-hunter segment; Facebook → one bulk "make me an offer / build your own bundle" lot instead of per-item listings. Hold timeline defaults longer (e.g. 30 days) since low physical footprint means no urgency to clear it
+- [ ] **High-demand vintage/collectible group** (e.g. vintage consoles): eBay → $0.99-start auction with no BIN, on the reasoning that built-in collector demand will drive the price to fair value organically — different auction rationale than the low-value case above (demand-driven vs. "don't care where it lands"), and the recommendation's stated reasoning should reflect which one applies
+- [ ] **Bulky/depreciating group, space is a constraint** (e.g. vintage tech like VHS players): willing to accept a low price (e.g. $1) but **not a loss** — strategy must compute a price floor that nets non-negative after platform fees + estimated shipping cost, not just an arbitrary low number; hold timeline shorter/more urgent than the low-value bulk case because the item is actively costing storage space and depreciating
+- [ ] The recommendation engine's output for each group states its reasoning in plain language (same transparency pattern as §2/§6/§10), e.g. "Auction, no reserve — this category has consistent collector demand so the market will find a fair price" vs. "Fixed low price with a shipping-adjusted floor — this item depreciates and isn't worth storing"
+
+**Inputs to the strategy computation**
+
+- [ ] Category/item-value signal (AI classification + market-price lookup, same source as §6's price_strategy)
+- [ ] User's stated goal for the group — timeline/urgency and value-vs-speed trade-off — captured via §1's intent form, scoped per batch or per category group (a single batch may reasonably contain a "clear fast" group and a "maximize value" group at once; goal is not necessarily uniform across a whole batch)
+- [ ] Space/holding-cost signal, if available (item dimensions/bulkiness, explicit user note) — informs hold-timeline defaults and floor-price willingness
+- [ ] Shipping cost estimate (weight/size-based, or platform-provided calculator) — required input to the profit-floor calculation, not optional
+- [ ] Platform-specific selling norms/audience (collector-heavy vs. budget-buyer vs. bulk-lot-friendly) as a static reference table the AI reasoning consults, not a hardcoded per-category platform assignment (consistent with §2's "never hardcoded" principle)
+
+**Output & controls**
+
+- [ ] Output shape matches §6's structured recommendation object per platform (`list_as_auction`, `auction_start_price`, `buy_it_now_price`, `accepts_offers`, `bulk_lot`, `hold_timeline_days`) — §11 is what computes those values, §6 is how they're captured/edited/applied
+- [ ] Presented per category group before bulk-apply, same preview-before-commit pattern as §6 ("this group → these platform strategies") so the user can sanity-check reasoning before it's applied to every item in the group
+- [ ] Editable at the group level (adjust once, applies to the whole group) and per-item (override one item without breaking the group default), same override model as §2
+
+## 12. Additional Bulk Entry Points on the Start-Listing Flow
+
+Today the start-listing flow only offers camera or gallery photo input. This adds two more entry points so bulk sessions aren't photo-only.
+
+**Text input** (see also §7, which this triggers into)
+
+- [ ] Start-listing screen gains a third option alongside Take Photo / Choose from Library: **Enter as text**, opening the free-text box described in §7
+- [ ] Text submitted here flows through the same parse → draft → auto-photo pipeline as §7; this section only concerns the entry point's placement, not the parsing logic itself
+
+**URL input**
+
+- [ ] Start-listing screen gains a fourth option: **Import from URL**, reusing the URL-import/parsing infrastructure already built for the web app
+- [ ] Accepts a **single listing URL** (e.g. a Weverse or other marketplace/storefront listing page) — extracts title, description, price, photos, and condition signals into one draft, same downstream pipeline as any other entry point
+- [ ] Accepts a **category/index page URL** (a page listing multiple items) — extracts a candidate list of items from the page and presents the same bulk select/de-select UI already designed for this pattern in the web app, so the user picks which of the detected items become drafts rather than importing all-or-nothing
+- [ ] Failed or partial extraction (a listing missing a price, a category page whose structure isn't recognized) degrades gracefully — partial data still becomes an editable draft rather than blocking the import, consistent with the "never silently drop" principle used throughout this doc
+- [ ] **Open question**: scraping third-party marketplace/storefront pages (e.g. Weverse, or a competitor marketplace) may implicate that site's terms of service — needs a compliance check per source site before this ships broadly, not assumed fine (see Open Questions)
+
+## 13. Guided Confirm Flow for Single-Photo Item Stacks
+
+§4 covers automatic multi-item detection when a photo clearly contains distinct sellable items. This section covers the more common default case: a user photographs a stack/pile (e.g. a stack of PC games, a separate stack of N64 games) the way the app already treats any photo — as **one** draft — and needs an explicit decision point to turn that into the right number of listings, rather than the app silently guessing.
+
+**Step 1 — Grouping decision**
+
+- [ ] When a photo is detected as likely containing multiple distinct items (same detection signal as §4), before any drafts are generated, prompt the user to choose: **List individually**, **Group into smaller bundles**, or **Keep as one lot** — this decision gates everything downstream, rather than §4's auto-split assuming "individually" is always correct
+- [ ] This prompt is per source photo — a batch with one stack-of-PC-games photo and one stack-of-N64-games photo asks the question independently for each, since the user may want different groupings for each
+
+**Step 2 — Optional intent capture**
+
+- [ ] After the grouping choice, offer the same optional free-text intent box as §1, scoped to this photo/group — matches the example: "I'm cleaning out my mom's attic so I just want to get rid of this stuff. Let me know if you think it makes more sense to just donate an item."
+- [ ] If the user's intent text suggests an item may not be worth listing (low value relative to effort, or an explicit ask like the example above), the resulting draft is flagged with a visible "consider donating" suggestion rather than the app unilaterally excluding it — final sell/donate call stays with the user via §9's sort/deselect, consistent with §9's decision to keep that judgment out of a silent AI field
+- [ ] Skipping this step is one tap, same as §1
+
+**Step 3 — Draft generation**
+
+- [ ] Whatever grouping was chosen in Step 1 (individual / small bundles / one lot) is what gets generated — individual feeds §4's per-item detection pipeline, small bundles feeds a bundle-aware generation pass (reuses §10's bundle-draft shape without requiring the user to separately trigger "Suggest Bundles"), and one lot produces a single draft covering the whole photo (today's existing default behavior)
+
+**Step 4 — AI-suggested pricing strategy & platform confirm**
+
+- [ ] Before finalizing, prompt the user to confirm (or decline) AI-suggested pricing strategy and platforms for the generated draft(s), surfacing the §11 recommendation for review rather than applying it silently
+- [ ] Strategy choice is offered as a simplified 3-option bucket to keep the decision cheap: **Sell quick** (favors auctions/lower BIN/shorter hold), **Balanced** (a sensible midrange default), **Maximize value** (favors higher BIN/offers/longer hold) — acknowledged limitation: a fixed 3-bucket simplification won't capture every nuance of intent, so each bucket's resulting recommendation is still shown and editable per platform (§6/§11), not applied blind
+- [ ] Selecting a bucket maps to the §11/§6 recommendation object (auction on/off, BIN price, accepts-offers, bulk-lot, hold-timeline) rather than being a separate, disconnected pricing mechanism
+- [ ] Platform selection at this step reuses §2's All / AI Suggested / Manual control, pre-populated with the AI Suggested result for this draft/group
+
+**Step 5 — Publish confirm**
+
+- [ ] Final step hands off to the existing review/publish screen (§9) — this flow does not bypass review; it's a guided path to arrive at well-formed drafts, not a shortcut around confirming before anything goes live (consistent with the Open Questions non-goal on auto-publish)
+
 ## Open Questions & Non-Goals
 
 - [ ] **AI-suggest recompute triggers** (§2, §6): exactly when does platform suggestion or pricing default recompute vs. stay frozen once a draft has been touched by the user?
@@ -210,5 +317,8 @@ Goal: for a batch containing multiple units of related/compatible items (e.g. 2 
 - [ ] **Marketplace AI-photo disclosure policy** (§5): eBay/Etsy AI-image-disclosure rules need an explicit compliance check before shipping — not assumed fine.
 - [ ] **Rule precedence conflicts** (§6): needs a concrete, signed-off resolution order for item vs. batch vs. account rules — not left implicit.
 - [ ] **Mercari smart-pricing sync floor** (§6): what's the minimum-price guardrail per item, and who sets it?
+- [ ] **Shipping-cost source for profit-floor calculations** (§11): does the floor-price math use a real per-platform shipping calculator/API, a flat estimate, or user-entered weight/size? Needs a concrete source before §11's "don't sell at a loss" guarantee is trustworthy.
+- [ ] **3-bucket strategy ceiling** (§13): explicitly flagged in the source discussion as an acknowledged simplification — worth revisiting whether a 4th bucket or a free-text override at this step is warranted once real usage shows the 3 buckets missing common cases.
+- [ ] **URL-import ToS/compliance per source site** (§12): scraping listing/category pages from third-party sites (marketplaces, storefronts like Weverse) needs a per-site legal/ToS check before broad rollout — not assumed fine.
 - [ ] **Non-goal (to confirm)**: full auto-publish with no human review is out of scope for v1 — every bulk-generated draft, however sourced, stops at a review/confirm step before posting to any marketplace, unless the user explicitly opts out.
 - [ ] **Batch-level undo/audit trail**: given how many automated decisions this workflow makes per item (platform, price, description chips, photo), should there be a single batch activity log so a user can see/undo what the AI did across 50 items at once, not just per item?
