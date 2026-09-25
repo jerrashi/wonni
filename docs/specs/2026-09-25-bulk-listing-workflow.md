@@ -2,13 +2,14 @@
 
 Sep 25, 2026 · @Jerry
 _Updated Sep 25, 2026 — added per-category/per-goal pricing strategy profiles (§11), text and URL entry points on the start-listing flow (§12), and the guided single-photo split/bundle/lot confirm flow (§13)._
+_Updated Sep 25, 2026 (2) — added the AI assistant interaction pattern (§14: Dismiss / Chat about this / Accept, scoped to individual suggestions, deliberately not a general chat assistant) and the AI capability/permission boundary model (§15: what an AI action can execute directly vs. propose-only — e.g. can post a listing, can never check out)._
 
 ## Overview
 
 Bulk listing mode is a separate workflow layered on top of Wonni's existing single-item draft/listing pipeline, built for high-volume, low-attention sessions — an attic cleanout, a bulk box, a relative's estate — where the constraint isn't ability to sell, it's the brainpower cost of hundreds of per-item micro-decisions.
 
 - **Product vision**: Wonni acts as an AI agent for marketplaces that don't offer their own AI/MCP integration (eBay, Etsy, Mercari, Facebook Marketplace) — natural language in, structured listing/pricing/platform actions out, for power sellers who don't want to build or maintain their own integration.
-- **How the 13 features connect**: the intent form (§1) sets an anchor prompt used by platform AI-suggest (§2), description chip generation (§3), bulk photo split (§4) / photo generation (§5), the pricing rules engine (§6), and the per-category/per-goal strategy profiles (§11) that feed it. §4 (auto-split), §7 (bulk text), §12 (URL import), and §13 (guided single-photo confirm flow) are four input paths into the same draft-generation pipeline, all landing on the same review/publish screen (§9). Sales tracking (§8) closes the loop once items sell, tracking what still needs to be bought/shipped.
+- **How the 15 features connect**: the intent form (§1) sets an anchor prompt used by platform AI-suggest (§2), description chip generation (§3), bulk photo split (§4) / photo generation (§5), the pricing rules engine (§6), and the per-category/per-goal strategy profiles (§11) that feed it. §4 (auto-split), §7 (bulk text), §12 (URL import), and §13 (guided single-photo confirm flow) are four input paths into the same draft-generation pipeline, all landing on the same review/publish screen (§9). Sales tracking (§8) closes the loop once items sell, tracking what still needs to be bought/shipped. §14 and §15 are cross-cutting: every AI-generated suggestion anywhere above (§2, §6, §10, §11, description chips in §3) interacts through the same Dismiss/Chat/Accept pattern (§14), and every AI-executable action anywhere above is bound by the same capability tier it's assigned in §15 — these aren't new features so much as the interaction and trust model the other 13 features share.
 - **Scope**: this doc specifies the bulk-workflow layer only. It assumes the existing single-item draft → listing → cross-post pipeline as the primitive every bulk action ultimately produces (N drafts in, same per-draft publish flow out).
 
 ## Roadmap & Prioritization
@@ -21,12 +22,14 @@ Grouped by what unlocks the most brainpower-reduction per unit of build effort. 
 - §13 Guided single-photo confirm flow — turns the existing single-photo-per-draft default into the "individual / small bundles / one lot" decision point that most other features hang off of
 - §9 Sort/bulk-deselect on the review screen — the highest-leverage brainpower fix for the least engineering (sort + range-select on existing data)
 - §2 Platform Selection (All / AI Suggested / Manual) — needed before AI-suggest anything else has somewhere to write its output
+- §15 Capability boundaries — this is infrastructure, not a feature with its own UI, but it has to exist before *any* AI-executable action (§2's Apply, §6's rule apply, §13's publish confirm) ships, not bolted on after — the harness enforcing "can post, can't check out" is a P0 dependency of everything else that acts on the user's behalf
 
 **P1 — Compounding AI value.** Depends on P0 being in place; this is where "reduce decisions per item" actually gets delivered.
 - §6 + §11 Pricing/listing strategy engine and per-category/per-goal profiles — the most-requested, highest-complexity piece; auction/BIN/offers/bulk-lot recommendation per platform
 - §3 Bracket → chip conversion — small, self-contained, high daily-use payoff
 - §5 Photo sourcing (generate/stock/bulk-apply/background removal) — meaningfully reduces photography time, which is most of the physical effort in a bulk session
 - §12 URL import — depends on scraping/parsing infra already partly built in the web app; mostly a reuse-and-wire-up job
+- §14 Dismiss/Chat/Accept pattern — layers onto whichever P0/P1 suggestion surfaces ship first (§2, §6/§11 are the natural pilot); not worth building until there are at least two suggestion types to validate the pattern generalizes
 
 **P2 — Depth / polish, lower urgency.**
 - §10 AI-suggested bundling — high novelty, but only pays off once a user has enough duplicate/compatible inventory in a batch to matter
@@ -310,6 +313,49 @@ Today the start-listing flow only offers camera or gallery photo input. This add
 
 - [ ] Final step hands off to the existing review/publish screen (§9) — this flow does not bypass review; it's a guided path to arrive at well-formed drafts, not a shortcut around confirming before anything goes live (consistent with the Open Questions non-goal on auto-publish)
 
+## 14. AI Assistant Action Pattern (Dismiss / Chat About This / Accept)
+
+A standing design principle, not a new screen: AI is already embedded throughout this doc as inline suggestions with visible reasoning (§2 platform picks, §6/§11 pricing strategy, §10 bundling, §13's guided flow). This section makes explicit how the user interacts with any one of those suggestions, and deliberately **against** adding a general-purpose chat assistant bolted onto the app — the risk called out directly: AI gets shoe-horned into products as a chat window that doesn't fit how people actually make decisions. The fix is scoping the assistant to the specific decision in front of the user, not giving it a standalone surface.
+
+**The three-action pattern**
+
+- [ ] Every AI-generated suggestion this doc specifies (a platform pick, a price/strategy recommendation, a bundle grouping, a description chip, a "consider donating" flag) presents exactly three actions: **Dismiss** (reject, no explanation needed, reverts to the pre-suggestion state or a sensible default), **Chat about this** (opens a scoped conversation anchored to that one suggestion — see below), **Accept** (applies it as-is)
+- [ ] This is additive to existing direct-edit affordances, not a replacement — a user who already knows they want a different price doesn't have to go through chat to change it; they edit the field directly, same as today. Chat is for when the *reasoning* needs a follow-up, not for routine edits
+- [ ] Dismiss is never destructive to underlying data — dismissing a bundling suggestion, for example, leaves the individual item drafts untouched, consistent with §10's existing non-destructive un-bundling requirement
+
+**"Chat about this" — scope and behavior**
+
+- [ ] Each chat is scoped to the single suggestion it was opened from (e.g. "why auction on eBay for this item," "suggest a different bundle grouping," "what if I want this sold within a week instead") — not a general assistant with access to the whole account, and not a persistent thread that outlives the suggestion
+- [ ] The chat has the same context the suggestion itself was generated from (item data, batch NL intent from §1, the specific recommendation object from §6/§11 or the bundle candidates from §10) — the user shouldn't have to re-explain what they're looking at
+- [ ] A chat turn can produce an updated suggestion (which itself gets Dismiss/Chat/Accept again) — this is iterative refinement, not one-shot; mirrors the pattern already specified for photo generation feedback in §5
+- [ ] Closing a chat without accepting anything leaves the original suggestion in its pre-chat state — chat is exploratory and reversible, never a side-channel that mutates data on its own (ties into §15's capability boundaries below)
+
+**Where this pattern does *not* apply**
+
+- [ ] Non-goal: a free-floating "ask AI anything" chat entry point elsewhere in the app (e.g. a persistent chat tab or a global assistant icon) — every chat surface in this doc is spawned from, and scoped to, a specific suggestion. If a future need for open-ended assistance emerges, it should be scoped and justified on its own, not added by default alongside this pattern
+- [ ] Purely mechanical UI (sort controls, toggles, the review/publish screen's selection state) gets no chat affordance — chat only attaches to AI-generated recommendations, not to plain user-driven controls
+
+## 15. AI Assistant Capability Boundaries (What It Can Act On vs. Propose)
+
+Companion to §14: defines what any AI-driven action in this doc — whether reached via direct Accept or via a "Chat about this" turn — is actually allowed to execute against real state, versus what it can only ever propose for a human to execute. This is the harness/permission layer the product vision (Overview, "AI agent for marketplaces") depends on being trustworthy: an agent that can post a listing on your behalf is a meaningfully different trust level than one that can also spend your money or delete your data, and the two should never share a permission boundary implicitly.
+
+**Design principle**
+
+- [ ] Capability boundaries are defined per action **type**, not per feature — e.g. "create/update/publish a listing" is one capability, checked the same way whether it's reached via §2's Apply, §13's guided flow, or a §14 chat turn accepting a suggestion. This keeps the boundary enforceable at a single layer (the API/harness) rather than re-implemented per screen
+- [ ] Every AI-executable capability requires the same review-before-publish gate already established as a non-goal-to-confirm in Open Questions ("full auto-publish... is out of scope for v1") — §15 extends that principle from "publish" specifically to a general rule across all capabilities, not just listing creation
+
+**Capability tiers (illustrative, to be finalized before implementation)**
+
+- [ ] **AI can execute directly, no per-action confirm required** (still visible/undoable via the batch activity log flagged in Open Questions): generating description text/chips (§3), generating or sourcing photos (§5), computing a suggested platform mix, price, or bundle grouping (§2/§6/§10/§11) — none of these mutate a live marketplace listing or move money, so they're safe to compute eagerly and simply present
+- [ ] **AI can execute after explicit Accept, but not autonomously**: creating/updating/publishing a listing, cross-posting to a platform, applying a pricing rule change, enabling Mercari smart pricing sync (§6) — matches the user's own example: "an AI assistant could post to platforms." Each of these is reversible or correctable after the fact (edit/unpublish/relist), which is why Accept alone (not a second confirmation) is sufficient
+- [ ] **AI never executes, proposal-only even with explicit Accept — routes to a human-only flow instead**: anything involving checkout/purchasing (§8's restock list is explicitly "what to buy," never "buy it"), payment method changes, account/connector credential changes, deleting a draft/listing/sale record outright (vs. archiving), and marking a sale as fulfilled/shipped when that has downstream buyer-facing effects (tracking numbers, refund eligibility). These are irreversible, involve money leaving the user's account, or touch trust/safety-sensitive state — the user's own example (checkout) is the canonical case here
+- [ ] Every capability in the third tier that a suggestion or chat turn touches must render as informational only (e.g. "you still need to buy this — here's the list") — never as a button that appears actionable but silently no-ops, and never phrased in a way that implies the assistant did it
+
+**Enforcement**
+
+- [ ] Capability tier is enforced server-side (the harness/API layer backing any AI action), not just hidden in the client UI — a client-side-only restriction is not a real boundary
+- [ ] New AI-driven features added after this doc must be explicitly assigned a tier before shipping, not default into the most permissive one
+
 ## Open Questions & Non-Goals
 
 - [ ] **AI-suggest recompute triggers** (§2, §6): exactly when does platform suggestion or pricing default recompute vs. stay frozen once a draft has been touched by the user?
@@ -322,3 +368,5 @@ Today the start-listing flow only offers camera or gallery photo input. This add
 - [ ] **URL-import ToS/compliance per source site** (§12): scraping listing/category pages from third-party sites (marketplaces, storefronts like Weverse) needs a per-site legal/ToS check before broad rollout — not assumed fine.
 - [ ] **Non-goal (to confirm)**: full auto-publish with no human review is out of scope for v1 — every bulk-generated draft, however sourced, stops at a review/confirm step before posting to any marketplace, unless the user explicitly opts out.
 - [ ] **Batch-level undo/audit trail**: given how many automated decisions this workflow makes per item (platform, price, description chips, photo), should there be a single batch activity log so a user can see/undo what the AI did across 50 items at once, not just per item?
+- [ ] **§15 capability tier sign-off**: the three-tier list in §15 is illustrative and needs explicit product/legal sign-off before implementation — particularly the middle tier (publish/cross-post/pricing-rule changes executable on Accept alone). Is Accept-only sufficient for every action in that tier, or do any of them (e.g. enabling Mercari smart-pricing sync, which cascades price drops across platforms) warrant a second confirmation given their blast radius?
+- [ ] **§14 chat cost/rate limits**: "Chat about this" is another LLM surface beyond the ones already flagged in §5's Open Question on generation cost — needs the same per-user quota/cost-pass-through decision, potentially as one combined AI-usage budget rather than a separate one per feature.
