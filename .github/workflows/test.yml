@@ -15,10 +15,56 @@ permissions:
   contents: read
 
 jobs:
+  # Cheap gate so a docs-only PR doesn't pay for the ~15-20min macOS
+  # build/test jobs below. Jobs stay in the graph (rather than using
+  # `paths-ignore` on the workflow itself) and just report success-via-skip,
+  # because a workflow that never runs at all leaves any branch-protection
+  # required check with that job's name pending forever.
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code-changed: ${{ steps.check.outputs.code-changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for non-docs changes
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+          fi
+
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "No comparable base commit — treating as code-changed."
+            echo "code-changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          if echo "$CHANGED" | grep -qvE '^(docs/|[^/]+\.md$)'; then
+            echo "code-changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Only docs/**.md changed — skipping build/test jobs."
+            echo "code-changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   lint:
     name: SwiftLint
     runs-on: macos-latest
     timeout-minutes: 5
+    needs: detect-changes
+    if: needs.detect-changes.outputs.code-changed == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -35,6 +81,8 @@ jobs:
     name: Unit Tests
     runs-on: macos-latest
     timeout-minutes: 15
+    needs: detect-changes
+    if: needs.detect-changes.outputs.code-changed == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -66,6 +114,8 @@ jobs:
     name: UI Tests (Selling Flow)
     runs-on: macos-latest
     timeout-minutes: 20
+    needs: detect-changes
+    if: needs.detect-changes.outputs.code-changed == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -168,6 +218,8 @@ jobs:
     name: Build Check
     runs-on: macos-latest
     timeout-minutes: 15
+    needs: detect-changes
+    if: needs.detect-changes.outputs.code-changed == 'true'
     steps:
       - uses: actions/checkout@v4
 
