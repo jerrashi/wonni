@@ -53,7 +53,7 @@ final class SellingFlowTests: XCTestCase {
         app.tap() // flush the permission-alert interruption monitor if it fired
 
         let firstPhoto = app.descendants(matching: .any).matching(identifier: "photoGridItem").firstMatch
-        XCTAssert(firstPhoto.waitForExistence(timeout: 90), "At least one photo grid item should load")
+        XCTAssert(firstPhoto.waitForExistence(timeout: 120), "At least one photo grid item should load")
         firstPhoto.tap()
 
         let commitButton = app.buttons.matching(identifier: "draftsCarousel").firstMatch
@@ -220,11 +220,12 @@ final class SellingFlowTests: XCTestCase {
         let firstPhoto = app.descendants(matching: .any).matching(identifier: "photoGridItem").firstMatch
         // Real tail-latency variance, not a fixed cold-start cost: 60s passed
         // cleanly in 3 straight CI runs, then timed out once more under
-        // heavier CI load. Paired with the CI workflow now giving photo
-        // indexing a head start in setup (see test.yml's seed step), 90s is
-        // headroom for that tail, not a guess — the common case still
-        // finishes in seconds either way.
-        XCTAssert(firstPhoto.waitForExistence(timeout: 90), "At least one photo grid item should load")
+        // heavier CI load; 90s later saw the same pattern repeat twice in a
+        // row (2026-09-25). Paired with the CI workflow now also launching
+        // Photos.app in setup to kick off indexing before the test queries it
+        // (see test.yml's seed step), 120s is headroom for that tail, not a
+        // guess — the common case still finishes in seconds either way.
+        XCTAssert(firstPhoto.waitForExistence(timeout: 120), "At least one photo grid item should load")
         firstPhoto.tap()
 
         // The Button's own "commitDraftButton" identifier gets clobbered by the
@@ -313,7 +314,7 @@ final class SellingFlowTests: XCTestCase {
             app.tap()
 
             let firstPhoto = app.descendants(matching: .any).matching(identifier: "photoGridItem").firstMatch
-            XCTAssert(firstPhoto.waitForExistence(timeout: 90), "At least one photo grid item should load")
+            XCTAssert(firstPhoto.waitForExistence(timeout: 120), "At least one photo grid item should load")
             firstPhoto.tap()
 
             let commitButton = app.buttons.matching(identifier: "draftsCarousel").firstMatch
