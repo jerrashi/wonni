@@ -146,6 +146,7 @@ Extends Wonni's existing cross-post rules concept to be settable via natural lan
 - [ ] Support a **price-band rule**: below a configurable value threshold → auction; above it → fixed price / Buy-It-Now
 - [ ] Support setting/overriding **handling/processing time** per listing or per rule via a direct value on the eBay API call — not limited to picking from eBay's existing saved business-policy templates
 - [ ] Support platform-specific price offsets (e.g. "Facebook = market − 10%") as a rule dimension distinct from Mercari's native smart pricing
+- [ ] Auction-format listings need a payment policy with immediate payment **not** required — eBay's API rejects an auction listing against a payment policy configured for immediate payment, so selecting/cloning the right policy has to happen automatically when a rule picks the auction format, not surface as an opaque API error at publish time. Same deterministic clone-and-reuse pattern already used for handling-time overrides (see `cloneFulfillmentPolicyWithHandlingTime` in `functions/ebay_listing.js`) should apply here rather than a new one-off. This is also the root cause behind a specific cross-post gap: today only the account's *default* payment policy is ever used, which breaks "sell similar on eBay app → import to Wonni to cross-post" for any listing that used a non-default policy (see #118)
 
 **Mercari smart pricing sync**
 
@@ -153,6 +154,14 @@ Extends Wonni's existing cross-post rules concept to be settable via natural lan
 - [ ] Support a cross-platform sync rule: when Mercari smart pricing drops a price, propagate a corresponding decrease to the same item's other-platform listings, excluding any platform the rule explicitly carves out (e.g. "besides eBay")
 - [ ] Needs a defined sync cadence (webhook vs. periodic poll) and a price floor/guardrail so cascading drops can't go below a configurable minimum profitable price
 - [ ] Must integrate with the existing shared-inventory/quantity-cascade logic — price sync and quantity sync key off the same product/variant but are separate concerns
+
+**Post-publish price nudges (time-based, cross-platform)**
+
+- [ ] Independent of the Mercari-smart-pricing-sync case above: any listing on any platform that's been active past a configurable staleness threshold (e.g. 30 days unsold) surfaces a price-reduction nudge, not just Mercari-triggered ones — e.g. "These items haven't sold in 30 days. Reduce by 5% / 10% / 15%?"
+- [ ] Nudge follows the same Dismiss / Chat About This / Accept pattern as §14: user picks one of the offered reduction options, types a custom amount, or dismisses — no autonomous price changes
+- [ ] Threshold and step sizes are themselves settable via the same natural-language rule capture as this section's opening example, not hardcoded defaults
+- [ ] Applies per-listing, not just per-item — the same physical item can have different price trajectories on different platforms (e.g. held firm on eBay, discounted on Mercari), consistent with this section's per-platform recommendation shape
+- [ ] Accepting a nudge updates the live listing via the same publish/update capability as initial listing — Tier 2 in §15 (executes on explicit Accept), not Tier 1
 
 **Rule scope & precedence**
 
@@ -251,6 +260,7 @@ Extends §6's rule engine with the layer that actually decides what to recommend
 - [ ] **High-demand vintage/collectible group** (e.g. vintage consoles): eBay → $0.99-start auction with no BIN, on the reasoning that built-in collector demand will drive the price to fair value organically — different auction rationale than the low-value case above (demand-driven vs. "don't care where it lands"), and the recommendation's stated reasoning should reflect which one applies
 - [ ] **Bulky/depreciating group, space is a constraint** (e.g. vintage tech like VHS players): willing to accept a low price (e.g. $1) but **not a loss** — strategy must compute a price floor that nets non-negative after platform fees + estimated shipping cost, not just an arbitrary low number; hold timeline shorter/more urgent than the low-value bulk case because the item is actively costing storage space and depreciating
 - [ ] The recommendation engine's output for each group states its reasoning in plain language (same transparency pattern as §2/§6/§10), e.g. "Auction, no reserve — this category has consistent collector demand so the market will find a fair price" vs. "Fixed low price with a shipping-adjusted floor — this item depreciates and isn't worth storing"
+- [ ] **Platform mix and format can differ for the same item, not just across categories** (e.g. bulk phone cases): eBay → $0.99-start auction only, no Buy-It-Now, using a non-immediate-payment policy per §6; Mercari → high starting price with smart-pricing floor near $1, letting smart pricing do price discovery instead of a manual auction; Facebook → one bundled "lot" listing rather than per-item; Etsy → skip entirely, listing fees aren't worth it at this per-item value. Contrast case, same mechanism, opposite conclusion (e.g. antiques): list on eBay + Mercari + Etsy at full price, Facebook at a slightly lower price for the no-fee/faster-sale trade-off — whether a platform is included at all is a per-category-group decision this layer makes, not a fixed global platform on/off toggle
 
 **Inputs to the strategy computation**
 
