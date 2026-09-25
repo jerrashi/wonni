@@ -29,7 +29,7 @@ jobs:
     # This job intentionally does nothing (fails fast with a clear message)
     # until those are set — see the "Check required secrets" step below.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check required secrets
         run: |
