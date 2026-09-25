@@ -65,7 +65,7 @@ jobs:
   ui-tests:
     name: UI Tests (Selling Flow)
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -127,17 +127,32 @@ jobs:
           # after the single flush tap. Granting it here, before the app ever
           # launches, removes that race outright.
           xcrun simctl privacy "$UDID" grant photos io.github.jerrashi.wonni
+          # PhotoKit indexes a newly-added asset lazily, on first access by
+          # whichever process queries it — which, without this step, is our
+          # own app's picker mid-test. Launching Photos.app here instead makes
+          # Apple's own (well-exercised) indexing path the first accessor,
+          # ahead of the test, rather than racing it. This is in addition to,
+          # not instead of, the flat wait below: launching Photos.app kicks
+          # indexing off earlier, it doesn't prove indexing finished (still no
+          # simctl subcommand for that — see prior note on this line).
+          xcrun simctl launch "$UDID" com.apple.mobileslideshow > /dev/null 2>&1 || true
+          sleep 5
+          xcrun simctl terminate "$UDID" com.apple.mobileslideshow > /dev/null 2>&1 || true
           # Give the simulator's photo indexing a head start here, in setup,
           # instead of paying that cold-start cost mid-test. Across the CI runs
           # that led to this fix, "At least one photo grid item should load"
-          # (60s wait, inside the test) passed cleanly 3 times in a row and
-          # then timed out once more under heavier CI load — real tail-latency
-          # variance, not a deterministic bug, so a blind timeout bump alone
-          # would just be gambling on the next run's luck. There's no simctl
-          # subcommand to positively confirm indexing is done, so this is a
-          # flat wait, not a poll — but any time spent here is time the actual
-          # test's own (already-generous) wait doesn't have to cover.
-          sleep 15
+          # (now a 90s wait, inside the test) passed cleanly 3 times in a row
+          # and then timed out once more under heavier CI load — real
+          # tail-latency variance, not a deterministic bug, so a blind timeout
+          # bump alone would just be gambling on the next run's luck. There's
+          # no simctl subcommand to positively confirm indexing is done, so
+          # this is a flat wait, not a poll — but any time spent here is time
+          # the actual test's own (already-generous) wait doesn't have to
+          # cover. Bumped from 15s -> 20s (2026-09-25, second consecutive CI
+          # failure on this same assertion) alongside the Photos.app
+          # pre-launch above — this alone did not previously fix it, so it's
+          # paired with the pre-launch rather than repeated as a solo fix.
+          sleep 20
 
       - name: Run selling flow UI tests
         run: |
