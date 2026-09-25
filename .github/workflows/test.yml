@@ -15,10 +15,56 @@ permissions:
   contents: read
 
 jobs:
+  # Cheap gate so a docs-only PR doesn't pay for the ~15-20min macOS
+  # build/test jobs below. Jobs stay in the graph (rather than using
+  # `paths-ignore` on the workflow itself) and just report success-via-skip,
+  # because a workflow that never runs at all leaves any branch-protection
+  # required check with that job's name pending forever.
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code-changed: ${{ steps.check.outputs.code-changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for non-docs changes
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+          fi
+
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "No comparable base commit — treating as code-changed."
+            echo "code-changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          if echo "$CHANGED" | grep -qvE '^(docs/|[^/]+\.md$)'; then
+            echo "code-changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Only docs/**.md changed — skipping build/test jobs."
+            echo "code-changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   lint:
     name: SwiftLint
     runs-on: macos-latest
     timeout-minutes: 5
+    needs: detect-changes
+    if: needs.detect-changes.outputs.code-changed == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -41,6 +87,8 @@ jobs:
     # check the elapsed time against this limit. Not a test slowdown to chase;
     # just matching the headroom already given to ui-tests below.
     timeout-minutes: 25
+    needs: detect-changes
+    if: needs.detect-changes.outputs.code-changed == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -71,7 +119,9 @@ jobs:
   ui-tests:
     name: UI Tests (Selling Flow)
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    needs: detect-changes
+    if: needs.detect-changes.outputs.code-changed == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -133,17 +183,36 @@ jobs:
           # after the single flush tap. Granting it here, before the app ever
           # launches, removes that race outright.
           xcrun simctl privacy "$UDID" grant photos io.github.jerrashi.wonni
+          # PhotoKit indexes a newly-added asset lazily, on first access by
+          # whichever process queries it — which, without this step, is our
+          # own app's picker mid-test. Launching Photos.app here instead makes
+          # Apple's own (well-exercised) indexing path the first accessor,
+          # ahead of the test, rather than racing it. This is in addition to,
+          # not instead of, the flat wait below: launching Photos.app kicks
+          # indexing off earlier, it doesn't prove indexing finished (still no
+          # simctl subcommand for that — see prior note on this line). The
+          # foreground dwell here was 5s initially; the very first test to
+          # touch the picker in the next CI run still failed the 120s in-test
+          # wait outright (2026-09-25, ~176s total including prior steps) —
+          # 5s foreground time was apparently too short for Photos.app to
+          # meaningfully start indexing before being killed. Bumped to 20s.
+          xcrun simctl launch "$UDID" com.apple.mobileslideshow > /dev/null 2>&1 || true
+          sleep 20
+          xcrun simctl terminate "$UDID" com.apple.mobileslideshow > /dev/null 2>&1 || true
           # Give the simulator's photo indexing a head start here, in setup,
           # instead of paying that cold-start cost mid-test. Across the CI runs
           # that led to this fix, "At least one photo grid item should load"
-          # (60s wait, inside the test) passed cleanly 3 times in a row and
-          # then timed out once more under heavier CI load — real tail-latency
-          # variance, not a deterministic bug, so a blind timeout bump alone
-          # would just be gambling on the next run's luck. There's no simctl
-          # subcommand to positively confirm indexing is done, so this is a
-          # flat wait, not a poll — but any time spent here is time the actual
-          # test's own (already-generous) wait doesn't have to cover.
-          sleep 15
+          # (now a 120s wait, inside the test) passed cleanly 3 times in a row
+          # and then timed out once more under heavier CI load — real
+          # tail-latency variance, not a deterministic bug, so a blind timeout
+          # bump alone would just be gambling on the next run's luck. There's
+          # no simctl subcommand to positively confirm indexing is done, so
+          # this is a flat wait, not a poll — but any time spent here is time
+          # the actual test's own (already-generous) wait doesn't have to
+          # cover. Bumped 15s -> 20s -> (unchanged here, see Photos.app dwell
+          # bump above) across two consecutive CI failures on this same
+          # assertion (2026-09-25) — still a mitigation, not a guarantee.
+          sleep 20
 
       - name: Run selling flow UI tests
         run: |
@@ -174,6 +243,8 @@ jobs:
     name: Build Check
     runs-on: macos-latest
     timeout-minutes: 15
+    needs: detect-changes
+    if: needs.detect-changes.outputs.code-changed == 'true'
     steps:
       - uses: actions/checkout@v4
 
