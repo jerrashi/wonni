@@ -184,7 +184,8 @@ struct MainView: View {
                 platformName: "Facebook Marketplace",
                 listingTitle: job.title,
                 listingDescription: job.description,
-                listingPrice: job.price
+                listingPrice: job.price,
+                job: job
             )
         }
         // N6: full screen (not a sheet) — this is the publish-progress view for the

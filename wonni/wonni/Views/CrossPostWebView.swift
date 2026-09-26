@@ -182,9 +182,16 @@ public struct CrossPostContainerView: View {
     let listingTitle: String
     let listingDescription: String
     let listingPrice: Double
+    /// Optional full job: enables photo attach + Firestore write-back. Without it the
+    /// sheet stays the old copy-chip reference (e.g. the CrossPostStatusView retry path).
+    let job: CrossPostJob?
     @Environment(\.dismiss) private var dismiss
 
     @State private var webView = WKWebView()
+    @State private var fbStatus = ""
+    @State private var fbPostedId: String?
+    @State private var fbSawCreatePage = false
+    @State private var fbFinishedOnSellingPage = false
     @State private var isLoading = true
     @State private var showClipboardNotification = false
     @State private var notificationText = ""
@@ -197,7 +204,8 @@ public struct CrossPostContainerView: View {
         }
     }
 
-    public init(platformName: String, listingTitle: String, listingDescription: String, listingPrice: Double) {
+    init(platformName: String, listingTitle: String, listingDescription: String, listingPrice: Double, job: CrossPostJob? = nil) {
+        self.job = job
         self.platformName = platformName
         self.listingTitle = listingTitle
         self.listingDescription = listingDescription
@@ -266,7 +274,24 @@ public struct CrossPostContainerView: View {
                         alignment: .bottom
                     )
 
+                    if !fbStatus.isEmpty {
+                        Text(fbStatus)
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(8)
+                            .background(fbPostedId != nil ? Color.green.opacity(0.2) : Color.orange.opacity(0.2))
+                    }
+                    if fbFinishedOnSellingPage && fbPostedId == nil, job != nil {
+                        Button("I published it — mark as posted") {
+                            Task { await markFacebookPosted(id: nil) }
+                        }
+                        .padding(8)
+                    }
+
                     CrossPostWebView(url: targetURL, webView: webView)
+                }
+                .onReceive(webView.publisher(for: \.url)) { url in
+                    handleFacebookURLChange(url)
                 }
 
                 VStack {
@@ -337,43 +362,135 @@ public struct CrossPostContainerView: View {
         }
     }
 
+    // MARK: Facebook autofill
+
+    /// Facebook's create-item form is React: assigning `.value` is silently discarded, so
+    /// fields are set through the native value setter + a bubbling `input` event. Inputs are
+    /// located by their visible label / aria-label text (Facebook's class names are
+    /// obfuscated and rotate), never by class. NOTE: labels were not captured from a live
+    /// DOM yet (see #66 convention) — if a field is missed the banner names it and the
+    /// copy chips above still work.
     private func executeAutofill() {
-        let escapedTitle = listingTitle.replacingOccurrences(of: "'", with: "\\'")
-        let escapedDesc = listingDescription.replacingOccurrences(of: "'", with: "\\'").replacingOccurrences(of: "\n", with: "\\n")
-        let priceStr = String(format: "%.2f", listingPrice)
-
-        let jsScript = """
-        (function() {
-            var title = '\(escapedTitle)';
-            var description = '\(escapedDesc)';
-            var price = '\(priceStr)';
-            var titleSelectors = ['input[name="title"]','input[placeholder*="title" i]','input[placeholder*="selling" i]','input[id*="title" i]'];
-            for (var i = 0; i < titleSelectors.length; i++) {
-                var el = document.querySelector(titleSelectors[i]);
-                if (el) { el.value = title; el.dispatchEvent(new Event('input', { bubbles: true })); break; }
+        Task {
+            fbStatus = "Filling fields…"
+            let js = """
+            function setReact(el, v) {
+                var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, v);
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
             }
-            var descSelectors = ['textarea[name="description"]','textarea[placeholder*="description" i]','textarea[placeholder*="describe" i]'];
-            for (var i = 0; i < descSelectors.length; i++) {
-                var el = document.querySelector(descSelectors[i]);
-                if (el) { el.value = description; el.dispatchEvent(new Event('input', { bubbles: true })); break; }
+            function findField(names, tag) {
+                for (var n of names) {
+                    var el = document.querySelector('label[aria-label="' + n + '"] ' + tag)
+                          || document.querySelector(tag + '[aria-label="' + n + '"]')
+                          || document.querySelector(tag + '[placeholder*="' + n + '" i]');
+                    if (el) return el;
+                    var labels = document.querySelectorAll('label, span');
+                    for (var l of labels) {
+                        if (l.children.length === 0 && l.textContent.trim().toLowerCase() === n.toLowerCase()) {
+                            var host = l.closest('label') || l.parentElement;
+                            var inner = host && host.querySelector(tag);
+                            if (inner) return inner;
+                        }
+                    }
+                }
+                return null;
             }
-            var priceSelectors = ['input[name="price"]','input[placeholder*="price" i]','input[id*="price" i]'];
-            for (var i = 0; i < priceSelectors.length; i++) {
-                var el = document.querySelector(priceSelectors[i]);
-                if (el) { el.value = price; el.dispatchEvent(new Event('input', { bubbles: true })); break; }
+            var missed = [];
+            var t = findField(['Title'], 'input');           if (t) setReact(t, title); else missed.push('title');
+            var p = findField(['Price'], 'input');           if (p) setReact(p, price); else missed.push('price');
+            var d = findField(['Description'], 'textarea');  if (d) setReact(d, desc);  else missed.push('description');
+            return missed.join(',');
+            """
+            let missed = (try? await webView.callJS(js, args: [
+                "title": listingTitle,
+                "price": String(format: "%.0f", listingPrice.rounded()),
+                "desc": listingDescription
+            ])) as? String
+            var photoNote = ""
+            if let job {
+                let photos = await Self.loadPhotoBase64(job)
+                if !photos.isEmpty {
+                    let r = (try? await webView.callJS(Self.attachPhotosJS, args: ["base64Photos": photos])) as? String ?? "error"
+                    photoNote = r.hasPrefix("attached") ? " Photos attached." : " Photos not attached (\(r))."
+                }
             }
-            return "Autofill completed!";
-        })()
-        """
-
-        webView.evaluateJavaScript(jsScript) { result, error in
-            if let error = error {
-                print("[CrossPostWebView] Autofill error: \(error.localizedDescription)")
-                triggerNotification("Autofill failed - try manual copy")
+            if let missed, !missed.isEmpty {
+                fbStatus = "Couldn't find: \(missed). Use the copy chips above." + photoNote
             } else {
-                triggerNotification("Fields Autofilled!")
+                fbStatus = "Fields filled — pick category & condition, then tap Next/Publish." + photoNote
             }
         }
+    }
+
+    private static let attachPhotosJS = """
+    var input = document.querySelector('input[type="file"][accept*="image"]') || document.querySelector('input[type="file"]');
+    if (!input) { return 'no-file-input'; }
+    try {
+        var dt = new DataTransfer();
+        for (var i = 0; i < base64Photos.length; i++) {
+            var bin = atob(base64Photos[i]); var bytes = new Uint8Array(bin.length);
+            for (var j = 0; j < bin.length; j++) { bytes[j] = bin.charCodeAt(j); }
+            dt.items.add(new File([bytes], 'photo_' + i + '.jpg', {type: 'image/jpeg'}));
+        }
+        input.files = dt.files;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        return 'attached-' + base64Photos.length;
+    } catch (e) { return 'error:' + e.message; }
+    """
+
+    private static func loadPhotoBase64(_ job: CrossPostJob) async -> [String] {
+        var out: [String] = []
+        if let item = job.item {
+            if !item.photosData.isEmpty { return item.photosData.map { $0.base64EncodedString() } }
+            for identifier in item.sourceAssetIdentifiers {
+                guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject else { continue }
+                let options = PHImageRequestOptions()
+                options.deliveryMode = .highQualityFormat
+                options.isNetworkAccessAllowed = true
+                let data: Data? = await withCheckedContinuation { c in
+                    PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { d, _, _, _ in c.resume(returning: d) }
+                }
+                if let data { out.append(data.base64EncodedString()) }
+            }
+        } else {
+            for path in job.photoFirebasePaths {
+                if let data = try? await Storage.storage().reference(withPath: path).data(maxSize: 15 * 1024 * 1024) {
+                    out.append(data.base64EncodedString())
+                }
+            }
+        }
+        return out
+    }
+
+    // MARK: Facebook success detection
+
+    /// Facebook redirects to /marketplace/item/<id> (or your selling list) after publishing.
+    /// An id is the only proof the item went live, so "posted" is written only with one —
+    /// same rule as Mercari; otherwise the user gets a manual confirm button.
+    private func handleFacebookURLChange(_ url: URL?) {
+        guard let path = url?.path, job != nil else { return }
+        if path.contains("/marketplace/create") { fbSawCreatePage = true; return }
+        guard fbSawCreatePage, fbPostedId == nil else { return }
+        if let range = path.range(of: #"/marketplace/item/(\d+)"#, options: .regularExpression) {
+            let id = String(path[range].split(separator: "/").last ?? "")
+            Task { await markFacebookPosted(id: id) }
+        } else if path.contains("/marketplace/you") || path.contains("/marketplace/selling") {
+            fbFinishedOnSellingPage = true
+        }
+    }
+
+    private func markFacebookPosted(id: String?) async {
+        guard let listingId = job?.listingId else { return }
+        var update: [String: Any] = [
+            "crossPostStatus.facebook": "posted",
+            "updatedAt": Timestamp(date: Date())
+        ]
+        if let id { update["crossPostListingIds.facebook"] = id }
+        try? await Firestore.firestore().collection("listings").document(listingId).updateData(update)
+        fbPostedId = id ?? "manual"
+        fbStatus = "Posted to Facebook Marketplace ✓"
     }
 }
 
