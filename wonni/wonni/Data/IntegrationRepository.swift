@@ -34,11 +34,9 @@ public class IntegrationRepository: ObservableObject {
     private let usersCollection = "users"
     private let integrationsSubcollection = "integrations"
 
-    // Mercari + eBay enabled for App Store launch v1.0.
-    // Etsy/Facebook integrations remain in backend but commented out from UI.
-    // (Etsy's backend is real but currently broken; Facebook has no automation,
-    // just a manual-entry webview — see #66.)
-    public static let supportedPlatforms = ["ebay", "mercari"]
+    // Mercari + eBay + Etsy enabled (Etsy re-enabled 2026-09-26 after aligning with the v3 API docs).
+    // Facebook is not listed here: it posts via in-app web autofill, not an integration.
+    public static let supportedPlatforms = ["ebay", "mercari", "etsy"]
     
     @Published public var integrations: [PlatformIntegration] = []
     @Published public var isLoading = false
