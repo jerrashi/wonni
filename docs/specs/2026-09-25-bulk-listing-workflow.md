@@ -31,9 +31,12 @@ Grouped by what unlocks the most brainpower-reduction per unit of build effort. 
 - §12 URL import — depends on scraping/parsing infra already partly built in the web app; mostly a reuse-and-wire-up job
 - §14 Dismiss/Chat/Accept pattern — layers onto whichever P0/P1 suggestion surfaces ship first (§2, §6/§11 are the natural pilot); not worth building until there are at least two suggestion types to validate the pattern generalizes
 
+- §16 Field-visibility toggle bar + bulk shipping dimensions — small UI on existing screens, and it supplies the real weight/size data §11's profit floor needs
+
 **P2 — Depth / polish, lower urgency.**
 - §10 AI-suggested bundling — high novelty, but only pays off once a user has enough duplicate/compatible inventory in a batch to matter
 - §8 Sales tracking (restock/shipping lists) — valuable but decoupled from the listing-creation flow; can ship independently, anytime
+- §17 Sell-through & engagement analytics — Phase 4 stretch; needs sales history to exist first
 - Background-removal cost/quality tuning, generation rate limits, and the other Open Questions items — refine after the core loop is validated
 
 ## 1. Bulk Intent Capture (Natural-Language Form)
@@ -366,6 +369,29 @@ Companion to §14: defines what any AI-driven action in this doc — whether rea
 - [ ] Capability tier is enforced server-side (the harness/API layer backing any AI action), not just hidden in the client UI — a client-side-only restriction is not a real boundary
 - [ ] New AI-driven features added after this doc must be explicitly assigned a tier before shipping, not default into the most permissive one
 
+## 16. Field-Visibility Toggle Bar + Bulk Shipping Dimensions (Drafts / AI Results Overview)
+
+Shipping weight/dimensions are required-in-practice for eBay/Etsy calculated shipping and feed §11's profit-floor math, but they only make sense to collect for some items (uncommon, variable-size goods like vintage) and are pointless for others (furniture → Facebook-only, local pickup). One-item-at-a-time entry doesn't scale to a bulk session, and a fixed always-visible field set clutters the screen.
+
+- [ ] A toggle bar at the top of both the **drafts overview** and the **AI results overview** with four independent toggles: **Title**, **Description**, **Price**, **Shipping dimensions**. On = that field renders on every card; off = hidden
+- [ ] Photos are always shown (not a toggle). With every toggle off the overview collapses to the same photo-only layout as the multi-draft carousel — one consistent surface at every density
+- [ ] Shipping dimensions field = weight (lb/oz) + L × W × H, writing the existing `weightLbs`/`weightOz`/dimension fields (see `ebayPackageWeightAndSize()`) — no new schema
+- [ ] Bulk entry: with the toggle on, users can type dimensions per card in a grid-like pass, and apply one set of dimensions to a selection (e.g. "these 12 are all 6×4×2, 8 oz")
+- [ ] Items the user chose not to ship (Facebook-only / local pickup, or deselected via §9) don't demand dimensions: the field is skippable, and missing dimensions only block platforms that need them (eBay/Etsy calculated shipping), never Facebook/Mercari flat-rate
+- [ ] Toggle state is remembered per user per screen (so a vintage-heavy seller can keep dimensions on); default = Title + Price on
+- [ ] AI-suggested dimensions (e.g. from product type/photo) may pre-fill the field but follow §14's Dismiss/Chat/Accept pattern and are never applied silently
+- [ ] Web first, then iOS parity
+
+## 17. Sell-Through & Engagement Analytics (Phase 4 stretch)
+
+Long-term goal: learn how fast items sell and how much interest they generate per platform, to tune pricing recommendations (§6/§11). Deliberately unscientific — a heuristic signal, not an experiment. Example from the user: an item posted on Facebook that gets a flood of messages is probably priced too low.
+
+- [ ] Per-listing metrics: days-to-sell (listed → sold), views/watchers where a platform API exposes them, and **inbound message/inquiry count** (manually loggable where no API exists, e.g. Facebook Marketplace)
+- [ ] Derived signals, stated as hints not verdicts: "very high interest, sold fast → likely underpriced", "no interest after N days → likely overpriced", compared against the user's own history per category/platform
+- [ ] Feeds back into §11 strategy profiles as an optional input to suggested price, always via §14 Accept — never auto-repricing
+- [ ] Data model: append-only per-listing event log (listed / message / view-count snapshot / sold) rather than counters, so signals can be recomputed as the heuristics change
+- [ ] Depends on: §11 (consumer of the signal), unified sales dashboard (source of sold dates); needs enough sales history to be meaningful, so this is intentionally last
+
 ## Open Questions & Non-Goals
 
 - [ ] **AI-suggest recompute triggers** (§2, §6): exactly when does platform suggestion or pricing default recompute vs. stay frozen once a draft has been touched by the user?
@@ -373,10 +399,12 @@ Companion to §14: defines what any AI-driven action in this doc — whether rea
 - [ ] **Marketplace AI-photo disclosure policy** (§5): eBay/Etsy AI-image-disclosure rules need an explicit compliance check before shipping — not assumed fine.
 - [ ] **Rule precedence conflicts** (§6): needs a concrete, signed-off resolution order for item vs. batch vs. account rules — not left implicit.
 - [ ] **Mercari smart-pricing sync floor** (§6): what's the minimum-price guardrail per item, and who sets it?
-- [ ] **Shipping-cost source for profit-floor calculations** (§11): does the floor-price math use a real per-platform shipping calculator/API, a flat estimate, or user-entered weight/size? Needs a concrete source before §11's "don't sell at a loss" guarantee is trustworthy.
+- [ ] **Shipping-cost source for profit-floor calculations** (§11; §16 now supplies user-entered weight/size): does the floor-price math use a real per-platform shipping calculator/API, a flat estimate, or user-entered weight/size? Needs a concrete source before §11's "don't sell at a loss" guarantee is trustworthy.
 - [ ] **3-bucket strategy ceiling** (§13): explicitly flagged in the source discussion as an acknowledged simplification — worth revisiting whether a 4th bucket or a free-text override at this step is warranted once real usage shows the 3 buckets missing common cases.
 - [ ] **URL-import ToS/compliance per source site** (§12): scraping listing/category pages from third-party sites (marketplaces, storefronts like Weverse) needs a per-site legal/ToS check before broad rollout — not assumed fine.
 - [ ] **Non-goal (to confirm)**: full auto-publish with no human review is out of scope for v1 — every bulk-generated draft, however sourced, stops at a review/confirm step before posting to any marketplace, unless the user explicitly opts out.
 - [ ] **Batch-level undo/audit trail**: given how many automated decisions this workflow makes per item (platform, price, description chips, photo), should there be a single batch activity log so a user can see/undo what the AI did across 50 items at once, not just per item?
 - [ ] **§15 capability tier sign-off**: the three-tier list in §15 is illustrative and needs explicit product/legal sign-off before implementation — particularly the middle tier (publish/cross-post/pricing-rule changes executable on Accept alone). Is Accept-only sufficient for every action in that tier, or do any of them (e.g. enabling Mercari smart-pricing sync, which cascades price drops across platforms) warrant a second confirmation given their blast radius?
 - [ ] **§14 chat cost/rate limits**: "Chat about this" is another LLM surface beyond the ones already flagged in §5's Open Question on generation cost — needs the same per-user quota/cost-pass-through decision, potentially as one combined AI-usage budget rather than a separate one per feature.
+- [ ] **§16 default toggles / dimension units**: which toggles default on, and lb/oz vs. metric handling for dimensions.
+- [ ] **§17 message-count capture**: Facebook has no API — manual tally, extension scrape, or skip? Decide before building the event log.
