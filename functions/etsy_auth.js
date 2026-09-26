@@ -25,16 +25,15 @@ exports.etsyExchangeToken = onCall(async (request) => {
 
   try {
     const clientId = await getSecret("ETSY_CLIENT_ID");
-    const clientSecret = await getSecret("ETSY_SHARED_SECRET");
+    const apiKey = await getEtsyApiKey();
 
     // Exchange code for access token using PKCE
-    const tokenResponse = await fetch("https://api.etsy.com/v3/oauth/token", {
+    const tokenResponse = await fetch("https://api.etsy.com/v3/public/oauth/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         grant_type: "authorization_code",
         client_id: clientId,
-        client_secret: clientSecret,
         redirect_uri: redirectUri,
         code,
         code_verifier: codeVerifier,
@@ -51,9 +50,11 @@ exports.etsyExchangeToken = onCall(async (request) => {
       throw new Error("No access token in Etsy response");
     }
 
-    // Fetch shop info to get shop name and ID
-    const shopResponse = await fetch("https://openapi.etsy.com/v3/application/shops", {
-      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    // Fetch shop info. `GET /shops` is a search (needs shop_name) — the seller's own shop
+    // is looked up by owner user id, which is the prefix of the access token ("<userId>.<random>").
+    const etsyUserId = tokenData.access_token.split(".")[0];
+    const shopResponse = await fetch(`https://openapi.etsy.com/v3/application/users/${etsyUserId}/shops`, {
+      headers: { "x-api-key": apiKey, Authorization: `Bearer ${tokenData.access_token}` },
     });
 
     if (!shopResponse.ok) {
@@ -61,7 +62,8 @@ exports.etsyExchangeToken = onCall(async (request) => {
     }
 
     const shopData = await shopResponse.json();
-    const shop = shopData.results?.[0];
+    // /users/{id}/shops returns the shop object itself; older shapes wrap it in results[].
+    const shop = shopData.shop_id ? shopData : shopData.results?.[0];
     if (!shop) throw new Error("No shop found in Etsy account");
 
     // Store token and shop info in Firestore
@@ -99,10 +101,6 @@ async function refreshEtsyToken(refreshToken) {
     client_id: clientId,
     refresh_token: refreshToken,
   });
-  try {
-    const secret = await getSecret("ETSY_SHARED_SECRET");
-    if (secret) body.set("client_secret", secret);
-  } catch { /* PKCE-only app — no secret */ }
 
   const res = await fetch("https://api.etsy.com/v3/public/oauth/token", {
     method: "POST",
@@ -138,7 +136,7 @@ async function getActiveEtsyToken(uid) {
     throw new HttpsError("failed-precondition", "Etsy not connected. Reconnect in Settings.");
   }
 
-  const clientId = await getEtsyClientId();
+  const apiKey = await getEtsyApiKey();
   let accessToken = data.accessToken;
 
   const expiresAt = typeof data.tokenExpiresAt === "number"
@@ -163,10 +161,11 @@ async function getActiveEtsyToken(uid) {
     // The Etsy user id is the prefix of the access token ("<userId>.<random>").
     const etsyUserId = accessToken.split(".")[0];
     const res = await fetch(`https://openapi.etsy.com/v3/application/users/${etsyUserId}/shops`, {
-      headers: { "x-api-key": clientId, Authorization: `Bearer ${accessToken}` },
+      headers: { "x-api-key": apiKey, Authorization: `Bearer ${accessToken}` },
     });
     if (res.ok) {
-      const shop = (await res.json()).results?.[0];
+      const body = await res.json();
+      const shop = body.shop_id ? body : body.results?.[0];
       if (shop) {
         shopId = String(shop.shop_id);
         await ref.update({ shopId, shopName: shop.shop_name ?? data.shopName ?? null });
@@ -179,7 +178,9 @@ async function getActiveEtsyToken(uid) {
       "No Etsy seller shop found. Make sure your shop is open (etsy.com/sell) and reconnect Etsy.",
     );
   }
-  return { accessToken, shopId, clientId };
+  // `clientId` is what etsy_listing.js sends as x-api-key, so it carries the full
+  // "keystring:shared_secret" value Etsy's authentication docs require.
+  return { accessToken, shopId, clientId: apiKey };
 }
 
 // Etsy v3 requires the app's keystring as `x-api-key` on every call.
@@ -190,7 +191,20 @@ async function getEtsyClientId() {
   return _etsyClientId;
 }
 
+// Etsy's docs: every request carries `x-api-key: <keystring>:<shared_secret>`.
+// Falls back to the bare keystring if the secret isn't configured.
+async function getEtsyApiKey() {
+  const keystring = await getEtsyClientId();
+  try {
+    const secret = (await getSecret("ETSY_SHARED_SECRET")).trim();
+    return secret ? `${keystring}:${secret}` : keystring;
+  } catch {
+    return keystring;
+  }
+}
+
 module.exports = {
+  getEtsyApiKey,
   etsyExchangeToken: exports.etsyExchangeToken,
   getValidEtsyToken,
   getActiveEtsyToken,

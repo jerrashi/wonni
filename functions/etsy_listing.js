@@ -123,6 +123,13 @@ async function firstReturnPolicyId(shopId, auth) {
   return status === 200 ? data.results?.[0]?.return_policy_id ?? null : null;
 }
 
+/** First processing profile ("readiness state") — Etsy requires one on physical listings.
+ *  Best-effort: null (omitted from the payload) if the shop has none / lookup fails. */
+async function firstReadinessStateId(shopId, auth) {
+  const { status, data } = await etsyReq("GET", `/v3/application/shops/${shopId}/readiness-state-definitions`, auth);
+  return status === 200 ? data.results?.[0]?.readiness_state_id ?? null : null;
+}
+
 // ── Image upload (multipart) ──────────────────────────────────────────────
 
 function downloadBuffer(url) {
@@ -141,6 +148,7 @@ function downloadBuffer(url) {
 
 async function uploadListingImages(shopId, listingId, imageUrls, { accessToken, clientId }) {
   let rank = 1;
+  let uploaded = 0;
   for (const url of imageUrls.slice(0, 10)) {
     try {
       const buf = await downloadBuffer(url);
@@ -161,18 +169,20 @@ async function uploadListingImages(shopId, listingId, imageUrls, { accessToken, 
         },
         body,
       });
-      if (!res.ok) console.error(`[etsy] image rank ${rank} failed (${res.status})`);
+      if (res.ok) uploaded++;
+      else console.error(`[etsy] image rank ${rank} failed (${res.status})`);
       rank++;
     } catch (e) {
       console.error(`[etsy] image ${url} failed: ${e.message}`);
     }
   }
+  return uploaded;
 }
 
 // ── Payload builders (pure) ───────────────────────────────────────────────
 
 /** Etsy `PUT /listings/{id}/inventory` payload from product variants. */
-function buildEtsyInventoryPayload(variations = [], basePrice = 0) {
+function buildEtsyInventoryPayload(variations = [], basePrice = 0, readinessStateId = null) {
   const products = variations.map((v, idx) => {
     const price = priceAmount(variantPriceOr(v, basePrice));
     const qty = Number.isFinite(Number(v.quantity)) && Number(v.quantity) >= 0 ? Number(v.quantity) : 1;
@@ -195,13 +205,13 @@ function buildEtsyInventoryPayload(variations = [], basePrice = 0) {
     return {
       sku: v.sku || `SKU_${idx + 1}`,
       property_values,
-      offerings: [{ price, quantity: qty, is_enabled: true }],
+      offerings: [{ price, quantity: qty, is_enabled: true, ...(readinessStateId ? { readiness_state_id: readinessStateId } : {}) }],
     };
   });
   return { products, price_on_property: [], quantity_on_property: [], sku_on_property: [] };
 }
 
-function buildEtsyCreateBody(product, { taxonomyId, whenMade, whoMade, price, quantity, shippingProfileId, returnPolicyId }) {
+function buildEtsyCreateBody(product, { taxonomyId, whenMade, whoMade, price, quantity, shippingProfileId, returnPolicyId, readinessStateId }) {
   const title = String(product.title || "").slice(0, 140) || "Product";
   return {
     quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
@@ -211,9 +221,12 @@ function buildEtsyCreateBody(product, { taxonomyId, whenMade, whoMade, price, qu
     who_made: whoMade,
     when_made: whenMade,
     taxonomy_id: taxonomyId,
-    state: "active",
+    // `state` can't be set on create — Etsy makes a draft; etsyCreateListingCore PATCHes it active
+    // once images are attached.
+    type: "physical",
     shipping_profile_id: shippingProfileId,
     return_policy_id: returnPolicyId,
+    ...(readinessStateId ? { readiness_state_id: readinessStateId } : {}),
   };
 }
 
@@ -305,10 +318,11 @@ async function etsyCreateListingCore(uid, data) {
       whoMade = r.who_made;
     }
 
+    const readinessStateId = await firstReadinessStateId(shopId, auth);
     const price = resolveListingPrice(product);
     const quantity = productTotalQuantity(product);
     const createBody = buildEtsyCreateBody(product, {
-      taxonomyId, whenMade, whoMade, price, quantity, shippingProfileId, returnPolicyId,
+      taxonomyId, whenMade, whoMade, price, quantity, shippingProfileId, returnPolicyId, readinessStateId,
     });
 
     const { status, data: created } = await etsyReq(
@@ -320,16 +334,26 @@ async function etsyCreateListingCore(uid, data) {
     const etsyListingId = String(created.listing_id);
 
     const images = listingImagesFor(product, 10);
-    if (images.length) await uploadListingImages(shopId, etsyListingId, images, auth);
+    const uploaded = images.length ? await uploadListingImages(shopId, etsyListingId, images, auth) : 0;
 
     const variants = Array.isArray(product.variants) ? product.variants.filter((v) => v.active !== false) : [];
     if (variants.length > 1) {
       try {
         await etsyReq("PUT", `/v3/application/listings/${etsyListingId}/inventory`,
-          { ...auth, body: buildEtsyInventoryPayload(variants, priceAmount(price)) });
+          { ...auth, body: buildEtsyInventoryPayload(variants, priceAmount(price), readinessStateId) });
       } catch (e) {
         console.warn(`[etsyCreateListing] inventory update failed: ${e.message}`);
       }
+    }
+
+    // Publish: drafts need ≥1 image before Etsy will accept state=active.
+    if (uploaded < 1) {
+      throw new HttpsError("failed-precondition", `Etsy draft ${etsyListingId} created but no photo uploaded — Etsy needs at least one photo to publish.`);
+    }
+    const pub = await etsyReq("PATCH", `/v3/application/shops/${shopId}/listings/${etsyListingId}`,
+      { ...auth, body: { state: "active" } });
+    if (pub.status !== 200) {
+      throw new Error(`Etsy publish failed (${pub.status}): ${JSON.stringify(pub.data)}`);
     }
 
     await ref.set({
