@@ -72,10 +72,19 @@ test("buildEtsyCreateBody: truncates the title, floors the price, carries setup 
   assert.equal(body.title.length, 140);
   assert.equal(body.price, 0.2);
   assert.equal(body.quantity, 4);
-  assert.equal(body.state, "active");
+  assert.equal(body.state, undefined, "Etsy creates drafts only; state is set by a follow-up PATCH");
+  assert.equal(body.type, "physical");
+  assert.equal(body.readiness_state_id, undefined, "omitted when the shop has no processing profile");
   assert.equal(body.shipping_profile_id, 99);
   assert.equal(body.return_policy_id, 77);
   assert.equal(body.description, body.title, "empty description falls back to the title");
+});
+
+test("buildEtsyCreateBody / inventory: carry readiness_state_id when the shop has one", () => {
+  const body = buildEtsyCreateBody({ title: "T" }, { taxonomyId: 5, whenMade: "x", whoMade: "y", price: 5, quantity: 1, shippingProfileId: 1, returnPolicyId: 2, readinessStateId: 42 });
+  assert.equal(body.readiness_state_id, 42);
+  const { products } = buildEtsyInventoryPayload([{ sku: "X", quantity: 1 }], 5, 42);
+  assert.equal(products[0].offerings[0].readiness_state_id, 42);
 });
 
 // ── quantity + drift ───────────────────────────────────────────────────────
