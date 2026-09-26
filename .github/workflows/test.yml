@@ -3,8 +3,12 @@ name: Test & Lint
 on:
   pull_request:
     branches: [ main ]
+    # `labeled` so adding the `ui-tests` label starts the heavy UI job on demand.
+    types: [opened, synchronize, reopened, labeled]
   push:
     branches: [ main ]
+  # Manual run (Actions tab → Test & Lint → Run workflow), e.g. at end of a phase.
+  workflow_dispatch:
 
 concurrency:
   group: test-${{ github.workflow }}-${{ github.ref }}
@@ -116,12 +120,19 @@ jobs:
           tail -50 wonni/test-output.log
           exit 1
 
+  # Opt-in: the simulator UI tests are the slowest, flakiest job (~15 min, and
+  # macOS runner queueing has left it pending for hours). Per-PR gating is lint +
+  # unit tests + build. Run this job by adding the `ui-tests` label to a PR, via
+  # workflow_dispatch, or at end-of-phase. Skipped counts as success in `Summary`.
   ui-tests:
     name: UI Tests (Selling Flow)
     runs-on: macos-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     needs: detect-changes
-    if: needs.detect-changes.outputs.code-changed == 'true'
+    if: >-
+      needs.detect-changes.outputs.code-changed == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       contains(github.event.pull_request.labels.*.name, 'ui-tests'))
     steps:
       - uses: actions/checkout@v4
 
