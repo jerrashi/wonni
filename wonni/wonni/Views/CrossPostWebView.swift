@@ -52,6 +52,13 @@ struct CrossPostJob: Identifiable {
     /// both non-nil; never mixed with a non-nil `listingId`.
     let variantProductId: String?
     let variantId: String?
+    /// Facebook only: a location to select on the "Change location" picker (e.g.
+    /// "Richmond, Virginia") — a search-and-pick screen, not a text field, so it can't be
+    /// filled the way Title/Price/Description are. Nil (the default) means the fill skips
+    /// it entirely and Facebook's own saved default location is left as-is; no UI sets
+    /// this yet (2026-09-27), this just wires the capability. See
+    /// docs/dom-captures/facebook-marketplace.md.
+    let facebookLocation: String?
 
     init(
         platform: String,
@@ -70,7 +77,8 @@ struct CrossPostJob: Identifiable {
         widthIn: Double? = nil,
         heightIn: Double? = nil,
         variantProductId: String? = nil,
-        variantId: String? = nil
+        variantId: String? = nil,
+        facebookLocation: String? = nil
     ) {
         self.platform = platform
         self.title = title
@@ -89,6 +97,7 @@ struct CrossPostJob: Identifiable {
         self.heightIn = heightIn
         self.variantProductId = variantProductId
         self.variantId = variantId
+        self.facebookLocation = facebookLocation
     }
 }
 
@@ -411,6 +420,11 @@ public struct CrossPostContainerView: View {
                 "price": String(format: "%.0f", listingPrice.rounded()),
                 "desc": listingDescription
             ])) as? String
+            var locationNote = ""
+            if let loc = job?.facebookLocation, !loc.isEmpty {
+                let r = (try? await webView.callJS(Self.fillLocationJS, args: ["location": loc])) as? String ?? "error"
+                locationNote = r.hasPrefix("selected") ? " Location set." : " Location not set (\(r))."
+            }
             var photoNote = ""
             if let job {
                 let photos = await Self.loadPhotoBase64(job)
@@ -420,12 +434,61 @@ public struct CrossPostContainerView: View {
                 }
             }
             if let missed, !missed.isEmpty {
-                fbStatus = "Couldn't find: \(missed). Use the copy chips above." + photoNote
+                fbStatus = "Couldn't find: \(missed). Use the copy chips above." + locationNote + photoNote
             } else {
-                fbStatus = "Fields filled — pick category & condition, then tap Next/Publish." + photoNote
+                fbStatus = "Fields filled — pick category & condition, then tap Next/Publish." + locationNote + photoNote
             }
         }
     }
+
+    /// Tapping Location doesn't reveal an inline text field — it pushes a full "Change
+    /// location" search-and-pick screen (`data-name="location_query"` search input +
+    /// `[data-focusable="true"][role="button"]` result rows). **Gotcha (2026-09-27):**
+    /// this screen push does NOT change `webView.url` (captured url was still
+    /// "https://www.facebook.com/") — it's an internal screen-stack, not a real
+    /// navigation, so `handleFacebookURLChange` can't see it; this whole flow has to be
+    /// self-contained JS with polling, not Swift-side navigation watching.
+    private static let fillLocationJS = """
+    return new Promise(function(resolve) {
+        var wrap = document.querySelector('[data-name="location"]');
+        if (!wrap) { resolve('no-location-field'); return; }
+        wrap.click();
+
+        var pickerDeadline = Date.now() + 4000;
+        function waitForPicker() {
+            var input = document.querySelector('input[placeholder="Location"][aria-label="Search on Facebook"]');
+            if (input) { typeAndPick(input); return; }
+            if (Date.now() > pickerDeadline) { resolve('picker-not-found'); return; }
+            setTimeout(waitForPicker, 200);
+        }
+        function typeAndPick(input) {
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, location);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+
+            var matchDeadline = Date.now() + 4000;
+            function waitForMatch() {
+                var rows = document.querySelectorAll('[data-focusable="true"][role="button"]');
+                for (var i = 0; i < rows.length; i++) {
+                    var t = (rows[i].innerText || '').trim();
+                    if (t.toLowerCase().indexOf(location.toLowerCase()) === 0) {
+                        rows[i].click();
+                        resolve('selected:' + t);
+                        return;
+                    }
+                }
+                if (Date.now() > matchDeadline) {
+                    var back = document.querySelector('[aria-label="Back"]');
+                    if (back) back.click();
+                    resolve('no-match');
+                    return;
+                }
+                setTimeout(waitForMatch, 300);
+            }
+            setTimeout(waitForMatch, 400);
+        }
+        waitForPicker();
+    });
+    """
 
     /// "Add photos" has no `<input type=file>` in the DOM until its row is tapped (not
     /// found in the 2026-09-27 capture of the untouched form) — so this clicks the row

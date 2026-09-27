@@ -116,12 +116,41 @@ Publish themselves.
 Confirms the category-dependent design: Condition only appears once a category is picked.
 Still needs its own capture (after selecting a category).
 
+### Location — "Change location" screen (captured 2026-09-27)
+Tapping the Location field does NOT reveal an inline text field like Title/Price — it
+pushes a full-screen search-and-pick UI. **Gotcha: this does not change `webView.url`**
+(captured `location.href` was still `https://www.facebook.com/`, not a new path) — it's
+an internal screen-stack push, not a real navigation. Anything watching `.url` (like
+Swift's `handleFacebookURLChange`) can't see this transition; detection must poll the DOM.
+
+Search input:
+```html
+<div data-focusable="true" data-name="location_query" data-mcomponent="MInputBox" data-init-markup-text="" ...>
+  <input aria-label="Search on Facebook" placeholder="Location" type="text" maxlength="200" class="internal-input input-box native-input" ...>
+</div>
+```
+Result rows (recent/suggested locations; same shape as category's selectable rows —
+`role="button" data-focusable="true"`, text in `span.f1`, no icon child on any of them
+here, so no header-row filtering needed on this screen):
+```html
+<div role="button" tabindex="0" data-focusable="true" data-action-id="32758" data-mcomponent="MContainer" data-type="container" ...><span class="f1">Richmond, Virginia</span></div>
+```
+Back button: `[aria-label="Back"]` (also used to leave the Category page).
+
+Wired in `CrossPostJob.facebookLocation` (opt-in, nil by default → skipped, Facebook's own
+saved location is left alone) + `fillLocationJS` in CrossPostWebView.swift: click the
+field, poll for the search input, type + poll for a matching result row (prefix match,
+case-insensitive), click it; times out and taps Back if nothing matches. No UI sets
+`facebookLocation` yet — capability only, until there's a use case (e.g. §16-style bulk
+location entry).
+
 ### "List as Single Item" — unexplored
 A dropdown-style row next to the photo area (single-item vs. multi-quantity listing).
 Not needed for MVP; noted for later.
 
 ## TODO captures
 - [ ] Condition (only appears after a category is picked — control + option list page)
+- [x] Location (see above — opt-in, wired, unverified on device)
 - [x] Photo picker: no input exists until "Add photos" is tapped (see above) — still need: what the input looks like once it appears
 - [x] Category list page and option rows (see above); still need: what happens after a row is tapped
 - [x] Publish button (see above; no separate "Next" step seen on this form) — still need: any extra steps for specific categories
