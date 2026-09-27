@@ -153,6 +153,165 @@ spelled-out "Virginia"; the city name alone is enough for the picker to suggest 
 A dropdown-style row next to the photo area (single-item vs. multi-quantity listing).
 Not needed for MVP; noted for later.
 
+## Category → field-set schema (captured 2026-09-27, automated crawler)
+
+A browser-console crawler (script kept at bottom of this section) walked all 28
+non-Housing top-level categories from a fresh "New listing" form, opening each and
+recording the resulting field list via the label/`nb`-sibling pattern from the Category
+capture above. Housing (Home sales, Rentals) was excluded — tapping into it drops into a
+structurally different flow (real-estate listing, not the generic compose form) that the
+crawler's selectors can't navigate; matches the Phase 4 deferral in issue #129.
+
+**Every category has:** Category, Price, Location, Description (the base `data-name`
+inputs) — and every category except Vehicles has **Condition**. Beyond that:
+
+| Category | Extra fields |
+|---|---|
+| Vehicles | `vehicle_make`, `vehicle_model` (real inputs) + Vehicle Type, Year, Make, Model, Interior Color, Exterior Color, Number of owners |
+| Furniture | brand, Condition, Material |
+| Household | brand, Condition, Color |
+| Electronics & computers | brand, size, Condition |
+| Mobile phones | Condition, Carrier, Device Name (no brand/size) |
+| Women's / Men's clothing & shoes, Baby & kids | brand, size, Condition |
+| Video Games | Condition, Platform |
+| Books, Movies & Music | Condition only |
+| Appliances, Tools, Garden, Garage Sale, Miscellaneous, Sports & Outdoors, Antiques & Collectibles, Musical Instruments, Arts & Crafts, Auto parts, Bicycles, Jewelry & Accessories, Bags & Luggage, Health & beauty, Toys & Games, Pet Supplies | brand, Condition |
+
+So the whole 28-category schema reduces to **9 distinct extra-field types**: Material,
+Color, size (Electronics/Clothing/Baby), Carrier, Device Name, Platform, and the
+Vehicles-only set (Vehicle Type/Year/Make/Model/Interior Color/Exterior Color/Number of
+owners) — brand and Condition are shared across nearly everything. Full raw crawl output:
+`docs/dom-captures/facebook-category-fields-raw.json`.
+
+**`brand` is a real `<input>` (data-name), not a picker** — confirmed by the crawler
+catching it both as `data-name="brand"` and (spuriously) as a `select`-style row, since
+its bordered-box styling matches the picker pattern. The same false-positive happened for
+the base form's Title/Price/Location/Description rows (each showed up twice: once via
+`data-name`, once via a boilerplate label like "What are you selling?"/"Price ($)") —
+**the label+`nb`-sibling pattern alone does not distinguish a real dropdown picker from a
+plain text input in a bordered box.** Not yet known for any of the 9 extra fields above:
+which are full-page pickers (like Category), in-place dropdowns (like Furniture's summary
+suggested), or free-text/autocomplete. Needs one capture per field to confirm.
+
+**Not yet captured:** option values for Condition (used almost everywhere — capture once)
+or any of the 9 category-specific fields.
+
+<details>
+<summary>Crawler script (run on a fresh "New listing" form)</summary>
+
+```js
+(async function () {
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  async function waitFor(fn, timeoutMs, intervalMs) {
+    var deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      var v = fn();
+      if (v) return v;
+      await sleep(intervalMs || 200);
+    }
+    return fn();
+  }
+  function rows() { return Array.from(document.querySelectorAll('[data-focusable="true"]')); }
+  function text(el) { return (el.innerText || '').trim(); }
+
+  function controlForLabel(labelText) {
+    var spans = Array.from(document.querySelectorAll('span.f1, span.f2'));
+    var labelSpan = spans.find(function (s) { return s.innerText.trim() === labelText; });
+    if (!labelSpan) return null;
+    var labelDiv = labelSpan.closest('[data-mcomponent="ServerTextArea"]');
+    if (!labelDiv || !labelDiv.parentElement) return null;
+    var group = labelDiv.parentElement;
+    var controlWrap = Array.from(group.children).find(function (c) {
+      return c !== labelDiv && (c.className || '').indexOf('nb') !== -1;
+    });
+    if (!controlWrap) return null;
+    return controlWrap.querySelector('[data-focusable="true"]') || controlWrap;
+  }
+
+  function extractFields() {
+    var scroller = document.querySelector('[data-type="vscroller"]') || document.body;
+    var out = [];
+    scroller.querySelectorAll('[data-name]').forEach(function (w) {
+      var ctl = w.querySelector('input,textarea');
+      out.push({ kind: 'input', name: w.getAttribute('data-name'), placeholder: ctl ? ctl.getAttribute('placeholder') : null });
+    });
+    var seen = {};
+    Array.from(scroller.querySelectorAll('span.f1')).forEach(function (s) {
+      var label = s.innerText.trim();
+      if (!label || seen[label]) return;
+      var labelDiv = s.closest('[data-mcomponent="ServerTextArea"]');
+      if (!labelDiv || !labelDiv.parentElement) return;
+      var group = labelDiv.parentElement;
+      var controlWrap = Array.from(group.children).find(function (c) {
+        return c !== labelDiv && (c.className || '').indexOf('nb') !== -1;
+      });
+      if (!controlWrap) return;
+      seen[label] = true;
+      var valueSpan = controlWrap.querySelector('span.f1');
+      out.push({ kind: 'select', label: label, currentValue: valueSpan ? valueSpan.innerText.trim() : null });
+    });
+    return out;
+  }
+
+  var results = { baseFields: extractFields(), categories: [] };
+  var catControl = controlForLabel('Category');
+  if (!catControl) { console.log('Category control not found — start from a fresh form.'); return; }
+  catControl.click();
+  await sleep(700);
+
+  var catNames = rows()
+    .filter(function (el) { return !el.querySelector('[aria-hidden="true"]') && el.tagName !== 'H1'; })
+    .map(text).filter(Boolean);
+  var SKIP = ['Home sales', 'Rentals']; // Housing — different flow, breaks the crawler
+  catNames = catNames.filter(function (n) { return SKIP.indexOf(n) === -1; });
+  console.log('Found ' + catNames.length + ' categories. Starting crawl...');
+
+  for (var i = 0; i < catNames.length; i++) {
+    var name = catNames[i];
+    try {
+      if (i > 0) {
+        var control = await waitFor(function () { return controlForLabel('Category'); }, 5000, 250);
+        if (!control) { results.categories.push({ name: name, error: 'category control not found' }); continue; }
+        control.click();
+        await sleep(600);
+      }
+      var target = await waitFor(function () {
+        return rows()
+          .filter(function (el) { return !el.querySelector('[aria-hidden="true"]') && el.tagName !== 'H1'; })
+          .find(function (el) { return text(el) === name; });
+      }, 3000, 200);
+      if (!target) { results.categories.push({ name: name, error: 'row not found on reopen' }); continue; }
+      target.click();
+      var fields = await waitFor(function () {
+        var f = extractFields();
+        return f.length > 0 ? f : null;
+      }, 4000, 300);
+      if (!fields) fields = extractFields();
+      results.categories.push({ name: name, fields: fields });
+      console.log((i + 1) + '/' + catNames.length + ': ' + name + ' — ' + fields.length + ' fields');
+    } catch (e) {
+      results.categories.push({ name: name, error: e.message });
+    }
+  }
+
+  var json = JSON.stringify(results, null, 1);
+  window.__fbCrawlResults = json;
+  var copied = false;
+  try { await navigator.clipboard.writeText(json); copied = true; } catch (e) {}
+  if (!copied) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = json; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      copied = document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch (e) {}
+  }
+  console.log(copied ? ('DONE. Copied ' + json.length + ' chars.') : 'DONE, but copy failed — run copy(window.__fbCrawlResults)');
+})();
+```
+</details>
+
 ## TODO captures
 - [ ] Condition (only appears after a category is picked — control + option list page)
 - [x] Location (see above — opt-in, wired, unverified on device)
