@@ -127,6 +127,13 @@ service cloud.firestore {
       allow write: if request.auth != null && docId == 'mercariObservedBrands';
     }
 
+    // ── Dev-only DOM captures (DevFormCapture.swift, #if DEBUG) ────────────────
+    // Scratch data for building the Facebook-form field/option tables (github #66) —
+    // not app data. Owner-only read/write; no client ever reads another user's dump.
+    match /devCaptures/{uid}/captures/{captureId} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
     // ── User profiles and subcollections ─────────────────────────────────────
     // Profile document: readable by all authenticated users, writable by owner.
     match /users/{userId} {
