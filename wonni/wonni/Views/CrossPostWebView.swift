@@ -444,13 +444,104 @@ public struct CrossPostContainerView: View {
                     photoNote = r.hasPrefix("attached") ? " Photos attached." : " Photos not attached (\(r))."
                 }
             }
+            // Condition only exists once a category is picked (docs/dom-captures/
+            // facebook-marketplace.md — "Condition"), so this only fires after the user
+            // has already chosen a category themselves (not automated — Category is a
+            // full-screen picker with no data-name selector; see below).
+            var conditionNote = ""
+            if let job {
+                let label = Self.facebookConditionLabel(job.condition)
+                let r = (try? await webView.callJS(Self.fillConditionJS, args: ["condition": label])) as? String ?? "error"
+                conditionNote = r.hasPrefix("selected") ? " Condition set." : " Condition not set (\(r) — pick a category first)."
+            }
+            // Availability always defaults to "List as Single Item" on Facebook's own
+            // form already; Wonni doesn't yet track a per-listing multi-quantity flag, so
+            // this just confirms the default rather than changing anything. Flip the
+            // hardcoded label here if/when Wonni adds quantity>1 listings.
+            let availR = (try? await webView.callJS(Self.fillAvailabilityJS, args: ["availability": "List as Single Item"])) as? String ?? "error"
+            let availabilityNote = availR.hasPrefix("selected") ? " Availability confirmed." : ""
             if let missed, !missed.isEmpty {
-                fbStatus = "Couldn't find: \(missed). Use the copy chips above." + locationNote + photoNote
+                fbStatus = "Couldn't find: \(missed). Use the copy chips above." + locationNote + photoNote + conditionNote + availabilityNote
             } else {
-                fbStatus = "Fields filled — pick category & condition, then tap Next/Publish." + locationNote + photoNote
+                fbStatus = "Fields filled — pick a category, then tap Next/Publish." + locationNote + photoNote + conditionNote + availabilityNote
             }
         }
     }
+
+    /// Facebook has 4 Condition options; Wonni's `ItemCondition` has 7. Collapse the two
+    /// extras Facebook doesn't distinguish: `newWithoutTags` reads as "New" to a buyer,
+    /// and `poor`/`forParts` both map to Facebook's worst bucket, "Used - Fair".
+    private static func facebookConditionLabel(_ raw: String) -> String {
+        switch ItemCondition(rawValue: raw) {
+        case .new, .newWithoutTags: return "New"
+        case .likeNew: return "Used - Like New"
+        case .fair, .poor, .forParts: return "Used - Fair"
+        case .good, .none: return "Used - Good"
+        }
+    }
+
+    /// Condition's option rows are already rendered inline (an always-expanded
+    /// `vscroller`, not a click-to-reveal control like Category/Availability — confirmed
+    /// 2026-09-27, see docs/dom-captures/facebook-marketplace.md), so this just finds and
+    /// clicks the matching row directly. `+` in Facebook's label markup is a
+    /// space-encoding artifact, normalized away before comparing.
+    private static let fillConditionJS = """
+    return new Promise(function(resolve) {
+        var target = condition.trim();
+        var rows = document.querySelectorAll('[data-focusable="true"]');
+        for (var i = 0; i < rows.length; i++) {
+            var span = rows[i].querySelector('span.f1');
+            if (!span) continue;
+            var t = (span.innerText || '').replace(/\\+/g, ' ').trim();
+            if (t === target) { rows[i].click(); resolve('selected:' + t); return; }
+        }
+        resolve('option-not-found:' + target);
+    });
+    """
+
+    /// Availability IS a full-screen nav (confirmed by DOM capture 2026-09-27 — an
+    /// `<h2>` "Choose availability" title + Back button), unlike Condition — same
+    /// control-open pattern as the base form's label+`nb`-sibling lookup used for
+    /// Category. Falls back to tapping Back if nothing matches so the form isn't left
+    /// stranded on the picker screen.
+    private static let fillAvailabilityJS = """
+    return new Promise(function(resolve) {
+        function controlForLabel(labelText) {
+            var spans = Array.from(document.querySelectorAll('span.f1, span.f2'));
+            var labelSpan = spans.find(function (s) { return s.innerText.trim() === labelText; });
+            if (!labelSpan) return null;
+            var labelDiv = labelSpan.closest('[data-mcomponent="ServerTextArea"]');
+            if (!labelDiv || !labelDiv.parentElement) return null;
+            var group = labelDiv.parentElement;
+            var controlWrap = Array.from(group.children).find(function (c) {
+                return c !== labelDiv && (c.className || '').indexOf('nb') !== -1;
+            });
+            if (!controlWrap) return null;
+            return controlWrap.querySelector('[data-focusable="true"]') || controlWrap;
+        }
+        var ctl = controlForLabel('Availability');
+        if (!ctl) { resolve('no-availability-field'); return; }
+        ctl.click();
+
+        var deadline = Date.now() + 3000;
+        function waitForScreen() {
+            var rows = document.querySelectorAll('[data-focusable="true"][role="button"]');
+            for (var i = 0; i < rows.length; i++) {
+                var h2 = rows[i].querySelector('h2 span.f1, h2 span.f2');
+                var t = h2 ? h2.innerText.trim() : '';
+                if (t === availability) { rows[i].click(); resolve('selected:' + t); return; }
+            }
+            if (Date.now() > deadline) {
+                var back = document.querySelector('[aria-label="Back"]');
+                if (back) back.click();
+                resolve('option-not-found');
+                return;
+            }
+            setTimeout(waitForScreen, 200);
+        }
+        setTimeout(waitForScreen, 300);
+    });
+    """
 
     /// Tapping Location doesn't reveal an inline text field — it pushes a full "Change
     /// location" search-and-pick screen (`data-name="location_query"` search input +
