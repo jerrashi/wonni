@@ -371,43 +371,39 @@ public struct CrossPostContainerView: View {
 
     // MARK: Facebook autofill
 
-    /// Facebook's create-item form is React: assigning `.value` is silently discarded, so
-    /// fields are set through the native value setter + a bubbling `input` event. Inputs are
-    /// located by their visible label / aria-label text (Facebook's class names are
-    /// obfuscated and rotate), never by class. NOTE: labels were not captured from a live
-    /// DOM yet (see #66 convention) — if a field is missed the banner names it and the
-    /// copy chips above still work.
+    /// Facebook's mobile create-item form is server-rendered "MComponent" UI, not React:
+    /// no aria-labels, obfuscated/rotating layout classes, everything absolutely
+    /// positioned. Title/Price/Description ARE real `<input>`/`<textarea>` elements,
+    /// each wrapped in a `div[data-name="title"|"price"|"description"]` — that attribute
+    /// is the one stable handle DevTools captures found (2026-09-27, see
+    /// docs/dom-captures/facebook-marketplace.md). `data-action-id` / inline styles /
+    /// `nth-child` rotate per render and must never be selected on.
+    /// `Location` (`data-name="location"`) is deliberately never touched — it's the
+    /// seller's pre-filled address, not something we fill.
     private func executeAutofill() {
         Task {
             fbStatus = "Filling fields…"
             let js = """
-            function setReact(el, v) {
+            function setNative(el, v) {
                 var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
                 Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, v);
                 el.dispatchEvent(new Event('input', { bubbles: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true }));
             }
-            function findField(names, tag) {
-                for (var n of names) {
-                    var el = document.querySelector('label[aria-label="' + n + '"] ' + tag)
-                          || document.querySelector(tag + '[aria-label="' + n + '"]')
-                          || document.querySelector(tag + '[placeholder*="' + n + '" i]');
-                    if (el) return el;
-                    var labels = document.querySelectorAll('label, span');
-                    for (var l of labels) {
-                        if (l.children.length === 0 && l.textContent.trim().toLowerCase() === n.toLowerCase()) {
-                            var host = l.closest('label') || l.parentElement;
-                            var inner = host && host.querySelector(tag);
-                            if (inner) return inner;
-                        }
-                    }
-                }
-                return null;
+            function fillByName(name, value) {
+                var wrap = document.querySelector('[data-name="' + name + '"]');
+                if (!wrap) return false;
+                var el = (wrap.tagName === 'INPUT' || wrap.tagName === 'TEXTAREA') ? wrap : wrap.querySelector('input,textarea');
+                if (!el) return false;
+                el.focus();
+                setNative(el, value);
+                el.blur();
+                return true;
             }
             var missed = [];
-            var t = findField(['Title'], 'input');           if (t) setReact(t, title); else missed.push('title');
-            var p = findField(['Price'], 'input');           if (p) setReact(p, price); else missed.push('price');
-            var d = findField(['Description'], 'textarea');  if (d) setReact(d, desc);  else missed.push('description');
+            if (!fillByName('title', title)) missed.push('title');
+            if (!fillByName('price', price)) missed.push('price');
+            if (!fillByName('description', desc)) missed.push('description');
             return missed.join(',');
             """
             let missed = (try? await webView.callJS(js, args: [
@@ -431,20 +427,35 @@ public struct CrossPostContainerView: View {
         }
     }
 
+    /// "Add photos" has no `<input type=file>` in the DOM until its row is tapped (not
+    /// found in the 2026-09-27 capture of the untouched form) — so this clicks the row
+    /// by its exact visible text first, waits a beat for Facebook to insert the input,
+    /// then attaches. Runs as one async JS call — WKWebView's callAsyncJavaScript awaits
+    /// a returned Promise, so the setTimeout below is safe to await from Swift.
     private static let attachPhotosJS = """
-    var input = document.querySelector('input[type="file"][accept*="image"]') || document.querySelector('input[type="file"]');
-    if (!input) { return 'no-file-input'; }
-    try {
-        var dt = new DataTransfer();
-        for (var i = 0; i < base64Photos.length; i++) {
-            var bin = atob(base64Photos[i]); var bytes = new Uint8Array(bin.length);
-            for (var j = 0; j < bin.length; j++) { bytes[j] = bin.charCodeAt(j); }
-            dt.items.add(new File([bytes], 'photo_' + i + '.jpg', {type: 'image/jpeg'}));
+    return new Promise(function(resolve) {
+        var rows = document.querySelectorAll('[data-focusable="true"]');
+        var addBtn = null;
+        for (var i = 0; i < rows.length; i++) {
+            if (rows[i].innerText && rows[i].innerText.trim() === 'Add photos') { addBtn = rows[i]; break; }
         }
-        input.files = dt.files;
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-        return 'attached-' + base64Photos.length;
-    } catch (e) { return 'error:' + e.message; }
+        if (addBtn) addBtn.click();
+        setTimeout(function() {
+            var input = document.querySelector('input[type="file"][accept*="image"]') || document.querySelector('input[type="file"]');
+            if (!input) { resolve('no-file-input'); return; }
+            try {
+                var dt = new DataTransfer();
+                for (var i = 0; i < base64Photos.length; i++) {
+                    var bin = atob(base64Photos[i]); var bytes = new Uint8Array(bin.length);
+                    for (var j = 0; j < bin.length; j++) { bytes[j] = bin.charCodeAt(j); }
+                    dt.items.add(new File([bytes], 'photo_' + i + '.jpg', {type: 'image/jpeg'}));
+                }
+                input.files = dt.files;
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                resolve('attached-' + base64Photos.length);
+            } catch (e) { resolve('error:' + e.message); }
+        }, 500);
+    });
     """
 
     private static func loadPhotoBase64(_ job: CrossPostJob) async -> [String] {
@@ -473,17 +484,35 @@ public struct CrossPostContainerView: View {
 
     // MARK: Facebook success detection
 
-    /// Facebook redirects to /marketplace/item/<id> (or your selling list) after publishing.
-    /// An id is the only proof the item went live, so "posted" is written only with one —
-    /// same rule as Mercari; otherwise the user gets a manual confirm button.
+    /// **Correction (2026-09-27):** a live DevTools capture showed the compose form itself
+    /// lives at `/marketplace/selling/item/?listing_id` (not `/marketplace/create/item` as
+    /// originally assumed — that's only the URL we *navigate* to; Facebook client-side
+    /// routes to this path once the form loads). `listing_id` is present but empty on a
+    /// fresh form; whether it populates with a real id purely on publish (vs. also on an
+    /// auto-saved draft) is INFERRED, not confirmed against a real publish yet — so this
+    /// is treated as a soft signal, and the manual "I published it" button stays the
+    /// primary confirmation path until a real publish is captured.
     private func handleFacebookURLChange(_ url: URL?) {
-        guard let path = url?.path, job != nil else { return }
-        if path.contains("/marketplace/create") { fbSawCreatePage = true; return }
+        guard let url, job != nil else { return }
+        let path = url.path
+        let isComposeForm = path.contains("/marketplace/selling/item") || path.contains("/marketplace/create")
+        let isSellingList = (path.contains("/marketplace/you/selling") || path.contains("/marketplace/selling"))
+            && !path.contains("/item")
+
+        if isComposeForm {
+            fbSawCreatePage = true
+            let listingId = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "listing_id" })?.value
+            if let listingId, !listingId.isEmpty, listingId.allSatisfy(\.isNumber), fbPostedId == nil {
+                Task { await markFacebookPosted(id: listingId) }
+            }
+            return
+        }
         guard fbSawCreatePage, fbPostedId == nil else { return }
         if let range = path.range(of: #"/marketplace/item/(\d+)"#, options: .regularExpression) {
             let id = String(path[range].split(separator: "/").last ?? "")
             Task { await markFacebookPosted(id: id) }
-        } else if path.contains("/marketplace/you") || path.contains("/marketplace/selling") {
+        } else if isSellingList {
             fbFinishedOnSellingPage = true
         }
     }
