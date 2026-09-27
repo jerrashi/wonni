@@ -183,6 +183,27 @@ Vehicles-only set (Vehicle Type/Year/Make/Model/Interior Color/Exterior Color/Nu
 owners) — brand and Condition are shared across nearly everything. Full raw crawl output:
 `docs/dom-captures/facebook-category-fields-raw.json`.
 
+### Common-row control types (from a screenshot, 2026-09-27)
+The crawler's extractor caught several rows below Description that aren't category
+schema fields at all — they're the always-present bottom of every compose form,
+regardless of category. Their actual control types, confirmed visually:
+- **Availability ("List as Single Item")** — a real **dropdown** (single vs. presumably
+  multi-quantity), not noise; excluded from the per-category table above only because
+  it's identical across every category, not because it isn't a real field.
+- **Offer shipping**, **Hide from friends**, **Turn on commenting on listing** — **toggle
+  switches**, not pickers. "Turn on commenting" defaults ON; the other two default OFF.
+- **Add photos** — an **action button** (opens the native photo flow; see the Photos
+  section above), not a form field.
+- **"This listing is still public…"** and **"All listings go through a quick standard
+  review…"** — plain **disclaimer text**, "Learn more" and "Commerce policies" are just
+  links. None are interactive fields; correctly excluded from the schema.
+- **Publish** — an **action button** (the submit), covered in its own section above.
+
+This matters for autofill: none of these five interactive rows (Availability, the three
+toggles, Add photos) can be filled the way Title/Price/Description are — each needs its
+own interaction (dropdown pick / toggle click / native photo flow), the same way the
+9 category-specific fields will each need their own handling once captured.
+
 **`brand` is a real `<input>` (data-name), not a picker** — confirmed by the crawler
 catching it both as `data-name="brand"` and (spuriously) as a `select`-style row, since
 its bordered-box styling matches the picker pattern. The same false-positive happened for
