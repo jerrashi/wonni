@@ -346,6 +346,13 @@ public struct CrossPostContainerView: View {
                         Image(systemName: "arrow.clockwise")
                     }
                 }
+                #if DEBUG
+                // Dev-only DOM capture tool — see DevFormCapture.swift. Never present in a
+                // release/TestFlight build.
+                ToolbarItem(placement: .primaryAction) {
+                    DevFormCaptureButton(webView: webView, platform: platformName.lowercased().contains("facebook") ? "facebook" : platformName.lowercased())
+                }
+                #endif
             }
         }
     }

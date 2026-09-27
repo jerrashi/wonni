@@ -20,6 +20,7 @@
 		2B46C4E38868C6C673B04554 /* MercariURLDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E4F2D9655DDF97CF4C7136F /* MercariURLDetectorTests.swift */; };
 		4DE0F3AA27864C66A4EC49AB /* Sale.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7EBEECFD9B24F3D971DDEA2 /* Sale.swift */; };
 		58027310287C4A0F94DF7BCF /* UploadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76A8453ED0904B9D853B98E5 /* UploadManager.swift */; };
+		AC64C369CBE743E69D4F0C58 /* DevFormCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = C359A8761B8447099E136096 /* DevFormCapture.swift */; };
 		5F4293A8E2E04F90145D6F53 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 946CBD23F95846D07C59FD39 /* Foundation.framework */; };
 		60A7C95275BB4BCCAA8FA838 /* RecordSaleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */; };
 		6134E14E2FB64DBD007C3979 /* BulkEditSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6134E14D2FB64DBD007C3979 /* BulkEditSheet.swift */; };
@@ -199,6 +200,7 @@
 		63AE5A91B4E5B0F695600110 /* MercariDateParsingTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MercariDateParsingTests.swift; sourceTree = "<group>"; };
 		67BC65BADBDD92E27F2C170A /* ImportListingSheet.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ImportListingSheet.swift; sourceTree = "<group>"; };
 		76A8453ED0904B9D853B98E5 /* UploadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadManager.swift; sourceTree = "<group>"; };
+		C359A8761B8447099E136096 /* DevFormCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevFormCapture.swift; sourceTree = "<group>"; };
 		76BC65B5E09E487A41EA3CCE /* PendingMercariSale.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PendingMercariSale.swift; sourceTree = "<group>"; };
 		7D3F2A91C4E8B5060A1D9F23 /* DraftAIProcessingPolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DraftAIProcessingPolicyTests.swift; sourceTree = "<group>"; };
 		93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalesDashboardView.swift; sourceTree = "<group>"; };
@@ -428,6 +430,7 @@
 				61FAA5892FB022A0001C28CE /* ConversationRepository.swift */,
 				61FAA58D2FB022A0001C28CE /* SearchRepository.swift */,
 				76A8453ED0904B9D853B98E5 /* UploadManager.swift */,
+				C359A8761B8447099E136096 /* DevFormCapture.swift */,
 				61FAA5802FAF22A0001C28CE /* AuthManager.swift */,
 				61F0F0012FB022A0001C28CE /* IntegrationRepository.swift */,
 				AA0011223344556677AABBEE /* MercariObservedDataRepository.swift */,
@@ -645,6 +648,7 @@
 				6A9BC89536054268BC3F7DDB /* PublicProfileView.swift in Sources */,
 				61FAA58C2FB022A0001C28CE /* SearchRepository.swift in Sources */,
 				58027310287C4A0F94DF7BCF /* UploadManager.swift in Sources */,
+				AC64C369CBE743E69D4F0C58 /* DevFormCapture.swift in Sources */,
 				2956025A9AE24C1CB28151E8 /* UploadPillView.swift in Sources */,
 				6192AA722D7F65DE00EC2EFA /* PhotoAsset.swift in Sources */,
 				6192AA762D7F65DE00EC2EFA /* PhotoItemView.swift in Sources */,
