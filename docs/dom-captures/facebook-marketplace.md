@@ -61,10 +61,102 @@ Headers → selectable categories (as of capture; Facebook may change these):
 (Full raw HTML was ~30KB of repeated row markup; the two row kinds above are the whole pattern.)
 Still unknown: how the page returns to the form after a selection (auto-back? URL change?).
 
+## Base form (captured 2026-09-27, browser console script)
+
+**IMPORTANT correction:** `document.title` was "New listing" and `location.href` was
+`https://www.facebook.com/marketplace/selling/item/?listing_id` — the compose form lives
+at **`/marketplace/selling/item/`**, not `/marketplace/create/item` (that's only the URL
+we navigate WKWebView to; Facebook client-side routes here once the form loads). Any
+success/create-page detection keyed on `/marketplace/create` in the path is wrong.
+
+### Title / Price / Description — real `<input>`/`<textarea>`, selectable by `data-name`
+The one genuinely stable selector found so far. Each field's wrapper div carries
+`data-name`, and for these three the wrapper IS the `[data-focusable="true"]` element:
+```html
+<div ... data-focusable="true" data-action-id="32747" data-name="title" data-mcomponent="MInputBox" ...>
+  <input type="text" tabindex="-1" maxlength="100" class="internal-input input-box native-text rslh non-native-input" style="color:#000;">
+</div>
+<div ... data-focusable="true" data-action-id="32741" data-name="price" data-mcomponent="MInputBox" data-init-markup-text="0" ...>
+  <input type="text" tabindex="-1" maxlength="14" class="internal-input input-box native-text rslh non-native-input" style="color:#000;">
+</div>
+<div ... data-focusable="true" data-action-id="32734" data-name="description" data-mcomponent="MInputBox" ...>
+  <textarea type="text" tabindex="-1" maxlength="2000" class="internal-input input-box native-text rslh non-native-input" style="color:#000;"></textarea>
+</div>
+```
+Selector: `document.querySelector('[data-name="title"] input')` etc. `tabindex="-1"` on the
+inner control — Facebook drives focus via the wrapper, not native tab order; `.focus()`
+still works programmatically. Price's initial value is the string `"0"`, not empty.
+
+### Location — pre-filled, NEVER autofilled
+```html
+<div ... data-name="location" data-mcomponent="MInputBox" data-init-markup-text="Richmond, VA" ...>
+  <input type="text" tabindex="-1" maxlength="200" ...>
+</div>
+```
+This is the seller's saved address, filled in by Facebook itself. Autofill must skip it.
+
+### Add photos — no file input until the row is tapped
+```html
+<div tabindex="0" data-focusable="true" data-action-id="32723" data-mcomponent="MContainer" ...>...<span class="f1">Add photos</span>...
+```
+No `input[type=file]` existed anywhere in the DOM in this capture (the untouched form).
+Click the row (matched by exact text "Add photos"), wait, then look for the file input.
+
+### Publish — TWO elements, same `data-action-id`
+```html
+<!-- top nav-bar shortcut -->
+<div role="button" tabindex="0" aria-label="Publish" data-focusable="true" data-action-id="32762" ...><span class="f1">Publish</span></div>
+<!-- full-width bottom button -->
+<div tabindex="0" data-focusable="true" data-action-id="32762" data-mcomponent="MContainer" class="m bg-s21" ...><span class="f2">Publish</span></div>
+```
+Both wired to the same action id. Never auto-clicked by the app — the user always taps
+Publish themselves.
+
+### Condition — NOT present on the base form
+Confirms the category-dependent design: Condition only appears once a category is picked.
+Still needs its own capture (after selecting a category).
+
+### Location — "Change location" screen (captured 2026-09-27)
+Tapping the Location field does NOT reveal an inline text field like Title/Price — it
+pushes a full-screen search-and-pick UI. **Gotcha: this does not change `webView.url`**
+(captured `location.href` was still `https://www.facebook.com/`, not a new path) — it's
+an internal screen-stack push, not a real navigation. Anything watching `.url` (like
+Swift's `handleFacebookURLChange`) can't see this transition; detection must poll the DOM.
+
+Search input:
+```html
+<div data-focusable="true" data-name="location_query" data-mcomponent="MInputBox" data-init-markup-text="" ...>
+  <input aria-label="Search on Facebook" placeholder="Location" type="text" maxlength="200" class="internal-input input-box native-input" ...>
+</div>
+```
+Result rows (recent/suggested locations; same shape as category's selectable rows —
+`role="button" data-focusable="true"`, text in `span.f1`, no icon child on any of them
+here, so no header-row filtering needed on this screen):
+```html
+<div role="button" tabindex="0" data-focusable="true" data-action-id="32758" data-mcomponent="MContainer" data-type="container" ...><span class="f1">Richmond, Virginia</span></div>
+```
+Back button: `[aria-label="Back"]` (also used to leave the Category page).
+
+Wired in `CrossPostJob.facebookLocation` + `fillLocationJS` in CrossPostWebView.swift:
+click the field, poll for the search input, type + poll for a matching result row (prefix
+match, case-insensitive), click it; times out and taps Back if nothing matches. Every
+Facebook `CrossPostJob` (2026-09-27) is constructed with
+`facebookLocation: CrossPostJob.facebookLocationFromSettings()` — the city from the same
+`SellingSettingsRepository` default-location settings eBay/Etsy shipping already reads —
+so posting to Facebook always sets the listing's location to the seller's configured
+city; nil (skipped, Facebook's saved default is left as-is) only if that setting is
+unset. Search query is the city alone (not "city, state" — the settings model stores
+`stateOrProvince` as an abbreviation like "VA", which won't prefix-match Facebook's
+spelled-out "Virginia"; the city name alone is enough for the picker to suggest it).
+
+### "List as Single Item" — unexplored
+A dropdown-style row next to the photo area (single-item vs. multi-quantity listing).
+Not needed for MVP; noted for later.
+
 ## TODO captures
-- [ ] Title, Price, Description (are they real `<input>`/`<textarea>` or contenteditable?)
-- [ ] Condition (control + option list page)
-- [ ] Photo picker (`input[type=file]`, `accept`)
+- [ ] Condition (only appears after a category is picked — control + option list page)
+- [x] Location (see above — opt-in, wired, unverified on device)
+- [x] Photo picker: no input exists until "Add photos" is tapped (see above) — still need: what the input looks like once it appears
 - [x] Category list page and option rows (see above); still need: what happens after a row is tapped
-- [ ] Next / Publish buttons, any extra steps (location, delivery)
-- [ ] Final URL after publishing a test item
+- [x] Publish button (see above; no separate "Next" step seen on this form) — still need: any extra steps for specific categories
+- [ ] Final URL/listing_id behavior after an ACTUAL publish (currently inferred, unverified — see success-detection note in CrossPostWebView.swift)

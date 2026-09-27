@@ -1270,7 +1270,8 @@ class UploadManager: ObservableObject {
                     weightLbs: item.weightLbs,
                     lengthIn: item.lengthIn,
                     widthIn: item.widthIn,
-                    heightIn: item.heightIn
+                    heightIn: item.heightIn,
+                    facebookLocation: platform == "facebook" ? CrossPostJob.facebookLocationFromSettings() : nil
                 ))
             }
         }

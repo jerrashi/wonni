@@ -2598,7 +2598,8 @@ struct CrossPostStatusView: View {
                 listingId: item.id,
                 photoFirebasePaths: item.photoPaths,
                 buyerPaysShipping: item.buyerPaysShipping,
-                condition: item.condition
+                condition: item.condition,
+                facebookLocation: CrossPostJob.facebookLocationFromSettings()
             )
         default:
             break
