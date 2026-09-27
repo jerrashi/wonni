@@ -140,12 +140,32 @@ fields. Autofill for Condition needs its own simpler click path: find the row wh
 `span.f1` text matches the target option and click it directly (no expand/collapse
 navigation logic required beyond the initial tap to reveal the list).
 
-### Availability ("Choose availability" — captured 2026-09-27, screenshot)
-A bottom-sheet dropdown (not yet DOM-captured — the `<select>` sweep across the page came
-back empty, so like Condition this is an MComponent picker, not a native `<select>`).
-Two fixed options, radio-style, one always selected (default: Single Item):
+### Availability — "Choose availability" screen (captured 2026-09-27, DOM)
+Like Category/Location (and unlike Condition), this is a **full-screen navigation**, not
+an inline dropdown or expander — confirmed by the `<h2>` title + `[aria-label="Back"]`
+button in the captured DOM (guessed "dropdown" from the screenshot alone was wrong).
+Two fixed, always-present options:
+```html
+<div role="button" tabindex="0" data-focusable="true" data-action-id="32763" data-mcomponent="MContainer" ...>
+  <h2><span class="f1">List as Single Item</span></h2>
+  <div><span class="f1">If you're selling one item, show
+"Only one" on your listing.</span></div>
+  <!-- selected-state icon, aria-hidden, blue #1877f2 when this option is the current selection -->
+  <div aria-hidden="true"><span class="f3" data-nosnippet="true">[icon]</span></div>
+</div>
+<div role="button" tabindex="0" data-focusable="true" data-action-id="32761" data-mcomponent="MContainer" ...>
+  <h2><span class="f1">List as In Stock</span></h2>
+  <div><span class="f1">If you're selling more than one item,
+show "In Stock" on your listing.</span></div>
+  <!-- unselected icon color #000000 -->
+  <div aria-hidden="true"><span class="f3" data-nosnippet="true">[icon]</span></div>
+</div>
+```
+Selection state is read from the icon's inline color (`#1877f2` = selected, `#000000` =
+not), not a separate `checked`/`aria-selected` attribute — same `data-action-id`-per-row
+click pattern as Category/Condition rows. Options identified by row text/`h2 span.f1`:
 - **List as Single Item** — "If you're selling one item, show 'Only one' on your
-  listing."
+  listing." (default selected)
 - **List as In Stock** — "If you're selling more than one item, show 'In Stock' on your
   listing."
 
@@ -246,9 +266,10 @@ per-category table at all.
 The crawler's extractor caught several rows below Description that aren't category
 schema fields at all — they're the always-present bottom of every compose form,
 regardless of category. Their actual control types, confirmed visually:
-- **Availability ("List as Single Item")** — a real **dropdown** (single vs. presumably
-  multi-quantity), not noise; excluded from the per-category table above only because
-  it's identical across every category, not because it isn't a real field.
+- **Availability ("List as Single Item")** — a real field, not noise; excluded from the
+  per-category table above only because it's identical across every category. Structure
+  confirmed by DOM (see its own section above): a **full-screen nav picker**, like
+  Category/Location, not an inline dropdown.
 - **Offer shipping**, **Hide from friends**, **Turn on commenting on listing** — **toggle
   switches**, not pickers. "Turn on commenting" defaults ON; the other two default OFF.
 - **Add photos** — an **action button** (opens the native photo flow; see the Photos
