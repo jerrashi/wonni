@@ -820,7 +820,8 @@ struct ProfileView: View {
                         listingId: id,
                         photoFirebasePaths: listing.photoPaths,
                         buyerPaysShipping: listing.shippingInfo?.buyerPaysShipping ?? false,
-                        condition: listing.condition.rawValue
+                        condition: listing.condition.rawValue,
+                        facebookLocation: platform == "facebook" ? CrossPostJob.facebookLocationFromSettings() : nil
                     ))
                 } else if platform == "ebay" {
                     // Set pending state locally first so UI updates immediately
@@ -2068,7 +2069,8 @@ struct EditListingSheet: View {
                         listingId: id,
                         photoFirebasePaths: listing.photoPaths,
                         buyerPaysShipping: !isFreeShipping,
-                        condition: (condition ?? listing.condition).rawValue
+                        condition: (condition ?? listing.condition).rawValue,
+                        facebookLocation: platform == "facebook" ? CrossPostJob.facebookLocationFromSettings() : nil
                     ))
                 }
             }

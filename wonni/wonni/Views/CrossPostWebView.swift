@@ -52,13 +52,24 @@ struct CrossPostJob: Identifiable {
     /// both non-nil; never mixed with a non-nil `listingId`.
     let variantProductId: String?
     let variantId: String?
-    /// Facebook only: a location to select on the "Change location" picker (e.g.
-    /// "Richmond, Virginia") — a search-and-pick screen, not a text field, so it can't be
-    /// filled the way Title/Price/Description are. Nil (the default) means the fill skips
-    /// it entirely and Facebook's own saved default location is left as-is; no UI sets
-    /// this yet (2026-09-27), this just wires the capability. See
-    /// docs/dom-captures/facebook-marketplace.md.
+    /// Facebook only: a location to select on the "Change location" picker (e.g. a city
+    /// name — the picker is a city search-and-pick screen, not a text field, so it can't
+    /// be filled the way Title/Price/Description are). Nil means the fill skips it and
+    /// Facebook's own saved default location is left as-is. See
+    /// docs/dom-captures/facebook-marketplace.md and `facebookLocationFromSettings()`.
     let facebookLocation: String?
+
+    /// The city from the user's Selling Settings default location (the same source eBay/
+    /// Etsy shipping already uses — `SellingSettingsRepository`), or nil if unset. Every
+    /// Facebook `CrossPostJob` construction site passes this so posting to Facebook always
+    /// sets the listing's location to the seller's configured city, matching how the
+    /// mobile Marketplace app scopes a listing to one city. Read on the main actor since
+    /// `SellingSettingsRepository` is main-actor-isolated.
+    @MainActor
+    static func facebookLocationFromSettings() -> String? {
+        let city = SellingSettingsRepository.shared.settings?.defaultLocation.city
+        return (city?.isEmpty == false) ? city : nil
+    }
 
     init(
         platform: String,

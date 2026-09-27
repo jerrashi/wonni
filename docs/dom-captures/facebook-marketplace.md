@@ -137,12 +137,17 @@ here, so no header-row filtering needed on this screen):
 ```
 Back button: `[aria-label="Back"]` (also used to leave the Category page).
 
-Wired in `CrossPostJob.facebookLocation` (opt-in, nil by default → skipped, Facebook's own
-saved location is left alone) + `fillLocationJS` in CrossPostWebView.swift: click the
-field, poll for the search input, type + poll for a matching result row (prefix match,
-case-insensitive), click it; times out and taps Back if nothing matches. No UI sets
-`facebookLocation` yet — capability only, until there's a use case (e.g. §16-style bulk
-location entry).
+Wired in `CrossPostJob.facebookLocation` + `fillLocationJS` in CrossPostWebView.swift:
+click the field, poll for the search input, type + poll for a matching result row (prefix
+match, case-insensitive), click it; times out and taps Back if nothing matches. Every
+Facebook `CrossPostJob` (2026-09-27) is constructed with
+`facebookLocation: CrossPostJob.facebookLocationFromSettings()` — the city from the same
+`SellingSettingsRepository` default-location settings eBay/Etsy shipping already reads —
+so posting to Facebook always sets the listing's location to the seller's configured
+city; nil (skipped, Facebook's saved default is left as-is) only if that setting is
+unset. Search query is the city alone (not "city, state" — the settings model stores
+`stateOrProvince` as an abbreviation like "VA", which won't prefix-match Facebook's
+spelled-out "Virginia"; the city name alone is enough for the picker to suggest it).
 
 ### "List as Single Item" — unexplored
 A dropdown-style row next to the photo area (single-item vs. multi-quantity listing).
