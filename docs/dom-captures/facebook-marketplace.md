@@ -112,9 +112,42 @@ Click the row (matched by exact text "Add photos"), wait, then look for the file
 Both wired to the same action id. Never auto-clicked by the app — the user always taps
 Publish themselves.
 
-### Condition — NOT present on the base form
-Confirms the category-dependent design: Condition only appears once a category is picked.
-Still needs its own capture (after selecting a category).
+### Condition (captured 2026-09-27, once a category is picked)
+Not present on the base form — only appears after a category is chosen, and (per the
+crawl above) on every category except Vehicles. Four fixed options, always the same:
+```
+New
+Used - Like New
+Used - Good
+Used - Fair
+```
+(the source HTML URL-encodes spaces as `+` inside the label text — `Used+-+Like+New` etc —
+that's a text-encoding quirk, not a literal `+` in the displayed label.)
+
+**Structurally different from Category/Location**: this is not a full-screen navigation.
+Tapping the Condition row expands an **inline scroller** (`data-scrollable="true"
+vscroller`) directly beneath the label, listing all 4 rows at once — no "Change
+Condition" screen, no Back button needed. Each option row:
+```html
+<div tabindex="0" data-focusable="true" data-action-id="32763" data-mcomponent="MContainer" class="m" ...>
+  <div data-mcomponent="ServerTextArea"><span class="f1">New</span></div>
+  <div role="button" data-focusable="true" data-action-id="32763" ...><span class="f1" data-nosnippet="true">[checkmark icon]</span></div>
+</div>
+```
+Also explains why the category-crawler's `controlForLabel` (sibling-`nb`-class lookup)
+can't find this control — its wrapper is `class="m bg-s4"`, not `nb` like the base-form
+fields. Autofill for Condition needs its own simpler click path: find the row whose
+`span.f1` text matches the target option and click it directly (no expand/collapse
+navigation logic required beyond the initial tap to reveal the list).
+
+### Availability ("Choose availability" — captured 2026-09-27, screenshot)
+A bottom-sheet dropdown (not yet DOM-captured — the `<select>` sweep across the page came
+back empty, so like Condition this is an MComponent picker, not a native `<select>`).
+Two fixed options, radio-style, one always selected (default: Single Item):
+- **List as Single Item** — "If you're selling one item, show 'Only one' on your
+  listing."
+- **List as In Stock** — "If you're selling more than one item, show 'In Stock' on your
+  listing."
 
 ### Location — "Change location" screen (captured 2026-09-27)
 Tapping the Location field does NOT reveal an inline text field like Title/Price — it
@@ -182,6 +215,32 @@ Color, size (Electronics/Clothing/Baby), Carrier, Device Name, Platform, and the
 Vehicles-only set (Vehicle Type/Year/Make/Model/Interior Color/Exterior Color/Number of
 owners) — brand and Condition are shared across nearly everything. Full raw crawl output:
 `docs/dom-captures/facebook-category-fields-raw.json`.
+
+### Firestore schema revision — common fields pulled out (2026-09-27)
+Given the above, the `fbCategories`/`fbFieldSets`/`fbOptionSets` design posted to issue
+#66 is revised: **don't repeat the ~9 common rows in every category's field-set doc.**
+They're identical across all 28 categories (Condition is the one near-exception — absent
+only on Vehicles, which is deferred to Phase 4 anyway, so it's still treated as common for
+now with a comment flagging that caveat). Revised shape:
+
+- **`fbCommonFields`** — a single fixed doc/constant (arguably doesn't even need
+  Firestore — it never changes and isn't crawled), listing: Title, Price, Location,
+  Description, Category, Condition, Availability, Offer shipping, Hide from friends,
+  Turn on commenting, Photos. Always rendered, for every category.
+- **`fbCategories/{id}`** — `{ name, fieldSetId }`, unchanged, but `fieldSetId` now points
+  to a field set holding **only the extra fields**, per the table above (e.g. Furniture →
+  `[brand, Material]`; Books, Movies & Music → `[]`, since Condition moved to common).
+- **`fbFieldSets/{id}`** — same as before, just much smaller per doc (0-7 fields instead
+  of duplicating the ~9 common ones 28 times).
+- **`fbOptionSets/{id}`** — unchanged, holds option values for a field (Condition's 4
+  values, Availability's 2, Material's list, etc.), referenced by field entries in either
+  the common set or a category's field set.
+
+Client render order: common fields (always, fixed order) → category-specific field set
+(looked up via the category's `fieldSetId`) → Photos/Publish (also common, rendered last).
+This is a pure normalization — same data, no duplication — and matches what the crawl
+empirically confirmed: these 9 rows never vary by category, so they don't belong in a
+per-category table at all.
 
 ### Common-row control types (from a screenshot, 2026-09-27)
 The crawler's extractor caught several rows below Description that aren't category
@@ -334,7 +393,7 @@ or any of the 9 category-specific fields.
 </details>
 
 ## TODO captures
-- [ ] Condition (only appears after a category is picked — control + option list page)
+- [x] Condition (see above — inline expander, not a nav screen; 4 fixed options)
 - [x] Location (see above — opt-in, wired, unverified on device)
 - [x] Photo picker: no input exists until "Add photos" is tapped (see above) — still need: what the input looks like once it appears
 - [x] Category list page and option rows (see above); still need: what happens after a row is tapped
