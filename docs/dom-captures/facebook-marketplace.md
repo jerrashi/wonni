@@ -112,9 +112,62 @@ Click the row (matched by exact text "Add photos"), wait, then look for the file
 Both wired to the same action id. Never auto-clicked by the app — the user always taps
 Publish themselves.
 
-### Condition — NOT present on the base form
-Confirms the category-dependent design: Condition only appears once a category is picked.
-Still needs its own capture (after selecting a category).
+### Condition (captured 2026-09-27, once a category is picked)
+Not present on the base form — only appears after a category is chosen, and (per the
+crawl above) on every category except Vehicles. Four fixed options, always the same:
+```
+New
+Used - Like New
+Used - Good
+Used - Fair
+```
+(the source HTML URL-encodes spaces as `+` inside the label text — `Used+-+Like+New` etc —
+that's a text-encoding quirk, not a literal `+` in the displayed label.)
+
+**Structurally different from Category/Location**: this is not a full-screen navigation.
+Tapping the Condition row expands an **inline scroller** (`data-scrollable="true"
+vscroller`) directly beneath the label, listing all 4 rows at once — no "Change
+Condition" screen, no Back button needed. Each option row:
+```html
+<div tabindex="0" data-focusable="true" data-action-id="32763" data-mcomponent="MContainer" class="m" ...>
+  <div data-mcomponent="ServerTextArea"><span class="f1">New</span></div>
+  <div role="button" data-focusable="true" data-action-id="32763" ...><span class="f1" data-nosnippet="true">[checkmark icon]</span></div>
+</div>
+```
+Also explains why the category-crawler's `controlForLabel` (sibling-`nb`-class lookup)
+can't find this control — its wrapper is `class="m bg-s4"`, not `nb` like the base-form
+fields. Autofill for Condition needs its own simpler click path: find the row whose
+`span.f1` text matches the target option and click it directly (no expand/collapse
+navigation logic required beyond the initial tap to reveal the list).
+
+### Availability — "Choose availability" screen (captured 2026-09-27, DOM)
+Like Category/Location (and unlike Condition), this is a **full-screen navigation**, not
+an inline dropdown or expander — confirmed by the `<h2>` title + `[aria-label="Back"]`
+button in the captured DOM (guessed "dropdown" from the screenshot alone was wrong).
+Two fixed, always-present options:
+```html
+<div role="button" tabindex="0" data-focusable="true" data-action-id="32763" data-mcomponent="MContainer" ...>
+  <h2><span class="f1">List as Single Item</span></h2>
+  <div><span class="f1">If you're selling one item, show
+"Only one" on your listing.</span></div>
+  <!-- selected-state icon, aria-hidden, blue #1877f2 when this option is the current selection -->
+  <div aria-hidden="true"><span class="f3" data-nosnippet="true">[icon]</span></div>
+</div>
+<div role="button" tabindex="0" data-focusable="true" data-action-id="32761" data-mcomponent="MContainer" ...>
+  <h2><span class="f1">List as In Stock</span></h2>
+  <div><span class="f1">If you're selling more than one item,
+show "In Stock" on your listing.</span></div>
+  <!-- unselected icon color #000000 -->
+  <div aria-hidden="true"><span class="f3" data-nosnippet="true">[icon]</span></div>
+</div>
+```
+Selection state is read from the icon's inline color (`#1877f2` = selected, `#000000` =
+not), not a separate `checked`/`aria-selected` attribute — same `data-action-id`-per-row
+click pattern as Category/Condition rows. Options identified by row text/`h2 span.f1`:
+- **List as Single Item** — "If you're selling one item, show 'Only one' on your
+  listing." (default selected)
+- **List as In Stock** — "If you're selling more than one item, show 'In Stock' on your
+  listing."
 
 ### Location — "Change location" screen (captured 2026-09-27)
 Tapping the Location field does NOT reveal an inline text field like Title/Price — it
@@ -153,8 +206,215 @@ spelled-out "Virginia"; the city name alone is enough for the picker to suggest 
 A dropdown-style row next to the photo area (single-item vs. multi-quantity listing).
 Not needed for MVP; noted for later.
 
+## Category → field-set schema (captured 2026-09-27, automated crawler)
+
+A browser-console crawler (script kept at bottom of this section) walked all 28
+non-Housing top-level categories from a fresh "New listing" form, opening each and
+recording the resulting field list via the label/`nb`-sibling pattern from the Category
+capture above. Housing (Home sales, Rentals) was excluded — tapping into it drops into a
+structurally different flow (real-estate listing, not the generic compose form) that the
+crawler's selectors can't navigate; matches the Phase 4 deferral in issue #129.
+
+**Every category has:** Category, Price, Location, Description (the base `data-name`
+inputs) — and every category except Vehicles has **Condition**. Beyond that:
+
+| Category | Extra fields |
+|---|---|
+| Vehicles | `vehicle_make`, `vehicle_model` (real inputs) + Vehicle Type, Year, Make, Model, Interior Color, Exterior Color, Number of owners |
+| Furniture | brand, Condition, Material |
+| Household | brand, Condition, Color |
+| Electronics & computers | brand, size, Condition |
+| Mobile phones | Condition, Carrier, Device Name (no brand/size) |
+| Women's / Men's clothing & shoes, Baby & kids | brand, size, Condition |
+| Video Games | Condition, Platform |
+| Books, Movies & Music | Condition only |
+| Appliances, Tools, Garden, Garage Sale, Miscellaneous, Sports & Outdoors, Antiques & Collectibles, Musical Instruments, Arts & Crafts, Auto parts, Bicycles, Jewelry & Accessories, Bags & Luggage, Health & beauty, Toys & Games, Pet Supplies | brand, Condition |
+
+So the whole 28-category schema reduces to **9 distinct extra-field types**: Material,
+Color, size (Electronics/Clothing/Baby), Carrier, Device Name, Platform, and the
+Vehicles-only set (Vehicle Type/Year/Make/Model/Interior Color/Exterior Color/Number of
+owners) — brand and Condition are shared across nearly everything. Full raw crawl output:
+`docs/dom-captures/facebook-category-fields-raw.json`.
+
+### Firestore schema revision — common fields pulled out (2026-09-27)
+Given the above, the `fbCategories`/`fbFieldSets`/`fbOptionSets` design posted to issue
+#66 is revised: **don't repeat the ~9 common rows in every category's field-set doc.**
+They're identical across all 28 categories (Condition is the one near-exception — absent
+only on Vehicles, which is deferred to Phase 4 anyway, so it's still treated as common for
+now with a comment flagging that caveat). Revised shape:
+
+- **`fbCommonFields`** — a single fixed doc/constant (arguably doesn't even need
+  Firestore — it never changes and isn't crawled), listing: Title, Price, Location,
+  Description, Category, Condition, Availability, Offer shipping, Hide from friends,
+  Turn on commenting, Photos. Always rendered, for every category.
+- **`fbCategories/{id}`** — `{ name, fieldSetId }`, unchanged, but `fieldSetId` now points
+  to a field set holding **only the extra fields**, per the table above (e.g. Furniture →
+  `[brand, Material]`; Books, Movies & Music → `[]`, since Condition moved to common).
+- **`fbFieldSets/{id}`** — same as before, just much smaller per doc (0-7 fields instead
+  of duplicating the ~9 common ones 28 times).
+- **`fbOptionSets/{id}`** — unchanged, holds option values for a field (Condition's 4
+  values, Availability's 2, Material's list, etc.), referenced by field entries in either
+  the common set or a category's field set.
+
+Client render order: common fields (always, fixed order) → category-specific field set
+(looked up via the category's `fieldSetId`) → Photos/Publish (also common, rendered last).
+This is a pure normalization — same data, no duplication — and matches what the crawl
+empirically confirmed: these 9 rows never vary by category, so they don't belong in a
+per-category table at all.
+
+### Common-row control types (from a screenshot, 2026-09-27)
+The crawler's extractor caught several rows below Description that aren't category
+schema fields at all — they're the always-present bottom of every compose form,
+regardless of category. Their actual control types, confirmed visually:
+- **Availability ("List as Single Item")** — a real field, not noise; excluded from the
+  per-category table above only because it's identical across every category. Structure
+  confirmed by DOM (see its own section above): a **full-screen nav picker**, like
+  Category/Location, not an inline dropdown.
+- **Offer shipping**, **Hide from friends**, **Turn on commenting on listing** — **toggle
+  switches**, not pickers. "Turn on commenting" defaults ON; the other two default OFF.
+- **Add photos** — an **action button** (opens the native photo flow; see the Photos
+  section above), not a form field.
+- **"This listing is still public…"** and **"All listings go through a quick standard
+  review…"** — plain **disclaimer text**, "Learn more" and "Commerce policies" are just
+  links. None are interactive fields; correctly excluded from the schema.
+- **Publish** — an **action button** (the submit), covered in its own section above.
+
+This matters for autofill: none of these five interactive rows (Availability, the three
+toggles, Add photos) can be filled the way Title/Price/Description are — each needs its
+own interaction (dropdown pick / toggle click / native photo flow), the same way the
+9 category-specific fields will each need their own handling once captured.
+
+**`brand` is a real `<input>` (data-name), not a picker** — confirmed by the crawler
+catching it both as `data-name="brand"` and (spuriously) as a `select`-style row, since
+its bordered-box styling matches the picker pattern. The same false-positive happened for
+the base form's Title/Price/Location/Description rows (each showed up twice: once via
+`data-name`, once via a boilerplate label like "What are you selling?"/"Price ($)") —
+**the label+`nb`-sibling pattern alone does not distinguish a real dropdown picker from a
+plain text input in a bordered box.** Not yet known for any of the 9 extra fields above:
+which are full-page pickers (like Category), in-place dropdowns (like Furniture's summary
+suggested), or free-text/autocomplete. Needs one capture per field to confirm.
+
+**Not yet captured:** option values for Condition (used almost everywhere — capture once)
+or any of the 9 category-specific fields.
+
+<details>
+<summary>Crawler script (run on a fresh "New listing" form)</summary>
+
+```js
+(async function () {
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  async function waitFor(fn, timeoutMs, intervalMs) {
+    var deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      var v = fn();
+      if (v) return v;
+      await sleep(intervalMs || 200);
+    }
+    return fn();
+  }
+  function rows() { return Array.from(document.querySelectorAll('[data-focusable="true"]')); }
+  function text(el) { return (el.innerText || '').trim(); }
+
+  function controlForLabel(labelText) {
+    var spans = Array.from(document.querySelectorAll('span.f1, span.f2'));
+    var labelSpan = spans.find(function (s) { return s.innerText.trim() === labelText; });
+    if (!labelSpan) return null;
+    var labelDiv = labelSpan.closest('[data-mcomponent="ServerTextArea"]');
+    if (!labelDiv || !labelDiv.parentElement) return null;
+    var group = labelDiv.parentElement;
+    var controlWrap = Array.from(group.children).find(function (c) {
+      return c !== labelDiv && (c.className || '').indexOf('nb') !== -1;
+    });
+    if (!controlWrap) return null;
+    return controlWrap.querySelector('[data-focusable="true"]') || controlWrap;
+  }
+
+  function extractFields() {
+    var scroller = document.querySelector('[data-type="vscroller"]') || document.body;
+    var out = [];
+    scroller.querySelectorAll('[data-name]').forEach(function (w) {
+      var ctl = w.querySelector('input,textarea');
+      out.push({ kind: 'input', name: w.getAttribute('data-name'), placeholder: ctl ? ctl.getAttribute('placeholder') : null });
+    });
+    var seen = {};
+    Array.from(scroller.querySelectorAll('span.f1')).forEach(function (s) {
+      var label = s.innerText.trim();
+      if (!label || seen[label]) return;
+      var labelDiv = s.closest('[data-mcomponent="ServerTextArea"]');
+      if (!labelDiv || !labelDiv.parentElement) return;
+      var group = labelDiv.parentElement;
+      var controlWrap = Array.from(group.children).find(function (c) {
+        return c !== labelDiv && (c.className || '').indexOf('nb') !== -1;
+      });
+      if (!controlWrap) return;
+      seen[label] = true;
+      var valueSpan = controlWrap.querySelector('span.f1');
+      out.push({ kind: 'select', label: label, currentValue: valueSpan ? valueSpan.innerText.trim() : null });
+    });
+    return out;
+  }
+
+  var results = { baseFields: extractFields(), categories: [] };
+  var catControl = controlForLabel('Category');
+  if (!catControl) { console.log('Category control not found — start from a fresh form.'); return; }
+  catControl.click();
+  await sleep(700);
+
+  var catNames = rows()
+    .filter(function (el) { return !el.querySelector('[aria-hidden="true"]') && el.tagName !== 'H1'; })
+    .map(text).filter(Boolean);
+  var SKIP = ['Home sales', 'Rentals']; // Housing — different flow, breaks the crawler
+  catNames = catNames.filter(function (n) { return SKIP.indexOf(n) === -1; });
+  console.log('Found ' + catNames.length + ' categories. Starting crawl...');
+
+  for (var i = 0; i < catNames.length; i++) {
+    var name = catNames[i];
+    try {
+      if (i > 0) {
+        var control = await waitFor(function () { return controlForLabel('Category'); }, 5000, 250);
+        if (!control) { results.categories.push({ name: name, error: 'category control not found' }); continue; }
+        control.click();
+        await sleep(600);
+      }
+      var target = await waitFor(function () {
+        return rows()
+          .filter(function (el) { return !el.querySelector('[aria-hidden="true"]') && el.tagName !== 'H1'; })
+          .find(function (el) { return text(el) === name; });
+      }, 3000, 200);
+      if (!target) { results.categories.push({ name: name, error: 'row not found on reopen' }); continue; }
+      target.click();
+      var fields = await waitFor(function () {
+        var f = extractFields();
+        return f.length > 0 ? f : null;
+      }, 4000, 300);
+      if (!fields) fields = extractFields();
+      results.categories.push({ name: name, fields: fields });
+      console.log((i + 1) + '/' + catNames.length + ': ' + name + ' — ' + fields.length + ' fields');
+    } catch (e) {
+      results.categories.push({ name: name, error: e.message });
+    }
+  }
+
+  var json = JSON.stringify(results, null, 1);
+  window.__fbCrawlResults = json;
+  var copied = false;
+  try { await navigator.clipboard.writeText(json); copied = true; } catch (e) {}
+  if (!copied) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = json; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      copied = document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch (e) {}
+  }
+  console.log(copied ? ('DONE. Copied ' + json.length + ' chars.') : 'DONE, but copy failed — run copy(window.__fbCrawlResults)');
+})();
+```
+</details>
+
 ## TODO captures
-- [ ] Condition (only appears after a category is picked — control + option list page)
+- [x] Condition (see above — inline expander, not a nav screen; 4 fixed options)
 - [x] Location (see above — opt-in, wired, unverified on device)
 - [x] Photo picker: no input exists until "Add photos" is tapped (see above) — still need: what the input looks like once it appears
 - [x] Category list page and option rows (see above); still need: what happens after a row is tapped
