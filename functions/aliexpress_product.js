@@ -2,7 +2,6 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const https = require("https");
 const { callAliexpressApi } = require("./aliexpress_auth");
-const { geminiApiKey } = require("./gemini_identify");
 const { buildNewProductDoc } = require("./product_schema");
 
 const ALLOWED_IMAGE_HOSTS = [".alicdn.com", ".aliexpress-media.com"];
@@ -107,7 +106,9 @@ function mapAliexpressVariants(skus, productId) {
 
 // Import a product from AliExpress — called by Chrome extension (scrapedData) or web URL paste
 exports.aliexpressImportProduct = onCall(
-  { timeoutSeconds: 120, memory: "512MiB", secrets: [geminiApiKey] },
+  // No automatic Gemini call at import (opt-in only, see comment below) — no
+  // geminiApiKey secret needed here.
+  { timeoutSeconds: 120, memory: "512MiB" },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
