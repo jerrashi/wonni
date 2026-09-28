@@ -42,6 +42,13 @@ test("toListingFields: maps product fields to the UserListing (marketplace) shap
   assert.ok(!("status" in f), "status is set by postToWonni, never the mapper");
 });
 
+test("toListingFields: sets catalogItemId/inventoryUnitIds/isBundleListing (non-optional on UserListing — a missing key here silently fails Firestore decode and drops the listing from the feed)", () => {
+  const f = toListingFields({ title: "x" });
+  assert.equal(f.catalogItemId, "");
+  assert.deepEqual(f.inventoryUnitIds, []);
+  assert.equal(f.isBundleListing, false);
+});
+
 test("toListingFields: condition falls back to 'new' (dropship imports are new stock)", () => {
   assert.equal(toListingFields({ title: "x" }).condition, "new");
 });

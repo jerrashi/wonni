@@ -129,6 +129,19 @@ function toListingFields({
     // iOS app — exactly the "optional, not lost, not shown" the field
     // should be.
     options: options ?? [],
+    // Non-optional on UserListing (Swift's synthesized Codable requires the
+    // key present even though this mapper has nothing to put there) — a
+    // dropship-originated listing has no /catalog or /inventory doc, so
+    // these mirror UserListing's own convenience-init defaults (empty/false,
+    // see Models/UserListing.swift init(...) catalogItemId: String = "",
+    // inventoryUnitIds = [], isBundleListing = false) rather than inventing
+    // new semantics here. Missing them caused a silent Firestore decode
+    // failure — bad listings never even hit the console (compactMap { try?
+    // ... } in ListingRepository.fetchFeedPage swallows it) — they just
+    // vanished from the home feed.
+    catalogItemId: "",
+    inventoryUnitIds: [],
+    isBundleListing: false,
     currency: "USD",
     // Prefer the product's own condition (iOS's rich per-item condition,
     // e.g. "good"/"likeNew", already synced onto `products.condition` by
