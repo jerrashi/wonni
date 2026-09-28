@@ -3041,19 +3041,31 @@ struct MercariAutoPosterView: View {
     private func loadPreferencesThenStart() async {
         // If this listing already has a Mercari ID (captured earlier, or linked by hand), it's
         // already live — accept it instead of posting a duplicate.
+        // #74: presence of an id alone isn't enough — a sold-and-relisted
+        // variant/listing still carries its OLD (now-stale) Mercari id in
+        // crossPostListingIds.mercari right up until this flow posts a fresh
+        // one. Re-accepting that stale id would silently skip the actual
+        // relist and report success. Only short-circuit when the id is
+        // confirmed still live (crossPostStatus == "active") AND a relist
+        // wasn't explicitly requested.
         if let productId = job.variantProductId, let variantId = job.variantId {
             if let product = try? await ProductRepository.shared.fetchProductVariants(productId: productId),
                let variant = product.variants?.first(where: { $0.id == variantId }),
-               let existingId = variant.crossPostListingIds.mercari, !existingId.isEmpty {
-                print("[MercariAutoPosterView] Variant already on Mercari (\(existingId)) — accepting, not re-posting")
+               let existingId = variant.crossPostListingIds.mercari, !existingId.isEmpty,
+               variant.crossPostStatus.mercari == "active",
+               variant.pendingMercariRelist != true {
+                print("[MercariAutoPosterView] Variant already active on Mercari (\(existingId)) — accepting, not re-posting")
                 state.acceptExisting(id: existingId)
                 return
             }
         } else if let listingId = job.listingId,
            let doc = try? await Firestore.firestore().collection("listings").document(listingId).getDocument(),
-           let existingId = (doc.data()?["crossPostListingIds"] as? [String: String])?["mercari"],
-           !existingId.isEmpty {
-            print("[MercariAutoPosterView] Listing already on Mercari (\(existingId)) — accepting, not re-posting")
+           let data = doc.data(),
+           let existingId = (data["crossPostListingIds"] as? [String: String])?["mercari"],
+           !existingId.isEmpty,
+           (data["crossPostStatus"] as? [String: String])?["mercari"] == "active",
+           (data["pendingMercariRelist"] as? Bool) != true {
+            print("[MercariAutoPosterView] Listing already active on Mercari (\(existingId)) — accepting, not re-posting")
             state.acceptExisting(id: existingId)
             return
         }
