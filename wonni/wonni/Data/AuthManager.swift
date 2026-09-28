@@ -188,11 +188,18 @@ class AuthManager: ObservableObject {
     // The nonce is SHA-256 hashed before sending to Apple, then verified by Firebase
     // to prevent replay attacks.
 
+    // #65: SecRandomCopyBytes failing is effectively unreachable on real
+    // hardware, but a crash here would take down Sign in with Apple entirely.
+    // Falls back to SystemRandomNumberGenerator — also OS-CSPRNG-backed on
+    // Apple platforms (arc4random under the hood), so this is a same-strength
+    // fallback, not a weakened one.
     private func randomNonceString(length: Int = 32) -> String {
         var randomBytes = [UInt8](repeating: 0, count: length)
         let errorCode = SecRandomCopyBytes(kSecRandomDefault, randomBytes.count, &randomBytes)
         if errorCode != errSecSuccess {
-            fatalError("SecRandomCopyBytes failed: \(errorCode)")
+            print("[AuthManager] SecRandomCopyBytes failed (\(errorCode)); falling back to SystemRandomNumberGenerator.")
+            var rng = SystemRandomNumberGenerator()
+            randomBytes = (0..<length).map { _ in UInt8.random(in: 0...255, using: &rng) }
         }
         let charset: [Character] = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
         return String(randomBytes.map { charset[Int($0) % charset.count] })
