@@ -13,6 +13,21 @@ const TITLE_CAP = 80;   // eBay title limit
 const DESC_CAP = 1000;  // readability cap for appended text
 const VALID_CONDITIONS = new Set(["new", "likenew", "good", "fair", "poor"]);
 
+// Facebook Marketplace's fixed top-level category list (26 non-Housing categories —
+// Home sales/Rentals excluded, see docs/dom-captures/facebook-marketplace.md and
+// github issue #129). Gemini must return exactly one of these strings or the click-to-
+// select autofill has nothing reliable to text-match against.
+const FACEBOOK_CATEGORIES = [
+  "Vehicles", "Furniture", "Household", "Appliances", "Tools", "Garden",
+  "Electronics & computers", "Mobile phones", "Garage Sale", "Miscellaneous",
+  "Sports & Outdoors", "Antiques & Collectibles", "Musical Instruments", "Arts & Crafts",
+  "Auto parts", "Bicycles", "Women's clothing & shoes", "Men's clothing & shoes",
+  "Jewelry & Accessories", "Bags & Luggage", "Baby & kids", "Health & beauty",
+  "Toys & Games", "Pet Supplies", "Video Games", "Books, Movies & Music",
+];
+const FACEBOOK_CATEGORY_SET = new Set(FACEBOOK_CATEGORIES);
+exports.FACEBOOK_CATEGORIES = FACEBOOK_CATEGORIES;
+
 function isBlank(v) {
   if (v == null) return true;
   if (typeof v === "string") return v.trim() === "";
@@ -22,13 +37,14 @@ function isBlank(v) {
 }
 
 // Which fillable fields are currently empty on the product.
-function blankFields(product) {
+function blankFields(product, { includeFacebookCategory = false } = {}) {
   const out = [];
   if (isBlank(product.description)) out.push("description");
   if (isBlank(product.brand) && isBlank(product.artistName)) out.push("brand");
   if (isBlank(product.tags)) out.push("tags");
   if (isBlank(product.condition) && isBlank(product.mercariCondition)) out.push("condition");
   if (isBlank(product.category) && isBlank(product.geminiCategory)) out.push("category");
+  if (includeFacebookCategory && isBlank(product.facebookCategory)) out.push("facebookCategory");
   return out;
 }
 
@@ -41,6 +57,7 @@ Given a product's title, its current description (may be empty), and one photo, 
 - "tags": array of up to 8 short lowercase search keywords.
 - "condition": exactly one of "new", "likenew", "good", "fair", "poor" — your best guess from the photo.
 - "category": a short category path hint like "Collectibles > K-pop > Photocards" (a hint for a marketplace category picker, NOT an ID).
+- "facebookCategory": ONLY if asked — must be EXACTLY one string from the provided candidate list, verbatim, no variation.
 - "itemSpecifics": object of extra attributes buyers filter on, e.g. {"Type":"Photo Card","Character":"Jungkook"}. Use {} if unsure.
 Return ONLY valid JSON, no code fences.`;
 
@@ -48,11 +65,15 @@ async function callGemini(apiKey, product, keys) {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: GEMINI_MODEL, systemInstruction: SYSTEM_PROMPT });
 
-  const parts = [[
+  const promptLines = [
     `Title: ${product.title || "(none)"}`,
     product.description ? `Current description: ${String(product.description).slice(0, 600)}` : "Current description: (empty)",
     `Fill these keys: ${keys.join(", ")}`,
-  ].join("\n")];
+  ];
+  if (keys.includes("facebookCategory")) {
+    promptLines.push(`facebookCategory candidates (pick exactly one, verbatim): ${FACEBOOK_CATEGORIES.join(" | ")}`);
+  }
+  const parts = [promptLines.join("\n")];
 
   const img = listingImagesFor(product, 1)[0];
   if (img) {
@@ -72,9 +93,9 @@ async function callGemini(apiKey, product, keys) {
 //   suggestions  — proposed { title, description } that APPEND to existing
 //                  user text (need consent via the aiSuggested* chip UI).
 // Never throws — a Gemini failure yields empty results.
-async function resolveListingFields(product, { apiKey } = {}) {
+async function resolveListingFields(product, { apiKey, includeFacebookCategory = false } = {}) {
   apiKey = apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  const blanks = blankFields(product);
+  const blanks = blankFields(product, { includeFacebookCategory });
 
   const titleAppendable = !isBlank(product.title) && String(product.title).trim().length < TITLE_CAP - 4;
   const descAppendable = !blanks.includes("description")
@@ -132,6 +153,10 @@ async function resolveListingFields(product, { apiKey } = {}) {
     writes.geminiItemSpecifics = g.itemSpecifics;
   }
 
+  if (blanks.includes("facebookCategory") && FACEBOOK_CATEGORY_SET.has(g.facebookCategory)) {
+    writes.facebookCategory = g.facebookCategory;
+  }
+
   return { writes, suggestions };
 }
 
@@ -160,7 +185,7 @@ exports.aiAutofillListing = onCall(
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
-    const { productId } = request.data ?? {};
+    const { productId, includeFacebookCategory } = request.data ?? {};
     if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
 
     const db = admin.firestore();
@@ -170,7 +195,7 @@ exports.aiAutofillListing = onCall(
     const product = snap.data();
     if (!isOwner(product, uid)) throw new HttpsError("permission-denied", "Not your product.");
 
-    const { writes, suggestions } = await resolveListingFields(product);
+    const { writes, suggestions } = await resolveListingFields(product, { includeFacebookCategory: !!includeFacebookCategory });
 
     const update = { ...writes };
     if (suggestions.title) update.aiSuggestedTitle = suggestions.title;

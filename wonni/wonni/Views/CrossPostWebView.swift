@@ -58,6 +58,12 @@ struct CrossPostJob: Identifiable {
     /// Facebook's own saved default location is left as-is. See
     /// docs/dom-captures/facebook-marketplace.md and `facebookLocationFromSettings()`.
     let facebookLocation: String?
+    /// Facebook only: one of the 26 fixed top-level category names (see
+    /// `FACEBOOK_CATEGORIES` in functions/listing_fields.js), pre-resolved if the caller
+    /// already has it. Nil is the common case — `executeAutofill` then resolves it live
+    /// via `aiAutofillListing` against `job.listingId`, so no construction site needs to
+    /// populate this up front.
+    let suggestedFacebookCategory: String?
 
     /// The city from the user's Selling Settings default location (the same source eBay/
     /// Etsy shipping already uses — `SellingSettingsRepository`), or nil if unset. Every
@@ -89,7 +95,8 @@ struct CrossPostJob: Identifiable {
         heightIn: Double? = nil,
         variantProductId: String? = nil,
         variantId: String? = nil,
-        facebookLocation: String? = nil
+        facebookLocation: String? = nil,
+        suggestedFacebookCategory: String? = nil
     ) {
         self.platform = platform
         self.title = title
@@ -102,6 +109,7 @@ struct CrossPostJob: Identifiable {
         self.condition = condition
         self.suggestedCategory = suggestedCategory
         self.suggestedBrand = suggestedBrand
+        self.suggestedFacebookCategory = suggestedFacebookCategory
         self.weightLbs = weightLbs
         self.lengthIn = lengthIn
         self.widthIn = widthIn
@@ -436,6 +444,29 @@ public struct CrossPostContainerView: View {
                 let r = (try? await webView.callJS(Self.fillLocationJS, args: ["location": loc])) as? String ?? "error"
                 locationNote = r.hasPrefix("selected") ? " Location set." : " Location not set (\(r))."
             }
+            // Ask the shared Gemini pipeline (same products/{id} doc + resolveListingFields
+            // eBay/Etsy already use) for a Facebook category + brand, so Category doesn't
+            // have to be picked by hand. Best-effort — a blank/failed call just leaves
+            // Category manual, same as before this existed.
+            var suggestedCategory = job?.suggestedFacebookCategory
+            var suggestedBrand = job?.suggestedBrand
+            if let productId = job?.listingId, suggestedCategory == nil {
+                let resolved = await Self.resolveFacebookSuggestedFields(productId: productId)
+                suggestedCategory = suggestedCategory ?? resolved.category
+                suggestedBrand = suggestedBrand ?? resolved.brand
+            }
+            var categoryNote = ""
+            if let cat = suggestedCategory, !cat.isEmpty {
+                let r = (try? await webView.callJS(Self.fillCategoryJS, args: ["category": cat])) as? String ?? "error"
+                categoryNote = r.hasPrefix("selected") ? " Category set." : " Category not set (\(r))."
+            }
+            // Brand (and Condition below) only exist once a category is picked — give
+            // the re-render a moment before probing for them.
+            var brandNote = ""
+            if let brand = suggestedBrand, !brand.isEmpty {
+                let r = (try? await webView.callJS(Self.fillBrandJS, args: ["brand": brand])) as? String ?? "error"
+                brandNote = r.hasPrefix("set") ? " Brand set." : ""
+            }
             var photoNote = ""
             if let job {
                 let photos = await Self.loadPhotoBase64(job)
@@ -461,12 +492,100 @@ public struct CrossPostContainerView: View {
             let availR = (try? await webView.callJS(Self.fillAvailabilityJS, args: ["availability": "List as Single Item"])) as? String ?? "error"
             let availabilityNote = availR.hasPrefix("selected") ? " Availability confirmed." : ""
             if let missed, !missed.isEmpty {
-                fbStatus = "Couldn't find: \(missed). Use the copy chips above." + locationNote + photoNote + conditionNote + availabilityNote
+                fbStatus = "Couldn't find: \(missed). Use the copy chips above." + categoryNote + brandNote + locationNote + photoNote + conditionNote + availabilityNote
             } else {
-                fbStatus = "Fields filled — pick a category, then tap Next/Publish." + locationNote + photoNote + conditionNote + availabilityNote
+                let categoryHint = categoryNote.isEmpty ? " Pick a category, then tap Next/Publish." : " Check category, then tap Next/Publish."
+                fbStatus = "Fields filled." + categoryHint + categoryNote + brandNote + locationNote + photoNote + conditionNote + availabilityNote
             }
         }
     }
+
+    /// Calls the shared `aiAutofillListing` Cloud Function (same one eBay/Etsy use —
+    /// `functions/listing_fields.js` `resolveListingFields`) with `includeFacebookCategory`,
+    /// then re-reads the `products/{productId}` doc for the values it wrote. `job.listingId`
+    /// IS a `products/{id}` doc id (`ProductRepository.syncProduct`), so no separate
+    /// `listings`-collection bridge is needed — see docs/dom-captures/facebook-marketplace.md.
+    /// Best-effort: any failure (offline, no Gemini key, doc missing) yields (nil, nil) and
+    /// autofill just falls back to manual Category/Brand, same as before this existed.
+    private static func resolveFacebookSuggestedFields(productId: String) async -> (category: String?, brand: String?) {
+        _ = try? await callCloudFunction("aiAutofillListing", ["productId": productId, "includeFacebookCategory": true] as [String: Any])
+        guard let data = try? await ProductRepository.shared.fetchProduct(productId: productId) else { return (nil, nil) }
+        return (data["facebookCategory"] as? String, data["brand"] as? String)
+    }
+
+    /// Category is a full-screen nav with two same-text row kinds per category (a
+    /// non-selectable section header with an `[aria-hidden]` icon + `span.f2` label, and
+    /// the real selectable row with no icon + `span.f1` label — see docs/dom-captures/
+    /// facebook-marketplace.md "Category list page"). Falls back to Back if nothing
+    /// matches, same pattern as fillAvailabilityJS/fillLocationJS.
+    private static let fillCategoryJS = """
+    return new Promise(function(resolve) {
+        function controlForLabel(labelText) {
+            var spans = Array.from(document.querySelectorAll('span.f1, span.f2'));
+            var labelSpan = spans.find(function (s) { return s.innerText.trim() === labelText; });
+            if (!labelSpan) return null;
+            var labelDiv = labelSpan.closest('[data-mcomponent="ServerTextArea"]');
+            if (!labelDiv || !labelDiv.parentElement) return null;
+            var group = labelDiv.parentElement;
+            var controlWrap = Array.from(group.children).find(function (c) {
+                return c !== labelDiv && (c.className || '').indexOf('nb') !== -1;
+            });
+            if (!controlWrap) return null;
+            return controlWrap.querySelector('[data-focusable="true"]') || controlWrap;
+        }
+        var ctl = controlForLabel('Category');
+        if (!ctl) { resolve('no-category-field'); return; }
+        ctl.click();
+
+        var deadline = Date.now() + 4000;
+        function waitForRow() {
+            var rows = document.querySelectorAll('[data-focusable="true"]');
+            for (var i = 0; i < rows.length; i++) {
+                var el = rows[i];
+                if (el.querySelector('[aria-hidden="true"]')) continue; // section header, not selectable
+                var span = el.querySelector('span.f1');
+                var t = span ? span.innerText.trim() : '';
+                if (t === category) { el.click(); resolve('selected:' + t); return; }
+            }
+            if (Date.now() > deadline) {
+                var back = document.querySelector('[aria-label="Back"]');
+                if (back) back.click();
+                resolve('option-not-found');
+                return;
+            }
+            setTimeout(waitForRow, 250);
+        }
+        setTimeout(waitForRow, 300);
+    });
+    """
+
+    /// Brand is a real `<input data-name="brand">`, same shape as Title/Price/Description —
+    /// but it only exists once a category with a brand field is picked, so this polls
+    /// briefly rather than assuming it's already rendered.
+    private static let fillBrandJS = """
+    return new Promise(function(resolve) {
+        function setNative(el, v) {
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        var deadline = Date.now() + 3000;
+        function tryFill() {
+            var wrap = document.querySelector('[data-name="brand"]');
+            var el = wrap && (wrap.tagName === 'INPUT' ? wrap : wrap.querySelector('input'));
+            if (el) {
+                el.focus();
+                setNative(el, brand);
+                el.blur();
+                resolve('set:' + brand);
+                return;
+            }
+            if (Date.now() > deadline) { resolve('no-brand-field'); return; }
+            setTimeout(tryFill, 250);
+        }
+        tryFill();
+    });
+    """
 
     /// Facebook has 4 Condition options; Wonni's `ItemCondition` has 7. Collapse the two
     /// extras Facebook doesn't distinguish: `newWithoutTags` reads as "New" to a buyer,
