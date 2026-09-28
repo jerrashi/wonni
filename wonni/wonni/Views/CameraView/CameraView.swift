@@ -55,16 +55,6 @@ struct CameraView: View {
                     .frame(width: screenW, height: viewfinderH)
                     .clipped()
                     .overlay { if showGrid { CameraGridOverlay() } }
-                    .overlay {
-                        if isFlashing {
-                            Color.white.opacity(0.8)
-                                .onAppear {
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                                        withAnimation(.easeOut(duration: 0.15)) { isFlashing = false }
-                                    }
-                                }
-                        }
-                    }
                     .offset(y: topBarH)
 
                 // 3. Top bar — safe-area-aware
@@ -95,6 +85,23 @@ struct CameraView: View {
             .padding(.bottom, 12)
             .frame(maxWidth: .infinity)
             .background(Color.black)
+        }
+        // #34: was scoped to ViewfinderView's own overlay, so the flash only
+        // covered the viewfinder rect — not the top bar or bottom controls.
+        // Applied here (top-level, after safeAreaInset) it covers the whole
+        // screen instead. allowsHitTesting(false) so it can't eat a fast
+        // double-tap on the shutter/gallery/switch buttons during the flash.
+        .overlay {
+            if isFlashing {
+                Color.white.opacity(0.8)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                    .onAppear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            withAnimation(.easeOut(duration: 0.15)) { isFlashing = false }
+                        }
+                    }
+            }
         }
         .toolbar(.hidden, for: .tabBar)
         .toolbar(.hidden, for: .navigationBar)
