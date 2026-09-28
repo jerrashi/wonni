@@ -44,9 +44,12 @@ function variantSkuFor(productId, variant, index) {
 
 // Build a `/sell/inventory/v1/offer` body. `forUpdate` omits the immutable
 // keys (sku/marketplaceId/format) that eBay's updateOffer (EbayOfferDetailsWithId)
-// rejects — only createOffer (EbayOfferDetailsWithKeys) accepts them.
+// rejects — only createOffer (EbayOfferDetailsWithKeys) accepts them. This is
+// also why an AUCTION vs FIXED_PRICE choice (ebayFormat below) can only ever
+// take effect on CREATE — see ebaySetListingFormat's own comment for why
+// there's no "convert a live offer" path.
 function buildEbayOfferPayload(
-  { sku, price, quantity, categoryId, description, listingPolicies, merchantLocationKey },
+  { sku, price, quantity, categoryId, description, listingPolicies, merchantLocationKey, ebayFormat },
   { forUpdate = false } = {}
 ) {
   const payload = {
@@ -63,7 +66,19 @@ function buildEbayOfferPayload(
   if (!forUpdate) {
     payload.sku = sku;
     payload.marketplaceId = MARKETPLACE_ID;
-    payload.format = "FIXED_PRICE";
+    if (ebayFormat?.format === "AUCTION") {
+      payload.format = "AUCTION";
+      payload.listingDuration = ebayFormat.listingDuration;
+      payload.pricingSummary = {
+        auctionStartPrice: { value: Number(ebayFormat.auctionStartPrice).toFixed(2), currency: "USD" },
+        ...(ebayFormat.auctionReservePrice ? { auctionReservePrice: { value: Number(ebayFormat.auctionReservePrice).toFixed(2), currency: "USD" } } : {}),
+        // Buy-It-Now alongside an auction rides on the plain `price` field.
+        ...(ebayFormat.buyItNowPrice ? { price: { value: Number(ebayFormat.buyItNowPrice).toFixed(2), currency: "USD" } } : {}),
+      };
+    } else {
+      payload.format = "FIXED_PRICE";
+      payload.listingDuration = "GTC";
+    }
   }
   return payload;
 }
@@ -250,6 +265,259 @@ async function getListingPolicies(uid, handlingTimeDays) {
   }
   return { fulfillmentPolicyId, paymentPolicyId, returnPolicyId };
 }
+
+// ── Listing format (function 1, docs/specs/2026-09-28-ebay-listing-management-api.md) ──
+//
+// A draft/publish-stage CHOICE, not a live toggle — eBay doesn't support
+// converting a published offer between FIXED_PRICE and AUCTION in place
+// (updateOffer 400s if format differs from creation), so this function
+// validates + persists the choice onto the product doc; postSingleVariant
+// reads it back at actual publish/create time (buildEbayOfferPayload).
+//
+// Pure validator, unit-testable without touching Firestore/eBay.
+const EBAY_AUCTION_DURATIONS = ["DAYS_1", "DAYS_3", "DAYS_5", "DAYS_7", "DAYS_10"];
+function validateListingFormatInput({ format, listingDuration, auctionStartPrice, hasVariations }) {
+  if (format !== "AUCTION" && format !== "FIXED_PRICE") {
+    return "format must be \"AUCTION\" or \"FIXED_PRICE\".";
+  }
+  if (format === "AUCTION") {
+    if (hasVariations) {
+      return "Multi-variant listings can't run as auctions (eBay auctions are single-quantity, single-SKU only).";
+    }
+    if (!EBAY_AUCTION_DURATIONS.includes(listingDuration)) {
+      return `AUCTION requires listingDuration to be one of: ${EBAY_AUCTION_DURATIONS.join(", ")}.`;
+    }
+    if (typeof auctionStartPrice !== "number" || auctionStartPrice <= 0) {
+      return "AUCTION requires a positive auctionStartPrice.";
+    }
+  }
+  return null; // valid
+}
+
+exports.ebaySetListingFormat = onCall(
+  { timeoutSeconds: 30 },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+    const { productId, format, listingDuration, auctionStartPrice, auctionReservePrice, buyItNowPrice } = request.data ?? {};
+    if (!productId) throw new HttpsError("invalid-argument", "productId is required.");
+
+    const docRef = admin.firestore().collection("products").doc(productId);
+    const snap = await docRef.get();
+    if (!snap.exists) throw new HttpsError("not-found", "Product not found.");
+    const product = snap.data();
+    if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
+
+    const error = validateListingFormatInput({
+      format, listingDuration, auctionStartPrice,
+      hasVariations: !!product.ebayHasVariations,
+    });
+    if (error) throw new HttpsError("invalid-argument", error);
+
+    // Already live on eBay under a different format — this function only
+    // sets the draft-time choice, it never withdraws/republishes on its own
+    // (see file header comment). Currently-live format is whatever was last
+    // mirrored to ebayListingFormat by postSingleVariant/postMultiVariant.
+    const isLive = product.crossPostStatus?.ebay === "active";
+    if (isLive && product.ebayListingFormat && product.ebayListingFormat !== format) {
+      throw new HttpsError(
+        "failed-precondition",
+        `This listing is already live as ${product.ebayListingFormat}. Withdraw it (ebayDeleteListing) before switching format, then re-post.`
+      );
+    }
+
+    const update = {
+      ebayListingFormat: format,
+      ebayListingDuration: format === "AUCTION" ? listingDuration : admin.firestore.FieldValue.delete(),
+      ebayAuctionStartPrice: format === "AUCTION" ? auctionStartPrice : admin.firestore.FieldValue.delete(),
+      ebayAuctionReservePrice: format === "AUCTION" && auctionReservePrice ? auctionReservePrice : admin.firestore.FieldValue.delete(),
+      ebayBuyItNowPrice: format === "AUCTION" && buyItNowPrice ? buyItNowPrice : admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    await docRef.update(update);
+
+    return {
+      format,
+      listingDuration: format === "AUCTION" ? listingDuration : "GTC",
+      auctionStartPrice: format === "AUCTION" ? auctionStartPrice : null,
+      auctionReservePrice: format === "AUCTION" ? (auctionReservePrice ?? null) : null,
+      buyItNowPrice: format === "AUCTION" ? (buyItNowPrice ?? null) : null,
+    };
+  }
+);
+
+// ── Shipping rules (function 3, docs/specs/2026-09-28-ebay-listing-management-api.md) ──
+//
+// eBay's own unit is the fulfillment policy — this generalizes the existing
+// clone-by-handling-time path (cloneFulfillmentPolicyWithHandlingTime, still
+// used by ebayCreateListing's implicit auto-pick) into an explicit, named,
+// user-driven rule.
+//
+// Naming convention (matches "X business days" already used above):
+//   "{handlingTimeDays} business days - {itemType} - ${handlingCost} handling"
+//   or, with no itemType: "{handlingTimeDays} business days - ${handlingCost} handling"
+// Pure + unit-testable — no network, no eBay-specific formatting decisions
+// buried where they can't be tested.
+function buildShippingRuleName({ handlingTimeDays, handlingCost, itemType }) {
+  const cost = Number(handlingCost).toFixed(2).replace(/\.00$/, "");
+  const parts = [`${handlingTimeDays} business days`];
+  if (itemType && String(itemType).trim()) parts.push(String(itemType).trim());
+  parts.push(`$${cost} handling`);
+  return parts.join(" - ").slice(0, 64); // eBay policy name length limit
+}
+
+// eBay's fulfillment policy has no separate "handling fee" field — sellers
+// bake it directly into the buyer-visible shipping cost. `handlingCost` is
+// therefore the shippingCost on the (single) shipping service this rule
+// sets, not layered on top of some other base rate — that's the most honest
+// mapping available in eBay's model, called out here since it's not obvious
+// from the field name alone.
+//
+// preferredService/preferredCarrier, when given, become that one shipping
+// service. When omitted, the rule reuses the account's existing default
+// policy's shippingOptions structure (categoryTypes + shippingServices list)
+// so eBay still gets a valid policy — same fallback-to-account-default
+// pattern getListingPolicies already relies on — but overwrites the first
+// service's cost with handlingCost so the rule's own inputs still take
+// effect.
+function buildShippingRulePayload({ handlingTimeDays, handlingCost, itemType, preferredCarrier, preferredService }, basePolicy) {
+  const handlingTime = {
+    value: Math.min(Math.max(Math.round(Number(handlingTimeDays)), 0), EBAY_MAX_HANDLING_TIME_DAYS),
+    unit: "DAY",
+  };
+  const costValue = Number(handlingCost).toFixed(2);
+
+  let shippingOptions;
+  if (preferredService) {
+    shippingOptions = [{
+      optionType: "DOMESTIC",
+      costType: "FLAT_RATE",
+      shippingServices: [{
+        sortOrder: 1,
+        shippingCarrierCode: preferredCarrier || undefined,
+        shippingServiceCode: preferredService,
+        shippingCost: { value: costValue, currency: "USD" },
+        freeShipping: false,
+      }],
+    }];
+  } else if (basePolicy?.shippingOptions?.length) {
+    // Clone the base policy's shape, override just the first service's cost.
+    shippingOptions = basePolicy.shippingOptions.map((opt, i) => {
+      if (i !== 0 || !opt.shippingServices?.length) return opt;
+      const [first, ...rest] = opt.shippingServices;
+      return {
+        ...opt,
+        shippingServices: [{ ...first, shippingCost: { value: costValue, currency: "USD" } }, ...rest],
+      };
+    });
+  } else {
+    // No preferred service and no base policy to clone from (e.g. account
+    // has zero existing fulfillment policies) — nothing valid to build.
+    return null;
+  }
+
+  return {
+    name: buildShippingRuleName({ handlingTimeDays, handlingCost, itemType }),
+    marketplaceId: basePolicy?.marketplaceId || MARKETPLACE_ID,
+    categoryTypes: basePolicy?.categoryTypes || [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
+    handlingTime,
+    shippingOptions,
+  };
+}
+
+exports.ebaySetShippingRule = onCall(
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 30 },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+    const { policyId, handlingTimeDays, handlingCost, itemType, preferredCarrier, preferredService } = request.data ?? {};
+    if (typeof handlingTimeDays !== "number" || handlingTimeDays < 0) {
+      throw new HttpsError("invalid-argument", "handlingTimeDays (number, >= 0) is required.");
+    }
+    if (typeof handlingCost !== "number" || handlingCost < 0) {
+      throw new HttpsError("invalid-argument", "handlingCost (number, >= 0) is required.");
+    }
+
+    // Base policy to clone shippingOptions shape from when no preferredService
+    // is given — the account's own first fulfillment policy, same source
+    // cloneFulfillmentPolicyWithHandlingTime already uses.
+    let basePolicy = null;
+    if (!preferredService) {
+      const existing = await ebayRequest(uid, "GET", `/sell/account/v1/fulfillment_policy?marketplace_id=${MARKETPLACE_ID}`);
+      basePolicy = existing?.fulfillmentPolicies?.[0] || null;
+    }
+
+    const payload = buildShippingRulePayload(
+      { handlingTimeDays, handlingCost, itemType, preferredCarrier, preferredService },
+      basePolicy
+    );
+    if (!payload) {
+      throw new HttpsError(
+        "failed-precondition",
+        "No preferredService given and no existing eBay fulfillment policy to base this rule on. Pass a preferredService, or create at least one shipping policy in Seller Hub first."
+      );
+    }
+
+    let saved;
+    if (policyId) {
+      await ebayRequest(uid, "PUT", `/sell/account/v1/fulfillment_policy/${policyId}`, payload);
+      saved = await ebayRequest(uid, "GET", `/sell/account/v1/fulfillment_policy/${policyId}`);
+    } else {
+      // Create-or-reuse-by-name, same dedup pattern as
+      // cloneFulfillmentPolicyWithHandlingTime — calling this twice with the
+      // same inputs shouldn't spawn duplicate policies.
+      try {
+        const byName = await ebayRequest(
+          uid, "GET",
+          `/sell/account/v1/fulfillment_policy/get_by_policy_name?marketplace_id=${MARKETPLACE_ID}&name=${encodeURIComponent(payload.name)}`
+        );
+        if (byName?.fulfillmentPolicyId) {
+          await ebayRequest(uid, "PUT", `/sell/account/v1/fulfillment_policy/${byName.fulfillmentPolicyId}`, payload);
+          saved = await ebayRequest(uid, "GET", `/sell/account/v1/fulfillment_policy/${byName.fulfillmentPolicyId}`);
+        }
+      } catch (_) {
+        // 404 = no policy with this name yet — fall through to create.
+      }
+      if (!saved) {
+        saved = await ebayRequest(uid, "POST", "/sell/account/v1/fulfillment_policy", payload);
+      }
+    }
+
+    return {
+      policyId: saved.fulfillmentPolicyId,
+      name: saved.name,
+      handlingTimeDays: saved.handlingTime?.value ?? handlingTimeDays,
+      handlingCost,
+      shippingServices: saved.shippingOptions?.[0]?.shippingServices ?? [],
+    };
+  }
+);
+
+exports.ebayListShippingRules = onCall(
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 30 },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+    const result = await ebayRequest(uid, "GET", `/sell/account/v1/fulfillment_policy?marketplace_id=${MARKETPLACE_ID}`);
+    const rules = (result?.fulfillmentPolicies ?? []).map((p) => ({
+      policyId: p.fulfillmentPolicyId,
+      name: p.name,
+      handlingTimeDays: p.handlingTime?.value ?? null,
+      // handlingCost isn't a distinct eBay field (see buildShippingRulePayload) —
+      // best-effort read back from the first shipping service's own cost, so
+      // a rule this function created round-trips its own input; a policy NOT
+      // created by this function may not have a clean single number here.
+      handlingCost: p.shippingOptions?.[0]?.shippingServices?.[0]?.shippingCost?.value != null
+        ? parseFloat(p.shippingOptions[0].shippingServices[0].shippingCost.value)
+        : null,
+      shippingServices: p.shippingOptions?.[0]?.shippingServices ?? [],
+    }));
+    return { rules };
+  }
+);
 
 // Resiliently resolve the eBay Offer ID for a product.
 // Recovers automatically if the stored ID is a 12-digit listing ID (e.g. 147542181716), draft ID, or if offer moved.
@@ -846,7 +1114,22 @@ async function postSingleVariant(ctx) {
     });
   await putItem();
 
-  const offerArgs = { sku, price: basePrice, quantity: itemQty, categoryId, description, listingPolicies, merchantLocationKey };
+  // Format (FIXED_PRICE/AUCTION) is chosen at draft time via
+  // ebaySetListingFormat, which validates + persists it onto the product
+  // doc — read it back here rather than re-validating; only meaningful on
+  // CREATE (buildEbayOfferPayload drops it for an update, matching eBay's
+  // own immutable-once-published constraint).
+  const ebayFormat = product.ebayListingFormat === "AUCTION"
+    ? {
+        format: "AUCTION",
+        listingDuration: product.ebayListingDuration,
+        auctionStartPrice: product.ebayAuctionStartPrice,
+        auctionReservePrice: product.ebayAuctionReservePrice,
+        buyItNowPrice: product.ebayBuyItNowPrice,
+      }
+    : { format: "FIXED_PRICE" };
+
+  const offerArgs = { sku, price: basePrice, quantity: itemQty, categoryId, description, listingPolicies, merchantLocationKey, ebayFormat };
   let offerId = await resolveSingleOfferId(uid, product, productId);
   if (offerId) {
     await ebayRequest(uid, "PUT", `/sell/inventory/v1/offer/${offerId}`, buildEbayOfferPayload(offerArgs, { forUpdate: true }));
@@ -868,6 +1151,10 @@ async function postSingleVariant(ctx) {
     ebayListingId: listingId,
     ebayListingUrl: listingId ? `https://www.ebay.com/itm/${listingId}` : null,
     ebayHasVariations: false,
+    // Mirrors what's actually live — defaults FIXED_PRICE for products that
+    // never called ebaySetListingFormat (backward-compat: every listing that
+    // predates this field).
+    ebayListingFormat: ebayFormat.format,
     ebayLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
@@ -1072,6 +1359,10 @@ async function postMultiVariant(ctx) {
     ebayListingId: listingId,
     ebayListingUrl: listingId ? `https://www.ebay.com/itm/${listingId}` : null,
     ebayHasVariations: true,
+    // Multi-variant items can never be auctions (ebaySetListingFormat already
+    // rejects that combination) — mirror FIXED_PRICE explicitly for the same
+    // "what's actually live" reason postSingleVariant does.
+    ebayListingFormat: "FIXED_PRICE",
     variants: nextVariants,
     ebayLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1923,9 +2214,20 @@ module.exports = {
   ebayPullSync: exports.ebayPullSync,
   ebayImportPullSync: exports.ebayImportPullSync,
   ebayImportListing: exports.ebayImportListing,
+  ebaySetListingFormat: exports.ebaySetListingFormat,
+  ebaySetShippingRule: exports.ebaySetShippingRule,
+  ebayListShippingRules: exports.ebayListShippingRules,
   // shared helpers (used by sales.js cascade)
   variantSkuFor,
   ebayPackageWeightAndSize,
+  // app-level (client_credentials) token — shared with ebay_comps.js instead
+  // of each spinning up its own cache (Browse API is public data, same token
+  // works for any caller).
+  getEbayAppTokenCached,
   // testable core (used by functions/test/ebay_import_listing.test.js)
-  _internal: { ebayImportListingCore, ebayCreateListingCore },
+  _internal: {
+    ebayImportListingCore, ebayCreateListingCore,
+    buildShippingRuleName, buildShippingRulePayload,
+    validateListingFormatInput, buildEbayOfferPayload,
+  },
 };
