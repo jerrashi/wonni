@@ -74,11 +74,17 @@ struct CameraView: View {
             VStack(spacing: 8) {
                 // Shared carousel (identical to picker bottom bar)
                 if hasAnyContent {
+                    // No entrance transition here on purpose: the FIRST photo of a
+                    // fresh draft flips hasAnyContent false→true at the exact instant
+                    // takePhoto() fires, and AVCapturePhotoOutput briefly stalls the
+                    // live preview while it processes the shot (expected — that's the
+                    // camera-app black flash). If that stall lands mid slide-up
+                    // animation, the carousel visually freezes partway up the screen
+                    // instead of finishing. Appearing instantly avoids the window.
                     ActiveDraftCarouselView(
                         cache: model.photoCollection.cache,
                         onOpenDraftHistory: { route = .draftHistory }
                     )
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 cameraButtonsView()
             }
