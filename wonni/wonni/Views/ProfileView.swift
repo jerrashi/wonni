@@ -62,6 +62,10 @@ struct ProfileView: View {
     @State private var listingToMarkSoldOut: UserListing?
     @State private var listingToDelete: UserListing?
     @State private var isSellingSimilar = false
+    // "Sell Similar" now spawns a local draft `Item` (products/{id} + adoptProduct,
+    // same as Desktop Drafts) instead of writing a `listings` doc with status: .draft —
+    // see sellSimilar()'s doc comment.
+    @State private var sellSimilarDraftItem: Item?
 
     // Per-variant pending-Mercari rows (products/{id}.variants[i].pendingMercari*) —
     // fetched alongside `listings` in loadListings() so the badge/button below reflect
@@ -137,6 +141,9 @@ struct ProfileView: View {
                         enqueueWebJobs(jobs)
                     }
                 }
+            }
+            .sheet(item: $sellSimilarDraftItem) { item in
+                DraftEditSheet(item: item)
             }
             .sheet(isPresented: $showImportSheet) {
                 ImportListingSheet()
@@ -700,6 +707,13 @@ struct ProfileView: View {
         }
     }
 
+    /// "Sell Similar" spawns a fresh, editable local draft copied from a live listing —
+    /// it used to write a `listings/{id}` doc with `status: .draft`, but nothing reads
+    /// that state anymore (drafts live as local `Item`s synced to `products/{id}`,
+    /// same as any other draft). This now creates a `products/{id}` catalog-shaped doc
+    /// and adopts it the exact same way `DesktopDraftsView.adopt(_:)` does, so the
+    /// result opens in `DraftEditSheet` and shows up in `DraftHistoryView` like any
+    /// other in-progress draft instead of disappearing into the old dead path.
     private func sellSimilar(_ original: UserListing) async {
         guard !isSellingSimilar, let userId = user?.uid else { return }
         isSellingSimilar = true
@@ -709,40 +723,7 @@ struct ProfileView: View {
 
         let newId = UUID().uuidString
 
-        // Copy all user-customizable fields; reset platform-specific state
-        var copy = UserListing(
-            id: newId,
-            userId: userId,
-            catalogItemId: original.catalogItemId,
-            inventoryUnitIds: [],
-            isBundleListing: original.isBundleListing,
-            bundleLabel: original.bundleLabel,
-            customTitle: original.customTitle,
-            customDescription: original.customDescription,
-            price: original.price,
-            currency: original.currency,
-            quantity: original.quantity,
-            condition: original.condition,
-            conditionNotes: original.conditionNotes,
-            photoPaths: [],
-            coverPhotoPath: nil,
-            shippingInfo: original.shippingInfo,
-            status: .draft,
-            createdAt: Timestamp(date: Date()),
-            updatedAt: Timestamp(date: Date()),
-            sourceAssetIdentifiers: [],
-            geminiIdentificationConfirmed: false,
-            sellingProfileId: original.sellingProfileId,
-            ebayCategory: original.ebayCategory
-        )
-
-        // Copy brand / category / tags / personalNote
-        copy.brand = original.brand
-        copy.category = original.category
-        copy.tags = original.tags
-        copy.personalNote = original.personalNote
-
-        // Download and re-upload photos under the new listing ID
+        // Download and re-upload photos under the new draft's id
         var newPhotoPaths: [String] = []
         let storage = StorageService.shared
         for (index, path) in original.photoPaths.enumerated() {
@@ -760,24 +741,42 @@ struct ProfileView: View {
                 print("[ProfileView] sellSimilar: failed to copy photo at \(path): \(error)")
             }
         }
-        copy.photoPaths = newPhotoPaths
-        copy.coverPhotoPath = newPhotoPaths.first
+
+        // Same field set ProductRepository.syncProductFromListing maps — copying a
+        // listing straight into `products` (catalog-shaped, isDraft: true) rather than
+        // into `listings`, since a listing is only ever created there at real publish.
+        var data: [String: Any] = [:]
+        data["userId"] = userId
+        data["source"] = "ios"
+        data["isDraft"] = true
+        data["title"] = original.customTitle
+        data["description"] = original.customDescription
+        data["listingPrice"] = original.price
+        data["condition"] = ProductRepository.webCondition(for: original.condition)
+        data["category"] = original.category
+        data["brand"] = original.brand
+        data["tags"] = original.tags
+        data["personalNote"] = original.personalNote
+        data["images"] = newPhotoPaths.map { storage.publicURL(forPath: $0) }
+        if let shipping = original.shippingInfo {
+            data["buyerPaysShipping"] = shipping.buyerPaysShipping
+            data["handlingFee"] = shipping.handlingFee
+            data["estimatedShippingDays"] = shipping.estimatedShippingDays
+            data["handlingTimeDays"] = shipping.handlingTimeDays as Any
+            data["weightLbs"] = shipping.weightLbs as Any
+        }
+        data["updatedAt"] = Timestamp(date: Date())
 
         do {
-            _ = try await ListingRepository.shared.saveDraft(copy)
-            // See ProductRepository.syncProductFromListing — a duplicated
-            // listing is written straight into `listings` under a new id,
-            // so it needs its own `products/{id}` twin created here too.
-            try? await ProductRepository.shared.syncProductFromListing(copy)
+            try await ProductRepository.shared.syncProduct(productId: newId, data: data)
+            let newItem = await UploadManager.shared.adoptProduct(productId: newId, modelContext: modelContext)
             AppTaskQueue.shared.complete(id: taskId)
-            await loadListings()
-            // Open EditListingSheet for the new listing
-            if let newListing = listings.first(where: { $0.id == newId }) {
-                listingToEdit = newListing
-            } else {
-                // Fallback: open with the copy struct directly
-                listingToEdit = copy
+            guard let newItem else {
+                print("[ProfileView] sellSimilar: adoptProduct returned nil for \(newId)")
+                isSellingSimilar = false
+                return
             }
+            sellSimilarDraftItem = newItem
         } catch {
             AppTaskQueue.shared.complete(id: taskId)
             print("[ProfileView] sellSimilar: failed to save copy: \(error)")
