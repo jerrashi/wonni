@@ -46,25 +46,86 @@ test("buildShippingRuleName: blank itemType treated same as omitted", () => {
 
 // ── buildShippingRulePayload ────────────────────────────────────────────────
 
-test("buildShippingRulePayload: preferredService builds a single-service FLAT_RATE policy", () => {
+test("buildShippingRulePayload: a single domestic service builds a one-entry DOMESTIC option", () => {
   const payload = buildShippingRulePayload(
-    { handlingTimeDays: 2, handlingCost: 10, itemType: "Trading Cards", preferredCarrier: "USPS", preferredService: "USPSFirstClass" },
+    {
+      handlingTimeDays: 2, handlingCost: 10, itemType: "Trading Cards",
+      preferredDomesticServices: [{ service: "USPSFirstClass", carrier: "USPS" }],
+    },
     null
   );
   assert.equal(payload.name, "2 business days - Trading Cards - $10 handling");
   assert.equal(payload.handlingTime.value, 2);
   assert.equal(payload.handlingTime.unit, "DAY");
+  assert.equal(payload.shippingOptions.length, 1);
+  assert.equal(payload.shippingOptions[0].optionType, "DOMESTIC");
   assert.equal(payload.shippingOptions[0].shippingServices[0].shippingServiceCode, "USPSFirstClass");
   assert.equal(payload.shippingOptions[0].shippingServices[0].shippingCarrierCode, "USPS");
   assert.equal(payload.shippingOptions[0].shippingServices[0].shippingCost.value, "10.00");
 });
 
-test("buildShippingRulePayload: no preferredService, no basePolicy -> null (nothing valid to build)", () => {
+test("buildShippingRulePayload: multiple domestic services get incrementing sortOrder and the same cost", () => {
+  const payload = buildShippingRulePayload(
+    {
+      handlingTimeDays: 2, handlingCost: 8,
+      preferredDomesticServices: ["USPSFirstClass", "USPSGroundAdvantage", "USPSPriorityMail"],
+    },
+    null
+  );
+  const services = payload.shippingOptions[0].shippingServices;
+  assert.equal(services.length, 3);
+  assert.deepEqual(services.map((s) => s.shippingServiceCode), ["USPSFirstClass", "USPSGroundAdvantage", "USPSPriorityMail"]);
+  assert.deepEqual(services.map((s) => s.sortOrder), [1, 2, 3]);
+  assert.ok(services.every((s) => s.shippingCost.value === "8.00"));
+});
+
+test("buildShippingRulePayload: domestic + international build two separate shippingOptions entries", () => {
+  const payload = buildShippingRulePayload(
+    {
+      handlingTimeDays: 3, handlingCost: 12,
+      preferredDomesticServices: ["USPSFirstClass"],
+      preferredInternationalServices: ["USPSPriorityMailInternational", "FedExInternationalPriority"],
+    },
+    null
+  );
+  assert.equal(payload.shippingOptions.length, 2);
+  const domestic = payload.shippingOptions.find((o) => o.optionType === "DOMESTIC");
+  const intl = payload.shippingOptions.find((o) => o.optionType === "INTERNATIONAL");
+  assert.equal(domestic.shippingServices.length, 1);
+  assert.equal(intl.shippingServices.length, 2);
+  assert.deepEqual(intl.shippingServices.map((s) => s.sortOrder), [1, 2]);
+});
+
+test("buildShippingRulePayload: international-only (no domestic) still builds a valid policy", () => {
+  const payload = buildShippingRulePayload(
+    { handlingTimeDays: 1, handlingCost: 20, preferredInternationalServices: ["USPSPriorityMailInternational"] },
+    null
+  );
+  assert.equal(payload.shippingOptions.length, 1);
+  assert.equal(payload.shippingOptions[0].optionType, "INTERNATIONAL");
+});
+
+test("buildShippingRulePayload: caller-supplied arrays beyond eBay's caps are truncated by the pure builder (the callable itself rejects them earlier)", () => {
+  const payload = buildShippingRulePayload(
+    {
+      handlingTimeDays: 1, handlingCost: 5,
+      preferredDomesticServices: ["A", "B", "C", "D", "E"], // 5 > eBay's max of 4
+      preferredInternationalServices: ["A", "B", "C", "D", "E", "F"], // 6 > eBay's max of 5
+    },
+    null
+  );
+  const domestic = payload.shippingOptions.find((o) => o.optionType === "DOMESTIC");
+  const intl = payload.shippingOptions.find((o) => o.optionType === "INTERNATIONAL");
+  assert.equal(domestic.shippingServices.length, 4);
+  assert.equal(intl.shippingServices.length, 5);
+});
+
+test("buildShippingRulePayload: no preferred services, no basePolicy -> null (nothing valid to build)", () => {
   const payload = buildShippingRulePayload({ handlingTimeDays: 2, handlingCost: 10 }, null);
   assert.equal(payload, null);
 });
 
-test("buildShippingRulePayload: no preferredService clones basePolicy's shippingOptions, overriding only the first service's cost", () => {
+test("buildShippingRulePayload: no preferred services clones basePolicy's shippingOptions, overriding only the first service's cost", () => {
   const basePolicy = {
     marketplaceId: "EBAY_US",
     categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
@@ -88,7 +149,7 @@ test("buildShippingRulePayload: no preferredService clones basePolicy's shipping
 
 test("buildShippingRulePayload: handlingTimeDays clamps to eBay's max", () => {
   const payload = buildShippingRulePayload(
-    { handlingTimeDays: 999, handlingCost: 1, preferredService: "USPSFirstClass" },
+    { handlingTimeDays: 999, handlingCost: 1, preferredDomesticServices: ["USPSFirstClass"] },
     null
   );
   assert.equal(payload.handlingTime.value, 30);
