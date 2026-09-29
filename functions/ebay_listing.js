@@ -367,40 +367,66 @@ function buildShippingRuleName({ handlingTimeDays, handlingCost, itemType }) {
   return parts.join(" - ").slice(0, 64); // eBay policy name length limit
 }
 
+// eBay's own caps (Account API ShippingOption/ShippingService docs): up to 4
+// domestic shipping services and up to 5 international, each differentiated
+// by sortOrder — this is what lets a seller show a buyer a menu of ship
+// speeds (e.g. USPS First Class + Ground Advantage + Priority) on one policy.
+const EBAY_MAX_DOMESTIC_SERVICES = 4;
+const EBAY_MAX_INTERNATIONAL_SERVICES = 5;
+
 // eBay's fulfillment policy has no separate "handling fee" field — sellers
 // bake it directly into the buyer-visible shipping cost. `handlingCost` is
-// therefore the shippingCost on the (single) shipping service this rule
-// sets, not layered on top of some other base rate — that's the most honest
-// mapping available in eBay's model, called out here since it's not obvious
-// from the field name alone.
+// therefore applied as the shippingCost on every service this rule sets
+// (domestic and international alike), not layered on top of some other base
+// rate — that's the most honest mapping available in eBay's model, and it
+// matches the rule's single "$X handling" name (see buildShippingRuleName):
+// one cost per rule, not a per-service price ladder.
 //
-// preferredService/preferredCarrier, when given, become that one shipping
-// service. When omitted, the rule reuses the account's existing default
-// policy's shippingOptions structure (categoryTypes + shippingServices list)
-// so eBay still gets a valid policy — same fallback-to-account-default
-// pattern getListingPolicies already relies on — but overwrites the first
-// service's cost with handlingCost so the rule's own inputs still take
-// effect.
-function buildShippingRulePayload({ handlingTimeDays, handlingCost, itemType, preferredCarrier, preferredService }, basePolicy) {
+// preferredDomesticServices / preferredInternationalServices, when given,
+// become that rule's shipping services (service codes as plain strings, or
+// {service, carrier} objects when a specific carrier code matters). When
+// both are omitted, the rule reuses the account's existing default policy's
+// shippingOptions structure (categoryTypes + shippingServices list) so eBay
+// still gets a valid policy — same fallback-to-account-default pattern
+// getListingPolicies already relies on — but overwrites the first service's
+// cost with handlingCost so the rule's own inputs still take effect.
+function buildServiceEntries(services, costValue) {
+  return (services || []).map((svc, i) => {
+    const isObj = svc && typeof svc === "object";
+    const code = isObj ? svc.service : svc;
+    const carrier = isObj ? svc.carrier : undefined;
+    return {
+      sortOrder: i + 1,
+      shippingCarrierCode: carrier || undefined,
+      shippingServiceCode: code,
+      shippingCost: { value: costValue, currency: "USD" },
+      freeShipping: false,
+    };
+  });
+}
+
+function buildShippingRulePayload(
+  { handlingTimeDays, handlingCost, itemType, preferredDomesticServices, preferredInternationalServices },
+  basePolicy
+) {
   const handlingTime = {
     value: Math.min(Math.max(Math.round(Number(handlingTimeDays)), 0), EBAY_MAX_HANDLING_TIME_DAYS),
     unit: "DAY",
   };
   const costValue = Number(handlingCost).toFixed(2);
 
+  const domesticEntries = buildServiceEntries(preferredDomesticServices, costValue).slice(0, EBAY_MAX_DOMESTIC_SERVICES);
+  const intlEntries = buildServiceEntries(preferredInternationalServices, costValue).slice(0, EBAY_MAX_INTERNATIONAL_SERVICES);
+
   let shippingOptions;
-  if (preferredService) {
-    shippingOptions = [{
-      optionType: "DOMESTIC",
-      costType: "FLAT_RATE",
-      shippingServices: [{
-        sortOrder: 1,
-        shippingCarrierCode: preferredCarrier || undefined,
-        shippingServiceCode: preferredService,
-        shippingCost: { value: costValue, currency: "USD" },
-        freeShipping: false,
-      }],
-    }];
+  if (domesticEntries.length || intlEntries.length) {
+    shippingOptions = [];
+    if (domesticEntries.length) {
+      shippingOptions.push({ optionType: "DOMESTIC", costType: "FLAT_RATE", shippingServices: domesticEntries });
+    }
+    if (intlEntries.length) {
+      shippingOptions.push({ optionType: "INTERNATIONAL", costType: "FLAT_RATE", shippingServices: intlEntries });
+    }
   } else if (basePolicy?.shippingOptions?.length) {
     // Clone the base policy's shape, override just the first service's cost.
     shippingOptions = basePolicy.shippingOptions.map((opt, i) => {
@@ -412,7 +438,7 @@ function buildShippingRulePayload({ handlingTimeDays, handlingCost, itemType, pr
       };
     });
   } else {
-    // No preferred service and no base policy to clone from (e.g. account
+    // No preferred services and no base policy to clone from (e.g. account
     // has zero existing fulfillment policies) — nothing valid to build.
     return null;
   }
@@ -432,31 +458,48 @@ exports.ebaySetShippingRule = onCall(
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
 
-    const { policyId, handlingTimeDays, handlingCost, itemType, preferredCarrier, preferredService } = request.data ?? {};
+    const {
+      policyId, handlingTimeDays, handlingCost, itemType,
+      preferredDomesticServices, preferredInternationalServices,
+    } = request.data ?? {};
     if (typeof handlingTimeDays !== "number" || handlingTimeDays < 0) {
       throw new HttpsError("invalid-argument", "handlingTimeDays (number, >= 0) is required.");
     }
     if (typeof handlingCost !== "number" || handlingCost < 0) {
       throw new HttpsError("invalid-argument", "handlingCost (number, >= 0) is required.");
     }
+    if (preferredDomesticServices != null && !Array.isArray(preferredDomesticServices)) {
+      throw new HttpsError("invalid-argument", "preferredDomesticServices must be an array of service codes.");
+    }
+    if (preferredDomesticServices?.length > EBAY_MAX_DOMESTIC_SERVICES) {
+      throw new HttpsError("invalid-argument", `preferredDomesticServices allows at most ${EBAY_MAX_DOMESTIC_SERVICES} services (eBay's own limit).`);
+    }
+    if (preferredInternationalServices != null && !Array.isArray(preferredInternationalServices)) {
+      throw new HttpsError("invalid-argument", "preferredInternationalServices must be an array of service codes.");
+    }
+    if (preferredInternationalServices?.length > EBAY_MAX_INTERNATIONAL_SERVICES) {
+      throw new HttpsError("invalid-argument", `preferredInternationalServices allows at most ${EBAY_MAX_INTERNATIONAL_SERVICES} services (eBay's own limit).`);
+    }
 
-    // Base policy to clone shippingOptions shape from when no preferredService
-    // is given — the account's own first fulfillment policy, same source
-    // cloneFulfillmentPolicyWithHandlingTime already uses.
+    const hasPreferredServices = preferredDomesticServices?.length > 0 || preferredInternationalServices?.length > 0;
+
+    // Base policy to clone shippingOptions shape from when no preferred
+    // services are given — the account's own first fulfillment policy, same
+    // source cloneFulfillmentPolicyWithHandlingTime already uses.
     let basePolicy = null;
-    if (!preferredService) {
+    if (!hasPreferredServices) {
       const existing = await ebayRequest(uid, "GET", `/sell/account/v1/fulfillment_policy?marketplace_id=${MARKETPLACE_ID}`);
       basePolicy = existing?.fulfillmentPolicies?.[0] || null;
     }
 
     const payload = buildShippingRulePayload(
-      { handlingTimeDays, handlingCost, itemType, preferredCarrier, preferredService },
+      { handlingTimeDays, handlingCost, itemType, preferredDomesticServices, preferredInternationalServices },
       basePolicy
     );
     if (!payload) {
       throw new HttpsError(
         "failed-precondition",
-        "No preferredService given and no existing eBay fulfillment policy to base this rule on. Pass a preferredService, or create at least one shipping policy in Seller Hub first."
+        "No preferred services given and no existing eBay fulfillment policy to base this rule on. Pass preferredDomesticServices/preferredInternationalServices, or create at least one shipping policy in Seller Hub first."
       );
     }
 
@@ -485,12 +528,17 @@ exports.ebaySetShippingRule = onCall(
       }
     }
 
+    const domesticOption = saved.shippingOptions?.find((o) => o.optionType === "DOMESTIC");
+    const intlOption = saved.shippingOptions?.find((o) => o.optionType === "INTERNATIONAL");
     return {
       policyId: saved.fulfillmentPolicyId,
       name: saved.name,
       handlingTimeDays: saved.handlingTime?.value ?? handlingTimeDays,
       handlingCost,
-      shippingServices: saved.shippingOptions?.[0]?.shippingServices ?? [],
+      domesticServices: domesticOption?.shippingServices ?? [],
+      internationalServices: intlOption?.shippingServices ?? [],
+      // Kept for existing callers reading the pre-international-support shape.
+      shippingServices: domesticOption?.shippingServices ?? saved.shippingOptions?.[0]?.shippingServices ?? [],
     };
   }
 );
@@ -502,19 +550,24 @@ exports.ebayListShippingRules = onCall(
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
 
     const result = await ebayRequest(uid, "GET", `/sell/account/v1/fulfillment_policy?marketplace_id=${MARKETPLACE_ID}`);
-    const rules = (result?.fulfillmentPolicies ?? []).map((p) => ({
-      policyId: p.fulfillmentPolicyId,
-      name: p.name,
-      handlingTimeDays: p.handlingTime?.value ?? null,
-      // handlingCost isn't a distinct eBay field (see buildShippingRulePayload) —
-      // best-effort read back from the first shipping service's own cost, so
-      // a rule this function created round-trips its own input; a policy NOT
-      // created by this function may not have a clean single number here.
-      handlingCost: p.shippingOptions?.[0]?.shippingServices?.[0]?.shippingCost?.value != null
-        ? parseFloat(p.shippingOptions[0].shippingServices[0].shippingCost.value)
-        : null,
-      shippingServices: p.shippingOptions?.[0]?.shippingServices ?? [],
-    }));
+    const rules = (result?.fulfillmentPolicies ?? []).map((p) => {
+      const domesticOption = p.shippingOptions?.find((o) => o.optionType === "DOMESTIC");
+      const intlOption = p.shippingOptions?.find((o) => o.optionType === "INTERNATIONAL");
+      const firstService = domesticOption?.shippingServices?.[0] ?? p.shippingOptions?.[0]?.shippingServices?.[0];
+      return {
+        policyId: p.fulfillmentPolicyId,
+        name: p.name,
+        handlingTimeDays: p.handlingTime?.value ?? null,
+        // handlingCost isn't a distinct eBay field (see buildShippingRulePayload) —
+        // best-effort read back from the first shipping service's own cost, so
+        // a rule this function created round-trips its own input; a policy NOT
+        // created by this function may not have a clean single number here.
+        handlingCost: firstService?.shippingCost?.value != null ? parseFloat(firstService.shippingCost.value) : null,
+        domesticServices: domesticOption?.shippingServices ?? [],
+        internationalServices: intlOption?.shippingServices ?? [],
+        shippingServices: domesticOption?.shippingServices ?? p.shippingOptions?.[0]?.shippingServices ?? [],
+      };
+    });
     return { rules };
   }
 );
