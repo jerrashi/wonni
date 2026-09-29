@@ -356,7 +356,7 @@ class ProductRepository: ObservableObject {
     /// (`new|likenew|good|fair|poor` — see CLAUDE.md open work item on this exact
     /// mismatch). `newWithoutTags` and `forParts` have no dedicated web value; folded
     /// into the closest neighbor rather than left unmapped.
-    private static func webCondition(for condition: ItemCondition) -> String {
+    static func webCondition(for condition: ItemCondition) -> String {
         switch condition {
         case .new, .newWithoutTags: return "new"
         case .likeNew: return "likenew"
