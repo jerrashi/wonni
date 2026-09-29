@@ -59,7 +59,12 @@ struct ActiveDraftCarouselView: View {
             HStack(spacing: 0) {
                 // ── Scrollable photo row ────────────────────────────────
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
+                    // LazyHStack, not HStack (2026-09-28 draft-drawer freeze/crash
+                    // investigation — see DraftThumbnailView.swift's header comment):
+                    // this carousel is visible across camera + picker, so a plain HStack
+                    // eagerly decoding every active-draft photo on every re-render was a
+                    // major contributor to "the photo picker flow in general is slow".
+                    LazyHStack(spacing: 8) {
                         // Committed drafts stack — single fanned card stack
                         if !committedDrafts.isEmpty {
                             DraftsStackIconView(drafts: committedDrafts, cache: cache)
@@ -136,19 +141,7 @@ struct ActiveDraftCarouselView: View {
     private func activePhotoCell(draft: Item, assetId: String) -> some View {
         let isDragged = draggedAssetId == assetId
 
-        Group {
-            if let uiImage = draft.thumbnail(for: assetId) {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                PhotoItemView(
-                    asset: PhotoAsset(identifier: assetId),
-                    cache: cache,
-                    imageSize: CGSize(width: 144, height: 144)
-                )
-            }
-        }
+        DraftThumbnailView(item: draft, assetId: assetId)
         .frame(width: 72, height: 72)
         .cornerRadius(10)
         .clipped()
@@ -229,17 +222,7 @@ struct DraftsStackIconView: View {
 
                 Group {
                     if let draft, let assetId = draft.sourceAssetIdentifiers.first {
-                        if let uiImage = draft.thumbnail(for: assetId) {
-                            Image(uiImage: uiImage)
-                                .resizable()
-                                .scaledToFill()
-                        } else {
-                            PhotoItemView(
-                                asset: PhotoAsset(identifier: assetId),
-                                cache: cache,
-                                imageSize: CGSize(width: 144, height: 144)
-                            )
-                        }
+                        DraftThumbnailView(item: draft, assetId: assetId)
                     } else {
                         // Placeholder square for an empty slot
                         RoundedRectangle(cornerRadius: 10)
