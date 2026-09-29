@@ -650,21 +650,19 @@ struct CustomPhotoPickerView: View {
                                         .padding(.horizontal)
 
                                         ScrollView(.horizontal, showsIndicators: false) {
-                                            HStack(spacing: 12) {
+                                            // LazyHStack, not HStack (2026-09-28 draft-drawer
+                                            // freeze/crash investigation): a plain HStack renders
+                                            // EVERY photo in the row immediately, off-screen ones
+                                            // included — combined with the old synchronous decode
+                                            // this meant a draft with many photos front-loaded all
+                                            // of them the instant its row appeared. LazyHStack only
+                                            // builds cells as they scroll into view.
+                                            LazyHStack(spacing: 12) {
                                                 ForEach(draft.sourceAssetIdentifiers, id: \.self) { assetId in
                                                     let compositeId = "\(draft.id.uuidString)|\(assetId)"
-                                                    let asset = PhotoAsset(identifier: assetId)
 
                                                     ZStack(alignment: .topTrailing) {
-                                                        Group {
-                                                            if let uiImage = draft.thumbnail(for: assetId) {
-                                                                Image(uiImage: uiImage)
-                                                                    .resizable()
-                                                                    .scaledToFill()
-                                                            } else {
-                                                                PhotoItemView(asset: asset, cache: photoCollection.cache, imageSize: CGSize(width: 80, height: 80))
-                                                            }
-                                                        }
+                                                        DraftThumbnailView(item: draft, assetId: assetId)
                                                         .frame(width: 80, height: 80)
                                                         .cornerRadius(8)
                                                         .clipped()

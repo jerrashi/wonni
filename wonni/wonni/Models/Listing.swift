@@ -149,23 +149,69 @@ class Item {
     /// decodes the photo at full camera resolution on every call, which — invoked from a
     /// row `body` that re-evaluates per keystroke — was the source of major typing lag
     /// in the listing flow. Upload/publish paths still use `image(for:)` for full res.
+    ///
+    /// UNCHANGED behavior/signature — still decodes synchronously on a cache miss, still
+    /// safe for the 8 existing call sites that rely on that (see 2026-09-28 investigation
+    /// notes on `loadThumbnailAsync` below for why that's a real perf problem at scale).
+    /// New call sites should prefer `DraftThumbnailView` (Views/DraftThumbnailView.swift)
+    /// instead, which uses `cachedThumbnailOnly` + `loadThumbnailAsync` to keep the decode
+    /// off the main thread. Migrating the remaining synchronous call sites to it is
+    /// tracked as follow-up, not done in this pass.
     func thumbnail(for assetId: String) -> UIImage? {
         guard !Item.deletedIDs.contains(id) else { return nil }
         let key = "\(id)-\(assetId)" as NSString
         if let cached = Item.thumbnailCache.object(forKey: key) { return cached }
         guard let idx = sourceAssetIdentifiers.firstIndex(of: assetId),
               idx < photosData.count else { return nil }
+        guard let thumb = Item.decodeThumbnail(photosData[idx]) else { return nil }
+        Item.thumbnailCache.setObject(thumb, forKey: key)
+        return thumb
+    }
+
+    /// Cache-only read, no decode — the fast path `DraftThumbnailView` checks before
+    /// falling back to a placeholder + `loadThumbnailAsync`. Never triggers the
+    /// `photosData` SwiftData fault, unlike `thumbnail(for:)` on a miss.
+    func cachedThumbnailOnly(for assetId: String) -> UIImage? {
+        guard !Item.deletedIDs.contains(id) else { return nil }
+        return Item.thumbnailCache.object(forKey: "\(id)-\(assetId)" as NSString)
+    }
+
+    /// The actual decode — pulled out of `thumbnail(for:)` so `loadThumbnailAsync` can run
+    /// it off the main thread. Pure function of already-extracted `Data`: no SwiftData
+    /// object access here, so it's safe to call from a background task (SwiftData model
+    /// properties themselves are NOT safe to touch off the main actor — see
+    /// `loadThumbnailAsync`, which reads `photosData` on the main actor before hopping off).
+    private static func decodeThumbnail(_ data: Data) -> UIImage? {
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: Item.thumbnailMaxPixel
         ]
-        guard let source = CGImageSourceCreateWithData(photosData[idx] as CFData, nil),
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
             return nil
         }
-        let thumb = UIImage(cgImage: cgImage)
-        Item.thumbnailCache.setObject(thumb, forKey: key)
+        return UIImage(cgImage: cgImage)
+    }
+
+    /// Cache-miss path for `DraftThumbnailView`: reads the one photo's `Data` on the
+    /// caller's actor (main — SwiftData model properties aren't safe to touch off it),
+    /// then hops to a background task for the actual decode (plain `Data` in, `UIImage`
+    /// out, no model object involved) so the expensive ImageIO work doesn't block the
+    /// main thread. Populates the same NSCache `thumbnail(for:)` reads, so once this
+    /// resolves, every other call site's synchronous fast path picks it up for free.
+    func loadThumbnailAsync(for assetId: String) async -> UIImage? {
+        guard !Item.deletedIDs.contains(id) else { return nil }
+        let key = "\(id)-\(assetId)" as NSString
+        if let cached = Item.thumbnailCache.object(forKey: key) { return cached }
+        guard let idx = sourceAssetIdentifiers.firstIndex(of: assetId),
+              idx < photosData.count else { return nil }
+        let data = photosData[idx] // SwiftData read — stays on the main actor
+        let thumb = await Task.detached(priority: .userInitiated) {
+            Item.decodeThumbnail(data)
+        }.value
+        guard !Item.deletedIDs.contains(id) else { return nil } // item may have been deleted while decoding
+        if let thumb { Item.thumbnailCache.setObject(thumb, forKey: key) }
         return thumb
     }
 
