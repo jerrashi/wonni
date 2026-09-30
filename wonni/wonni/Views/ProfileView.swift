@@ -2317,6 +2317,18 @@ struct StorageImage: View {
         }
         .task(id: path) {
             debugErrorText = nil
+            // Web-originated listings (toListingFields, functions/listing_shape.js)
+            // store `images`/`coverPhotoPath` as full public URLs
+            // (StorageService.publicURL's format), not bare Storage paths — unlike
+            // iOS-native listings, which write the bare "users/UID/ID/N.jpg" path
+            // StorageService.uploadListingImage returns. `.child(fullURL)` on a
+            // StorageReference doesn't resolve, so those never loaded (2026-09-30
+            // report: "photos load now except for listings created on the web
+            // app"). Use the URL directly when it's already one.
+            if let direct = URL(string: path), path.hasPrefix("http") {
+                url = direct
+                return
+            }
             do {
                 url = try await Storage.storage().reference().child(path).downloadURL()
             } catch {
