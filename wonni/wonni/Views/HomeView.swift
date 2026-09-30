@@ -55,6 +55,11 @@ class FeedViewModel: ObservableObject {
     @Published var promotedBanners: [PromotedBanner] = []
     @Published var isLoading = false
     @Published var hasMore = true
+    /// Visible-on-device diagnostic (2026-09-30): an empty feed previously only
+    /// printed why (see loadInitial's comment below) — no way to tell "no active
+    /// listings exist" from "the query failed" without a console. Surfaced in
+    /// HomeView's emptyState; nil on success.
+    @Published var lastError: String?
 
     private var lastDoc: DocumentSnapshot?
     private let db = Firestore.firestore()
@@ -77,8 +82,11 @@ class FeedViewModel: ObservableObject {
             listings = page.listings
             lastDoc = page.lastDocument
             hasMore = page.hasMore
+            lastError = nil
         } catch {
             print("[FeedViewModel] loadInitial: fetchFeedPage failed: \(error)")
+            let nsError = error as NSError
+            lastError = "\(nsError.domain) #\(nsError.code): \(nsError.localizedDescription)"
         }
         do {
             promotedBanners = try await bannerFetch
@@ -233,6 +241,18 @@ struct HomeView: View {
             Text("Be the first to sell something!")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+            // Not gated to DEBUG — same reasoning as StorageImage's on-screen
+            // diagnostic: this needs to be readable from a screenshot on a
+            // Release/TestFlight build, no Mac/console required. Temporary
+            // until root-caused.
+            if let lastError = vm.lastError {
+                Text(lastError)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 4)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 60)
