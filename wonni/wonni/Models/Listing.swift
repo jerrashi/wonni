@@ -13,7 +13,17 @@ import UIKit
 class Item {
     var id: UUID
     var createdAt: Date
+    /// LEGACY — no longer written. Local photo bytes live in per-photo files now (see
+    /// `localPhotoFilesByAsset` / DraftPhotoStore.swift for why). Kept in the schema so
+    /// drafts created before 2026-09-30 can be read and migrated
+    /// (`migrateLegacyPhotosIfNeeded`); empty for every migrated or newer draft.
     @Attribute(.externalStorage) var photosData: [Data]
+    /// assetId -> file name in DraftPhotoStore, for photos whose bytes this draft keeps
+    /// locally (camera shots, photos pulled from another device). Library-picked photos
+    /// have no entry — they're read from PhotoKit. Keyed by assetId (not position), so
+    /// reordering never touches it. Optional so SwiftData's lightweight migration can
+    /// add the column to existing databases.
+    var localPhotoFilesByAsset: [String: String]?
     var blurb: String
     var aiSuggestedTitle: String?
     var aiSuggestedPrice: Double?
@@ -134,9 +144,8 @@ class Item {
     nonisolated(unsafe) static var deletedIDs: Set<UUID> = []
 
     /// Decoded-thumbnail cache for `thumbnail(for:)`. Keyed by "\(item.id)-\(assetId)":
-    /// the bytes behind an assetId never change after insertion (reorder/remove remap
-    /// `sourceAssetIdentifiers` and `photosData` together, keeping the assetId→data
-    /// mapping stable), so entries only need explicit eviction in `removePhoto`.
+    /// the bytes behind an assetId never change after insertion, so entries only need
+    /// explicit eviction in `removePhoto`.
     /// `nonisolated(unsafe)` for the same reason as `deletedIDs`: all access is
     /// main-thread by construction (view bodies), and NSCache is thread-safe anyway.
     nonisolated(unsafe) private static let thumbnailCache = NSCache<NSString, UIImage>()
@@ -145,67 +154,172 @@ class Item {
     /// DraftPhotoEditModal) at 3x. One tier keeps every view sharing one cache entry.
     private static let thumbnailMaxPixel = 480
 
-    /// Cached, downsampled thumbnail for list/grid display. Views must use this instead
-    /// of `image(for:)`: that faults the entire externally-stored `photosData` array and
-    /// decodes the photo at full camera resolution on every call, which — invoked from a
-    /// row `body` that re-evaluates per keystroke — was the source of major typing lag
-    /// in the listing flow. Upload/publish paths still use `image(for:)` for full res.
-    ///
-    /// Decodes synchronously on a cache miss, and only knows about locally-stored bytes
-    /// (nil for library-picked photos). Views should use `DraftThumbnailView`
-    /// (Views/DraftThumbnailView.swift) instead, which keeps the work off the main
-    /// thread via `cachedThumbnailOnly` + `loadThumbnailAsync` and handles both photo
-    /// sources — every draft screen was migrated to it 2026-09-30.
+    // MARK: Local photo bytes
+
+    /// Full-resolution bytes this draft keeps locally for a photo; nil for photos that
+    /// live only in the photo library.
+    func photoData(for assetId: String) -> Data? {
+        // A SwiftUI row can still be mid-render against a just-deleted Item — e.g. List's
+        // own swipe-to-delete removal animation, or a sibling carousel/stack view driven
+        // by an independent @Query, re-evaluating a row's body a beat after the underlying
+        // SwiftData delete commits. Reading attributes on a detached object crashes with
+        // "backing data was detached from a context without resolving attribute faults."
+        // Checking `Item.deletedIDs` here is the one choke point that protects every
+        // caller regardless of which view rendered it or render timing.
+        guard !Item.deletedIDs.contains(id) else { return nil }
+        if let fileName = localPhotoFilesByAsset?[assetId] {
+            return DraftPhotoStore.read(itemID: id, fileName: fileName)
+        }
+        return legacyPhotoData(for: assetId)
+    }
+
+    /// Every locally-stored photo keyed by assetId.
+    func localPhotoDataByAsset() -> [String: Data] {
+        guard !Item.deletedIDs.contains(id) else { return [:] }
+        var result: [String: Data] = [:]
+        let itemID = id
+        for (assetId, fileName) in localPhotoFilesByAsset ?? [:] {
+            result[assetId] = DraftPhotoStore.read(itemID: itemID, fileName: fileName)
+        }
+        let blobs = photosData
+        if !blobs.isEmpty {
+            let indexes = LegacyDraftPhotos.blobIndexByAsset(assetIds: sourceAssetIdentifiers, blobCount: blobs.count)
+            for (assetId, idx) in indexes where result[assetId] == nil {
+                result[assetId] = blobs[idx]
+            }
+        }
+        return result
+    }
+
+    /// Stores local bytes for a photo (one already in, or about to be added to,
+    /// `sourceAssetIdentifiers`). On a write failure (disk full) the bytes are dropped
+    /// and the photo falls back to the photo library like a picked one.
+    func setLocalPhoto(_ data: Data, for assetId: String) {
+        do {
+            let fileName = try DraftPhotoStore.write(data, itemID: id)
+            var files = localPhotoFilesByAsset ?? [:]
+            if let replaced = files[assetId] { DraftPhotoStore.delete(itemID: id, fileName: replaced) }
+            files[assetId] = fileName
+            localPhotoFilesByAsset = files
+            isLocalPhotoOnly = true
+        } catch {
+            print("[Item] Couldn't store local photo \(assetId) for draft \(id): \(error)")
+        }
+    }
+
+    /// Drops everything this draft stored locally. Call wherever a draft is deleted,
+    /// while the object is still attached.
+    func discardLocalPhotos() {
+        DraftPhotoStore.deleteAll(itemID: id)
+        localPhotoFilesByAsset = nil
+        photosData = []
+    }
+
+    /// Moves bytes still held in the legacy `photosData` array out to files. Returns
+    /// true if this draft changed (the caller saves). No-op for migrated/new drafts.
+    /// All-or-nothing: if a file write fails the legacy array is left intact, and the
+    /// legacy branches in the mutators below keep it consistent.
+    @discardableResult
+    func migrateLegacyPhotosIfNeeded() -> Bool {
+        guard !Item.deletedIDs.contains(id) else { return false }
+        let blobs = photosData
+        guard !blobs.isEmpty else { return false }
+        let indexes = LegacyDraftPhotos.blobIndexByAsset(assetIds: sourceAssetIdentifiers, blobCount: blobs.count)
+        if indexes.isEmpty {
+            // Can't tell which photo each blob belongs to. Every photo with a real
+            // library id is served by PhotoKit, so the blobs are dead weight — unless a
+            // `local_temp_` photo is involved, whose only copy may be in there.
+            guard !sourceAssetIdentifiers.contains(where: { $0.hasPrefix("local_temp_") }) else { return false }
+            photosData = []
+            return true
+        }
+        let itemID = id
+        var written: [String: String] = [:]
+        do {
+            for (assetId, idx) in indexes {
+                written[assetId] = try DraftPhotoStore.write(blobs[idx], itemID: itemID)
+            }
+        } catch {
+            print("[Item] Legacy photo migration failed for draft \(itemID): \(error)")
+            for fileName in written.values { DraftPhotoStore.delete(itemID: itemID, fileName: fileName) }
+            return false
+        }
+        localPhotoFilesByAsset = (localPhotoFilesByAsset ?? [:]).merging(written) { current, _ in current }
+        photosData = []
+        return true
+    }
+
+    private func legacyPhotoData(for assetId: String) -> Data? {
+        let blobs = photosData
+        guard !blobs.isEmpty,
+              let idx = LegacyDraftPhotos.blobIndexByAsset(assetIds: sourceAssetIdentifiers, blobCount: blobs.count)[assetId]
+        else { return nil }
+        return blobs[idx]
+    }
+
+    // MARK: Thumbnails
+
+    /// Cached, downsampled thumbnail for list/grid display. Decodes synchronously on a
+    /// cache miss, and only knows about locally-stored bytes (nil for library-picked
+    /// photos). Views should use `DraftThumbnailView` (Views/DraftThumbnailView.swift)
+    /// instead, which keeps the work off the main thread via `cachedThumbnailOnly` +
+    /// `loadThumbnailAsync` and handles both photo sources — every draft screen was
+    /// migrated to it 2026-09-30.
     func thumbnail(for assetId: String) -> UIImage? {
         guard !Item.deletedIDs.contains(id) else { return nil }
         let key = "\(id)-\(assetId)" as NSString
         if let cached = Item.thumbnailCache.object(forKey: key) { return cached }
-        guard let idx = sourceAssetIdentifiers.firstIndex(of: assetId),
-              idx < photosData.count else { return nil }
-        guard let thumb = Item.decodeThumbnail(photosData[idx]) else { return nil }
+        guard let data = photoData(for: assetId),
+              let thumb = Item.decodeThumbnail(.data(data)) else { return nil }
         Item.thumbnailCache.setObject(thumb, forKey: key)
         return thumb
     }
 
     /// Cache-only read, no decode — the fast path `DraftThumbnailView` checks before
-    /// falling back to a placeholder + `loadThumbnailAsync`. Never triggers the
-    /// `photosData` SwiftData fault, unlike `thumbnail(for:)` on a miss.
+    /// falling back to a placeholder + `loadThumbnailAsync`.
     func cachedThumbnailOnly(for assetId: String) -> UIImage? {
         guard !Item.deletedIDs.contains(id) else { return nil }
         return Item.thumbnailCache.object(forKey: "\(id)-\(assetId)" as NSString)
     }
 
-    /// The actual decode — pulled out of `thumbnail(for:)` so `loadThumbnailAsync` can run
-    /// it off the main thread. Pure function of already-extracted `Data`: no SwiftData
-    /// object access here, so it's safe to call from a background task (SwiftData model
-    /// properties themselves are NOT safe to touch off the main actor — see
-    /// `loadThumbnailAsync`, which reads `photosData` on the main actor before hopping off).
-    private static func decodeThumbnail(_ data: Data) -> UIImage? {
+    /// Where a thumbnail's bytes come from. `.file` is read on the background queue;
+    /// `.photoLibrary` means the draft holds no local bytes for the photo.
+    private enum ThumbnailSource {
+        case file(URL)
+        case data(Data)
+        case photoLibrary
+    }
+
+    /// The actual decode. No SwiftData object access here, so it's safe to call from a
+    /// background queue (model properties themselves are NOT safe to touch off the main
+    /// actor — `loadThumbnailAsync` resolves the source on the main actor first).
+    private static func decodeThumbnail(_ source: ThumbnailSource) -> UIImage? {
+        let imageSource: CGImageSource?
+        switch source {
+        case .file(let url): imageSource = CGImageSourceCreateWithURL(url as CFURL, nil)
+        case .data(let data): imageSource = CGImageSourceCreateWithData(data as CFData, nil)
+        case .photoLibrary: imageSource = nil
+        }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: Item.thumbnailMaxPixel
         ]
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+        guard let imageSource,
+              let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else {
             return nil
         }
         return UIImage(cgImage: cgImage)
     }
 
-    /// Cache-miss path for `DraftThumbnailView`: reads the one photo's `Data` on the
-    /// main actor (SwiftData model properties aren't safe to touch off it), then hops
-    /// to a background queue for the actual decode (plain `Data` in, `UIImage` out, no
-    /// model object involved) so the expensive ImageIO work doesn't block the main
-    /// thread. Populates the same NSCache `thumbnail(for:)` reads, so once this
-    /// resolves, every other call site's synchronous fast path picks it up for free.
+    /// Cache-miss path for `DraftThumbnailView`: works out where the photo's bytes are
+    /// on the main actor (SwiftData model properties aren't safe to touch off it), then
+    /// reads and decodes on a background queue so neither the file read nor the ImageIO
+    /// work blocks the main thread. Populates the same NSCache `thumbnail(for:)` reads.
     ///
     /// `@MainActor` is load-bearing: a plain `async` method on a non-actor class runs
     /// on the global executor no matter who awaits it, so without the annotation the
-    /// `photosData` read below happened OFF the main thread.
-    ///
-    /// Photos picked from the library have no local bytes (`photosData` is only filled
-    /// for camera shots) — those load from PhotoKit instead, also off-main.
+    /// model reads below happened OFF the main thread.
     @MainActor
     func loadThumbnailAsync(for assetId: String) async -> UIImage? {
         guard !Item.deletedIDs.contains(id) else { return nil }
@@ -216,15 +330,18 @@ class Item {
 
         let load: Task<UIImage?, Never>
         if let inFlight = Item.thumbnailLoads[key] {
-            // Already loading (another cell, or `prewarmThumbnail` at capture time) —
-            // join it instead of faulting `photosData` again.
+            // Already loading (another cell, or `prewarmThumbnail` at capture time).
             load = inFlight
         } else {
-            var data: Data?
-            if let idx = sourceAssetIdentifiers.firstIndex(of: assetId), idx < photosData.count {
-                data = photosData[idx]
+            let source: ThumbnailSource
+            if let fileName = localPhotoFilesByAsset?[assetId] {
+                source = .file(DraftPhotoStore.url(itemID: itemID, fileName: fileName))
+            } else if let legacy = legacyPhotoData(for: assetId) {
+                source = .data(legacy)
+            } else {
+                source = .photoLibrary
             }
-            load = Item.startThumbnailLoad(key: key, data: data, assetId: assetId)
+            load = Item.startThumbnailLoad(key: key, source: source, assetId: assetId)
         }
         let thumb = await load.value
         guard !Item.deletedIDs.contains(itemID) else { return nil } // deleted while loading
@@ -232,14 +349,13 @@ class Item {
     }
 
     /// Decodes a just-captured photo's thumbnail straight from the bytes the camera
-    /// handed over, before the carousel asks for it. Without this the carousel's first
-    /// render of a new shot reads it back out of `photosData` — which faults the ENTIRE
-    /// externally-stored array (every full-res photo in the draft) on the main thread.
+    /// handed over, before the carousel asks for it — so the new shot's cell never has
+    /// to read it back from disk.
     @MainActor
     static func prewarmThumbnail(itemID: UUID, assetId: String, data: Data) {
         let key = "\(itemID)-\(assetId)"
         guard thumbnailCache.object(forKey: key as NSString) == nil, thumbnailLoads[key] == nil else { return }
-        _ = startThumbnailLoad(key: key, data: data, assetId: assetId)
+        _ = startThumbnailLoad(key: key, source: .data(data), assetId: assetId)
     }
 
     /// In-flight loads keyed like `thumbnailCache`, so concurrent requests for the same
@@ -252,15 +368,13 @@ class Item {
         label: "wonni.item-thumbnails", qos: .userInitiated, attributes: .concurrent)
 
     @MainActor
-    private static func startThumbnailLoad(key: String, data: Data?, assetId: String) -> Task<UIImage?, Never> {
+    private static func startThumbnailLoad(key: String, source: ThumbnailSource, assetId: String) -> Task<UIImage?, Never> {
         let task = Task<UIImage?, Never> { @MainActor in
             let thumb: UIImage? = await withCheckedContinuation { continuation in
                 thumbnailQueue.async {
-                    if let data, let decoded = decodeThumbnail(data) {
-                        continuation.resume(returning: decoded)
-                    } else {
-                        continuation.resume(returning: photoLibraryThumbnail(assetId: assetId))
-                    }
+                    // Local bytes first; the library is the fallback for photos with
+                    // none (or whose bytes won't decode).
+                    continuation.resume(returning: decodeThumbnail(source) ?? photoLibraryThumbnail(assetId: assetId))
                 }
             }
             if let thumb { thumbnailCache.setObject(thumb, forKey: key as NSString) }
@@ -294,35 +408,12 @@ class Item {
         return result
     }
 
-    /// Every locally-stored photo keyed by assetId, from a SINGLE `photosData` read.
-    /// Loops that need several photos should use this rather than calling `image(for:)`
-    /// per photo — each of those re-reads the whole externally-stored array.
-    func localPhotoDataByAsset() -> [String: Data] {
-        guard !Item.deletedIDs.contains(id) else { return [:] }
-        let data = photosData
-        var result: [String: Data] = [:]
-        for (idx, assetId) in sourceAssetIdentifiers.enumerated() where idx < data.count {
-            result[assetId] = data[idx]
-        }
-        return result
+    /// Full-resolution image from the draft's local bytes (upload/publish/AI paths).
+    func image(for assetId: String) -> UIImage? {
+        photoData(for: assetId).flatMap { UIImage(data: $0) }
     }
 
-    func image(for assetId: String) -> UIImage? {
-        // A SwiftUI row can still be mid-render against a just-deleted Item — e.g. List's
-        // own swipe-to-delete removal animation, or a sibling carousel/stack view driven
-        // by an independent @Query, re-evaluating a row's body a beat after the underlying
-        // SwiftData delete commits. Reading `photosData` (externally stored) on a detached
-        // object crashes with "backing data was detached from a context without resolving
-        // attribute faults." Checking `Item.deletedIDs` here is the one choke point that
-        // protects every caller regardless of which view rendered it or render timing.
-        guard !Item.deletedIDs.contains(id) else { return nil }
-        if let idx = sourceAssetIdentifiers.firstIndex(of: assetId) {
-            if idx < photosData.count {
-                return UIImage(data: photosData[idx])
-            }
-        }
-        return nil
-    }
+    // MARK: Photo order & membership
 
     /// `sourceAssetIdentifiers` reflects the user's current photo order (drag-to-reorder
     /// mutates it directly); this resolves that order into Storage paths via the
@@ -331,7 +422,12 @@ class Item {
         sourceAssetIdentifiers.compactMap { firebasePhotoPathsByAsset?[$0] }
     }
 
+    // The mutators below first move any legacy `photosData` out to files. The
+    // `!photosData.isEmpty` branches only run if that migration failed (disk full) and
+    // keep the positional legacy array in step, exactly as before.
+
     func movePhoto(from: Int, to: Int) {
+        migrateLegacyPhotosIfNeeded()
         var ids = sourceAssetIdentifiers
         ids.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
         sourceAssetIdentifiers = ids
@@ -341,7 +437,20 @@ class Item {
             data.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
             photosData = data
         }
-        // No firebasePhotoPathsByAsset change needed — it's keyed by assetId, not position.
+        // Nothing else to do — local files and Storage paths are keyed by assetId.
+    }
+
+    /// Applies a new photo order (a permutation of the current photos).
+    func reorderPhotos(to newOrder: [String]) {
+        migrateLegacyPhotosIfNeeded()
+        let legacy = photosData
+        if !legacy.isEmpty {
+            let oldOrder = sourceAssetIdentifiers
+            photosData = newOrder.compactMap { assetId in
+                oldOrder.firstIndex(of: assetId).flatMap { $0 < legacy.count ? legacy[$0] : nil }
+            }
+        }
+        sourceAssetIdentifiers = newOrder
     }
 
     /// Removes a photo from this draft. Returns the local photo bytes (if this draft
@@ -350,11 +459,18 @@ class Item {
     /// Storage path for good (permanent removal).
     @discardableResult
     func removePhoto(assetId: String) -> (data: Data?, firebasePhotoPath: String?) {
+        migrateLegacyPhotosIfNeeded()
         guard let idx = sourceAssetIdentifiers.firstIndex(of: assetId) else { return (nil, nil) }
         sourceAssetIdentifiers.remove(at: idx)
         Item.thumbnailCache.removeObject(forKey: "\(id)-\(assetId)" as NSString)
         let path = firebasePhotoPathsByAsset?.removeValue(forKey: assetId)
 
+        if let fileName = localPhotoFilesByAsset?[assetId] {
+            let data = DraftPhotoStore.read(itemID: id, fileName: fileName)
+            DraftPhotoStore.delete(itemID: id, fileName: fileName)
+            localPhotoFilesByAsset?.removeValue(forKey: assetId)
+            return (data, path)
+        }
         if isLocalPhotoOnly && idx < photosData.count {
             return (photosData.remove(at: idx), path)
         }
@@ -366,16 +482,17 @@ class Item {
     /// note the underlying Storage object still physically lives under the source
     /// draft's listing ID until/unless it's explicitly re-uploaded.
     func insertPhoto(assetId: String, data: Data?, at index: Int, firebasePhotoPath: String? = nil) {
+        migrateLegacyPhotosIfNeeded()
+        let hasLegacy = !photosData.isEmpty
         if index >= sourceAssetIdentifiers.count {
             sourceAssetIdentifiers.append(assetId)
-            if let data = data {
-                photosData.append(data)
-            }
+            if hasLegacy, let data { photosData.append(data) }
         } else {
             sourceAssetIdentifiers.insert(assetId, at: index)
-            if let data = data {
-                photosData.insert(data, at: index)
-            }
+            if hasLegacy, let data { photosData.insert(data, at: index) }
+        }
+        if !hasLegacy, let data {
+            setLocalPhoto(data, for: assetId)
         }
         if let firebasePhotoPath {
             if firebasePhotoPathsByAsset == nil { firebasePhotoPathsByAsset = [:] }

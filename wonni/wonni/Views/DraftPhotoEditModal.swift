@@ -113,24 +113,10 @@ struct DraftPhotoEditModal: View {
 
     private func syncChangesToItem() {
         let removedAssetIds = Set(item.sourceAssetIdentifiers).subtracting(localAssetIds)
-        let pathsToDelete = removedAssetIds.compactMap { item.firebasePhotoPathsByAsset?[$0] }
-
-        var newPhotosData: [Data] = []
-        for assetId in localAssetIds {
-            if let idx = item.sourceAssetIdentifiers.firstIndex(of: assetId) {
-                if idx < item.photosData.count {
-                    newPhotosData.append(item.photosData[idx])
-                }
-            }
-        }
-
-        item.sourceAssetIdentifiers = localAssetIds
-        if item.isLocalPhotoOnly || !item.photosData.isEmpty {
-            item.photosData = newPhotosData
-        }
-        for assetId in removedAssetIds {
-            item.firebasePhotoPathsByAsset?.removeValue(forKey: assetId)
-        }
+        // removePhoto also drops each photo's local file, Storage-path entry and cached
+        // thumbnail.
+        let pathsToDelete = removedAssetIds.compactMap { item.removePhoto(assetId: $0).firebasePhotoPath }
+        item.reorderPhotos(to: localAssetIds)
 
         try? modelContext.save()
 

@@ -715,11 +715,7 @@ struct CustomPhotoPickerView: View {
                                                                 originalDraftID = draft.id
                                                                 originalAssetID = assetId
                                                                 originalIndex = draft.sourceAssetIdentifiers.firstIndex(of: assetId)
-                                                                if let idx = originalIndex, idx < draft.photosData.count {
-                                                                    originalPhotoData = draft.photosData[idx]
-                                                                } else {
-                                                                    originalPhotoData = nil
-                                                                }
+                                                                originalPhotoData = draft.photoData(for: assetId)
                                                                 return NSItemProvider(object: compositeId as NSString)
                                                             }
                                                             return NSItemProvider()
