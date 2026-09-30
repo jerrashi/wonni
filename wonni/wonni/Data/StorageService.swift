@@ -137,15 +137,48 @@ class StorageService: ObservableObject {
     /// swallowing it, so orphaned files don't go undetected.
     func deleteListingImages(userId: String, listingId: String) async throws {
         let listRef = storage.child("users/\(userId)/\(listingId)")
-        let result = try await listRef.listAll()
+        let result: StorageListResult
+        do {
+            result = try await listRef.listAll()
+        } catch {
+            logStorageError("listAll(\(listRef.fullPath))", error)
+            throw error
+        }
+        print("[StorageService] deleteListingImages(\(listingId)): listAll found \(result.items.count) item(s)")
 
         for item in result.items {
-            if try await isPhotoReferenced(path: item.fullPath, userId: userId) {
-                print("[StorageService] Skipping delete of \(item.fullPath) — still referenced by a Sale/Conversation")
-                continue
+            do {
+                if try await isPhotoReferenced(path: item.fullPath, userId: userId) {
+                    print("[StorageService] Skipping delete of \(item.fullPath) — still referenced by a Sale/Conversation")
+                    continue
+                }
+            } catch {
+                logStorageError("isPhotoReferenced(\(item.fullPath))", error)
+                throw error
             }
-            try await item.delete()
+            do {
+                try await item.delete()
+            } catch {
+                logStorageError("delete(\(item.fullPath))", error)
+                throw error
+            }
         }
+    }
+
+    /// Verbose diagnostic for a Storage/Firestore failure — added 2026-09-29 to catch a
+    /// "Delete Failed" report in TestFlight where the generic `\(error)` interpolation at
+    /// the UploadManager call site wasn't enough to tell listAll/isPhotoReferenced/item
+    /// delete apart, or surface the underlying NSError code. Temporary until root-caused;
+    /// safe to keep (print-only, no behavior change).
+    private func logStorageError(_ step: String, _ error: Error) {
+        let nsError = error as NSError
+        print("""
+        [StorageService] ⚠️ \(step) failed:
+          domain: \(nsError.domain)
+          code: \(nsError.code)
+          localizedDescription: \(nsError.localizedDescription)
+          userInfo: \(nsError.userInfo)
+        """)
     }
     
     /// Uploads a user's profile photo and returns the download URL string.

@@ -405,7 +405,19 @@ class UploadManager: ObservableObject {
                 do {
                     try await ListingRepository.shared.deleteListing(id: listingId)
                 } catch {
-                    print("[UploadManager] Cleanup failed for \(listingId): \(error)")
+                    // Verbose on purpose (2026-09-29): TestFlight reported a "Delete
+                    // Failed" alert with no way to see which step actually threw or why —
+                    // StorageService/ListingRepository now log each step, this is the
+                    // final rollup with the full NSError so the next occurrence's device
+                    // console has enough to root-cause instead of just "some error".
+                    let nsError = error as NSError
+                    print("""
+                    [UploadManager] ⚠️ Cleanup failed for \(listingId):
+                      domain: \(nsError.domain)
+                      code: \(nsError.code)
+                      localizedDescription: \(nsError.localizedDescription)
+                      userInfo: \(nsError.userInfo)
+                    """)
                     self?.cleanupError = "Couldn't fully delete this draft's photos. It may still be using storage — please try deleting it again."
                 }
             }

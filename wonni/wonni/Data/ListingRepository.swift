@@ -278,9 +278,21 @@ class ListingRepository: ObservableObject {
     /// into a permanently orphaned set of files.
     func deleteListing(id: String) async throws {
         if let uid = Auth.auth().currentUser?.uid {
-            try await StorageService.shared.deleteListingImages(userId: uid, listingId: id)
+            do {
+                try await StorageService.shared.deleteListingImages(userId: uid, listingId: id)
+            } catch {
+                print("[ListingRepository] deleteListing(\(id)): Storage cleanup failed, leaving Firestore doc in place — \(error)")
+                throw error
+            }
+        } else {
+            print("[ListingRepository] deleteListing(\(id)): no authenticated user — skipping Storage cleanup")
         }
-        try await db.collection(listingsCollection).document(id).delete()
+        do {
+            try await db.collection(listingsCollection).document(id).delete()
+        } catch {
+            print("[ListingRepository] deleteListing(\(id)): Firestore doc delete failed — \(error)")
+            throw error
+        }
     }
     
     /// Updates a listing with data received from Gemini identification.
