@@ -1025,6 +1025,13 @@ struct DraftHistoryTitleField: View {
 // eBay & Mercari: 80 chars · Facebook: 99 · Etsy: 140
 struct TitleCharCountView: View {
     let count: Int
+    /// The "Facebook & Etsy only" / "Only shows fully on Etsy" hint is a per-platform
+    /// truncation *suggestion* — only meaningful once the user is choosing which
+    /// platforms to cross-post to, on the Review & Publish screen (`ResultDraftRow`).
+    /// Shown there; suppressed on the earlier draft-edit rows/sheets (2026-09-30 report:
+    /// it was confusingly showing up before the user had even gotten to platform
+    /// selection). The character counter itself still shows everywhere.
+    var showPlatformMessage: Bool = true
 
     private var color: Color {
         if count > 140 { return Color(red: 0.75, green: 0.0, blue: 0.0) }
@@ -1034,6 +1041,7 @@ struct TitleCharCountView: View {
     }
 
     private var message: String? {
+        guard showPlatformMessage else { return nil }
         if count > 140 { return "Truncated on all platforms" }
         if count > 99  { return "Only shows fully on Etsy" }
         if count > 80  { return "Facebook & Etsy only" }
@@ -1200,7 +1208,7 @@ struct DraftRow: View, Equatable {
                         .presentationDragIndicator(.visible)
                     }
 
-                    TitleCharCountView(count: titleText.count)
+                    TitleCharCountView(count: titleText.count, showPlatformMessage: false)
 
                     if let vision = item.visionTitle, !vision.isEmpty,
                        item.processedAt == nil, titleText.isEmpty {
@@ -1480,7 +1488,7 @@ struct DraftEditSheet: View {
                         .onChange(of: title) { _, v in
                             if v.count > 140 { title = String(v.prefix(140)) }
                         }
-                    TitleCharCountView(count: title.count)
+                    TitleCharCountView(count: title.count, showPlatformMessage: false)
                     HStack {
                         Text("$")
                         TextField("0.00", text: $priceText)
