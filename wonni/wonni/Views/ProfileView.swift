@@ -2281,6 +2281,13 @@ private struct ListingCard: View {
 struct StorageImage: View {
     let path: String
     @State private var url: URL?
+    // Visible-on-device diagnostic (2026-09-30): TestFlight reported photos
+    // never displaying anywhere in the app, and the report came in from a
+    // phone with no Mac/console nearby to read `try?`'s swallowed error from.
+    // Surfacing it as on-screen text (instead of only `print`) means a
+    // screenshot alone is enough to read the real NSError. Temporary until
+    // root-caused, then revert to a silent placeholder.
+    @State private var debugErrorText: String?
 
     var body: some View {
         Group {
@@ -2289,20 +2296,54 @@ struct StorageImage: View {
                     switch phase {
                     case .success(let image):
                         image.resizable().scaledToFill()
-                    case .failure:
-                        Rectangle().fill(Color.secondary.opacity(0.12))
+                    case .failure(let error):
+                        placeholder(opacity: 0.12)
+                            .onAppear {
+                                let nsError = error as NSError
+                                let msg = "AsyncImage \(nsError.domain) #\(nsError.code): \(nsError.localizedDescription)"
+                                print("[StorageImage] ⚠️ \(msg) — path: \(path)")
+                                debugErrorText = msg
+                            }
                     default:
-                        Rectangle().fill(Color.secondary.opacity(0.08))
+                        placeholder(opacity: 0.08)
                             .overlay(ProgressView().scaleEffect(0.6))
                     }
                 }
+            } else if let debugErrorText {
+                placeholder(opacity: 0.12, errorText: debugErrorText)
             } else {
-                Rectangle().fill(Color.secondary.opacity(0.08))
+                placeholder(opacity: 0.08)
             }
         }
         .task(id: path) {
-            url = try? await Storage.storage().reference().child(path).downloadURL()
+            debugErrorText = nil
+            do {
+                url = try await Storage.storage().reference().child(path).downloadURL()
+            } catch {
+                let nsError = error as NSError
+                let msg = "downloadURL \(nsError.domain) #\(nsError.code): \(nsError.localizedDescription)"
+                print("[StorageImage] ⚠️ \(msg) — path: \(path)")
+                debugErrorText = msg
+            }
         }
+    }
+
+    @ViewBuilder
+    private func placeholder(opacity: Double, errorText: String? = nil) -> some View {
+        // Not #if DEBUG-gated on purpose: this report came from a TestFlight
+        // build, and TestFlight is a Release configuration, so a DEBUG guard
+        // would hide the exact text we need to see. Print-only otherwise;
+        // temporary until root-caused (see comment above on debugErrorText).
+        Rectangle().fill(Color.secondary.opacity(opacity))
+            .overlay {
+                if let errorText {
+                    Text(errorText)
+                        .font(.system(size: 8))
+                        .foregroundColor(.red)
+                        .multilineTextAlignment(.center)
+                        .padding(4)
+                }
+            }
     }
 }
 
