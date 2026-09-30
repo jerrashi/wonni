@@ -72,19 +72,16 @@ final class DataModel: ObservableObject, @unchecked Sendable {
         return PhotoData(thumbnailImage: thumbnailImage, thumbnailSize: thumbnailSize, imageData: imageData, imageSize: imageSize)
     }
 
+    /// Returns the asset ID to file the shot under. Comes back as soon as Photos has
+    /// assigned the identifier — the library save itself finishes in the background
+    /// (see PhotoCollection.addImage), so the carousel shows the shot without waiting.
     func savePhoto(imageData: Data) async -> String {
         let saveToCameraRoll = UserDefaults.standard.object(forKey: "saveToCameraRoll") as? Bool ?? true
-        if saveToCameraRoll {
-            do {
-                let assetId = try await photoCollection.addImage(imageData)
-                logger.debug("Added image data to photo collection with asset ID: \(assetId)")
-                return assetId
-            } catch let error {
-                logger.error("Failed to add image to photo collection: \(error.localizedDescription)")
-                // Fall through to local ID on failure
-            }
+        if saveToCameraRoll, let assetId = await photoCollection.addImage(imageData) {
+            logger.debug("Saving image data to photo collection with asset ID: \(assetId)")
+            return assetId
         }
-        // Local-only path (saveToCameraRoll=false or photo library save failed)
+        // Local-only path (saveToCameraRoll=false or Photos couldn't start the save)
         return "local_temp_" + UUID().uuidString
     }
 
@@ -128,9 +125,13 @@ fileprivate struct PhotoData {
 }
 
 fileprivate extension CIImage {
+    /// One shared context for every viewfinder frame — creating a CIContext is
+    /// expensive (it sets up its own GPU state), and this runs once per preview frame.
+    /// CIContext is thread-safe.
+    private static let previewContext = CIContext()
+
     var image: Image? {
-        let ciContext = CIContext()
-        guard let cgImage = ciContext.createCGImage(self, from: self.extent) else { return nil }
+        guard let cgImage = CIImage.previewContext.createCGImage(self, from: self.extent) else { return nil }
         return Image(decorative: cgImage, scale: 1, orientation: .up)
     }
 }
