@@ -297,6 +297,14 @@ final class SellingFlowTests: XCTestCase {
                 "Picker drafts carousel rendered mid-grid instead of pinned to the bottom (iteration \(iteration)): \(pickerCarousel.frame) vs screen height \(screenHeight)"
             )
 
+            // Pinned isn't enough — it must also stay one thumbnail row tall. The
+            // HStack→LazyHStack swap made it greedy (it took half the picker) while
+            // still passing the minY check above.
+            XCTAssertLessThan(
+                pickerCarousel.frame.height, 120,
+                "Picker drafts carousel is taller than its thumbnail row (iteration \(iteration)): \(pickerCarousel.frame)"
+            )
+
             // The carousel must sit BELOW every currently-visible grid cell, never
             // overlapping/embedded among them.
             let gridItems = app.descendants(matching: .any).matching(identifier: "photoGridItem")
@@ -314,9 +322,9 @@ final class SellingFlowTests: XCTestCase {
         }
     }
 
-    /// Repro for "no way to delete drafts": after selecting a full draft in the
-    /// drafts history modal, the Delete button is reportedly replaced by a "..."
-    /// overflow button that does nothing when tapped.
+    /// Draft history selection mode end to end. Originally a repro for "no way to
+    /// delete drafts" (iOS 26 collapsed the nav-bar Delete into a dead "..." overflow);
+    /// now also covers the fixed-position layout that replaced it.
     func testDeleteDraftFromHistoryModal() throws {
         let photosInterruption = addUIInterruptionMonitor(withDescription: "Photos permission") { alert in
             let allowButtons = alert.buttons.matching(
@@ -360,19 +368,54 @@ final class SellingFlowTests: XCTestCase {
         XCTAssert(selectButton.waitForExistence(timeout: 5), "Select button should appear")
         selectButton.tap()
 
+        // Selection mode layout: Cancel fixed top-right with the "…" actions menu
+        // (Bulk Edit / Delete) beside it, Select All ⇄ Deselect All top-left. The menu
+        // is present the whole time and disabled (not hidden) with nothing selected.
+        let cancelButton = app.buttons["draftHistoryCancelButton"]
+        let selectAllButton = app.buttons["draftHistorySelectAllButton"]
+        let selectionMenu = app.buttons["draftHistorySelectionMenu"]
+        XCTAssert(cancelButton.waitForExistence(timeout: 5), "Cancel should appear in selection mode")
+        XCTAssert(selectAllButton.exists, "Select All should appear in selection mode")
+        XCTAssert(selectionMenu.waitForExistence(timeout: 5), "Actions menu should be in the nav bar: \(app.debugDescription)")
+        XCTAssertFalse(selectionMenu.isEnabled, "Actions menu should be disabled with nothing selected")
+        XCTAssertGreaterThan(
+            cancelButton.frame.minX, selectionMenu.frame.minX,
+            "Cancel must be the far-right item, with the actions menu to its left: cancel \(cancelButton.frame) vs menu \(selectionMenu.frame)"
+        )
+        let cancelFrameBefore = cancelButton.frame
+
+        // Select All -> menu enabled, leading flips, Cancel doesn't move.
+        selectAllButton.tap()
+        let deselectAllButton = app.buttons["draftHistoryDeselectAllButton"]
+        XCTAssert(deselectAllButton.waitForExistence(timeout: 5), "Select All should become Deselect All once everything is selected")
+        XCTAssert(selectionMenu.isEnabled, "Actions menu should be enabled with a selection")
+        XCTAssertEqual(cancelButton.frame, cancelFrameBefore, "Cancel must stay put while the selection changes")
+
+        // Deselect All -> back to the empty state, still in selection mode.
+        deselectAllButton.tap()
+        XCTAssert(selectAllButton.waitForExistence(timeout: 5), "Deselect All should flip back to Select All")
+        XCTAssertFalse(selectionMenu.isEnabled, "Actions menu should be disabled again after Deselect All")
+
+        // One whole draft -> Delete available, Bulk Edit not (needs two or more).
         let fullSelectToggle = app.descendants(matching: .any).matching(identifier: "draftFullSelectToggle").firstMatch
         XCTAssert(fullSelectToggle.waitForExistence(timeout: 5), "Full-select toggle should appear")
         fullSelectToggle.tap()
 
-        // Snapshot the toolbar state right after a full draft is selected.
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = "after-full-select"
-        attachment.lifetime = .keepAlways
-        add(attachment)
+        XCTAssert(selectionMenu.isEnabled, "Actions menu should be enabled with one draft selected")
+        XCTAssert(selectionMenu.isHittable, "Actions menu should be directly tappable: \(app.debugDescription)")
+        selectionMenu.tap()
 
         let deleteButton = app.buttons["draftHistoryDeleteButton"]
-        XCTAssert(deleteButton.exists, "Delete button should still exist in the accessibility tree: \(app.debugDescription)")
-        XCTAssert(deleteButton.isHittable, "Delete button should be hittable, not collapsed into an overflow menu")
+        XCTAssert(deleteButton.waitForExistence(timeout: 5), "Delete should be in the actions menu: \(app.debugDescription)")
+        let bulkEditButton = app.buttons["draftHistoryBulkEditButton"]
+        XCTAssert(bulkEditButton.exists, "Bulk Edit should be listed in the actions menu")
+        XCTAssertFalse(bulkEditButton.isEnabled, "Bulk Edit needs two or more whole drafts")
+
+        // Snapshot the open menu.
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "selection-menu-open"
+        attachment.lifetime = .keepAlways
+        add(attachment)
 
         deleteButton.tap()
 

@@ -5,6 +5,7 @@
 
 import Foundation
 import ImageIO
+import Photos
 import SwiftData
 import UIKit
 
@@ -150,13 +151,11 @@ class Item {
     /// row `body` that re-evaluates per keystroke — was the source of major typing lag
     /// in the listing flow. Upload/publish paths still use `image(for:)` for full res.
     ///
-    /// UNCHANGED behavior/signature — still decodes synchronously on a cache miss, still
-    /// safe for the 8 existing call sites that rely on that (see 2026-09-28 investigation
-    /// notes on `loadThumbnailAsync` below for why that's a real perf problem at scale).
-    /// New call sites should prefer `DraftThumbnailView` (Views/DraftThumbnailView.swift)
-    /// instead, which uses `cachedThumbnailOnly` + `loadThumbnailAsync` to keep the decode
-    /// off the main thread. Migrating the remaining synchronous call sites to it is
-    /// tracked as follow-up, not done in this pass.
+    /// Decodes synchronously on a cache miss, and only knows about locally-stored bytes
+    /// (nil for library-picked photos). Views should use `DraftThumbnailView`
+    /// (Views/DraftThumbnailView.swift) instead, which keeps the work off the main
+    /// thread via `cachedThumbnailOnly` + `loadThumbnailAsync` and handles both photo
+    /// sources — every draft screen was migrated to it 2026-09-30.
     func thumbnail(for assetId: String) -> UIImage? {
         guard !Item.deletedIDs.contains(id) else { return nil }
         let key = "\(id)-\(assetId)" as NSString
@@ -195,24 +194,117 @@ class Item {
     }
 
     /// Cache-miss path for `DraftThumbnailView`: reads the one photo's `Data` on the
-    /// caller's actor (main — SwiftData model properties aren't safe to touch off it),
-    /// then hops to a background task for the actual decode (plain `Data` in, `UIImage`
-    /// out, no model object involved) so the expensive ImageIO work doesn't block the
-    /// main thread. Populates the same NSCache `thumbnail(for:)` reads, so once this
+    /// main actor (SwiftData model properties aren't safe to touch off it), then hops
+    /// to a background queue for the actual decode (plain `Data` in, `UIImage` out, no
+    /// model object involved) so the expensive ImageIO work doesn't block the main
+    /// thread. Populates the same NSCache `thumbnail(for:)` reads, so once this
     /// resolves, every other call site's synchronous fast path picks it up for free.
+    ///
+    /// `@MainActor` is load-bearing: a plain `async` method on a non-actor class runs
+    /// on the global executor no matter who awaits it, so without the annotation the
+    /// `photosData` read below happened OFF the main thread.
+    ///
+    /// Photos picked from the library have no local bytes (`photosData` is only filled
+    /// for camera shots) — those load from PhotoKit instead, also off-main.
+    @MainActor
     func loadThumbnailAsync(for assetId: String) async -> UIImage? {
         guard !Item.deletedIDs.contains(id) else { return nil }
-        let key = "\(id)-\(assetId)" as NSString
-        if let cached = Item.thumbnailCache.object(forKey: key) { return cached }
-        guard let idx = sourceAssetIdentifiers.firstIndex(of: assetId),
-              idx < photosData.count else { return nil }
-        let data = photosData[idx] // SwiftData read — stays on the main actor
-        let thumb = await Task.detached(priority: .userInitiated) {
-            Item.decodeThumbnail(data)
-        }.value
-        guard !Item.deletedIDs.contains(id) else { return nil } // item may have been deleted while decoding
-        if let thumb { Item.thumbnailCache.setObject(thumb, forKey: key) }
+        // Captured before the await — `id` itself can fault once the item is deleted.
+        let itemID = id
+        let key = "\(itemID)-\(assetId)"
+        if let cached = Item.thumbnailCache.object(forKey: key as NSString) { return cached }
+
+        let load: Task<UIImage?, Never>
+        if let inFlight = Item.thumbnailLoads[key] {
+            // Already loading (another cell, or `prewarmThumbnail` at capture time) —
+            // join it instead of faulting `photosData` again.
+            load = inFlight
+        } else {
+            var data: Data?
+            if let idx = sourceAssetIdentifiers.firstIndex(of: assetId), idx < photosData.count {
+                data = photosData[idx]
+            }
+            load = Item.startThumbnailLoad(key: key, data: data, assetId: assetId)
+        }
+        let thumb = await load.value
+        guard !Item.deletedIDs.contains(itemID) else { return nil } // deleted while loading
         return thumb
+    }
+
+    /// Decodes a just-captured photo's thumbnail straight from the bytes the camera
+    /// handed over, before the carousel asks for it. Without this the carousel's first
+    /// render of a new shot reads it back out of `photosData` — which faults the ENTIRE
+    /// externally-stored array (every full-res photo in the draft) on the main thread.
+    @MainActor
+    static func prewarmThumbnail(itemID: UUID, assetId: String, data: Data) {
+        let key = "\(itemID)-\(assetId)"
+        guard thumbnailCache.object(forKey: key as NSString) == nil, thumbnailLoads[key] == nil else { return }
+        _ = startThumbnailLoad(key: key, data: data, assetId: assetId)
+    }
+
+    /// In-flight loads keyed like `thumbnailCache`, so concurrent requests for the same
+    /// photo share one decode.
+    @MainActor private static var thumbnailLoads: [String: Task<UIImage?, Never>] = [:]
+
+    /// Own queue rather than `Task.detached`: the PhotoKit request below is synchronous
+    /// and can wait on iCloud, which must not tie up the cooperative thread pool.
+    private static let thumbnailQueue = DispatchQueue(
+        label: "wonni.item-thumbnails", qos: .userInitiated, attributes: .concurrent)
+
+    @MainActor
+    private static func startThumbnailLoad(key: String, data: Data?, assetId: String) -> Task<UIImage?, Never> {
+        let task = Task<UIImage?, Never> { @MainActor in
+            let thumb: UIImage? = await withCheckedContinuation { continuation in
+                thumbnailQueue.async {
+                    if let data, let decoded = decodeThumbnail(data) {
+                        continuation.resume(returning: decoded)
+                    } else {
+                        continuation.resume(returning: photoLibraryThumbnail(assetId: assetId))
+                    }
+                }
+            }
+            if let thumb { thumbnailCache.setObject(thumb, forKey: key as NSString) }
+            thumbnailLoads[key] = nil
+            return thumb
+        }
+        thumbnailLoads[key] = task
+        return task
+    }
+
+    /// Thumbnail for a photo that lives only in the photo library. Blocking — call from
+    /// `thumbnailQueue` only. `isSynchronous` guarantees exactly one callback.
+    private static func photoLibraryThumbnail(assetId: String) -> UIImage? {
+        guard !assetId.hasPrefix("local_temp_"),
+              let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil).firstObject else {
+            return nil
+        }
+        let options = PHImageRequestOptions()
+        options.isSynchronous = true
+        options.deliveryMode = .highQualityFormat
+        options.resizeMode = .fast
+        options.isNetworkAccessAllowed = true
+        let side = CGFloat(thumbnailMaxPixel)
+        var result: UIImage?
+        PHImageManager.default().requestImage(
+            for: asset, targetSize: CGSize(width: side, height: side),
+            contentMode: .aspectFill, options: options
+        ) { image, _ in
+            result = image
+        }
+        return result
+    }
+
+    /// Every locally-stored photo keyed by assetId, from a SINGLE `photosData` read.
+    /// Loops that need several photos should use this rather than calling `image(for:)`
+    /// per photo — each of those re-reads the whole externally-stored array.
+    func localPhotoDataByAsset() -> [String: Data] {
+        guard !Item.deletedIDs.contains(id) else { return [:] }
+        let data = photosData
+        var result: [String: Data] = [:]
+        for (idx, assetId) in sourceAssetIdentifiers.enumerated() where idx < data.count {
+            result[assetId] = data[idx]
+        }
+        return result
     }
 
     func image(for assetId: String) -> UIImage? {

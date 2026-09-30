@@ -261,7 +261,7 @@ class UploadManager: ObservableObject {
     func addPhotoToActiveDraft(assetId: String, imageData: Data?, modelContext: ModelContext) {
         let draft: Item
         if let existingID = activeDraftID,
-           let existing = (try? modelContext.fetch(FetchDescriptor<Item>()))?.first(where: { $0.id == existingID }) {
+           let existing = fetchItem(id: existingID, modelContext: modelContext) {
             draft = existing
         } else {
             draft = Item(firestoreListingId: UUID().uuidString)
@@ -269,6 +269,11 @@ class UploadManager: ObservableObject {
             activeDraftID = draft.id
         }
 
+        if let data = imageData {
+            // Before the carousel learns about the photo (the append below), so its
+            // cell joins this decode instead of reading the bytes back out of SwiftData.
+            Item.prewarmThumbnail(itemID: draft.id, assetId: assetId, data: data)
+        }
         draft.sourceAssetIdentifiers.append(assetId)
         if let data = imageData {
             draft.photosData.append(data)
@@ -277,12 +282,34 @@ class UploadManager: ObservableObject {
         try? modelContext.save()
     }
 
+    /// Picker tap: adds the photo to the active draft, or removes it if it's already
+    /// there. Decided here against the live draft rather than by the caller, so a grid
+    /// cell holding an older tap closure (cells skip re-rendering when their own
+    /// inputs are unchanged) can never act on stale selection state.
+    func togglePhotoInActiveDraft(assetId: String, modelContext: ModelContext) {
+        if let id = activeDraftID,
+           let draft = fetchItem(id: id, modelContext: modelContext),
+           draft.sourceAssetIdentifiers.contains(assetId) {
+            removePhotoFromActiveDraft(assetId: assetId, modelContext: modelContext)
+        } else {
+            addPhotoToActiveDraft(assetId: assetId, imageData: nil, modelContext: modelContext)
+        }
+    }
+
+    /// Single-row lookup. The active-draft paths run on every photo tap / shutter press,
+    /// and used to fetch EVERY Item just to find one by id.
+    private func fetchItem(id: UUID, modelContext: ModelContext) -> Item? {
+        var descriptor = FetchDescriptor<Item>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return (try? modelContext.fetch(descriptor))?.first
+    }
+
     /// Removes a photo from the active draft (deselect in picker, or delete in carousel).
     /// Safe to discard the removed Storage path here — the active draft hasn't started
     /// its background upload yet, so it never has one.
     func removePhotoFromActiveDraft(assetId: String, modelContext: ModelContext) {
         guard let id = activeDraftID,
-              let draft = (try? modelContext.fetch(FetchDescriptor<Item>()))?.first(where: { $0.id == id }) else { return }
+              let draft = fetchItem(id: id, modelContext: modelContext) else { return }
         draft.removePhoto(assetId: assetId)
         if draft.sourceAssetIdentifiers.isEmpty {
             deleteDraftLocallyAndCloud(draft: draft, modelContext: modelContext)
@@ -428,7 +455,7 @@ class UploadManager: ObservableObject {
     /// "Starting a new stack" in either view calls this.
     func commitActiveDraft(modelContext: ModelContext) {
         guard let id = activeDraftID,
-              let draft = (try? modelContext.fetch(FetchDescriptor<Item>()))?.first(where: { $0.id == id }),
+              let draft = fetchItem(id: id, modelContext: modelContext),
               !draft.sourceAssetIdentifiers.isEmpty else {
             activeDraftID = nil
             return
@@ -490,12 +517,16 @@ class UploadManager: ObservableObject {
             // Paired with assetId (not a bare [UIImage]) so a fetch failure partway through
             // doesn't shift later images out of sync with the assetId they belong to.
             var images: [(assetId: String, image: UIImage)] = []
+            // One read of the externally-stored photo array for the whole draft, instead
+            // of one per photo via image(for:) — this runs on the main actor right as the
+            // user taps "+" and keeps picking.
+            let localPhotos = deletedDraftIDs.contains(draftID) ? [:] : draft.localPhotoDataByAsset()
             for assetId in assetIdentifiers {
                 guard !deletedDraftIDs.contains(draftID) else {
                     print("[UploadManager] Draft \(draftID) deleted mid-upload — aborting")
                     return
                 }
-                if let img = draft.image(for: assetId) {
+                if let data = localPhotos[assetId], let img = UIImage(data: data) {
                     images.append((assetId, img))
                 } else if let img = await PhotoAsset(identifier: assetId).fullResolutionImage() {
                     images.append((assetId, img))

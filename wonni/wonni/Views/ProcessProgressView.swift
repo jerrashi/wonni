@@ -141,17 +141,7 @@ struct ProcessProgressView: View {
             // Thumbnail
             Group {
                 if let assetId = item.sourceAssetIdentifiers.first {
-                    if let img = item.thumbnail(for: assetId) {
-                        Image(uiImage: img)
-                            .resizable()
-                            .scaledToFill()
-                    } else {
-                        PhotoItemView(
-                            asset: PhotoAsset(identifier: assetId),
-                            cache: cache,
-                            imageSize: CGSize(width: 100, height: 100)
-                        )
-                    }
+                    DraftThumbnailView(item: item, assetId: assetId)
                 } else {
                     Color(.systemGray5)
                 }

@@ -29,6 +29,9 @@ struct ActiveDraftCarouselView: View {
     @State private var stackBouncing = false
     @State private var isTrashTargeted = false
 
+    /// 72pt thumbnails + 8pt vertical padding on each side.
+    private static let rowHeight: CGFloat = 88
+
     // Active draft — the Item currently being built
     private var activeDraft: Item? {
         guard let id = uploadManager.activeDraftID, !uploadManager.deletedDraftIDs.contains(id) else { return nil }
@@ -92,6 +95,13 @@ struct ActiveDraftCarouselView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                 }
+                // Explicit height is REQUIRED with the LazyHStack above: unlike HStack
+                // (which hugs its children), a LazyHStack in a horizontal ScrollView is
+                // greedy on the cross axis and takes whatever height it's offered. The
+                // HStack→LazyHStack swap (#143) is what made this carousel balloon to
+                // half the picker / float mid-screen on the camera — #146 and #147
+                // chased that as a transition/safeAreaInset bug.
+                .frame(height: Self.rowHeight)
 
                 // ── "+" commit button, replaced by a trash drop target while dragging ──
                 let hasActive = activeDraft?.sourceAssetIdentifiers.isEmpty == false
