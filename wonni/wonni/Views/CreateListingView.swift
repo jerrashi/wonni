@@ -1190,6 +1190,14 @@ struct DraftRow: View, Equatable {
                             titleText = String(newText.prefix(140))
                             item.userEditedTitle = titleText.isEmpty ? nil : titleText
                         }
+                        // Compact bottom sheet, not the full-screen default (2026-09-30):
+                        // the field itself is only ever a couple lines tall, so a
+                        // full-height sheet left most of the screen empty black space
+                        // above the keyboard. Fixed height + a medium fallback so it
+                        // still grows a bit for a 2-3 line title before the keyboard
+                        // covers it.
+                        .presentationDetents([.height(160), .medium])
+                        .presentationDragIndicator(.visible)
                     }
 
                     TitleCharCountView(count: titleText.count)
@@ -1778,6 +1786,7 @@ private struct TitleEditorSheet: View {
             TextField("Add title…", text: $localText, axis: .vertical)
                 .focused($focused)
                 .font(.body)
+                .lineLimit(1...4)
                 .padding(.horizontal, 12)
                 .padding(.top, 4)
                 .navigationTitle("Title")
