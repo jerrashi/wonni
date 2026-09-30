@@ -172,6 +172,15 @@ struct CustomPhotoPickerView: View {
         var body: some View {
             let currentUsedAssetIDs = allUsedAssetIDs
 
+            // hasContent gates the bottom carousel below — computed here (not inside the
+            // old .safeAreaInset(edge: .bottom) closure) now that it's a plain VStack
+            // sibling of the ScrollView instead of a safe-area reservation on it. See the
+            // 2026-09-29 note on the carousel below for why that mattered.
+            let hasContent = (activeDraft?.sourceAssetIdentifiers.isEmpty == false
+                || !committedDrafts.isEmpty)
+                && !photoCollection.photoAssets.isEmpty
+
+            VStack(spacing: 0) {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: Self.itemSpacing) {
                     if hidePreviouslySelected {
@@ -234,29 +243,26 @@ struct CustomPhotoPickerView: View {
                     }
                 }
             }
-            .safeAreaInset(edge: .bottom) {
-                // Unified carousel — identical to camera view bottom panel.
-                // Also requires photoAssets to have loaded: on a fresh push, hasContent
-                // can already be true (from a draft committed on a prior visit) while
-                // the LazyVGrid above hasn't measured any rows yet. ScrollView doesn't
-                // always reserve the safeAreaInset's space correctly when the inset is
-                // present from the very first layout pass, so the carousel could render
-                // overlapping the grid instead of pinned below it.
-                let hasContent = (activeDraft?.sourceAssetIdentifiers.isEmpty == false
-                    || !committedDrafts.isEmpty)
-                    && !photoCollection.photoAssets.isEmpty
-                if hasContent {
-                    VStack(spacing: 0) {
-                        Divider()
-                        ActiveDraftCarouselView(
-                            cache: photoCollection.cache,
-                            onOpenDraftHistory: { pickerRoute = .draftHistory }
-                        )
-                        .padding(.bottom, 4)
-                    }
-                    .background(Color(.systemBackground))
-                    .transition(.move(edge: .bottom))
+
+            // 2026-09-29: was `.safeAreaInset(edge: .bottom)` on the ScrollView above —
+            // that relies on the ScrollView correctly re-reserving space for the inset's
+            // content, which it doesn't reliably do on the very first layout pass (see the
+            // old comment this replaced). Reported symptom: the carousel rendering
+            // mid-screen / overlapping the grid instead of pinned to the bottom, a real
+            // constraint bug, not an animation timing one. A plain VStack sibling below the
+            // ScrollView has no such reservation to get wrong — it's just laid out in flow.
+            if hasContent {
+                VStack(spacing: 0) {
+                    Divider()
+                    ActiveDraftCarouselView(
+                        cache: photoCollection.cache,
+                        onOpenDraftHistory: { pickerRoute = .draftHistory }
+                    )
+                    .padding(.bottom, 4)
                 }
+                .background(Color(.systemBackground))
+                .transition(.move(edge: .bottom))
+            }
             }
             .navigationTitle("Photos")
             .navigationBarTitleDisplayMode(.inline)
