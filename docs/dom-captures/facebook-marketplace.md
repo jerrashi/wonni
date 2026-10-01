@@ -71,7 +71,12 @@ we navigate WKWebView to; Facebook client-side routes here once the form loads).
 success/create-page detection keyed on `/marketplace/create` in the path is wrong.
 
 ### Title / Price / Description — real `<input>`/`<textarea>`, selectable by `data-name`
-The one genuinely stable selector found so far. Each field's wrapper div carries
+The one genuinely stable selector found so far. **Do not set `.value` + dispatch
+`input` on these** — Facebook's handler form-encodes the result and the listing goes out
+as `Nintendo+Wii+Console` (TestFlight 2026-10-01). `FacebookAutoPosterView.fillBasicsJS`
+focuses, selects, and `document.execCommand('insertText')`s instead (same event
+sequence as typing), then reads the value back and reports `plus-encoded` if `+`
+survived. Each field's wrapper div carries
 `data-name`, and for these three the wrapper IS the `[data-focusable="true"]` element:
 ```html
 <div ... data-focusable="true" data-action-id="32747" data-name="title" data-mcomponent="MInputBox" ...>
@@ -150,15 +155,17 @@ unset. Search query is the city alone (not "city, state" — the settings model 
 `stateOrProvince` as an abbreviation like "VA", which won't prefix-match Facebook's
 spelled-out "Virginia"; the city name alone is enough for the picker to suggest it).
 
-### Add photos — ONE photo per tap (observed on device 2026-10-01)
-The mobile form's photo flow is per-photo: each "Add photos" tap yields a file input
-that takes a single file. The old all-at-once `DataTransfer` attach left at most one
-photo on the listing. `FacebookAutoPosterView.attachPhotosJS` now loops — tap row, wait
-for `input[type=file]`, hand it one file, wait for the preview-`img` count to grow,
-repeat — and reports `attached-N/M` in the banner. Still uncaptured: the input's exact
-attributes (it's sniffed for `multiple` and, if present, given everything remaining at
-once) and what the preview thumbnails look like (currently counted as `img[src^=blob:]`
-/ `img[src^=data:]`).
+### Add photos — ONE photo per tap, input never in the DOM (2026-10-01)
+Each "Add photos" tap takes a single file, and `querySelector('input[type=file]')`
+after the tap found nothing on device (second TestFlight round) — consistent with
+Facebook creating a detached `type=file` input and calling `.click()` on it to open the
+picker. `FacebookAutoPosterView.attachPhotosJS` therefore hooks
+`HTMLInputElement.prototype.click` (captures the element, suppresses the native picker)
+plus a MutationObserver for inputs that are inserted, then per photo: tap row → wait for
+a captured input → assign one `File` → `change`/`input` → wait for preview-`img` count to
+grow (4 s cap) → repeat; `multiple` on the input sends everything remaining at once.
+Banner token: `attached-N/M (reason)` — `no-add-photos-row` / `no-file-input` name the
+step that broke. Still uncaptured: the real input markup and preview thumbnails.
 
 ### "Offer shipping" / "Hide from friends" — NOT captured
 Driven by `FacebookAutoPosterView.setToggleJS` by label text → nearest

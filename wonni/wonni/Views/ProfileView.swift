@@ -2499,7 +2499,7 @@ struct SettingsSheet: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Posting defaults")
-                            Text("Offer shipping and hide-from-friends defaults applied when posting to Facebook. Each listing can override them.")
+                            Text("Listing location, offer shipping, and hide-from-friends defaults applied when posting to Facebook.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }

@@ -235,7 +235,13 @@ public class IntegrationRepository: ObservableObject {
     /// Account-level Facebook Marketplace posting defaults (`users/{uid}/settings/
     /// facebookPosting`). nil = never saved on any device → FacebookAutoPosterView
     /// collects them before the first post.
-    public func loadFacebookPostingPreferences() async -> (offerShipping: Bool, hideFromFriends: Bool)? {
+    public struct FacebookPostingPreferences {
+        public var offerShipping: Bool
+        public var hideFromFriends: Bool
+        public var location: String
+    }
+
+    public func loadFacebookPostingPreferences() async -> FacebookPostingPreferences? {
         guard let uid = userId else { return nil }
         do {
             let doc = try await db.collection(usersCollection)
@@ -244,14 +250,18 @@ public class IntegrationRepository: ObservableObject {
                 .document("facebookPosting")
                 .getDocument()
             guard doc.exists, let data = doc.data() else { return nil }
-            return (data["offerShipping"] as? Bool ?? false, data["hideFromFriends"] as? Bool ?? false)
+            return FacebookPostingPreferences(
+                offerShipping: data["offerShipping"] as? Bool ?? false,
+                hideFromFriends: data["hideFromFriends"] as? Bool ?? false,
+                location: data["location"] as? String ?? ""
+            )
         } catch {
             print("[IntegrationRepository] loadFacebookPostingPreferences error: \(error)")
             return nil
         }
     }
 
-    public func saveFacebookPostingPreferences(offerShipping: Bool, hideFromFriends: Bool) async {
+    public func saveFacebookPostingPreferences(offerShipping: Bool, hideFromFriends: Bool, location: String) async {
         guard let uid = userId else { return }
         do {
             try await db.collection(usersCollection)
@@ -261,6 +271,7 @@ public class IntegrationRepository: ObservableObject {
                 .setData([
                     "offerShipping": offerShipping,
                     "hideFromFriends": hideFromFriends,
+                    "location": location,
                     "updatedAt": FieldValue.serverTimestamp()
                 ], merge: true)
         } catch {
