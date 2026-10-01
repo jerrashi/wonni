@@ -2493,6 +2493,19 @@ struct SettingsSheet: View {
                     }
                 }
 
+                Section(header: Text("Facebook Marketplace")) {
+                    NavigationLink {
+                        FacebookPostingPreferencesView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Posting defaults")
+                            Text("Offer shipping and hide-from-friends defaults applied when posting to Facebook. Each listing can override them.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
                 Section(header: Text("Selling Settings")) {
                     if settingsRepo.isLoading {
                         HStack {

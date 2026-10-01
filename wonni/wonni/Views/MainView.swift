@@ -181,13 +181,7 @@ struct MainView: View {
         .sheet(item: $uploadManager.activeAutofillJob, onDismiss: {
             uploadManager.checkAndStartNextWebJob(modelContext: modelContext)
         }) { job in
-            CrossPostContainerView(
-                platformName: "Facebook Marketplace",
-                listingTitle: job.title,
-                listingDescription: job.description,
-                listingPrice: job.price,
-                job: job
-            )
+            FacebookAutoPosterView(job: job)
         }
         // N6: full screen (not a sheet) — this is the publish-progress view for the
         // cross-post phase, per listing × platform, mirroring ProcessProgressView's

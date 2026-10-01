@@ -232,6 +232,42 @@ public class IntegrationRepository: ObservableObject {
         }
     }
 
+    /// Account-level Facebook Marketplace posting defaults (`users/{uid}/settings/
+    /// facebookPosting`). nil = never saved on any device → FacebookAutoPosterView
+    /// collects them before the first post.
+    public func loadFacebookPostingPreferences() async -> (offerShipping: Bool, hideFromFriends: Bool)? {
+        guard let uid = userId else { return nil }
+        do {
+            let doc = try await db.collection(usersCollection)
+                .document(uid)
+                .collection("settings")
+                .document("facebookPosting")
+                .getDocument()
+            guard doc.exists, let data = doc.data() else { return nil }
+            return (data["offerShipping"] as? Bool ?? false, data["hideFromFriends"] as? Bool ?? false)
+        } catch {
+            print("[IntegrationRepository] loadFacebookPostingPreferences error: \(error)")
+            return nil
+        }
+    }
+
+    public func saveFacebookPostingPreferences(offerShipping: Bool, hideFromFriends: Bool) async {
+        guard let uid = userId else { return }
+        do {
+            try await db.collection(usersCollection)
+                .document(uid)
+                .collection("settings")
+                .document("facebookPosting")
+                .setData([
+                    "offerShipping": offerShipping,
+                    "hideFromFriends": hideFromFriends,
+                    "updatedAt": FieldValue.serverTimestamp()
+                ], merge: true)
+        } catch {
+            print("[IntegrationRepository] saveFacebookPostingPreferences error: \(error)")
+        }
+    }
+
     /// Loads sales dashboard settings from Firestore. Returns defaults if not yet saved.
     /// Stored at `users/{uid}/settings/salesDashboard`.
     public func loadSalesDashboardSettings() async -> Bool {

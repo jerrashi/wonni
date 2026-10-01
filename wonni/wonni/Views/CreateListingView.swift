@@ -1495,6 +1495,9 @@ struct DraftEditSheet: View {
     @State private var estimatedDays: String = ""
     @State private var selectedCondition: ItemCondition = .good
     @State private var tagsText: String = ""
+    // Facebook overrides: nil = account default (see Item.facebookOfferShipping).
+    @State private var facebookOfferShipping: Bool?
+    @State private var facebookHideFromFriends: Bool?
 
     @State private var showPhotoEditModal = false
     @State private var selectedItems: [PhotosPickerItem] = []
@@ -1624,6 +1627,23 @@ struct DraftEditSheet: View {
 
                 Section("Note (hidden from buyer)") {
                     TextField("e.g. stored in basement", text: $personalNote)
+                }
+
+                Section {
+                    Picker("Offer shipping", selection: $facebookOfferShipping) {
+                        Text("Default").tag(Bool?.none)
+                        Text("On").tag(Bool?.some(true))
+                        Text("Off").tag(Bool?.some(false))
+                    }
+                    Picker("Hide from friends", selection: $facebookHideFromFriends) {
+                        Text("Default").tag(Bool?.none)
+                        Text("On").tag(Bool?.some(true))
+                        Text("Off").tag(Bool?.some(false))
+                    }
+                } header: {
+                    Text("Facebook Marketplace")
+                } footer: {
+                    Text("\"Default\" uses your account setting (Settings → Facebook Marketplace).")
                 }
 
                 Section("Shipping & Dimensions") {
@@ -1789,6 +1809,8 @@ struct DraftEditSheet: View {
         estimatedDays = "\(item.estimatedShippingDays)"
         handlingTimeDaysOverride = item.handlingTimeDays
         tagsText = item.tags.joined(separator: ", ")
+        facebookOfferShipping = item.facebookOfferShipping
+        facebookHideFromFriends = item.facebookHideFromFriends
         
         // Dimensions & Weight
         if let w = item.weightLbs { weightText = String(format: "%.2f", w) } else { weightText = "" }
@@ -1818,6 +1840,8 @@ struct DraftEditSheet: View {
         item.handlingFee = Double(handlingFee.filter { $0.isNumber || $0 == "." }) ?? 0
         item.estimatedShippingDays = Int(estimatedDays) ?? 3
         item.handlingTimeDays = handlingTimeDaysOverride
+        item.facebookOfferShipping = facebookOfferShipping
+        item.facebookHideFromFriends = facebookHideFromFriends
         item.tags = tagsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         
         // Dimensions & Weight
@@ -2571,12 +2595,7 @@ struct CrossPostStatusView: View {
         .onAppear(perform: startListeners)
         .onDisappear(perform: stopListeners)
         .sheet(item: $retryJob) { job in
-            CrossPostContainerView(
-                platformName: "Facebook Marketplace",
-                listingTitle: job.title,
-                listingDescription: job.description,
-                listingPrice: job.price
-            )
+            FacebookAutoPosterView(job: job)
         }
         // See UploadManager.crossPostError — surfaced here (not on ProcessResultsOverviewView)
         // because this is reliably the screen the user is on by the time an eBay/Etsy
