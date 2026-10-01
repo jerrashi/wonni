@@ -46,6 +46,9 @@ struct FacebookAutoPosterView: View {
     // fill reads, same split MercariAutoPosterView uses for shipping preferences.
     @AppStorage("facebookOfferShipping") private var defaultOfferShipping = false
     @AppStorage("facebookHideFromFriends") private var defaultHideFromFriends = false
+    /// City typed into the "Change location" picker. Account default; empty = leave
+    /// Facebook's own saved location alone.
+    @AppStorage("facebookLocation") private var defaultLocation = ""
     @AppStorage("facebookPrefsConfigured") private var prefsConfigured = false
     @State private var showPrefSetup = false
 
@@ -186,6 +189,7 @@ struct FacebookAutoPosterView: View {
         if let remote = await IntegrationRepository.shared.loadFacebookPostingPreferences() {
             defaultOfferShipping = remote.offerShipping
             defaultHideFromFriends = remote.hideFromFriends
+            defaultLocation = remote.location
             prefsConfigured = true
         }
         if prefsConfigured {
@@ -227,7 +231,10 @@ struct FacebookAutoPosterView: View {
         ])) as? String ?? ""
         if !missed.isEmpty { issues.append("couldn't fill \(missed)") }
 
-        if let loc = job.facebookLocation, !loc.isEmpty {
+        // Facebook default (Settings → Facebook Marketplace) wins; the job's value is the
+        // older Selling-Settings city, kept as the fallback for accounts that never set one.
+        let location = defaultLocation.isEmpty ? job.facebookLocation : defaultLocation
+        if let loc = location, !loc.isEmpty {
             phase = .filling("Setting location…")
             let result = (try? await webView.callJS(Self.fillLocationJS, args: ["location": loc])) as? String ?? "error"
             if !result.hasPrefix("selected") { issues.append("location (\(result))") }
@@ -441,8 +448,14 @@ struct FacebookAutoPosterView: View {
     })();
     """
 
-    /// Title/Price/Description are real inputs wrapped in `div[data-name=…]`; set through
-    /// the native value setter so Facebook's own input listeners see the change.
+    /// Title/Price/Description are real inputs wrapped in `div[data-name=…]`. Setting
+    /// `.value` through the native setter + `input` event looked right but Facebook's
+    /// MComponent handler form-encodes the result — the listing went out as
+    /// "Nintendo+Wii+Console" (TestFlight, 2026-10-01). Real typing takes a different
+    /// path, so this focuses the field, selects any existing text, and inserts via
+    /// `execCommand('insertText')`, which fires the same beforeinput/input sequence a
+    /// keyboard does. The value is read back afterwards; a field that still shows `+`
+    /// for spaces is reported by name so the banner says exactly which one.
     private static let fillBasicsJS = """
     function setNative(el, v) {
         var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -450,20 +463,29 @@ struct FacebookAutoPosterView: View {
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
     }
+    function typeInto(el, value) {
+        el.focus();
+        try { el.setSelectionRange(0, (el.value || '').length); } catch (e) {}
+        var ok = false;
+        try { ok = document.execCommand('insertText', false, value); } catch (e) { ok = false; }
+        if (!ok || el.value !== value) { setNative(el, value); }
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.blur();
+    }
     function fillByName(name, value) {
         var wrap = document.querySelector('[data-name="' + name + '"]');
-        if (!wrap) return false;
+        if (!wrap) return 'missing';
         var el = (wrap.tagName === 'INPUT' || wrap.tagName === 'TEXTAREA') ? wrap : wrap.querySelector('input,textarea');
-        if (!el) return false;
-        el.focus();
-        setNative(el, value);
-        el.blur();
-        return true;
+        if (!el) return 'missing';
+        typeInto(el, value);
+        var got = el.value || '';
+        if (got === value) return 'ok';
+        if (value.indexOf(' ') !== -1 && got.indexOf('+') !== -1 && got.indexOf(' ') === -1) return 'plus-encoded';
+        return 'ok';
     }
     var missed = [];
-    if (!fillByName('title', title)) missed.push('title');
-    if (!fillByName('price', price)) missed.push('price');
-    if (!fillByName('description', desc)) missed.push('description');
+    var results = { title: fillByName('title', title), price: fillByName('price', price), description: fillByName('description', desc) };
+    for (var k in results) { if (results[k] !== 'ok') missed.push(k + ' (' + results[k] + ')'); }
     return missed.join(', ');
     """
 
@@ -599,21 +621,43 @@ struct FacebookAutoPosterView: View {
     """
 
     /// Photos go in one at a time: Facebook's mobile form accepts a single file per
-    /// "Add photos" tap (confirmed on device 2026-10-01 — the old all-at-once
-    /// DataTransfer left at most one photo attached). Per photo: tap the add row, wait for
-    /// the file input to appear, hand it one file, wait for the preview count to grow,
-    /// repeat. If the input advertises `multiple`, everything remaining goes in one shot.
-    /// Resolves "attached-N/M".
+    /// "Add photos" tap. The file input is never findable in the DOM — the first attempt
+    /// (`querySelector('input[type=file]')` after the tap) attached nothing on device —
+    /// so this hooks `HTMLInputElement.prototype.click`: when Facebook creates its
+    /// `type=file` input and clicks it to open the picker, the hook captures the element
+    /// instead (no native picker appears), hands it the next photo, and fires `change`.
+    /// A MutationObserver catches inputs that ARE inserted, as a second path. Per photo:
+    /// tap the add row, wait for a captured input, assign, wait for the preview count to
+    /// grow (or 4 s), repeat. If the input advertises `multiple`, everything remaining
+    /// goes in one shot. Resolves "attached-N/M" plus the reason it stopped early.
     private static let attachPhotosJS = """
     return new Promise(function(resolve) {
         var total = base64Photos.length, attached = 0, index = 0;
+        var W = window;
+        if (!W.__wonniFileHook) {
+            W.__wonniFileHook = { pending: null };
+            var origClick = HTMLInputElement.prototype.click;
+            HTMLInputElement.prototype.click = function() {
+                if (this.type === 'file') { W.__wonniFileHook.pending = this; return; }
+                return origClick.apply(this, arguments);
+            };
+            new MutationObserver(function(muts) {
+                muts.forEach(function(m) {
+                    Array.prototype.forEach.call(m.addedNodes, function(n) {
+                        if (!(n instanceof Element)) return;
+                        var inp = (n.matches && n.matches('input[type="file"]')) ? n : (n.querySelector ? n.querySelector('input[type="file"]') : null);
+                        if (inp) W.__wonniFileHook.pending = inp;
+                    });
+                });
+            }).observe(document.documentElement, { childList: true, subtree: true });
+        }
         function fileAt(i) {
             var bin = atob(base64Photos[i]); var bytes = new Uint8Array(bin.length);
             for (var j = 0; j < bin.length; j++) { bytes[j] = bin.charCodeAt(j); }
             return new File([bytes], 'photo_' + i + '.jpg', {type: 'image/jpeg'});
         }
         function previewCount() {
-            return document.querySelectorAll('#screen-root img[src^="blob:"], #screen-root img[src^="data:"], img[src^="blob:"]').length;
+            return document.querySelectorAll('img[src^="blob:"], img[src^="data:"], img[src*="scontent"]').length;
         }
         function addRow() {
             var rows = document.querySelectorAll('[data-focusable="true"]');
@@ -629,16 +673,20 @@ struct FacebookAutoPosterView: View {
                 var v = pred();
                 if (v) { cb(v); return; }
                 if (Date.now() > deadline) { cb(null); return; }
-                setTimeout(poll, 200);
+                setTimeout(poll, 150);
             })();
         }
+        function done(reason) { resolve('attached-' + attached + '/' + total + (reason ? ' (' + reason + ')' : '')); }
         function step() {
-            if (index >= total) { resolve('attached-' + attached + '/' + total); return; }
+            if (index >= total) { done(''); return; }
             var before = previewCount();
+            W.__wonniFileHook.pending = null;
+            var existing = document.querySelector('input[type="file"]');
             var row = addRow();
+            if (!row && !existing) { done('no-add-photos-row'); return; }
             if (row) row.click();
-            waitFor(function() { return document.querySelector('input[type="file"]'); }, 3000, function(input) {
-                if (!input) { resolve('attached-' + attached + '/' + total + ' (no-file-input)'); return; }
+            waitFor(function() { return W.__wonniFileHook.pending || document.querySelector('input[type="file"]'); }, 4000, function(input) {
+                if (!input) { done('no-file-input'); return; }
                 var dt = new DataTransfer();
                 var batch = input.hasAttribute('multiple') ? total - index : 1;
                 for (var b = 0; b < batch; b++) { dt.items.add(fileAt(index + b)); }
@@ -646,11 +694,12 @@ struct FacebookAutoPosterView: View {
                     input.files = dt.files;
                     input.dispatchEvent(new Event('change', { bubbles: true }));
                     input.dispatchEvent(new Event('input', { bubbles: true }));
-                } catch (e) { resolve('attached-' + attached + '/' + total + ' (' + e.message + ')'); return; }
+                } catch (e) { done(e.message); return; }
                 index += batch;
-                waitFor(function() { return previewCount() > before ? true : null; }, 8000, function(grew) {
-                    if (grew) attached += batch;
-                    step();
+                waitFor(function() { return previewCount() > before ? true : null; }, 4000, function(grew) {
+                    attached += batch;
+                    if (!grew && attached === batch) { /* first photo: keep going, previews may render differently */ }
+                    setTimeout(step, 400);
                 });
             });
         }
@@ -708,6 +757,7 @@ struct FacebookPostingPreferencesView: View {
 
     @AppStorage("facebookOfferShipping") private var offerShipping = false
     @AppStorage("facebookHideFromFriends") private var hideFromFriends = false
+    @AppStorage("facebookLocation") private var location = ""
     @AppStorage("facebookPrefsConfigured") private var prefsConfigured = false
 
     var isFirstTimeSetup = false
@@ -715,9 +765,19 @@ struct FacebookPostingPreferencesView: View {
 
     @State private var offer = false
     @State private var hide = false
+    @State private var city = ""
 
     var body: some View {
         Form {
+            Section {
+                TextField("City, e.g. Richmond", text: $city)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled()
+            } header: {
+                Text("Listing location")
+            } footer: {
+                Text("The city each listing is posted in. Leave blank to keep whatever location Facebook has saved for you.")
+            }
             Section {
                 Toggle("Offer shipping", isOn: $offer)
             } footer: {
@@ -739,15 +799,19 @@ struct FacebookPostingPreferencesView: View {
         .onAppear {
             offer = offerShipping
             hide = hideFromFriends
+            // First run: start from the Selling Settings city the fill used before this
+            // field existed, so nobody has to retype it.
+            city = location.isEmpty ? (CrossPostJob.facebookLocationFromSettings() ?? "") : location
         }
     }
 
     private func save() {
         offerShipping = offer
         hideFromFriends = hide
+        location = city.trimmingCharacters(in: .whitespaces)
         prefsConfigured = true
         Task {
-            await IntegrationRepository.shared.saveFacebookPostingPreferences(offerShipping: offer, hideFromFriends: hide)
+            await IntegrationRepository.shared.saveFacebookPostingPreferences(offerShipping: offer, hideFromFriends: hide, location: location)
         }
         onSaved?()
         dismiss()
