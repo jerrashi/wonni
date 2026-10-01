@@ -1,13 +1,30 @@
 name: Test & Lint
 
+# The ONE iOS gate. Branch protection on `main` requires the `Summary` job below,
+# which fails if any of lint / unit tests / UI tests failed (skips count as pass,
+# so a web-only or docs-only PR still merges).
+#
+# 2026-10-01 rework — why this looks the way it does:
+#   * UI tests used to be opt-in via a `ui-tests` PR label that nobody ever added
+#     (0 of the previous 15 merged PRs), so the carousel regression in #143 sailed
+#     through with its own UI test sitting unrun. They now run on every PR that
+#     touches iOS code. They are the slow job (~15 min) — that's the price.
+#   * Branch protection required a check named "Lint & Test" that no job had been
+#     called for months, so every PR showed BLOCKED and was merged with an admin
+#     override. The required check is now `Summary`.
+#   * The standalone swiftlint.yml always failed (548 pre-existing violations) and
+#     the lint step here always skipped ("SwiftLint not installed"). Lint now runs
+#     for real against a committed baseline (wonni/.swiftlint-baseline.json), so
+#     only NEW violations fail. Regenerate the baseline after a deliberate cleanup:
+#       cd wonni && swiftlint lint --write-baseline .swiftlint-baseline.json wonni/
+#   * The separate "Build Check" job was dropped: `xcodebuild test` already builds
+#     the app and test targets, so it was ~6 min of macOS runner buying nothing.
+
 on:
   pull_request:
     branches: [ main ]
-    # `labeled` so adding the `ui-tests` label starts the heavy UI job on demand.
-    types: [opened, synchronize, reopened, labeled]
   push:
     branches: [ main ]
-  # Manual run (Actions tab → Test & Lint → Run workflow), e.g. at end of a phase.
   workflow_dispatch:
 
 concurrency:
@@ -18,24 +35,29 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # Pin so CI's violations line up with the committed baseline (generated locally
+  # with the same version).
+  SWIFTLINT_VERSION: 0.65.1
+  SIMULATOR: platform=iOS Simulator,name=iPhone 17,OS=latest
+
 jobs:
-  # Cheap gate so a docs-only PR doesn't pay for the ~15-20min macOS
-  # build/test jobs below. Jobs stay in the graph (rather than using
-  # `paths-ignore` on the workflow itself) and just report success-via-skip,
-  # because a workflow that never runs at all leaves any branch-protection
-  # required check with that job's name pending forever.
+  # Cheap gate so web/functions/docs-only PRs don't pay for macOS runners. Jobs
+  # stay in the graph and report success-via-skip rather than using
+  # `paths-ignore` on the workflow, because a workflow that never runs leaves a
+  # required check pending forever.
   detect-changes:
     name: Detect Changes
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      code-changed: ${{ steps.check.outputs.code-changed }}
+      ios-changed: ${{ steps.check.outputs.ios-changed }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Check for non-docs changes
+      - name: Check for iOS changes
         id: check
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
@@ -46,9 +68,10 @@ jobs:
             HEAD_SHA="${{ github.sha }}"
           fi
 
-          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
-            echo "No comparable base commit — treating as code-changed."
-            echo "code-changed=true" >> "$GITHUB_OUTPUT"
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BASE_SHA" 2>/dev/null; then
+            echo "No comparable base commit — treating as iOS-changed."
+            echo "ios-changed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -56,43 +79,52 @@ jobs:
           echo "Changed files:"
           echo "$CHANGED"
 
-          if echo "$CHANGED" | grep -qvE '^(docs/|[^/]+\.md$)'; then
-            echo "code-changed=true" >> "$GITHUB_OUTPUT"
+          # The iOS project, or this workflow itself.
+          if echo "$CHANGED" | grep -qE '^(wonni/|\.github/workflows/test\.yml)'; then
+            echo "ios-changed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Only docs/**.md changed — skipping build/test jobs."
-            echo "code-changed=false" >> "$GITHUB_OUTPUT"
+            echo "No iOS changes — skipping macOS jobs."
+            echo "ios-changed=false" >> "$GITHUB_OUTPUT"
           fi
 
   lint:
     name: SwiftLint
-    runs-on: macos-latest
-    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: detect-changes
-    if: needs.detect-changes.outputs.code-changed == 'true'
+    if: needs.detect-changes.outputs.ios-changed == 'true'
     steps:
       - uses: actions/checkout@v4
 
-      - name: SwiftLint
+      - name: Install SwiftLint
         run: |
-          cd wonni
-          if which swiftlint > /dev/null; then
-            swiftlint --config .swiftlint.yml wonni/
-          else
-            echo "SwiftLint not installed, skipping"
-          fi
+          # --fail so a bad URL is a loud 404, not a quietly saved HTML page.
+          curl -sSL --fail -o swiftlint.zip \
+            "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/swiftlint_linux_amd64.zip"
+          # The zip ships `swiftlint` (dynamic, needs no extra libs on ubuntu-latest)
+          # and `swiftlint-static`; we only need the static one.
+          unzip -q swiftlint.zip swiftlint-static -d swiftlint-bin
+          mv swiftlint-bin/swiftlint-static swiftlint-bin/swiftlint
+          chmod +x swiftlint-bin/swiftlint
+          echo "$PWD/swiftlint-bin" >> "$GITHUB_PATH"
+
+      - name: SwiftLint (new violations only)
+        working-directory: wonni
+        run: |
+          swiftlint version
+          # --strict: warnings fail too. --baseline: the 548 pre-existing violations
+          # are ignored; anything not in the baseline is new and fails the job.
+          swiftlint lint --strict --reporter github-actions-logging \
+            --config .swiftlint.yml --baseline .swiftlint-baseline.json wonni/
 
   unit-tests:
     name: Unit Tests
     runs-on: macos-latest
-    # Bumped from 15 (2026-09-25): two separate PR runs hit this ceiling under
-    # heavier CI load with every visible test case still passing right up to
-    # the cut — GitHub reports a timeout-kill as job conclusion "cancelled",
-    # not "failure"/"timed_out", which reads like an infra flake until you
-    # check the elapsed time against this limit. Not a test slowdown to chase;
-    # just matching the headroom already given to ui-tests below.
+    # 25, not 15: two PR runs hit the lower ceiling under heavy CI load with every
+    # test passing — a timeout-kill reports as "cancelled", which reads like a flake.
     timeout-minutes: 25
     needs: detect-changes
-    if: needs.detect-changes.outputs.code-changed == 'true'
+    if: needs.detect-changes.outputs.ios-changed == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -103,36 +135,36 @@ jobs:
         run: cp wonni/wonni/Secrets.xcconfig.example wonni/wonni/Secrets.xcconfig
 
       - name: Run unit tests
+        working-directory: wonni
         run: |
           set -o pipefail
-          cd wonni
           xcodebuild test \
             -scheme wonni \
-            -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+            -destination "$SIMULATOR" \
             -configuration Debug \
-            -enableCodeCoverage YES \
+            -testPlan UnitTests \
+            -resultBundlePath UnitTests.xcresult \
             2>&1 | tee test-output.log
 
-      - name: Check test results
+      - name: Show failures
         if: failure()
-        run: |
-          echo "❌ Unit tests failed"
-          tail -50 wonni/test-output.log
-          exit 1
+        run: grep -E "error:|failed \(" wonni/test-output.log | sed 's#.*/wonni/##' | sort -u | head -60
 
-  # Opt-in: the simulator UI tests are the slowest, flakiest job (~15 min, and
-  # macOS runner queueing has left it pending for hours). Per-PR gating is lint +
-  # unit tests + build. Run this job by adding the `ui-tests` label to a PR, via
-  # workflow_dispatch, or at end-of-phase. Skipped counts as success in `Summary`.
+      - name: Upload result bundle
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-tests-xcresult
+          path: wonni/UnitTests.xcresult
+
+  # Runs on every iOS PR (no more opt-in label). This is the only job that exercises
+  # the real screens end to end — it's what would have caught #143 on day one.
   ui-tests:
     name: UI Tests (Selling Flow)
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     needs: detect-changes
-    if: >-
-      needs.detect-changes.outputs.code-changed == 'true' &&
-      (github.event_name == 'workflow_dispatch' ||
-       contains(github.event.pull_request.labels.*.name, 'ui-tests'))
+    if: needs.detect-changes.outputs.ios-changed == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -143,14 +175,10 @@ jobs:
         run: cp wonni/wonni/Secrets.xcconfig.example wonni/wonni/Secrets.xcconfig
 
       - name: Seed the simulator's Photos library
-        # The UI tests drive selling through the gallery/photo picker (iOS
-        # Simulator has no camera hardware for the AVCaptureSession shutter
-        # path) — a fresh CI simulator's Photos library is empty, so without
-        # this "At least one photo grid item should load" always times out.
-        # `screencapture` was tried first but the macOS runner is headless
-        # ("could not create image from display", found 2026-09-14) — build
-        # the PNG by hand instead (stdlib zlib/struct only, no display or
-        # extra tooling needed).
+        # The UI tests drive selling through the photo picker (the Simulator has no
+        # camera). A fresh CI simulator's Photos library is empty, so without this
+        # "At least one photo grid item should load" always times out. The PNG is
+        # built by hand — the macOS runner is headless, so `screencapture` fails.
         run: |
           UDID=$(xcrun simctl list devices available --json | python3 -c '
           import json, re, sys
@@ -165,7 +193,7 @@ jobs:
                   if dev["name"] == "iPhone 17":
                       candidates.append((version, dev["udid"]))
           candidates.sort()
-          # Highest iOS version wins, matching the test destinations OS=latest.
+          # Highest iOS version wins, matching the test destination OS=latest.
           print(candidates[-1][1])
           ')
           xcrun simctl boot "$UDID" || true
@@ -185,123 +213,71 @@ jobs:
               f.write(png)
           '
           xcrun simctl addmedia "$UDID" /tmp/seed-photo.png
-          # Pre-grant Photos access instead of relying on each UI test's
-          # addUIInterruptionMonitor to catch and dismiss the system permission
-          # alert. That interruption-monitor callback only fires on the test's
-          # NEXT UI query/action after the alert appears — a race whichever
-          # test happens to run first (testExecutionOrdering is "random" in
-          # SellingFlow.xctestplan) can lose, since the alert can appear a beat
-          # after the single flush tap. Granting it here, before the app ever
-          # launches, removes that race outright.
+          # Pre-grant Photos access so no test races the system permission alert
+          # (addUIInterruptionMonitor only fires on the NEXT UI query after the alert).
           xcrun simctl privacy "$UDID" grant photos io.github.jerrashi.wonni
-          # PhotoKit indexes a newly-added asset lazily, on first access by
-          # whichever process queries it — which, without this step, is our
-          # own app's picker mid-test. Launching Photos.app here instead makes
-          # Apple's own (well-exercised) indexing path the first accessor,
-          # ahead of the test, rather than racing it. This is in addition to,
-          # not instead of, the flat wait below: launching Photos.app kicks
-          # indexing off earlier, it doesn't prove indexing finished (still no
-          # simctl subcommand for that — see prior note on this line). The
-          # foreground dwell here was 5s initially; the very first test to
-          # touch the picker in the next CI run still failed the 120s in-test
-          # wait outright (2026-09-25, ~176s total including prior steps) —
-          # 5s foreground time was apparently too short for Photos.app to
-          # meaningfully start indexing before being killed. Bumped to 20s.
+          # PhotoKit indexes a new asset lazily on first access. Make Photos.app the
+          # first accessor (20s foreground dwell — 5s was too short, 2026-09-25) and
+          # then give indexing a flat head start. No simctl call confirms indexing
+          # finished, so this is mitigation, not a guarantee.
           xcrun simctl launch "$UDID" com.apple.mobileslideshow > /dev/null 2>&1 || true
           sleep 20
           xcrun simctl terminate "$UDID" com.apple.mobileslideshow > /dev/null 2>&1 || true
-          # Give the simulator's photo indexing a head start here, in setup,
-          # instead of paying that cold-start cost mid-test. Across the CI runs
-          # that led to this fix, "At least one photo grid item should load"
-          # (now a 120s wait, inside the test) passed cleanly 3 times in a row
-          # and then timed out once more under heavier CI load — real
-          # tail-latency variance, not a deterministic bug, so a blind timeout
-          # bump alone would just be gambling on the next run's luck. There's
-          # no simctl subcommand to positively confirm indexing is done, so
-          # this is a flat wait, not a poll — but any time spent here is time
-          # the actual test's own (already-generous) wait doesn't have to
-          # cover. Bumped 15s -> 20s -> (unchanged here, see Photos.app dwell
-          # bump above) across two consecutive CI failures on this same
-          # assertion (2026-09-25) — still a mitigation, not a guarantee.
           sleep 20
 
       - name: Run selling flow UI tests
+        working-directory: wonni
         run: |
           set -o pipefail
-          cd wonni
+          # -retry-tests-on-failure: one automatic retry absorbs simulator flakes
+          # (Photos indexing tail latency) without hiding a real failure — a
+          # genuinely broken screen fails both attempts.
           xcodebuild test \
             -scheme wonni \
-            -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+            -destination "$SIMULATOR" \
             -configuration Debug \
             -testPlan SellingFlow \
+            -retry-tests-on-failure \
+            -test-iterations 2 \
+            -resultBundlePath SellingFlow.xcresult \
             2>&1 | tee ui-test-output.log
 
-      - name: Check UI test results
+      - name: Show failures
         if: failure()
-        run: |
-          echo "❌ UI tests failed - Selling flow is broken!"
-          tail -100 wonni/ui-test-output.log
-          exit 1
+        run: grep -E "error:|failed \(" wonni/ui-test-output.log | sed 's#.*/wonni/##' | sort -u | head -60
 
-      - name: Upload test logs on failure
+      - name: Upload result bundle (screenshots of every failure)
+        # Open SellingFlow.xcresult in Xcode: each failed step has an automatic
+        # screenshot + the accessibility hierarchy at the moment it failed.
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: ui-test-logs
-          path: wonni/ui-test-output.log
+          name: ui-tests-xcresult
+          path: |
+            wonni/SellingFlow.xcresult
+            wonni/ui-test-output.log
 
-  build:
-    name: Build Check
-    runs-on: macos-latest
-    timeout-minutes: 15
-    needs: detect-changes
-    if: needs.detect-changes.outputs.code-changed == 'true'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Select Xcode version
-        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-
-      - name: Provide CI placeholder Secrets.xcconfig
-        run: cp wonni/wonni/Secrets.xcconfig.example wonni/wonni/Secrets.xcconfig
-
-      - name: Build app
-        run: |
-          cd wonni
-          xcodebuild build \
-            -scheme wonni \
-            -destination 'generic/platform=iOS Simulator' \
-            -configuration Debug
-
-      - name: Build test targets
-        run: |
-          cd wonni
-          xcodebuild build-for-testing \
-            -scheme wonni \
-            -destination 'generic/platform=iOS Simulator' \
-            -configuration Debug
-
+  # THE required check (branch protection on main). Reads needs.*.result
+  # explicitly — step-level success()/failure() only see prior steps in this
+  # job, which is how this once printed "All checks passed!" above a red run.
   test-results:
     name: Summary
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [lint, unit-tests, ui-tests, build]
+    needs: [lint, unit-tests, ui-tests, malware-guard]
     if: always()
     steps:
-      # Step-level success()/failure() only look at prior STEPS in this same
-      # job — this job has none, so they don't actually see the needs jobs'
-      # outcomes. That's why this used to print "All checks passed!" right
-      # above a run that GitHub had already marked failed (found 2026-09-12).
-      # Read needs.*.result explicitly instead.
-      - name: ✅ All checks passed
-        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
-        run: echo "All tests and lint checks passed!"
-
-      - name: ❌ Some checks failed
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+      - name: Report
         run: |
-          echo "⚠️  Build or tests failed. Review the logs above."
-          exit 1
+          echo "lint:       ${{ needs.lint.result }}"
+          echo "unit-tests: ${{ needs.unit-tests.result }}"
+          echo "ui-tests:   ${{ needs.ui-tests.result }}"
+          echo "malware:    ${{ needs.malware-guard.result }}"
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            echo "::error::One or more iOS checks failed. See the job logs and the uploaded .xcresult bundles."
+            exit 1
+          fi
+          echo "All iOS checks passed (or were skipped because no iOS code changed)."
 
   # Fails the run if an obfuscated infostealer (or variant) is present in tracked
   # source — see scripts/check-no-obfuscated-code.js. Read-only; never executes repo code.
