@@ -1,6 +1,7 @@
 # Facebook Marketplace — captured DOM (create-item form)
 
-Reference data for `CrossPostContainerView` autofill (`wonni/wonni/Views/CrossPostWebView.swift`).
+Reference data for `FacebookAutoPosterView` autofill (`wonni/wonni/Views/FacebookAutoPosterView.swift`;
+was `CrossPostContainerView` in CrossPostWebView.swift until 2026-10-01).
 Captured from the **mobile layout** the in-app WKWebView loads (iPhone UA, `#screen-root`),
 via DevTools → Copy element. Not a decision spec: paste new captures here so they are only
 ever copied once. Newest capture date per section.
@@ -148,6 +149,23 @@ city; nil (skipped, Facebook's saved default is left as-is) only if that setting
 unset. Search query is the city alone (not "city, state" — the settings model stores
 `stateOrProvince` as an abbreviation like "VA", which won't prefix-match Facebook's
 spelled-out "Virginia"; the city name alone is enough for the picker to suggest it).
+
+### Add photos — ONE photo per tap (observed on device 2026-10-01)
+The mobile form's photo flow is per-photo: each "Add photos" tap yields a file input
+that takes a single file. The old all-at-once `DataTransfer` attach left at most one
+photo on the listing. `FacebookAutoPosterView.attachPhotosJS` now loops — tap row, wait
+for `input[type=file]`, hand it one file, wait for the preview-`img` count to grow,
+repeat — and reports `attached-N/M` in the banner. Still uncaptured: the input's exact
+attributes (it's sniffed for `multiple` and, if present, given everything remaining at
+once) and what the preview thumbnails look like (currently counted as `img[src^=blob:]`
+/ `img[src^=data:]`).
+
+### "Offer shipping" / "Hide from friends" — NOT captured
+Driven by `FacebookAutoPosterView.setToggleJS` by label text → nearest
+`[role=switch] / [role=checkbox] / input[type=checkbox] / [aria-checked]` within six
+ancestors, reading state before clicking so a re-run never flips it back. The banner
+shows the token it returned (`no-label`, `no-switch`, `no-change`) — paste that with a
+capture of the row here when it fails.
 
 ### "List as Single Item" — unexplored
 A dropdown-style row next to the photo area (single-item vs. multi-quantity listing).

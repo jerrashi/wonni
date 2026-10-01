@@ -12,6 +12,8 @@
 		0A6C5D24F71BE8393D402C56 /* VisionTitlePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F5B4C13E60AD7282C3F1B45 /* VisionTitlePolicyTests.swift */; };
 		D7A10001C0FFEE0000000003 /* DraftPhotoStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE0000000004 /* DraftPhotoStoreTests.swift */; };
 		D7A10001C0FFEE0000000005 /* LayoutRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE0000000006 /* LayoutRegressionTests.swift */; };
+		D7A10001C0FFEE0000000007 /* FacebookAutoPosterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE0000000008 /* FacebookAutoPosterView.swift */; };
+		D7A10001C0FFEE0000000009 /* FacebookAutofillPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE000000000A /* FacebookAutofillPolicyTests.swift */; };
 		10C28802920C6151581A6530 /* WeverseURL.swift in Sources */ = {isa = PBXBuildFile; fileRef = A01EEF505FA085AC4A238CA4 /* WeverseURL.swift */; };
 		147096BF7F09296C73526449 /* PendingMercariSale.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76BC65B5E09E487A41EA3CCE /* PendingMercariSale.swift */; };
 		19BE5E984ECA727D0E9A513A /* MercariDateParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63AE5A91B4E5B0F695600110 /* MercariDateParsingTests.swift */; };
@@ -220,6 +222,8 @@
 		9F5B4C13E60AD7282C3F1B45 /* VisionTitlePolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VisionTitlePolicyTests.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE0000000004 /* DraftPhotoStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftPhotoStoreTests.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE0000000006 /* LayoutRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutRegressionTests.swift; sourceTree = "<group>"; };
+		D7A10001C0FFEE0000000008 /* FacebookAutoPosterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FacebookAutoPosterView.swift; sourceTree = "<group>"; };
+		D7A10001C0FFEE000000000A /* FacebookAutofillPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FacebookAutofillPolicyTests.swift; sourceTree = "<group>"; };
 		A01EEF505FA085AC4A238CA4 /* WeverseURL.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WeverseURL.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B82E9D0002 /* ActiveDraftCarouselView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveDraftCarouselView.swift; sourceTree = "<group>"; };
 		A9D1D2B4BED80AB257DFE4C7 /* MercariScanJSTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MercariScanJSTests.swift; sourceTree = "<group>"; };
@@ -379,6 +383,7 @@
 				53C7176BC7F54AF2908CF8FE /* PublicProfileView.swift */,
 				6192AA5D2D7F583300EC2EFA /* CreateListingView.swift */,
 				61F0F0032FB022A0001C28CE /* CrossPostWebView.swift */,
+				D7A10001C0FFEE0000000008 /* FacebookAutoPosterView.swift */,
 				6134E1562FDCB206007C3979 /* DraftPhotoEditModal.swift */,
 				61E75A002FC100A000D4B3F1 /* EtsyConnectView.swift */,
 				6192AA592D7F575F00EC2EFA /* HomeView.swift */,
@@ -481,6 +486,7 @@
 				9F5B4C13E60AD7282C3F1B45 /* VisionTitlePolicyTests.swift */,
 				D7A10001C0FFEE0000000004 /* DraftPhotoStoreTests.swift */,
 				D7A10001C0FFEE0000000006 /* LayoutRegressionTests.swift */,
+				D7A10001C0FFEE000000000A /* FacebookAutofillPolicyTests.swift */,
 				2C8E7F46193D0A5B5F624E78 /* AIQualityTrackingTests.swift */,
 				570CA587E17CD5EDC122D8CE /* VariantEditingTests.swift */,
 				E85E88794B38261E935C2BDC /* VariantMercariPostQueueTests.swift */,
@@ -673,6 +679,7 @@
 				A1B2C3D4E5F6A7B82E9D0001 /* ActiveDraftCarouselView.swift in Sources */,
 				61F0F0022FB022A0001C28CE /* IntegrationRepository.swift in Sources */,
 				61F0F0042FB022A0001C28CE /* CrossPostWebView.swift in Sources */,
+				D7A10001C0FFEE0000000007 /* FacebookAutoPosterView.swift in Sources */,
 				61E75A012FC100A000D4B3F1 /* EtsyConnectView.swift in Sources */,
 				AA0011223344556677AABBFF /* MercariObservedDataRepository.swift in Sources */,
 				4DE0F3AA27864C66A4EC49AB /* Sale.swift in Sources */,
@@ -724,6 +731,7 @@
 				0A6C5D24F71BE8393D402C56 /* VisionTitlePolicyTests.swift in Sources */,
 				D7A10001C0FFEE0000000003 /* DraftPhotoStoreTests.swift in Sources */,
 				D7A10001C0FFEE0000000005 /* LayoutRegressionTests.swift in Sources */,
+				D7A10001C0FFEE0000000009 /* FacebookAutofillPolicyTests.swift in Sources */,
 				1B7D6E35082CF94A4E513D67 /* AIQualityTrackingTests.swift in Sources */,
 				5AE27094F4F4DED09BBA82BE /* VariantEditingTests.swift in Sources */,
 				460667840A20621A2C2DF35F /* VariantMercariPostQueueTests.swift in Sources */,

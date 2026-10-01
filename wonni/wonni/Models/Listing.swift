@@ -43,6 +43,14 @@ class Item {
     /// Per-listing eBay handling time override; nil inherits the account default
     /// (SellingSettings.handlingTimeDays). See ShippingInfo.handlingTimeDays.
     var handlingTimeDays: Int?
+    /// Per-listing Facebook Marketplace overrides; nil inherits the account default
+    /// (AppStorage `facebookOfferShipping` / `facebookHideFromFriends`, synced from
+    /// users/{uid}/settings/facebookPosting). Optional so SwiftData's lightweight
+    /// migration adds the columns without a migration plan. Mirrored to products/{id}
+    /// as `facebookOfferShipping` / `facebookHideFromFriends`, which is where
+    /// FacebookAutoPosterView reads them (the draft is gone by cross-post time).
+    var facebookOfferShipping: Bool?
+    var facebookHideFromFriends: Bool?
     var isDraft: Bool
     /// Local last-modified time, bumped alongside every `UploadManager.syncProductData`
     /// call. Compared against the shared `products/{id}` doc's own `updatedAt` to decide

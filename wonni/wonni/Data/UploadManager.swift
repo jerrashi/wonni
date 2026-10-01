@@ -901,6 +901,8 @@ class UploadManager: ObservableObject {
         data["handlingFee"] = draft.handlingFee
         data["estimatedShippingDays"] = draft.estimatedShippingDays
         data["handlingTimeDays"] = draft.handlingTimeDays
+        data["facebookOfferShipping"] = draft.facebookOfferShipping
+        data["facebookHideFromFriends"] = draft.facebookHideFromFriends
         data["images"] = draft.orderedFirebasePhotoPaths.map { StorageService.shared.publicURL(forPath: $0) }
         data["updatedAt"] = Timestamp(date: now)
 
@@ -960,6 +962,8 @@ class UploadManager: ObservableObject {
         if let handlingFee = data["handlingFee"] as? Double { draft.handlingFee = handlingFee }
         if let estimatedShippingDays = data["estimatedShippingDays"] as? Int { draft.estimatedShippingDays = estimatedShippingDays }
         if let handlingTimeDays = data["handlingTimeDays"] as? Int { draft.handlingTimeDays = handlingTimeDays }
+        if let offerShipping = data["facebookOfferShipping"] as? Bool { draft.facebookOfferShipping = offerShipping }
+        if let hideFromFriends = data["facebookHideFromFriends"] as? Bool { draft.facebookHideFromFriends = hideFromFriends }
         if let weightLbs = data["weightLbs"] as? Double { draft.weightLbs = weightLbs }
         if let lengthIn = data["lengthIn"] as? Double { draft.lengthIn = lengthIn }
         if let widthIn = data["widthIn"] as? Double { draft.widthIn = widthIn }
