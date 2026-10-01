@@ -1213,6 +1213,9 @@ struct DraftRow: View, Equatable {
     @State private var showDescriptionEditor = false
     @State private var descriptionEditorOpenedViaFocus = false
     @State private var showTitleEditor = false
+    /// Inline nav bar (~44) + 4 lines of body text (~88) + field padding. Test-visible so
+    /// the UI test can assert the sheet actually sits above the keyboard at this size.
+    static let titleSheetHeight: CGFloat = 180
     @State private var titleEditorOpenedViaFocus = false
 
     // BulkListingOverviewView.body re-evaluates on every uploadManager @Published change
@@ -1283,6 +1286,7 @@ struct DraftRow: View, Equatable {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("draftRowTitleButton")
                     .sheet(isPresented: $showTitleEditor) {
                         TitleEditorSheet(initialText: titleText) { newText in
                             titleText = String(newText.prefix(140))
@@ -1291,10 +1295,16 @@ struct DraftRow: View, Equatable {
                         // Compact bottom sheet, not the full-screen default (2026-09-30):
                         // the field itself is only ever a couple lines tall, so a
                         // full-height sheet left most of the screen empty black space
-                        // above the keyboard. Fixed height + a medium fallback so it
-                        // still grows a bit for a 2-3 line title before the keyboard
-                        // covers it.
-                        .presentationDetents([.height(160), .medium])
+                        // above the keyboard.
+                        //
+                        // ONE detent only (2026-10-01). This sheet always opens with the
+                        // keyboard up, and when a keyboard appears inside a sheet UIKit
+                        // snaps the sheet to its LARGEST detent — so the earlier
+                        // `[.height(160), .medium]` never showed 160: it went straight to
+                        // .medium, which the keyboard then pushed up to the nav bar on a
+                        // 4.7" phone (reported with a screenshot). The height covers the
+                        // inline nav bar plus the 4-line maximum of the field below.
+                        .presentationDetents([.height(Self.titleSheetHeight)])
                         .presentationDragIndicator(.visible)
                     }
 

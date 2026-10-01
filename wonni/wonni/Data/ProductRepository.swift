@@ -315,6 +315,47 @@ class ProductRepository: ObservableObject {
     /// `fetchDesktopDrafts` already needs) and filters client-side — fine at the small
     /// per-user scale this runs at (a user's own products, checked when they open the
     /// Mercari sync sheet / their profile badge).
+    /// Cross-post state of the API platforms (eBay, Etsy) for every product this user owns,
+    /// keyed by product id. The Cloud Functions own these fields and write them ONLY to
+    /// `products/{id}` (CLAUDE.md "The Cloud Function owns all eBay fields on the doc"),
+    /// while the app's listing screens read `listings/{id}` — so a successful
+    /// `ebayCreateListing` left the Profile row showing no eBay badge at all
+    /// (2026-10-01: listing 147612911453 was live on eBay, the app said nothing).
+    /// Vocabulary differs too: products say "active", the app's badges say "posted".
+    struct APIPlatformStatus {
+        var status: [String: String] = [:]
+        var listingIds: [String: String] = [:]
+    }
+
+    static func apiPlatformStatus(fromProductData raw: [String: Any]) -> APIPlatformStatus {
+        var out = APIPlatformStatus()
+        let platforms = ["ebay", "etsy"]
+        if let status = raw["crossPostStatus"] as? [String: Any] {
+            for platform in platforms {
+                guard let value = status[platform] as? String, !value.isEmpty else { continue }
+                out.status[platform] = value == "active" ? "posted" : value
+            }
+        }
+        if let ids = raw["crossPostListingIds"] as? [String: Any] {
+            for platform in platforms {
+                if let id = ids[platform] as? String, !id.isEmpty { out.listingIds[platform] = id }
+            }
+        }
+        return out
+    }
+
+    func fetchAPIPlatformStatuses(userId: String) async throws -> [String: APIPlatformStatus] {
+        let snap = try await db.collection(productsCollection)
+            .whereField("userId", isEqualTo: userId)
+            .getDocuments()
+        var out: [String: APIPlatformStatus] = [:]
+        for doc in snap.documents {
+            let status = Self.apiPlatformStatus(fromProductData: doc.data())
+            if !status.status.isEmpty || !status.listingIds.isEmpty { out[doc.documentID] = status }
+        }
+        return out
+    }
+
     func fetchPendingMercariVariantActions(userId: String) async throws -> [PendingMercariVariantAction] {
         let snap = try await db.collection(productsCollection)
             .whereField("userId", isEqualTo: userId)

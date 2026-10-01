@@ -1094,8 +1094,7 @@ private struct AsyncFirebaseImage: View {
         }
         .task {
             guard image == nil else { return }
-            let ref = Storage.storage().reference(withPath: path)
-            if let data = try? await ref.data(maxSize: 2 * 1024 * 1024) {
+            if let data = try? await StorageService.shared.downloadImageData(path: path, maxSize: 2 * 1024 * 1024) {
                 image = UIImage(data: data)
             }
         }

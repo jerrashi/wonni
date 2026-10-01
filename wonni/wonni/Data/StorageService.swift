@@ -87,8 +87,74 @@ class StorageService: ObservableObject {
         return String(url.dropFirst(prefix.count)).removingPercentEncoding
     }
 
-    func downloadImageData(path: String) async throws -> Data {
-        return try await storage.child(path).data(maxSize: 10 * 1024 * 1024)
+    /// Where a stored photo string actually points. `listings.photoPaths` holds TWO
+    /// formats: bare Storage paths (listings iOS wrote directly, pre-2026-09) and full
+    /// public URLs (listings `postToWonni` writes by copying `products.images`, which is
+    /// URL-shaped by convention). Feeding a URL to `reference().child(_:)` built a
+    /// nonsense object path that matched no Storage rule — every photo on a
+    /// freshly-published listing showed `FIRStorageErrorDomain -13021` (2026-10-01).
+    enum PhotoLocation: Equatable {
+        /// An object in this app's bucket — read through the SDK (rules + token).
+        case storagePath(String)
+        /// Someone else's bucket (e.g. wonni_dropship's old photos) — only fetchable as-is.
+        case externalURL(URL)
+    }
+
+    /// Normalizes either format. Pure, so it's unit-testable.
+    nonisolated static func photoLocation(for pathOrURL: String, bucket: String) -> PhotoLocation? {
+        let trimmed = pathOrURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard trimmed.lowercased().hasPrefix("http") else { return .storagePath(trimmed) }
+
+        let gcsPrefix = "https://storage.googleapis.com/\(bucket)/"
+        if trimmed.hasPrefix(gcsPrefix),
+           let path = String(trimmed.dropFirst(gcsPrefix.count)).removingPercentEncoding,
+           !path.isEmpty {
+            return .storagePath(path)
+        }
+        // https://firebasestorage.googleapis.com/v0/b/<bucket>/o/<url-encoded path>?alt=media
+        let fbPrefix = "https://firebasestorage.googleapis.com/v0/b/\(bucket)/o/"
+        if trimmed.hasPrefix(fbPrefix) {
+            let rest = String(trimmed.dropFirst(fbPrefix.count))
+            let encoded = rest.split(separator: "?", maxSplits: 1).first.map(String.init) ?? rest
+            if let path = encoded.removingPercentEncoding, !path.isEmpty {
+                return .storagePath(path)
+            }
+        }
+        return URL(string: trimmed).map { .externalURL($0) }
+    }
+
+    func photoLocation(for pathOrURL: String) -> PhotoLocation? {
+        Self.photoLocation(for: pathOrURL, bucket: storage.bucket)
+    }
+
+    /// A URL `AsyncImage`/`URLSession` can load, for either stored format.
+    func imageURL(forPathOrURL pathOrURL: String) async throws -> URL {
+        switch photoLocation(for: pathOrURL) {
+        case .storagePath(let path): return try await storage.child(path).downloadURL()
+        case .externalURL(let url):  return url
+        case nil:
+            throw NSError(domain: "StorageService", code: 400,
+                          userInfo: [NSLocalizedDescriptionKey: "Empty photo path"])
+        }
+    }
+
+    /// Bytes for either stored format (external URLs are fetched directly).
+    func downloadImageData(path pathOrURL: String, maxSize: Int64 = 10 * 1024 * 1024) async throws -> Data {
+        switch photoLocation(for: pathOrURL) {
+        case .storagePath(let path):
+            return try await storage.child(path).data(maxSize: maxSize)
+        case .externalURL(let url):
+            let (data, response) = try await URLSession.shared.data(from: url)
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                throw NSError(domain: "StorageService", code: http.statusCode,
+                              userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode) fetching \(url)"])
+            }
+            return data
+        case nil:
+            throw NSError(domain: "StorageService", code: 400,
+                          userInfo: [NSLocalizedDescriptionKey: "Empty photo path"])
+        }
     }
 
     /// True if a Sale record still snapshots this exact Storage path as its cover photo —
@@ -123,7 +189,9 @@ class StorageService: ObservableObject {
 
     /// Deletes a single photo, unless a Sale or Conversation still references it — in which
     /// case it's left in place (no-op) so that record doesn't end up with a broken image.
-    func deletePhoto(path: String, userId: String) async throws {
+    func deletePhoto(path pathOrURL: String, userId: String) async throws {
+        // Only our own objects can be deleted; an external URL is just dropped from the doc.
+        guard case .storagePath(let path) = photoLocation(for: pathOrURL) else { return }
         guard try await !isPhotoReferenced(path: path, userId: userId) else {
             print("[StorageService] Skipping delete of \(path) — still referenced by a Sale/Conversation")
             return

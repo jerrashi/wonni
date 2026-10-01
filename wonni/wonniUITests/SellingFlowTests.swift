@@ -55,6 +55,17 @@ final class SellingFlowTests: XCTestCase {
 
     /// Test the complete selling flow from camera to publish
     func testPublishSingleListing() throws {
+        // End-to-end against the LIVE backend: a real Gemini call via `enrichListing`,
+        // a real publish. That can't pass on CI (placeholder Secrets.xcconfig) and it
+        // turns the merge gate red whenever Gemini is down or out of credits — both
+        // happened on 2026-10-01. Opt in locally with
+        //   WONNI_LIVE_BACKEND_TESTS=1 xcodebuild test … -testPlan SellingFlow
+        // Everything below the AI step is covered by the other tests in this file.
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["WONNI_LIVE_BACKEND_TESTS"] != nil,
+            "Needs the live backend (Gemini + publish); set WONNI_LIVE_BACKEND_TESTS=1 to run"
+        )
+
         // Photos permission alert may appear the first time the picker touches the
         // library — auto-allow it so the flow isn't blocked.
         let photosInterruption = addUIInterruptionMonitor(withDescription: "Photos permission") { alert in
@@ -422,6 +433,78 @@ final class SellingFlowTests: XCTestCase {
         let confirmDelete = app.alerts.buttons["Delete"]
         XCTAssert(confirmDelete.waitForExistence(timeout: 5), "Delete confirmation alert should appear")
         confirmDelete.tap()
+    }
+
+    /// The title editor is a compact bottom sheet that must stay compact once the
+    /// keyboard is up. Regression for the 2026-10-01 report: with detents
+    /// `[.height(160), .medium]` the keyboard snapped the sheet to .medium and pushed it
+    /// up to the nav bar on a 4.7" phone, so it looked full-screen again (#150 redux).
+    func testDraftTitleEditorStaysCompactWithKeyboard() throws {
+        let photosInterruption = addUIInterruptionMonitor(withDescription: "Photos permission") { alert in
+            let allowButtons = alert.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'Allow' OR label CONTAINS 'OK'")
+            )
+            if allowButtons.count > 0 {
+                allowButtons.firstMatch.tap()
+                return true
+            }
+            return false
+        }
+        defer { removeUIInterruptionMonitor(photosInterruption) }
+
+        app.tabBars.buttons["Sell"].tap()
+
+        let galleryButton = app.buttons["cameraGalleryButton"]
+        XCTAssert(galleryButton.waitForExistence(timeout: 5), "Camera gallery button should appear")
+        galleryButton.tap()
+        app.tap()
+
+        let firstPhoto = waitForPhotoGridItem(reopeningVia: galleryButton)
+        firstPhoto.tap()
+
+        let commitButton = app.buttons.matching(identifier: "draftsCarousel").firstMatch
+        XCTAssert(commitButton.waitForExistence(timeout: 5))
+        commitButton.tap()
+
+        let backButton = app.buttons["pickerBackButton"]
+        XCTAssert(backButton.waitForExistence(timeout: 5))
+        backButton.tap()
+
+        // The Drafts overview (Proceed) is where DraftRow + the title sheet live; draft
+        // history edits the title inline instead.
+        let proceedButton = app.buttons["Proceed"]
+        XCTAssert(proceedButton.waitForExistence(timeout: 5), "Proceed button should exist")
+        proceedButton.tap()
+
+        let titleButton = app.descendants(matching: .any).matching(identifier: "draftRowTitleButton").firstMatch
+        XCTAssert(titleButton.waitForExistence(timeout: 5), "Draft row title button should appear")
+        titleButton.tap()
+
+        let sheetTitle = app.navigationBars["Title"]
+        XCTAssert(sheetTitle.waitForExistence(timeout: 5), "Title editor sheet should open")
+        // The field auto-focuses, so the keyboard is what pushes the sheet up.
+        XCTAssert(app.keyboards.firstMatch.waitForExistence(timeout: 5), "Keyboard should be up in the title editor")
+
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "title-editor-with-keyboard"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        // Sheet top = its nav bar top. Keyboard + a 180pt sheet leaves the top well
+        // below the upper third on any supported phone; at .medium it sits near the
+        // status bar instead.
+        let screenHeight = app.windows.firstMatch.frame.height
+        let keyboardTop = app.keyboards.firstMatch.frame.minY
+        XCTAssertGreaterThan(
+            sheetTitle.frame.minY, screenHeight * 0.3,
+            "Title sheet is not compact: its top is at \(sheetTitle.frame.minY)pt of a \(screenHeight)pt screen"
+        )
+        XCTAssertLessThan(
+            keyboardTop - sheetTitle.frame.minY, 260,
+            "Title sheet above the keyboard is \(keyboardTop - sheetTitle.frame.minY)pt tall; expected roughly 180"
+        )
+
+        app.buttons["Done"].firstMatch.tap()
     }
 
     /// Test that editing fields saves correctly (deferred saves)

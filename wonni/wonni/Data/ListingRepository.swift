@@ -88,14 +88,34 @@ class ListingRepository: ObservableObject {
             throw NSError(domain: "ListingRepository", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
 
-        let snapshot = try await db.collection(listingsCollection)
+        async let listingSnapshot = db.collection(listingsCollection)
             .whereField("userId", isEqualTo: userId)
             .getDocuments()
+        // eBay/Etsy state lives on products/{id}, not here — see
+        // ProductRepository.fetchAPIPlatformStatuses. Best-effort: a products read
+        // failing must not blank the whole listings screen.
+        async let apiStatuses = (try? ProductRepository.shared.fetchAPIPlatformStatuses(userId: userId)) ?? [:]
 
+        let (snapshot, overlay) = try await (listingSnapshot, apiStatuses)
         return snapshot.documents
             .compactMap { try? $0.data(as: UserListing.self) }
             .filter { $0.status == .active }
+            .map { Self.applyingAPIPlatformStatus(overlay[$0.id ?? ""], to: $0) }
             .sorted { ($0.updatedAt?.dateValue() ?? .distantPast) > ($1.updatedAt?.dateValue() ?? .distantPast) }
+    }
+
+    /// Product-doc state wins for the API platforms; everything the listing doc already
+    /// says about the web platforms (Mercari/Facebook, written by iOS) is kept.
+    static func applyingAPIPlatformStatus(_ api: ProductRepository.APIPlatformStatus?, to listing: UserListing) -> UserListing {
+        guard let api else { return listing }
+        var merged = listing
+        var status = merged.crossPostStatus ?? [:]
+        var ids = merged.crossPostListingIds ?? [:]
+        for (platform, value) in api.status { status[platform] = value }
+        for (platform, id) in api.listingIds { ids[platform] = id }
+        merged.crossPostStatus = status
+        merged.crossPostListingIds = ids
+        return merged
     }
 
     /// Fetches all sold-out listings (status == .sold) for the current user, sorted by soldAt desc.

@@ -110,6 +110,31 @@ class UploadManager: ObservableObject {
     @Published var processedItemIDs: [UUID] = []
     @Published var processingFailedIDs: Set<UUID> = []
     @Published var processQueuedIDs: [UUID] = []
+    /// Why identification failed, in user terms — set from the first failure of a run.
+    /// Before this (2026-10-01) every failure was a bare "Couldn't identify", so a Gemini
+    /// billing outage (402, prepaid credits depleted) looked identical to a bad photo.
+    @Published var processingFailureReason: String?
+
+    /// Maps a Cloud Function / network error onto something the user can act on.
+    nonisolated static func processingFailureReason(for error: Error) -> String {
+        let message = (error as NSError).localizedDescription
+        let lower = message.lowercased()
+        if lower.contains("402") || lower.contains("credits are depleted") || lower.contains("payment required") {
+            return "AI identification is paused: the Gemini API credits are used up. Top up at ai.studio/projects, then retry."
+        }
+        if lower.contains("429") || lower.contains("resource exhausted") || lower.contains("quota") {
+            return "The AI service is rate-limited right now. Wait a minute and retry."
+        }
+        if lower.contains("unauthenticated") || lower.contains("permission") {
+            return "Not signed in to the AI service. Sign out and back in, then retry."
+        }
+        if lower.contains("network") || lower.contains("offline") || lower.contains("internet") {
+            return "No connection to the AI service. Check your network and retry."
+        }
+        // Strip the Cloud Function's prefix; keep the rest short.
+        let stripped = message.replacingOccurrences(of: "Identification failed: ", with: "")
+        return "AI identification failed: " + String(stripped.prefix(140))
+    }
 
     // ── Publish Phase ───────────────────────────────────────────────────────
     @Published var isPublishing = false
@@ -654,6 +679,7 @@ class UploadManager: ObservableObject {
         processStatuses = [:]
         processedItemIDs = []
         processingFailedIDs = []
+        processingFailureReason = nil
         processQueuedIDs = drafts.map { $0.id }
 
         for draft in drafts { processStatuses[draft.id] = .pending }
@@ -798,6 +824,9 @@ class UploadManager: ObservableObject {
                 } catch {
                     print("[UploadManager] Gemini error for \(draft.id): \(error)")
                     processingFailedIDs.insert(draft.id)
+                    if processingFailureReason == nil {
+                        processingFailureReason = Self.processingFailureReason(for: error)
+                    }
                     processStatuses[draft.id] = .failed
                 }
 
@@ -1458,6 +1487,7 @@ class UploadManager: ObservableObject {
         processStatuses.removeAll()
         processedItemIDs.removeAll()
         processingFailedIDs.removeAll()
+        processingFailureReason = nil
     }
 
     func resetAll() {
@@ -1481,6 +1511,7 @@ class UploadManager: ObservableObject {
         processStatuses.removeAll()
         processedItemIDs.removeAll()
         processingFailedIDs.removeAll()
+        processingFailureReason = nil
         shouldReturnToRoot = false
         uploadStartTime = nil
         activeUploadCount = 0

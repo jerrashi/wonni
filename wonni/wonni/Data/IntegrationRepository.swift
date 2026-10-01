@@ -35,8 +35,14 @@ public class IntegrationRepository: ObservableObject {
     private let integrationsSubcollection = "integrations"
 
     // Mercari + eBay + Etsy enabled (Etsy re-enabled 2026-09-26 after aligning with the v3 API docs).
-    // Facebook is not listed here: it posts via in-app web autofill, not an integration.
-    public static let supportedPlatforms = ["ebay", "mercari", "etsy"]
+    // Facebook added 2026-10-01: it was left out as "web autofill, not an integration",
+    // but this list is ALSO what the Publish Listings sheet and the per-listing cross-post
+    // menu offer — so Facebook Marketplace (fully wired through CrossPostJob /
+    // CrossPostWebView, same as Mercari) was never selectable at publish time.
+    public static let supportedPlatforms = ["ebay", "mercari", "etsy", "facebook"]
+    /// Platforms that post through the in-app browser and need no linked account here —
+    /// the user signs in inside the web view the first time a post runs.
+    public static let browserOnlyPlatforms: Set<String> = ["facebook"]
     
     @Published public var integrations: [PlatformIntegration] = []
     @Published public var isLoading = false

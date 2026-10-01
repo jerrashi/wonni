@@ -760,7 +760,9 @@ public struct CrossPostContainerView: View {
             }
         } else {
             for path in job.photoFirebasePaths {
-                if let data = try? await Storage.storage().reference(withPath: path).data(maxSize: 15 * 1024 * 1024) {
+                // Path or URL form — see StorageService.photoLocation (2026-10-01: URL-form
+                // listings loaded zero photos here, so Mercari/Facebook posts went out bare).
+                if let data = try? await StorageService.shared.downloadImageData(path: path, maxSize: 15 * 1024 * 1024) {
                     out.append(data.base64EncodedString())
                 }
             }
@@ -3114,8 +3116,7 @@ struct MercariAutoPosterView: View {
             }
         } else if !job.photoFirebasePaths.isEmpty {
             for path in job.photoFirebasePaths {
-                let ref = Storage.storage().reference(withPath: path)
-                if let data = try? await ref.data(maxSize: 15 * 1024 * 1024) {
+                if let data = try? await StorageService.shared.downloadImageData(path: path, maxSize: 15 * 1024 * 1024) {
                     photoBase64Strings.append(data.base64EncodedString())
                 }
             }
@@ -3175,8 +3176,7 @@ struct MercariAutoPosterView: View {
             }
         } else if !job.photoFirebasePaths.isEmpty {
             for path in job.photoFirebasePaths {
-                let ref = Storage.storage().reference(withPath: path)
-                if let data = try? await ref.data(maxSize: 15 * 1024 * 1024) {
+                if let data = try? await StorageService.shared.downloadImageData(path: path, maxSize: 15 * 1024 * 1024) {
                     photoBase64Strings.append(data.base64EncodedString())
                 }
             }
