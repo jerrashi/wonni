@@ -81,6 +81,27 @@ struct ProcessProgressView: View {
                 .transition(.opacity)
             }
 
+            // Why things failed — the per-row "Couldn't identify" alone hid a Gemini
+            // billing outage behind what looked like a bad photo (2026-10-01).
+            if let reason = uploadManager.processingFailureReason {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .padding(12)
+                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+                .accessibilityIdentifier("processingFailureReason")
+                .transition(.opacity)
+            }
+
             Divider()
 
             // ── Per-item list ─────────────────────────────────────────────────

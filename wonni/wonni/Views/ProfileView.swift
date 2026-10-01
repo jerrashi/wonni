@@ -2318,7 +2318,9 @@ struct StorageImage: View {
         .task(id: path) {
             debugErrorText = nil
             do {
-                url = try await Storage.storage().reference().child(path).downloadURL()
+                // Accepts a bare path or the URL form postToWonni writes — see
+                // StorageService.photoLocation.
+                url = try await StorageService.shared.imageURL(forPathOrURL: path)
             } catch {
                 let nsError = error as NSError
                 let msg = "downloadURL \(nsError.domain) #\(nsError.code): \(nsError.localizedDescription)"
@@ -3573,13 +3575,21 @@ struct PlatformRowView: View {
     let integration: PlatformIntegration
     let onConnect: () -> Void
     let onDisconnect: () -> Void
-    
+
+    private var isBrowserOnly: Bool {
+        IntegrationRepository.browserOnlyPlatforms.contains(integration.platform)
+    }
+
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
                 Text(platformDisplayName(integration.platform))
                     .font(.body)
-                if integration.isConnected {
+                if isBrowserOnly {
+                    Text("Posts through the in-app browser — sign in there when prompted")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else if integration.isConnected {
                     Text("Linked as: \(integration.connectedUsername ?? "Unknown")")
                         .font(.caption)
                         .foregroundColor(.green)
@@ -3589,10 +3599,12 @@ struct PlatformRowView: View {
                         .foregroundColor(.secondary)
                 }
             }
-            
+
             Spacer()
-            
-            if integration.isConnected {
+
+            if isBrowserOnly {
+                EmptyView()
+            } else if integration.isConnected {
                 Button("Disconnect", role: .destructive, action: onDisconnect)
                     .buttonStyle(.borderless)
             } else {

@@ -119,3 +119,94 @@ final class DraftSelectionToolbarTests: XCTestCase {
         XCTAssertEqual(toolbar.leading, .selectAll)
     }
 }
+
+// MARK: - Failure reason shown on the processing sheet
+
+final class ProcessingFailureReasonTests: XCTestCase {
+    private func error(_ message: String) -> Error {
+        NSError(domain: "GeminiService", code: 500, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    func testDepletedGeminiCreditsIsNamedAsBilling() {
+        // Verbatim shape of the Cloud Function error from the 2026-10-01 outage.
+        let reason = UploadManager.processingFailureReason(for: error(
+            "Identification failed: [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent: [402 Payment Required] Your prepayment credits are depleted."
+        ))
+        XCTAssertTrue(reason.contains("credits are used up"), reason)
+        XCTAssertTrue(reason.contains("ai.studio"), reason)
+    }
+
+    func testRateLimitIsNamed() {
+        XCTAssertTrue(UploadManager.processingFailureReason(for: error("[429 Too Many Requests] quota exceeded")).contains("rate-limited"))
+    }
+
+    func testUnknownErrorKeepsTheMessageButDropsThePrefix() {
+        let reason = UploadManager.processingFailureReason(for: error("Identification failed: model returned no candidates"))
+        XCTAssertEqual(reason, "AI identification failed: model returned no candidates")
+    }
+}
+
+// MARK: - Listing photo strings: bare path vs URL form
+
+final class PhotoLocationTests: XCTestCase {
+    private let bucket = "wonni-app.firebasestorage.app"
+    private let path = "users/vKZZ83xRQOU9ghkNIN7XSl18dIS2/21E7324A-B919-4324-8770-86C4DF672553/0.jpg"
+
+    func testBarePathIsStoragePath() {
+        XCTAssertEqual(StorageService.photoLocation(for: path, bucket: bucket), .storagePath(path))
+    }
+
+    func testOwnBucketPublicURLBecomesStoragePath() {
+        // Exactly what postToWonni writes into listings.photoPaths (copied from products.images).
+        let url = "https://storage.googleapis.com/\(bucket)/\(path)"
+        XCTAssertEqual(StorageService.photoLocation(for: url, bucket: bucket), .storagePath(path))
+    }
+
+    func testOwnBucketFirebaseDownloadURLBecomesStoragePath() {
+        let encoded = path.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+        let url = "https://firebasestorage.googleapis.com/v0/b/\(bucket)/o/\(encoded)?alt=media&token=abc"
+        XCTAssertEqual(StorageService.photoLocation(for: url, bucket: bucket), .storagePath(path))
+    }
+
+    func testOtherBucketURLStaysExternal() {
+        let url = "https://storage.googleapis.com/wonni-dropship.firebasestorage.app/dropship/x/edits/y/1.jpg"
+        XCTAssertEqual(StorageService.photoLocation(for: url, bucket: bucket), .externalURL(URL(string: url)!))
+    }
+
+    func testEmptyIsNil() {
+        XCTAssertNil(StorageService.photoLocation(for: "  ", bucket: bucket))
+    }
+}
+
+// MARK: - eBay/Etsy status lives on products/{id}; the app shows it on the listing
+
+final class APIPlatformStatusOverlayTests: XCTestCase {
+    func testProductActiveBecomesListingPosted() {
+        let api = ProductRepository.apiPlatformStatus(fromProductData: [
+            "crossPostStatus": ["ebay": "active", "wonni": "active"],
+            "crossPostListingIds": ["ebay": "147612911453", "wonni": "21E7"],
+        ])
+        XCTAssertEqual(api.status, ["ebay": "posted"])
+        XCTAssertEqual(api.listingIds, ["ebay": "147612911453"])
+    }
+
+    func testOverlayKeepsWebPlatformStateFromTheListingDoc() {
+        var listing = UserListing(userId: "u", catalogItemId: "")
+        listing.crossPostStatus = ["mercari": "posted"]
+        listing.crossPostListingIds = ["mercari": "m123"]
+        var api = ProductRepository.APIPlatformStatus()
+        api.status = ["ebay": "posted"]
+        api.listingIds = ["ebay": "147612911453"]
+
+        let merged = ListingRepository.applyingAPIPlatformStatus(api, to: listing)
+        XCTAssertEqual(merged.crossPostStatus, ["mercari": "posted", "ebay": "posted"])
+        XCTAssertEqual(merged.crossPostListingIds, ["mercari": "m123", "ebay": "147612911453"])
+    }
+
+    func testNoProductDataLeavesListingUntouched() {
+        var listing = UserListing(userId: "u", catalogItemId: "")
+        listing.crossPostStatus = ["mercari": "pending"]
+        let merged = ListingRepository.applyingAPIPlatformStatus(nil, to: listing)
+        XCTAssertEqual(merged.crossPostStatus, ["mercari": "pending"])
+    }
+}
