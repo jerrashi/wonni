@@ -75,6 +75,7 @@ struct MainView: View {
         // once the device's local data is clean.
         .task {
             uploadManager.cleanupOrphanedPublishedDrafts(modelContext: modelContext)
+            uploadManager.migrateDraftPhotoStorage(modelContext: modelContext)
             uploadManager.sweepFailedPublishDrafts(modelContext: modelContext)
         }
         .sheet(isPresented: $uploadManager.showProgressSheet) {

@@ -261,7 +261,7 @@ class UploadManager: ObservableObject {
     func addPhotoToActiveDraft(assetId: String, imageData: Data?, modelContext: ModelContext) {
         let draft: Item
         if let existingID = activeDraftID,
-           let existing = (try? modelContext.fetch(FetchDescriptor<Item>()))?.first(where: { $0.id == existingID }) {
+           let existing = fetchItem(id: existingID, modelContext: modelContext) {
             draft = existing
         } else {
             draft = Item(firestoreListingId: UUID().uuidString)
@@ -269,12 +269,38 @@ class UploadManager: ObservableObject {
             activeDraftID = draft.id
         }
 
+        if let data = imageData {
+            // Before the carousel learns about the photo (the append below), so its
+            // cell joins this decode instead of reading the bytes back out of SwiftData.
+            Item.prewarmThumbnail(itemID: draft.id, assetId: assetId, data: data)
+        }
         draft.sourceAssetIdentifiers.append(assetId)
         if let data = imageData {
-            draft.photosData.append(data)
-            draft.isLocalPhotoOnly = true
+            draft.setLocalPhoto(data, for: assetId)
         }
         try? modelContext.save()
+    }
+
+    /// Picker tap: adds the photo to the active draft, or removes it if it's already
+    /// there. Decided here against the live draft rather than by the caller, so a grid
+    /// cell holding an older tap closure (cells skip re-rendering when their own
+    /// inputs are unchanged) can never act on stale selection state.
+    func togglePhotoInActiveDraft(assetId: String, modelContext: ModelContext) {
+        if let id = activeDraftID,
+           let draft = fetchItem(id: id, modelContext: modelContext),
+           draft.sourceAssetIdentifiers.contains(assetId) {
+            removePhotoFromActiveDraft(assetId: assetId, modelContext: modelContext)
+        } else {
+            addPhotoToActiveDraft(assetId: assetId, imageData: nil, modelContext: modelContext)
+        }
+    }
+
+    /// Single-row lookup. The active-draft paths run on every photo tap / shutter press,
+    /// and used to fetch EVERY Item just to find one by id.
+    private func fetchItem(id: UUID, modelContext: ModelContext) -> Item? {
+        var descriptor = FetchDescriptor<Item>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return (try? modelContext.fetch(descriptor))?.first
     }
 
     /// Removes a photo from the active draft (deselect in picker, or delete in carousel).
@@ -282,7 +308,7 @@ class UploadManager: ObservableObject {
     /// its background upload yet, so it never has one.
     func removePhotoFromActiveDraft(assetId: String, modelContext: ModelContext) {
         guard let id = activeDraftID,
-              let draft = (try? modelContext.fetch(FetchDescriptor<Item>()))?.first(where: { $0.id == id }) else { return }
+              let draft = fetchItem(id: id, modelContext: modelContext) else { return }
         draft.removePhoto(assetId: assetId)
         if draft.sourceAssetIdentifiers.isEmpty {
             deleteDraftLocallyAndCloud(draft: draft, modelContext: modelContext)
@@ -307,10 +333,34 @@ class UploadManager: ObservableObject {
         for item in orphaned {
             Item.deletedIDs.insert(item.id)
             item.sourceAssetIdentifiers = []
-            item.photosData = []
+            item.discardLocalPhotos()
             modelContext.delete(item)
         }
         try? modelContext.save()
+    }
+
+    /// Launch sweep for the move of local photo bytes out of SwiftData into per-photo
+    /// files (see DraftPhotoStore.swift). Migrates any draft still carrying the legacy
+    /// `photosData` array — a one-time cost per draft, a cheap no-op check afterwards —
+    /// then removes photo folders whose draft no longer exists. Run after
+    /// `cleanupOrphanedPublishedDrafts` so the items it deletes are swept too.
+    func migrateDraftPhotoStorage(modelContext: ModelContext) {
+        // A failed fetch must not reach the orphan sweep: an empty "live" set would
+        // delete every draft's photos.
+        guard let items = try? modelContext.fetch(FetchDescriptor<Item>()) else { return }
+        var migrated = 0
+        for item in items where !Item.deletedIDs.contains(item.id) {
+            if item.migrateLegacyPhotosIfNeeded() { migrated += 1 }
+        }
+        if migrated > 0 {
+            print("[UploadManager] Moved local photos of \(migrated) draft(s) out of SwiftData into files")
+            try? modelContext.save()
+        }
+        let live = Set(items.filter { !Item.deletedIDs.contains($0.id) }.map(\.id))
+        let swept = DraftPhotoStore.sweepOrphans(keeping: live)
+        if swept > 0 {
+            print("[UploadManager] Removed \(swept) orphaned draft photo folder(s)")
+        }
     }
 
     /// Finds items where `pendingPublish == true` but `publishedAt == nil` — these were
@@ -384,7 +434,7 @@ class UploadManager: ObservableObject {
         // has nothing to iterate, so photosData is never touched again for this object,
         // regardless of whether some other reference to it is still floating around a view.
         draft.sourceAssetIdentifiers = []
-        draft.photosData = []
+        draft.discardLocalPhotos()
 
         // Defer the actual SwiftData delete + save by one run loop tick — belt-and-braces
         // on top of the clearing above, so nothing else races the removal animation either.
@@ -428,7 +478,7 @@ class UploadManager: ObservableObject {
     /// "Starting a new stack" in either view calls this.
     func commitActiveDraft(modelContext: ModelContext) {
         guard let id = activeDraftID,
-              let draft = (try? modelContext.fetch(FetchDescriptor<Item>()))?.first(where: { $0.id == id }),
+              let draft = fetchItem(id: id, modelContext: modelContext),
               !draft.sourceAssetIdentifiers.isEmpty else {
             activeDraftID = nil
             return
@@ -490,12 +540,15 @@ class UploadManager: ObservableObject {
             // Paired with assetId (not a bare [UIImage]) so a fetch failure partway through
             // doesn't shift later images out of sync with the assetId they belong to.
             var images: [(assetId: String, image: UIImage)] = []
+            // Snapshot the draft's local photo bytes up front, before any suspension
+            // point — the draft can be deleted mid-upload.
+            let localPhotos = deletedDraftIDs.contains(draftID) ? [:] : draft.localPhotoDataByAsset()
             for assetId in assetIdentifiers {
                 guard !deletedDraftIDs.contains(draftID) else {
                     print("[UploadManager] Draft \(draftID) deleted mid-upload — aborting")
                     return
                 }
-                if let img = draft.image(for: assetId) {
+                if let data = localPhotos[assetId], let img = UIImage(data: data) {
                     images.append((assetId, img))
                 } else if let img = await PhotoAsset(identifier: assetId).fullResolutionImage() {
                     images.append((assetId, img))
@@ -924,8 +977,7 @@ class UploadManager: ObservableObject {
             guard let bytes = try? await StorageService.shared.downloadImageData(path: path) else { continue }
             let assetId = UUID().uuidString
             draft.sourceAssetIdentifiers.append(assetId)
-            draft.photosData.append(bytes)
-            draft.isLocalPhotoOnly = true
+            draft.setLocalPhoto(bytes, for: assetId)
             if draft.firebasePhotoPathsByAsset == nil { draft.firebasePhotoPathsByAsset = [:] }
             draft.firebasePhotoPathsByAsset?[assetId] = path
         }
@@ -1172,7 +1224,7 @@ class UploadManager: ObservableObject {
                         // pending cross-post job) still needs the photos.
                         Item.deletedIDs.insert(draft.id)
                         draft.sourceAssetIdentifiers = []
-                        draft.photosData = []
+                        draft.discardLocalPhotos()
                         modelContext.delete(draft)
                     }
                     // This draft is now a live listing — drop it from the session set so the
@@ -1374,7 +1426,7 @@ class UploadManager: ObservableObject {
                     // nothing else marks or clears them.
                     Item.deletedIDs.insert(item.id)
                     item.sourceAssetIdentifiers = []
-                    item.photosData = []
+                    item.discardLocalPhotos()
                     modelContext.delete(item)
                 }
                 try? modelContext.save()

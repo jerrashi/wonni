@@ -103,37 +103,56 @@ class PhotoCollection: NSObject, ObservableObject {
         }
     }
     
-    func addImage(_ imageData: Data) async throws -> String {
+    /// Saves a captured photo to the library and returns its asset identifier — as soon
+    /// as Photos ASSIGNS the identifier, not when the save finishes. The identifier
+    /// exists from inside the change block (via the creation placeholder); the commit
+    /// that follows is the slow part, and nothing downstream needs it: the draft keeps
+    /// the photo's bytes itself. Waiting for the commit (plus a full library re-fetch)
+    /// is what used to delay the new shot's thumbnail in the draft carousel.
+    ///
+    /// Returns nil if Photos never got as far as assigning one (no album, permission
+    /// denied). If the commit fails AFTER the identifier was handed out, the caller is
+    /// left with an identifier that matches nothing in the library — harmless, since
+    /// every reader falls back to the draft's own bytes.
+    func addImage(_ imageData: Data) async -> String? {
         guard let assetCollection = self.assetCollection else {
-            throw PhotoCollectionError.missingAssetCollection
+            logger.error("Error adding image to photo library: no asset collection loaded")
+            return nil
         }
 
-        var assetLocalId = ""
-
-        do {
-            try await PHPhotoLibrary.shared().performChanges {
-
-                let creationRequest = PHAssetCreationRequest.forAsset()
-                if let assetPlaceholder = creationRequest.placeholderForCreatedAsset {
-                    assetLocalId = assetPlaceholder.localIdentifier
-                    creationRequest.addResource(with: .photo, data: imageData, options: nil)
-
-                    if let albumChangeRequest = PHAssetCollectionChangeRequest(for: assetCollection), assetCollection.canPerform(.addContent) {
-                        let fastEnumeration = NSArray(array: [assetPlaceholder])
-                        albumChangeRequest.addAssets(fastEnumeration)
-                    }
-                }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+            // The change block and the completion handler both try to resume; the
+            // first one wins.
+            let lock = NSLock()
+            var resumed = false
+            func resumeOnce(_ identifier: String?) {
+                lock.lock()
+                let alreadyResumed = resumed
+                resumed = true
+                lock.unlock()
+                if !alreadyResumed { continuation.resume(returning: identifier) }
             }
 
-            await refreshPhotoAssets()
-            return assetLocalId
+            PHPhotoLibrary.shared().performChanges {
+                let creationRequest = PHAssetCreationRequest.forAsset()
+                guard let assetPlaceholder = creationRequest.placeholderForCreatedAsset else { return }
+                creationRequest.addResource(with: .photo, data: imageData, options: nil)
 
-        } catch let error {
-            logger.error("Error adding image to photo library: \(error.localizedDescription)")
-            throw PhotoCollectionError.addImageError(error)
+                if let albumChangeRequest = PHAssetCollectionChangeRequest(for: assetCollection), assetCollection.canPerform(.addContent) {
+                    let fastEnumeration = NSArray(array: [assetPlaceholder])
+                    albumChangeRequest.addAssets(fastEnumeration)
+                }
+                resumeOnce(assetPlaceholder.localIdentifier)
+            } completionHandler: { success, error in
+                if !success {
+                    logger.error("Error adding image to photo library: \(error?.localizedDescription ?? "unknown")")
+                }
+                resumeOnce(nil) // no-op when the change block already delivered the identifier
+                Task { await self.refreshPhotoAssets() }
+            }
         }
     }
-    
+
     func removeAsset(_ asset: PhotoAsset) async throws {
         guard let assetCollection = self.assetCollection else {
             throw PhotoCollectionError.missingAssetCollection

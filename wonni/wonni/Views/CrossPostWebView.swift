@@ -745,8 +745,10 @@ public struct CrossPostContainerView: View {
     private static func loadPhotoBase64(_ job: CrossPostJob) async -> [String] {
         var out: [String] = []
         if let item = job.item {
-            if !item.photosData.isEmpty { return item.photosData.map { $0.base64EncodedString() } }
+            // Per photo: the draft's own bytes when it has them, the photo library otherwise.
+            let localPhotos = item.localPhotoDataByAsset()
             for identifier in item.sourceAssetIdentifiers {
+                if let local = localPhotos[identifier] { out.append(local.base64EncodedString()); continue }
                 guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject else { continue }
                 let options = PHImageRequestOptions()
                 options.deliveryMode = .highQualityFormat
@@ -3092,10 +3094,11 @@ struct MercariAutoPosterView: View {
 
         var photoBase64Strings: [String] = []
         if let item = job.item {
-            if !item.photosData.isEmpty {
-                photoBase64Strings = item.photosData.map { $0.base64EncodedString() }
-            } else {
+            // Per photo: the draft's own bytes when it has them, the photo library otherwise.
+            let localPhotos = item.localPhotoDataByAsset()
+            do {
                 for identifier in item.sourceAssetIdentifiers {
+                    if let local = localPhotos[identifier] { photoBase64Strings.append(local.base64EncodedString()); continue }
                     let assets = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
                     guard let asset = assets.firstObject else { continue }
                     let options = PHImageRequestOptions()
@@ -3152,10 +3155,11 @@ struct MercariAutoPosterView: View {
 
         var photoBase64Strings: [String] = []
         if let item = job.item {
-            if !item.photosData.isEmpty {
-                photoBase64Strings = item.photosData.map { $0.base64EncodedString() }
-            } else {
+            // Per photo: the draft's own bytes when it has them, the photo library otherwise.
+            let localPhotos = item.localPhotoDataByAsset()
+            do {
                 for identifier in item.sourceAssetIdentifiers {
+                    if let local = localPhotos[identifier] { photoBase64Strings.append(local.base64EncodedString()); continue }
                     let assets = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
                     guard let asset = assets.firstObject else { continue }
                     let options = PHImageRequestOptions()

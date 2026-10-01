@@ -24,19 +24,7 @@ struct DraftPhotoEditModal: View {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
                     ForEach(localAssetIds, id: \.self) { assetId in
                         ZStack(alignment: .topTrailing) {
-                            Group {
-                                if let uiImage = item.thumbnail(for: assetId) {
-                                    Image(uiImage: uiImage)
-                                        .resizable()
-                                        .scaledToFill()
-                                } else {
-                                    PhotoItemView(
-                                        asset: PhotoAsset(identifier: assetId),
-                                        cache: cache,
-                                        imageSize: CGSize(width: 160, height: 160)
-                                    )
-                                }
-                            }
+                            DraftThumbnailView(item: item, assetId: assetId)
                             .frame(minWidth: 0, maxWidth: .infinity, minHeight: 160, maxHeight: 160)
                             .cornerRadius(8)
                             .clipped()
@@ -45,19 +33,7 @@ struct DraftPhotoEditModal: View {
                                 draggedAssetId = assetId
                                 return NSItemProvider(object: assetId as NSString)
                             }, preview: {
-                                Group {
-                                    if let uiImage = item.thumbnail(for: assetId) {
-                                        Image(uiImage: uiImage)
-                                            .resizable()
-                                            .scaledToFill()
-                                    } else {
-                                        PhotoItemView(
-                                            asset: PhotoAsset(identifier: assetId),
-                                            cache: cache,
-                                            imageSize: CGSize(width: 160, height: 160)
-                                        )
-                                    }
-                                }
+                                DraftThumbnailView(item: item, assetId: assetId)
                                 .frame(width: 160, height: 160)
                                 .cornerRadius(8)
                                 .clipped()
@@ -137,24 +113,10 @@ struct DraftPhotoEditModal: View {
 
     private func syncChangesToItem() {
         let removedAssetIds = Set(item.sourceAssetIdentifiers).subtracting(localAssetIds)
-        let pathsToDelete = removedAssetIds.compactMap { item.firebasePhotoPathsByAsset?[$0] }
-
-        var newPhotosData: [Data] = []
-        for assetId in localAssetIds {
-            if let idx = item.sourceAssetIdentifiers.firstIndex(of: assetId) {
-                if idx < item.photosData.count {
-                    newPhotosData.append(item.photosData[idx])
-                }
-            }
-        }
-
-        item.sourceAssetIdentifiers = localAssetIds
-        if item.isLocalPhotoOnly || !item.photosData.isEmpty {
-            item.photosData = newPhotosData
-        }
-        for assetId in removedAssetIds {
-            item.firebasePhotoPathsByAsset?.removeValue(forKey: assetId)
-        }
+        // removePhoto also drops each photo's local file, Storage-path entry and cached
+        // thumbnail.
+        let pathsToDelete = removedAssetIds.compactMap { item.removePhoto(assetId: $0).firebasePhotoPath }
+        item.reorderPhotos(to: localAssetIds)
 
         try? modelContext.save()
 

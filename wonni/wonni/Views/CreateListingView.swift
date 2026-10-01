@@ -59,18 +59,30 @@ struct DraftsStackIcon: View {
     }
 }
 
-struct SelectablePhotoGridItem: View {
+struct SelectablePhotoGridItem: View, Equatable {
     let asset: PhotoAsset
-    let activeAssetIDs: Set<String>       // IDs in the current active draft
-    let activeAssetOrder: [String]         // Ordered IDs for badge numbering
-    let usedAssetIDs: Set<String>          // All used IDs (active + committed)
+    /// Position in the active draft (drives the numbered badge); nil = not selected.
+    let selectionIndex: Int?
+    /// Already saved into a committed draft.
+    let isDrafted: Bool
     let cache: CachedImageManager
     let imageSize: CGSize
     let toggleAction: () -> Void
 
-    var isSelected: Bool { activeAssetIDs.contains(asset.id) }
-    var isDrafted: Bool { !isSelected && usedAssetIDs.contains(asset.id) }
-    var selectionIndex: Int? { activeAssetOrder.firstIndex(of: asset.id) }
+    var isSelected: Bool { selectionIndex != nil }
+
+    // The picker's body re-runs on every UploadManager change (upload progress ticks
+    // several times a second while the user is still picking) and on every tap. Each
+    // pass hands every cell a fresh `toggleAction` closure, which SwiftUI always treats
+    // as changed — so without this, every visible cell re-rendered every time. Compares
+    // only what the cell draws; `toggleAction` is safe to leave stale because it only
+    // captures the asset (UploadManager.togglePhotoInActiveDraft decides add vs remove).
+    static func == (lhs: SelectablePhotoGridItem, rhs: SelectablePhotoGridItem) -> Bool {
+        lhs.asset.id == rhs.asset.id &&
+        lhs.selectionIndex == rhs.selectionIndex &&
+        lhs.isDrafted == rhs.isDrafted &&
+        lhs.imageSize == rhs.imageSize
+    }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -151,33 +163,47 @@ struct CustomPhotoPickerView: View {
             return allItems.first { $0.id == id }
         }
 
-        /// Asset IDs in the active draft — used for grid badges
-        private var activeDraftAssetIDs: Set<String> {
-            Set(activeDraft?.sourceAssetIdentifiers ?? [])
-        }
-
-        /// Committed drafts (not the active one)
+        /// Committed drafts (not the active one). Their asset IDs are the "used" set behind
+        /// the grey checkmark badge and the "Hide previously selected" toggle — which
+        /// deliberately excludes the active (not-yet-committed) draft's selections, since
+        /// those stay visible with their number badge until the user commits the draft.
         private var committedDrafts: [Item] {
             let activeID = uploadManager.activeDraftID
             return allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && $0.id != activeID }
         }
 
-        /// Asset IDs already saved into a committed draft — for the "Hide previously selected" toggle.
-        /// Deliberately excludes the active (not-yet-committed) draft's selections, since those
-        /// should stay visible with their number badge until the user commits the draft.
-        private var allUsedAssetIDs: Set<String> {
-            Set(committedDrafts.flatMap { $0.sourceAssetIdentifiers })
+        /// One grid cell. Takes the already-computed selection lookups — see the hoisting
+        /// note at the top of `body`.
+        private func gridItem(_ asset: PhotoAsset, selectionIndexByAsset: [String: Int], usedAssetIDs: Set<String>) -> some View {
+            let selectionIndex = selectionIndexByAsset[asset.id]
+            return SelectablePhotoGridItem(
+                asset: asset,
+                selectionIndex: selectionIndex,
+                isDrafted: selectionIndex == nil && usedAssetIDs.contains(asset.id),
+                cache: photoCollection.cache,
+                imageSize: imageSize,
+                toggleAction: { togglePhoto(asset) }
+            )
+            .equatable()
         }
-        
+
         var body: some View {
-            let currentUsedAssetIDs = allUsedAssetIDs
+            // Everything the grid cells need is derived ONCE per body pass here. These
+            // used to be read through the computed properties above from inside the
+            // ForEach, so every visible cell re-scanned all drafts and rebuilt a Set.
+            let activeOrder = activeDraft?.sourceAssetIdentifiers ?? []
+            let selectionIndexByAsset = Dictionary(
+                activeOrder.enumerated().map { ($0.element, $0.offset) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            let committed = committedDrafts
+            let currentUsedAssetIDs = Set(committed.flatMap { $0.sourceAssetIdentifiers })
 
             // hasContent gates the bottom carousel below — computed here (not inside the
             // old .safeAreaInset(edge: .bottom) closure) now that it's a plain VStack
             // sibling of the ScrollView instead of a safe-area reservation on it. See the
             // 2026-09-29 note on the carousel below for why that mattered.
-            let hasContent = (activeDraft?.sourceAssetIdentifiers.isEmpty == false
-                || !committedDrafts.isEmpty)
+            let hasContent = (!activeOrder.isEmpty || !committed.isEmpty)
                 && !photoCollection.photoAssets.isEmpty
 
             VStack(spacing: 0) {
@@ -185,27 +211,11 @@ struct CustomPhotoPickerView: View {
                 LazyVGrid(columns: columns, spacing: Self.itemSpacing) {
                     if hidePreviouslySelected {
                         ForEach(photoCollection.photoAssets.filter { !currentUsedAssetIDs.contains($0.id) }) { asset in
-                            SelectablePhotoGridItem(
-                                asset: asset,
-                                activeAssetIDs: activeDraftAssetIDs,
-                                activeAssetOrder: activeDraft?.sourceAssetIdentifiers ?? [],
-                                usedAssetIDs: currentUsedAssetIDs,
-                                cache: photoCollection.cache,
-                                imageSize: imageSize,
-                                toggleAction: { togglePhoto(asset) }
-                            )
+                            gridItem(asset, selectionIndexByAsset: selectionIndexByAsset, usedAssetIDs: currentUsedAssetIDs)
                         }
                     } else {
                         ForEach(photoCollection.photoAssets) { asset in
-                            SelectablePhotoGridItem(
-                                asset: asset,
-                                activeAssetIDs: activeDraftAssetIDs,
-                                activeAssetOrder: activeDraft?.sourceAssetIdentifiers ?? [],
-                                usedAssetIDs: currentUsedAssetIDs,
-                                cache: photoCollection.cache,
-                                imageSize: imageSize,
-                                toggleAction: { togglePhoto(asset) }
-                            )
+                            gridItem(asset, selectionIndexByAsset: selectionIndexByAsset, usedAssetIDs: currentUsedAssetIDs)
                         }
                     }
                 }
@@ -339,16 +349,8 @@ struct CustomPhotoPickerView: View {
 
         /// Toggle a photo in/out of the active draft.
         private func togglePhoto(_ asset: PhotoAsset) {
-            if activeDraftAssetIDs.contains(asset.id) {
-                // Deselect: remove from active draft
-                withAnimation {
-                    uploadManager.removePhotoFromActiveDraft(assetId: asset.id, modelContext: modelContext)
-                }
-            } else {
-                // Select: add to active draft
-                withAnimation {
-                    uploadManager.addPhotoToActiveDraft(assetId: asset.id, imageData: nil, modelContext: modelContext)
-                }
+            withAnimation {
+                uploadManager.togglePhotoInActiveDraft(assetId: asset.id, modelContext: modelContext)
             }
         }
     }
@@ -542,6 +544,41 @@ struct CustomPhotoPickerView: View {
         }
     }
 
+    // MARK: - DraftSelectionToolbar
+    /// DraftHistoryView's selection-mode controls. Pure mapping from selection counts to
+    /// button state, kept out of the view so it's unit-testable
+    /// (DraftSelectionToolbarTests) and so the UX lives in one place.
+    ///
+    /// Every control keeps a FIXED position (2026-09-30):
+    ///
+    ///     [Select All ⇄ Deselect All]        Drafts        […] [Cancel]
+    ///                                                       └ Bulk Edit, Delete
+    ///
+    /// Cancel never moves, so leaving selection mode is always one tap in the same
+    /// spot. The "…" menu is disabled (not hidden) until something is selected, and
+    /// Bulk Edit is disabled inside it until it applies, so nothing jumps around.
+    struct DraftSelectionToolbar: Equatable {
+        enum Leading: Equatable { case selectAll, deselectAll }
+
+        let leading: Leading
+        /// Bulk Edit acts on whole drafts and needs at least two of them.
+        let canBulkEdit: Bool
+        /// Delete also removes individual photos, so any selection enables it.
+        let canDelete: Bool
+
+        /// - Parameters:
+        ///   - totalDrafts: drafts on screen.
+        ///   - fullySelectedDrafts: drafts with EVERY photo selected. Selection here is
+        ///     per photo, so a draft with only some photos ticked doesn't count.
+        ///   - hasAnySelection: at least one photo selected anywhere.
+        init(totalDrafts: Int, fullySelectedDrafts: Int, hasAnySelection: Bool) {
+            let allSelected = totalDrafts > 0 && fullySelectedDrafts == totalDrafts
+            leading = allSelected ? .deselectAll : .selectAll
+            canBulkEdit = fullySelectedDrafts >= 2
+            canDelete = hasAnySelection
+        }
+    }
+
     // MARK: - DraftHistoryView
     /// Draft history: every committed draft with photos, titles, selection mode, and a
     /// per-draft "+" that reopens the draft in the photo picker. Pushed full-screen on
@@ -678,11 +715,7 @@ struct CustomPhotoPickerView: View {
                                                                 originalDraftID = draft.id
                                                                 originalAssetID = assetId
                                                                 originalIndex = draft.sourceAssetIdentifiers.firstIndex(of: assetId)
-                                                                if let idx = originalIndex, idx < draft.photosData.count {
-                                                                    originalPhotoData = draft.photosData[idx]
-                                                                } else {
-                                                                    originalPhotoData = nil
-                                                                }
+                                                                originalPhotoData = draft.photoData(for: assetId)
                                                                 return NSItemProvider(object: compositeId as NSString)
                                                             }
                                                             return NSItemProvider()
@@ -741,6 +774,9 @@ struct CustomPhotoPickerView: View {
                                             }
                                             .padding(.horizontal)
                                         }
+                                        // LazyHStack is greedy on the cross axis — pin the
+                                        // row to its 80pt cells (see ActiveDraftCarouselView).
+                                        .frame(height: 80)
 
                                         Divider()
                                             .padding(.horizontal)
@@ -775,7 +811,11 @@ struct CustomPhotoPickerView: View {
                     }
                 }
                 .animation(.spring(response: 0.25, dampingFraction: 0.8), value: draggedCompositeId != nil)
+                .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isSelectionMode)
                 .navigationBarTitleDisplayMode(.inline)
+                // Selection mode is left via Cancel only — the back chevron would
+                // otherwise crowd Select All and pop the screen mid-selection.
+                .navigationBarBackButtonHidden(isSelectionMode)
                 .toolbar {
                     ToolbarItem(placement: .principal) {
                         HStack(spacing: 6) {
@@ -797,11 +837,16 @@ struct CustomPhotoPickerView: View {
                             }
                         }
                     }
+                    // Selection-mode layout comes from DraftSelectionToolbar (above).
                     ToolbarItem(placement: .navigationBarLeading) {
                         if isSelectionMode {
-                            Button("Cancel") {
-                                isSelectionMode = false
-                                selectedPhotos.removeAll()
+                            switch selectionToolbar.leading {
+                            case .selectAll:
+                                Button("Select All") { selectAllDrafts() }
+                                    .accessibilityIdentifier("draftHistorySelectAllButton")
+                            case .deselectAll:
+                                Button("Deselect All") { selectedPhotos.removeAll() }
+                                    .accessibilityIdentifier("draftHistoryDeselectAllButton")
                             }
                         } else {
                             Button("Select") {
@@ -810,29 +855,22 @@ struct CustomPhotoPickerView: View {
                             .accessibilityIdentifier("draftHistorySelectButton")
                         }
                     }
-                    // Two buttons that can appear together (Bulk Edit + Delete) must be
-                    // separate ToolbarItems, not one custom HStack in a single item — a
-                    // combined HStack is opaque to the system's toolbar layout, so when it
-                    // doesn't fit and iOS 26 collapses the trailing group into a "..."
-                    // overflow button, the buttons inside lose their individual tap targets
-                    // and the overflow menu does nothing when tapped.
+                    // The actions live in ONE explicit Menu, in its own ToolbarItem. Loose
+                    // trailing buttons (Bulk Edit + Delete) got collapsed by iOS 26 into a
+                    // system "..." overflow that did nothing when tapped; an explicit Menu
+                    // is a single item, so there's nothing for the system to collapse.
                     ToolbarItem(placement: .navigationBarTrailing) {
                         if isSelectionMode {
-                            if !fullySelectedDrafts.isEmpty {
-                                Button("Bulk Edit") { showingDraftBulkEdit = true }
-                                    .foregroundStyle(Color.accentColor)
-                                    .accessibilityIdentifier("draftHistoryBulkEditButton")
-                            }
-                        } else {
-                            Button("Done") { dismiss() }
+                            selectionActionsMenu
                         }
                     }
+                    // Declared after the menu so it's the outermost (far-right) item.
                     ToolbarItem(placement: .navigationBarTrailing) {
                         if isSelectionMode {
-                            Button("Delete") { showingDeleteConfirm = true }
-                                .foregroundColor(.red)
-                                .disabled(selectedPhotos.isEmpty)
-                                .accessibilityIdentifier("draftHistoryDeleteButton")
+                            Button("Cancel") { exitSelectionMode() }
+                                .accessibilityIdentifier("draftHistoryCancelButton")
+                        } else {
+                            Button("Done") { dismiss() }
                         }
                     }
                 }
@@ -866,6 +904,64 @@ struct CustomPhotoPickerView: View {
                 }
         }
 
+
+        private var selectionToolbar: DraftSelectionToolbar {
+            DraftSelectionToolbar(
+                totalDrafts: drafts.count,
+                fullySelectedDrafts: fullySelectedDrafts.count,
+                hasAnySelection: !selectedPhotos.isEmpty
+            )
+        }
+
+        /// The "…" next to Cancel. Always present in selection mode (disabled while
+        /// nothing is selected) so the nav bar doesn't reflow as the selection changes.
+        /// The section header carries the selection count.
+        private var selectionActionsMenu: some View {
+            let toolbar = selectionToolbar
+            return Menu {
+                Section(selectionSummary) {
+                    Button { showingDraftBulkEdit = true } label: {
+                        Label("Bulk Edit", systemImage: "square.and.pencil")
+                    }
+                    .disabled(!toolbar.canBulkEdit)
+                    .accessibilityIdentifier("draftHistoryBulkEditButton")
+
+                    Button(role: .destructive) { showingDeleteConfirm = true } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    .accessibilityIdentifier("draftHistoryDeleteButton")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .disabled(!toolbar.canDelete)
+            .accessibilityIdentifier("draftHistorySelectionMenu")
+        }
+
+        /// "2 drafts selected" when the selection is exactly whole drafts, otherwise a
+        /// photo count — a partly-ticked draft is a photo selection, not a draft one.
+        private var selectionSummary: String {
+            guard !selectedPhotos.isEmpty else { return "Nothing selected" }
+            let whole = fullySelectedDrafts
+            let photosInWholeDrafts = whole.reduce(0) { $0 + $1.sourceAssetIdentifiers.count }
+            if !whole.isEmpty && photosInWholeDrafts == selectedPhotos.count {
+                return "\(whole.count) draft\(whole.count == 1 ? "" : "s") selected"
+            }
+            return "\(selectedPhotos.count) photo\(selectedPhotos.count == 1 ? "" : "s") selected"
+        }
+
+        private func selectAllDrafts() {
+            for draft in drafts {
+                for assetId in draft.sourceAssetIdentifiers {
+                    selectedPhotos.insert("\(draft.id.uuidString)|\(assetId)")
+                }
+            }
+        }
+
+        private func exitSelectionMode() {
+            isSelectionMode = false
+            selectedPhotos.removeAll()
+        }
 
         private func moveFocusByDraft(_ delta: Int) {
             guard let current = focusedDraftID,
@@ -1160,13 +1256,7 @@ struct DraftRow: View, Equatable {
                 // Photo thumbnail
                 Group {
                     if let assetId = item.sourceAssetIdentifiers.first {
-                        Group {
-                            if let uiImage = item.thumbnail(for: assetId) {
-                                Image(uiImage: uiImage).resizable().scaledToFill()
-                            } else {
-                                PhotoItemView(asset: PhotoAsset(identifier: assetId), cache: cache, imageSize: CGSize(width: 160, height: 160))
-                            }
-                        }
+                        DraftThumbnailView(item: item, assetId: assetId)
                     } else {
                         Color(.systemGray5)
                             .overlay(Image(systemName: "photo").foregroundStyle(.tertiary))
@@ -1433,19 +1523,7 @@ struct DraftEditSheet: View {
                             HStack(spacing: 12) {
                                 ForEach(item.sourceAssetIdentifiers, id: \.self) { assetId in
                                     ZStack(alignment: .topTrailing) {
-                                        Group {
-                                            if let uiImage = item.thumbnail(for: assetId) {
-                                                Image(uiImage: uiImage)
-                                                    .resizable()
-                                                    .scaledToFill()
-                                            } else {
-                                                PhotoItemView(
-                                                    asset: PhotoAsset(identifier: assetId),
-                                                    cache: cache,
-                                                    imageSize: CGSize(width: 160, height: 160)
-                                                )
-                                            }
-                                        }
+                                        DraftThumbnailView(item: item, assetId: assetId)
                                         .frame(width: 80, height: 80)
                                         .cornerRadius(8)
                                         .clipped()
@@ -2819,11 +2897,7 @@ struct ResultDraftRow: View, Equatable {
 
                 Group {
                     if let assetId = item.sourceAssetIdentifiers.first {
-                        if let img = item.thumbnail(for: assetId) {
-                            Image(uiImage: img).resizable().scaledToFill()
-                        } else {
-                            PhotoItemView(asset: PhotoAsset(identifier: assetId), cache: cache, imageSize: CGSize(width: 160, height: 160))
-                        }
+                        DraftThumbnailView(item: item, assetId: assetId)
                     } else {
                         Color(.systemGray5)
                     }
@@ -3179,12 +3253,7 @@ struct PublishedRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             if let assetId = item.sourceAssetIdentifiers.first {
-                PhotoItemView(
-                    asset: PhotoAsset(identifier: assetId),
-                    cache: cache,
-                    imageSize: CGSize(width: 120, height: 120)
-                )
-                .scaledToFill()
+                DraftThumbnailView(item: item, assetId: assetId)
                 .frame(width: 60, height: 60)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             } else {
