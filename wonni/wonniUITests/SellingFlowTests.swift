@@ -55,6 +55,17 @@ final class SellingFlowTests: XCTestCase {
 
     /// Test the complete selling flow from camera to publish
     func testPublishSingleListing() throws {
+        // End-to-end against the LIVE backend: a real Gemini call via `enrichListing`,
+        // a real publish. That can't pass on CI (placeholder Secrets.xcconfig) and it
+        // turns the merge gate red whenever Gemini is down or out of credits — both
+        // happened on 2026-10-01. Opt in locally with
+        //   WONNI_LIVE_BACKEND_TESTS=1 xcodebuild test … -testPlan SellingFlow
+        // Everything below the AI step is covered by the other tests in this file.
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["WONNI_LIVE_BACKEND_TESTS"] != nil,
+            "Needs the live backend (Gemini + publish); set WONNI_LIVE_BACKEND_TESTS=1 to run"
+        )
+
         // Photos permission alert may appear the first time the picker touches the
         // library — auto-allow it so the flow isn't blocked.
         let photosInterruption = addUIInterruptionMonitor(withDescription: "Photos permission") { alert in
