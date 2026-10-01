@@ -98,9 +98,13 @@ jobs:
 
       - name: Install SwiftLint
         run: |
-          curl -sSL -o swiftlint.zip \
-            "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/swiftlint_linux.zip"
-          unzip -q swiftlint.zip -d swiftlint-bin
+          # --fail so a bad URL is a loud 404, not a quietly saved HTML page.
+          curl -sSL --fail -o swiftlint.zip \
+            "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/swiftlint_linux_amd64.zip"
+          # The zip ships `swiftlint` (dynamic, needs no extra libs on ubuntu-latest)
+          # and `swiftlint-static`; we only need the static one.
+          unzip -q swiftlint.zip swiftlint-static -d swiftlint-bin
+          mv swiftlint-bin/swiftlint-static swiftlint-bin/swiftlint
           chmod +x swiftlint-bin/swiftlint
           echo "$PWD/swiftlint-bin" >> "$GITHUB_PATH"
 
