@@ -8,6 +8,7 @@
 import Foundation
 import FirebaseStorage
 import FirebaseAuth
+import FirebaseFunctions
 import FirebaseFirestore
 import UIKit
 
@@ -31,6 +32,7 @@ class StorageService: ObservableObject {
         metadata.customMetadata = ["userId": userId]
 
         _ = try await ref.putDataAsync(data, metadata: metadata)
+        try await publishObject(path: path)
         return path
     }
 
@@ -49,7 +51,22 @@ class StorageService: ObservableObject {
         metadata.customMetadata = ["userId": userId]
 
         _ = try await ref.putDataAsync(data, metadata: metadata)
+        try await publishObject(path: path)
         return path
+    }
+
+    /// Flips a just-uploaded object to public and returns. Client SDK uploads land
+    /// PRIVATE at the GCS layer: `storage.rules` `allow read: if true` only covers the
+    /// firebasestorage.googleapis.com endpoint, while every `products.images` /
+    /// `listings.photoPaths` URL we write is the canonical `storage.googleapis.com`
+    /// form (`publicURL(forPath:)`), which ignores rules and needs an allUsers ACL.
+    /// Web has always called this after `uploadBytes` (`web/src/firebase.js`); iOS
+    /// never did, so until 2026-10-01 every iOS photo 403'd for eBay's image fetch
+    /// (listings posted with no pictures), the web dashboard, and the Mercari
+    /// extension. Throws on failure so the caller's upload retry loop re-runs it —
+    /// a silently private photo is exactly the bug this exists to prevent.
+    private func publishObject(path: String) async throws {
+        _ = try await Functions.functions().httpsCallable("publishStorageObject").call(["path": path])
     }
 
     func uploadTemplateImage(image: UIImage, index: Int, userId: String, templateId: String) async throws -> String {
@@ -63,6 +80,7 @@ class StorageService: ObservableObject {
         metadata.contentType = "image/jpeg"
         metadata.customMetadata = ["userId": userId]
         _ = try await ref.putDataAsync(data, metadata: metadata)
+        try await publishObject(path: path)
         return path
     }
 
