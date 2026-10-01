@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     paths: [wonni/**]
+  # Manual re-run (Actions → TestFlight → Run workflow), e.g. after fixing signing.
+  workflow_dispatch:
 
 concurrency:
   group: testflight-${{ github.workflow }}-${{ github.ref }}
@@ -28,8 +30,57 @@ jobs:
     #                                    (e.g. `base64 -i AuthKey_XXXX.p8 | pbcopy`)
     # This job intentionally does nothing (fails fast with a clear message)
     # until those are set — see the "Check required secrets" step below.
+    #
+    # Persistent signing certificates (added 2026-10-01). Every runner starts
+    # with an empty keychain, so automatic signing minted a NEW certificate on
+    # every run — until Apple's per-account cap was hit and the archive failed
+    # with "Choose a certificate to revoke. Your account has reached the maximum
+    # number of certificates" (run 36910045462). Each of those certs' private
+    # keys died with its runner, so they're dead weight: revoke them at
+    # developer.apple.com → Certificates. To stop it recurring, export ONE of
+    # each from Keychain Access (right-click → Export → .p12, set a password)
+    # and add:
+    #   SIGNING_CERT_DEVELOPMENT_P12    — "Apple Development" .p12, base64
+    #   SIGNING_CERT_DISTRIBUTION_P12   — "Apple Distribution" .p12, base64
+    #                                     (Xcode → Settings → Accounts → Manage
+    #                                     Certificates → + → Apple Distribution
+    #                                     if you don't have one yet)
+    #   SIGNING_CERT_PASSWORD           — the password used for both exports
+    # With these present, automatic signing reuses them (the API key is still
+    # needed to fetch/create provisioning profiles, which have no such cap).
+    # Without them the job behaves as before and warns.
     steps:
       - uses: actions/checkout@v4
+
+      - name: Import signing certificates
+        env:
+          SIGNING_CERT_DEVELOPMENT_P12: ${{ secrets.SIGNING_CERT_DEVELOPMENT_P12 }}
+          SIGNING_CERT_DISTRIBUTION_P12: ${{ secrets.SIGNING_CERT_DISTRIBUTION_P12 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          if [ -z "$SIGNING_CERT_DEVELOPMENT_P12$SIGNING_CERT_DISTRIBUTION_P12" ]; then
+            echo "::warning::No SIGNING_CERT_*_P12 secrets set — automatic signing will mint a new certificate on this runner (see the comment at the top of this workflow)."
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          imported=0
+          for var in SIGNING_CERT_DEVELOPMENT_P12 SIGNING_CERT_DISTRIBUTION_P12; do
+            [ -z "${!var}" ] && continue
+            P12="$RUNNER_TEMP/$var.p12"
+            echo "${!var}" | base64 --decode > "$P12"
+            security import "$P12" -P "$SIGNING_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+            rm -f "$P12"
+            imported=$((imported + 1))
+          done
+          # Let codesign use the keys without a UI prompt, and make this keychain searchable.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          echo "Imported $imported certificate(s):"
+          security find-identity -v -p codesigning "$KEYCHAIN" | sed -E 's/[0-9A-F]{40}/<sha1>/'
 
       - name: Check required secrets
         run: |
