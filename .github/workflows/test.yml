@@ -152,7 +152,7 @@ jobs:
 
       - name: Upload result bundle
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unit-tests-xcresult
           path: wonni/UnitTests.xcresult
@@ -250,7 +250,7 @@ jobs:
         # Open SellingFlow.xcresult in Xcode: each failed step has an automatic
         # screenshot + the accessibility hierarchy at the moment it failed.
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ui-tests-xcresult
           path: |
