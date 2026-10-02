@@ -43,6 +43,7 @@ struct ProfileView: View {
     @State private var showDeleteError = false
     @State private var showImportSheet = false
     @State private var showBulkImportSheet = false
+    @State private var showBulkTextDraftsSheet = false
     
     // Web cross-posting (Mercari, Facebook) goes through UploadManager's shared queue —
     // MainView owns the pill/sheet presentation, so jobs keep advancing even if the user
@@ -150,6 +151,10 @@ struct ProfileView: View {
             }
             .sheet(isPresented: $showBulkImportSheet) {
                 BulkImportSheet()
+            }
+            .sheet(isPresented: $showBulkTextDraftsSheet) {
+                BulkTextDraftsSheet(offersOpenDrafts: true)
+                    .environmentObject(uploadManager)
             }
             .sheet(isPresented: $showBulkPost) {
                 let selectedListingsArray = listings.filter { selectedListings.contains($0.id ?? "") }
@@ -470,6 +475,12 @@ struct ProfileView: View {
                     showBulkImportSheet = true
                 } label: {
                     Label("Bulk from Profile", systemImage: "square.grid.2x2.fill")
+                }
+
+                Button {
+                    showBulkTextDraftsSheet = true
+                } label: {
+                    Label("Drafts from a List", systemImage: "text.badge.plus")
                 }
             } label: {
                 HStack(spacing: 4) {

@@ -34,6 +34,11 @@ class UploadManager: ObservableObject {
     /// (drafts stay saved). Set by Review & Publish's Back button; observed and
     /// reset by CameraView.
     @Published var returnToCameraRoot = false
+    /// One-shot: pushes the camera tab's NavigationStack straight to the drafts
+    /// overview. Set by BulkTextDraftsSheet's "Open drafts" when it was opened from
+    /// Profile › Import (i.e. not already on the camera stack); observed and reset by
+    /// CameraView.
+    @Published var openDraftsOverview = false
     @Published var pendingAutofillJobsCount = 0
     @Published var sessionDraftIDs: [UUID] = []
     /// IDs of drafts marked for deletion. Populated synchronously by
