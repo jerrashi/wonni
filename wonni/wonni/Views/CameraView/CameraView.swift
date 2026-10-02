@@ -164,6 +164,13 @@ struct CameraView: View {
                 uploadManager.selectedTab = 4
             }
         }
+        // "Open drafts" from BulkTextDraftsSheet when it was opened outside this stack
+        // (Profile › Import). Checked on appear too: the flag is set before the tab
+        // switch, so if this view wasn't alive yet the onChange never fires.
+        .onChange(of: uploadManager.openDraftsOverview) { _, should in
+            if should { openDraftsOverviewIfRequested() }
+        }
+        .onAppear { openDraftsOverviewIfRequested() }
         // Review & Publish's Back button (spec N4): dismisses the full-screen results
         // view and pops this stack back to the camera, drafts intact.
         .onChange(of: uploadManager.returnToCameraRoot) { _, should in
@@ -172,6 +179,12 @@ struct CameraView: View {
                 uploadManager.returnToCameraRoot = false
             }
         }
+    }
+
+    private func openDraftsOverviewIfRequested() {
+        guard uploadManager.openDraftsOverview else { return }
+        uploadManager.openDraftsOverview = false
+        route = .drafts
     }
 
     // MARK: - Top bar

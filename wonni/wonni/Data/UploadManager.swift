@@ -34,6 +34,11 @@ class UploadManager: ObservableObject {
     /// (drafts stay saved). Set by Review & Publish's Back button; observed and
     /// reset by CameraView.
     @Published var returnToCameraRoot = false
+    /// One-shot: pushes the camera tab's NavigationStack straight to the drafts
+    /// overview. Set by BulkTextDraftsSheet's "Open drafts" when it was opened from
+    /// Profile › Import (i.e. not already on the camera stack); observed and reset by
+    /// CameraView.
+    @Published var openDraftsOverview = false
     @Published var pendingAutofillJobsCount = 0
     @Published var sessionDraftIDs: [UUID] = []
     /// IDs of drafts marked for deletion. Populated synchronously by
@@ -903,6 +908,11 @@ class UploadManager: ObservableObject {
         data["handlingTimeDays"] = draft.handlingTimeDays
         data["facebookOfferShipping"] = draft.facebookOfferShipping
         data["facebookHideFromFriends"] = draft.facebookHideFromFriends
+        // "Sell similar" fields (pasted-list drafts only) — the keys ebayCreateListing
+        // already reads: `geminiItemSpecifics` feeds buildProductAspects, `ebayCategoryId`
+        // is preferred over the taxonomy suggestion (resolveCategoryId).
+        data["ebayCategoryId"] = draft.ebayCategoryId
+        data["geminiItemSpecifics"] = draft.itemSpecifics
         data["images"] = draft.orderedFirebasePhotoPaths.map { StorageService.shared.publicURL(forPath: $0) }
         data["updatedAt"] = Timestamp(date: now)
 
@@ -964,6 +974,8 @@ class UploadManager: ObservableObject {
         if let handlingTimeDays = data["handlingTimeDays"] as? Int { draft.handlingTimeDays = handlingTimeDays }
         if let offerShipping = data["facebookOfferShipping"] as? Bool { draft.facebookOfferShipping = offerShipping }
         if let hideFromFriends = data["facebookHideFromFriends"] as? Bool { draft.facebookHideFromFriends = hideFromFriends }
+        if let ebayCategoryId = data["ebayCategoryId"] as? String { draft.ebayCategoryId = ebayCategoryId }
+        if let itemSpecifics = data["geminiItemSpecifics"] as? [String: String] { draft.itemSpecifics = itemSpecifics }
         if let weightLbs = data["weightLbs"] as? Double { draft.weightLbs = weightLbs }
         if let lengthIn = data["lengthIn"] as? Double { draft.lengthIn = lengthIn }
         if let widthIn = data["widthIn"] as? Double { draft.widthIn = widthIn }

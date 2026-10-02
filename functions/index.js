@@ -41,6 +41,7 @@ const { onProductDeleted } = require("./product_cleanup");
 const { generateProductDescription } = require("./generate_description");
 const { aiAutofillListing } = require("./listing_fields");
 const { enrichListing } = require("./enrichment");
+const { bulkDraftsFromText, generateListingPhoto } = require("./bulk_text_drafts");
 const { publishStorageObject } = require("./publish_storage_object");
 const {
   recordSale,
@@ -76,6 +77,8 @@ module.exports = {
   generateProductDescription,
   aiAutofillListing,
   enrichListing,
+  bulkDraftsFromText,
+  generateListingPhoto,
   onProductDeleted,
   publishStorageObject,
 

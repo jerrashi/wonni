@@ -31,8 +31,9 @@ const settings = require("./settings");
 const products = require("./products");
 const crossPostRules = require("./cross_post_rules");
 const weverseOrderTasks = require("./weverse_order_tasks");
+const bulkDrafts = require("./bulk_drafts");
 
-const domains = { sales, mercari, listings, ebay, etsy, enrichment, settings, crossPostRules, weverseOrderTasks };
+const domains = { sales, mercari, listings, ebay, etsy, enrichment, settings, crossPostRules, weverseOrderTasks, bulkDrafts };
 
 /** Flat list of every contract: [{ name, summary, request, response, domain }]. */
 const ALL = Object.entries(domains).flatMap(([domain, mod]) =>
@@ -97,6 +98,7 @@ module.exports = {
   ProductDocSchema: products.ProductDocSchema,
   WeverseOrderTaskDocSchema: weverseOrderTasks.WeverseOrderTaskDocSchema,
   WeverseOrderTaskWithIdSchema: weverseOrderTasks.WeverseOrderTaskWithIdSchema,
+  DraftProposalSchema: bulkDrafts.DraftProposalSchema,
   ALL,
   RequestSchemas,
   ResponseSchemas,

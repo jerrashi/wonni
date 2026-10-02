@@ -238,6 +238,18 @@
     "WeverseOrderTaskWithId": {
       "$ref": "#/definitions/WeverseOrderTaskWithId"
     },
+    "BulkDraftsFromTextRequest": {
+      "$ref": "#/definitions/BulkDraftsFromTextRequest"
+    },
+    "BulkDraftsFromTextResponse": {
+      "$ref": "#/definitions/BulkDraftsFromTextResponse"
+    },
+    "GenerateListingPhotoRequest": {
+      "$ref": "#/definitions/GenerateListingPhotoRequest"
+    },
+    "GenerateListingPhotoResponse": {
+      "$ref": "#/definitions/GenerateListingPhotoResponse"
+    },
     "SaleDoc": {
       "$ref": "#/definitions/SaleDoc"
     },
@@ -2978,6 +2990,245 @@
         "status",
         "createdAt",
         "id"
+      ],
+      "additionalProperties": false
+    },
+    "BulkDraftsFromTextRequest": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000
+        },
+        "maxItems": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60,
+          "default": 40
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "BulkDraftsFromTextResponse": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "type": "string"
+        },
+        "drafts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "maxLength": 140
+              },
+              "shortTitle": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 2000
+              },
+              "brand": {
+                "type": "string",
+                "maxLength": 60
+              },
+              "category": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "condition": {
+                "type": "string",
+                "enum": [
+                  "new",
+                  "likenew",
+                  "good",
+                  "fair",
+                  "poor"
+                ]
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 8
+              },
+              "isBundle": {
+                "type": "boolean"
+              },
+              "bundleItems": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "quantity": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "suggestedPrice": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "priceSource": {
+                "type": "string",
+                "enum": [
+                  "comps",
+                  "ai",
+                  "none"
+                ]
+              },
+              "imageUrls": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "imageSource": {
+                "type": "string",
+                "enum": [
+                  "ebay",
+                  "google",
+                  "generated",
+                  "none"
+                ]
+              },
+              "comps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string"
+                    },
+                    "price": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "itemWebUrl": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "price",
+                    "itemWebUrl"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "similarItemId": {
+                "type": "string"
+              },
+              "ebayCategoryId": {
+                "type": "string"
+              },
+              "ebayConditionId": {
+                "type": "string"
+              },
+              "epid": {
+                "type": "string"
+              },
+              "itemSpecifics": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "sourceText": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "shortTitle",
+              "description",
+              "condition",
+              "tags",
+              "isBundle",
+              "bundleItems",
+              "quantity",
+              "priceSource",
+              "imageUrls",
+              "imageSource",
+              "comps",
+              "sourceText"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "aiModel": {
+          "type": "string"
+        },
+        "aiPromptVersion": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "context",
+        "drafts",
+        "aiModel",
+        "aiPromptVersion"
+      ],
+      "additionalProperties": false
+    },
+    "GenerateListingPhotoRequest": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "bundleItems": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "condition": {
+          "type": "string",
+          "enum": [
+            "new",
+            "likenew",
+            "good",
+            "fair",
+            "poor"
+          ],
+          "default": "good"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "additionalProperties": false
+    },
+    "GenerateListingPhotoResponse": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "url"
       ],
       "additionalProperties": false
     },

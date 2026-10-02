@@ -1941,6 +1941,7 @@ struct BulkListingOverviewView: View {
     @State private var selectedItemIDs: Set<UUID> = []
     @State private var showDraftBulkEdit = false
     @State private var showDesktopDrafts = false
+    @State private var showBulkTextDrafts = false
     /// Direction of the last arrow-key move, so continuing past a description slot (see
     /// DraftRow.onDescriptionAutoAdvance) keeps going the same way the user was already moving.
     @State private var lastFocusMoveDelta = 1
@@ -2085,6 +2086,15 @@ struct BulkListingOverviewView: View {
                         Image(systemName: "desktopcomputer")
                     }
                 }
+                // Paste a text list → one ready-to-list draft per line (BulkTextDraftsSheet).
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        showBulkTextDrafts = true
+                    } label: {
+                        Image(systemName: "text.badge.plus")
+                    }
+                    .accessibilityIdentifier("draftsFromTextButton")
+                }
             }
             ToolbarItemGroup(placement: .keyboard) {
                 Button { moveFocus(by: -1) } label: { Image(systemName: "chevron.up") }
@@ -2122,6 +2132,10 @@ struct BulkListingOverviewView: View {
             NavigationStack {
                 DesktopDraftsView()
             }
+        }
+        .sheet(isPresented: $showBulkTextDrafts) {
+            BulkTextDraftsSheet()
+                .environmentObject(uploadManager)
         }
     }
 
