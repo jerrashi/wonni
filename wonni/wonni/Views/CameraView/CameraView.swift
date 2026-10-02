@@ -22,6 +22,9 @@ struct CameraView: View {
     }
     @State private var route: CameraRoute?
     @AppStorage("showCameraGrid") private var showGrid: Bool = false
+    /// "Paste a list" — drafts without photos (BulkTextDraftsSheet). Lives here, next
+    /// to the shutter, because this is where every listing starts.
+    @State private var showBulkTextDrafts = false
 
     private var hasActiveDraft: Bool {
         guard let id = uploadManager.activeDraftID else { return false }
@@ -145,6 +148,12 @@ struct CameraView: View {
         .onDisappear {
             model.camera.stop()
         }
+        .sheet(isPresented: $showBulkTextDrafts) {
+            // "Open drafts" sets uploadManager.openDraftsOverview, which the onChange
+            // below turns into route = .drafts once the sheet is gone.
+            BulkTextDraftsSheet(offersOpenDrafts: true)
+                .environmentObject(uploadManager)
+        }
         .navigationDestination(item: $route) { destination in
             switch destination {
             case .picker:
@@ -184,7 +193,13 @@ struct CameraView: View {
     private func openDraftsOverviewIfRequested() {
         guard uploadManager.openDraftsOverview else { return }
         uploadManager.openDraftsOverview = false
-        route = .drafts
+        // The flag is set from inside a sheet (BulkTextDraftsSheet) that is dismissing
+        // at this exact moment — defer the push past its dismiss animation so SwiftUI
+        // doesn't get a sheet dismissal and a navigation push in the same frame (same
+        // pattern as ProcessProgressView's onMinimize).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            route = .drafts
+        }
     }
 
     // MARK: - Top bar
@@ -212,6 +227,24 @@ struct CameraView: View {
                 .background(.black.opacity(0.45))
                 .clipShape(Capsule())
             }
+
+            Button {
+                showBulkTextDrafts = true
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "text.badge.plus")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("List")
+                        .font(.body.weight(.medium))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.black.opacity(0.45))
+                .clipShape(Capsule())
+            }
+            .padding(.leading, 10)
+            .accessibilityIdentifier("cameraDraftsFromListButton")
 
             Spacer()
 

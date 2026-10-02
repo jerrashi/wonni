@@ -138,6 +138,7 @@ struct CustomPhotoPickerView: View {
         }
         @State private var pickerRoute: PickerRoute?
         @State private var hidePreviouslySelected = false
+        @State private var showBulkTextDrafts = false
         @State private var photoAccessLimited = false
         @Environment(\.dismiss) private var dismiss
 
@@ -278,6 +279,10 @@ struct CustomPhotoPickerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .navigationBarBackButtonHidden(true)
             .toolbar(.hidden, for: .tabBar)
+            .sheet(isPresented: $showBulkTextDrafts) {
+                BulkTextDraftsSheet(offersOpenDrafts: true)
+                    .environmentObject(uploadManager)
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button {
@@ -289,6 +294,17 @@ struct CustomPhotoPickerView: View {
                         }
                     }
                     .accessibilityIdentifier("pickerBackButton")
+                }
+                // "Paste a list" — same sheet as the camera's List button. Its "Open
+                // drafts" flips uploadManager.openDraftsOverview; CameraView (which owns
+                // this stack) swaps the route from the picker to the drafts overview.
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        showBulkTextDrafts = true
+                    } label: {
+                        Image(systemName: "text.badge.plus")
+                    }
+                    .accessibilityIdentifier("pickerDraftsFromListButton")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     let hasActiveDraft = uploadManager.activeDraftID != nil
