@@ -59,6 +59,54 @@ async function retrieveComps({ title, categoryId, condition, limit }, { fetchImp
   }));
 }
 
+/** Browse API thumbnails are `.../s-l225.jpg`; the same CDN path serves the
+ *  full upload at `s-l1600` (verified 2026-10-01). Non-eBay URLs pass through. */
+function fullSizeEbayImage(url) {
+  if (typeof url !== "string") return url;
+  return url.replace(/(\/\/i\.ebayimg\.com\/.*\/s-l)\d+(\.(?:jpg|jpeg|png|webp))$/i, "$11600$2");
+}
+
+// The "sell similar" half of a comp: Browse `getItem` returns what a search
+// summary doesn't — every photo, the eBay category id, the numeric condition
+// id, the catalog ePID, and the seller's item specifics (`localizedAspects`).
+// Still app-token, still public marketplace data.
+async function retrieveCompDetail(itemId, { fetchImpl = fetch } = {}) {
+  const appToken = await getEbayAppTokenCached();
+  const res = await fetchImpl(
+    `https://${ebayApiHost()}/buy/browse/v1/item/${encodeURIComponent(itemId)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${appToken}`,
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+        "Accept-Language": "en-US",
+      },
+    }
+  );
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new HttpsError("internal", `eBay item lookup failed (${res.status}): ${json.errors?.[0]?.message ?? ""}`);
+  }
+  const images = [json.image?.imageUrl, ...(json.additionalImages ?? []).map((i) => i?.imageUrl)]
+    .filter(Boolean)
+    .map(fullSizeEbayImage);
+  const aspects = {};
+  for (const a of json.localizedAspects ?? []) {
+    if (a?.name && a?.value != null && String(a.value).trim()) aspects[String(a.name)] = String(a.value).trim();
+  }
+  return {
+    itemId: json.itemId ?? itemId,
+    title: json.title ?? "",
+    categoryId: json.categoryId ?? null,
+    categoryPath: json.categoryPath ?? null,
+    conditionId: json.conditionId ?? null,
+    condition: json.condition ?? null,
+    epid: json.epid ?? null,
+    images: [...new Set(images)],
+    aspects,
+    shortDescription: json.shortDescription ?? null,
+  };
+}
+
 exports.ebayRetrieveComps = onCall(
   { timeoutSeconds: 30, secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET] },
   async (request) => {
@@ -75,4 +123,4 @@ exports.ebayRetrieveComps = onCall(
   }
 );
 
-exports._internal = { retrieveComps };
+exports._internal = { retrieveComps, retrieveCompDetail, fullSizeEbayImage };

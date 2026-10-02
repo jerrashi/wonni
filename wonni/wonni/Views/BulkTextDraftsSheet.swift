@@ -6,7 +6,10 @@
 //  super smash bros brawl / …") and get one ready-to-list draft per line —
 //  bundles become one listing, headers become shared context. Three steps in
 //  one sheet: paste → review the proposals (uncheck any) → create drafts.
-//  Opened from the drafts overview toolbar and from Profile › Import.
+//  Photos come from eBay sellers' comps, then Google; when neither had one,
+//  the user is asked ONCE whether AI-generated photos are acceptable, and only
+//  a yes triggers generation. Opened from the drafts overview toolbar and from
+//  Profile › Import.
 //
 
 import SwiftUI
@@ -21,16 +24,22 @@ struct BulkTextDraftsSheet: View {
         case input
         case proposing
         case review
+        case generating(done: Int, total: Int)
         case creating(done: Int, total: Int, current: String)
         case finished(count: Int)
     }
 
     @State private var phase: Phase = .input
     @State private var text = ""
-    @State private var photoSource: PhotoSource = .ebay
     @State private var response: BulkDraftsFromTextResponse?
     @State private var excludedIndices: Set<Int> = []
     @State private var errorMessage: String?
+    @State private var showAIPhotoConsent = false
+
+    /// Remembered "yes" to AI-generated photos. Only ever set to true: a "no" applies
+    /// to that run alone, so the question comes back next time rather than silently
+    /// locking the option out forever.
+    @AppStorage("bulkTextAIPhotosAllowed") private var aiPhotosAllowed = false
 
     /// Shown when the user came from somewhere other than the drafts overview
     /// (Profile › Import) and needs a way to get to the drafts they just made.
@@ -53,8 +62,10 @@ struct BulkTextDraftsSheet: View {
                     inputView
                 case .review:
                     reviewView
+                case .generating(let done, let total):
+                    progressView(title: "Generating \(min(done + 1, total)) of \(total) photos…", detail: "", footnote: "AI-generated photos for listings nothing else covered.", done: done, total: total)
                 case .creating(let done, let total, let current):
-                    progressView(done: done, total: total, current: current)
+                    progressView(title: "Saving \(min(done + 1, total)) of \(total)…", detail: current, footnote: "Downloading photos and starting uploads.", done: done, total: total)
                 case .finished(let count):
                     finishedView(count: count)
                 }
@@ -63,7 +74,7 @@ struct BulkTextDraftsSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    if case .creating = phase {
+                    if isBusy {
                         EmptyView()
                     } else {
                         Button(phase == .review ? "Back" : "Close") {
@@ -77,6 +88,15 @@ struct BulkTextDraftsSheet: View {
             } message: {
                 Text(errorMessage ?? "")
             }
+            .alert("Use AI-generated photos?", isPresented: $showAIPhotoConsent) {
+                Button("Use AI photos") {
+                    aiPhotosAllowed = true
+                    Task { await generateMissingPhotos() }
+                }
+                Button("Skip", role: .cancel) {}
+            } message: {
+                Text("No seller or web photo was found for \(missingPhotoCount) of these listings. AI can generate a realistic product photo for them, but it won't be a photo of your actual item. You can always replace it on the draft.")
+            }
         }
         .interactiveDismissDisabled(isBusy)
     }
@@ -85,6 +105,7 @@ struct BulkTextDraftsSheet: View {
         switch phase {
         case .input, .proposing: return "Drafts from a list"
         case .review: return "Review drafts"
+        case .generating: return "Generating photos"
         case .creating: return "Creating drafts"
         case .finished: return "Done"
         }
@@ -92,7 +113,7 @@ struct BulkTextDraftsSheet: View {
 
     private var isBusy: Bool {
         switch phase {
-        case .proposing, .creating: return true
+        case .proposing, .generating, .creating: return true
         default: return false
         }
     }
@@ -122,15 +143,6 @@ struct BulkTextDraftsSheet: View {
             }
 
             Section {
-                Picker("Photos", selection: $photoSource) {
-                    Text("Stock photo from eBay").tag(PhotoSource.ebay)
-                    Text("AI-generated").tag(PhotoSource.generate)
-                }
-            } footer: {
-                Text("Stock photos come from comparable eBay listings (AI-generated when none is found). Prices are the median of live eBay asking prices. Everything is editable before you publish.")
-            }
-
-            Section {
                 Button {
                     Task { await propose() }
                 } label: {
@@ -148,6 +160,8 @@ struct BulkTextDraftsSheet: View {
                 }
                 .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || phase == .proposing)
                 .accessibilityIdentifier("bulkTextDraftsGenerate")
+            } footer: {
+                Text("Each listing is priced from live eBay comps and copies the closest eBay listing's category and item specifics. Photos come from eBay sellers' listings, then the web. Everything is editable before you publish.")
             }
         }
     }
@@ -155,7 +169,7 @@ struct BulkTextDraftsSheet: View {
     private func propose() async {
         phase = .proposing
         do {
-            let result = try await BulkTextDraftService.shared.propose(text: text, photoSource: photoSource)
+            let result = try await BulkTextDraftService.shared.propose(text: text)
             if result.drafts.isEmpty {
                 errorMessage = "No listings were found in that text."
                 phase = .input
@@ -164,10 +178,46 @@ struct BulkTextDraftsSheet: View {
             response = result
             excludedIndices = []
             phase = .review
+            // Photo priority: eBay sellers → web → ask about AI, once. A remembered
+            // "yes" skips the question; a "no" only ever applies to this run.
+            if missingPhotoCount > 0 {
+                if aiPhotosAllowed {
+                    await generateMissingPhotos()
+                } else {
+                    showAIPhotoConsent = true
+                }
+            }
         } catch {
             errorMessage = error.localizedDescription
             phase = .input
         }
+    }
+
+    // MARK: AI photos (consent-gated)
+
+    private var missingPhotoCount: Int {
+        (response?.drafts ?? []).filter(BulkTextDraftMapper.needsPhoto).count
+    }
+
+    private func generateMissingPhotos() async {
+        guard let current = response else { return }
+        let missing = current.drafts.enumerated().filter { BulkTextDraftMapper.needsPhoto($0.element) }
+        guard !missing.isEmpty else { return }
+        var drafts = current.drafts
+        for (done, entry) in missing.enumerated() {
+            phase = .generating(done: done, total: missing.count)
+            do {
+                if let url = try await BulkTextDraftService.shared.generatePhoto(for: entry.element) {
+                    drafts[entry.offset] = entry.element.with(imageSource: .generated, imageUrls: [url])
+                }
+            } catch {
+                // One failed image is not a reason to lose the whole review — that
+                // listing just keeps its placeholder.
+                print("[BulkTextDraftsSheet] photo generation failed for \(entry.element.shortTitle): \(error)")
+            }
+        }
+        response = current.with(drafts: drafts)
+        phase = .review
     }
 
     // MARK: Step 2 — review
@@ -231,20 +281,20 @@ struct BulkTextDraftsSheet: View {
 
     // MARK: Step 3 — progress / done
 
-    private func progressView(done: Int, total: Int, current: String) -> some View {
+    private func progressView(title: String, detail: String, footnote: String, done: Int, total: Int) -> some View {
         VStack(spacing: 16) {
             ProgressView(value: Double(done), total: Double(max(total, 1)))
                 .padding(.horizontal, 32)
-            Text("Saving \(min(done + 1, total)) of \(total)…")
+            Text(title)
                 .font(.headline)
-            if !current.isEmpty {
-                Text(current)
+            if !detail.isEmpty {
+                Text(detail)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
             }
-            Text("Downloading photos and starting uploads.")
+            Text(footnote)
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
         }
@@ -319,6 +369,11 @@ private struct ProposalRow: View {
                         Text(BulkTextDraftMapper.priceLabel(proposal))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
+                        if proposal.ebayCategoryId != nil {
+                            Text("· eBay details copied")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     Text(BulkTextDraftMapper.photoLabel(proposal))
                         .font(.caption2)

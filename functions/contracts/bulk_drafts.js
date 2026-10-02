@@ -12,24 +12,20 @@
  * listing containing several items; header lines like "wii games (CIB):"
  * are context that applies to everything under them). Each proposal is
  * fully filled (title, description, condition, category, tags), priced from
- * live eBay comps where possible, and carries photo URLs — a stock photo
- * pulled from an eBay comp, or an AI-generated product shot when no comp
- * had one. Persists nothing: the client reviews and creates the drafts.
+ * live eBay comps where possible, carries the best comp's eBay category /
+ * condition / item specifics ("sell similar"), and has photo URLs from the
+ * comp (eBay sellers' photos) or Google image search. No AI-generated
+ * photos here — the client asks the user first, then calls
+ * `generateListingPhoto` per photo-less listing. Persists nothing.
  */
 
 const { z } = require("zod");
 const { ConditionSchema, PositiveMoneySchema } = require("./_shared");
 
-const PhotoSourceSchema = z.enum(["ebay", "generate", "none"]);
-
 const BulkDraftsFromTextRequestSchema = z.object({
   text: z.string().min(1).max(8000),
   /** Cap on listings produced (default 40). */
   maxItems: z.number().int().min(1).max(60).default(40),
-  /** Where photos come from. "ebay" (default) = stock photo from a comp,
-   *  falling back to "generate" when no comp had an image; "generate" =
-   *  always AI-generate; "none" = skip photos. */
-  photoSource: PhotoSourceSchema.default("ebay"),
 });
 
 const CompSummarySchema = z.object({
@@ -57,9 +53,21 @@ const DraftProposalSchema = z.object({
   priceSource: z.enum(["comps", "ai", "none"]),
   /** https photo URLs, first = cover. */
   imageUrls: z.array(z.string()),
-  imageSource: z.enum(["ebay", "generated", "none"]),
+  /** "ebay" = the best comp's own photos; "google" = image search. The
+   *  server never emits "generated" — the client sets it after the user has
+   *  consented and `generateListingPhoto` returned a URL, so the review list
+   *  and the draft can label the photo honestly. */
+  imageSource: z.enum(["ebay", "google", "generated", "none"]),
   /** The comps the price came from (top few, for the review UI). */
   comps: z.array(CompSummarySchema),
+  /** "Sell similar": the eBay item whose details were copied, and what came
+   *  off it. The eBay create path prefers `ebayCategoryId` over a taxonomy
+   *  suggestion and merges `itemSpecifics` into the offer's aspects. */
+  similarItemId: z.string().optional(),
+  ebayCategoryId: z.string().optional(),
+  ebayConditionId: z.string().optional(),
+  epid: z.string().optional(),
+  itemSpecifics: z.record(z.string(), z.string()).optional(),
   /** The source line(s) this proposal was parsed from, for review. */
   sourceText: z.string(),
 });
@@ -72,14 +80,32 @@ const BulkDraftsFromTextResponseSchema = z.object({
   aiPromptVersion: z.string(),
 });
 
+const GenerateListingPhotoRequestSchema = z.object({
+  title: z.string().min(1).max(140),
+  bundleItems: z.array(z.string()).default([]),
+  condition: ConditionSchema.default("good"),
+});
+
+const GenerateListingPhotoResponseSchema = z.object({
+  /** Public storage.googleapis.com URL under users/{uid}/generated/, or null
+   *  when the model returned no image. */
+  url: z.string().nullable(),
+});
+
 module.exports = {
   DraftProposalSchema,
   contracts: [
     {
       name: "bulkDraftsFromText",
-      summary: "Parse a pasted list of items/bundles into fully-filled draft proposals with comp pricing and stock/generated photos. Persists nothing.",
+      summary: "Parse a pasted list of items/bundles into fully-filled draft proposals with comp pricing, sell-similar details and stock photos. Persists nothing.",
       request: BulkDraftsFromTextRequestSchema,
       response: BulkDraftsFromTextResponseSchema,
+    },
+    {
+      name: "generateListingPhoto",
+      summary: "AI-generate one product photo for a listing (consent-gated on the client); saved public under users/{uid}/generated/.",
+      request: GenerateListingPhotoRequestSchema,
+      response: GenerateListingPhotoResponseSchema,
     },
   ],
 };

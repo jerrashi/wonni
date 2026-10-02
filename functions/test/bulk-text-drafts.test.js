@@ -1,8 +1,9 @@
 /**
  * bulk-text-drafts.test.js — `bulkDraftsFromText` minus the network: the
- * model-output → proposal mapping, comp-median pricing, and the
- * price/photo enrichment with injected comps + image generation.
- * The Gemini parse itself is a manual smoke (see docs in bulk_text_drafts.js).
+ * model-output → proposal mapping, comp-median pricing, best-comp selection,
+ * the "sell similar" carry-over, and the photo priority chain with injected
+ * comps / detail / google deps. The Gemini parse itself and the image model
+ * are manual smokes (see bulk_text_drafts.js header).
  */
 
 "use strict";
@@ -14,9 +15,12 @@ process.env.EBAY_CLIENT_ID = "test-client-id";
 process.env.EBAY_CLIENT_SECRET = "test-client-secret";
 
 const { _internal } = require("../bulk_text_drafts");
+const { fullSizeEbayImage } = require("../ebay_comps")._internal;
 const { RequestSchemas, ResponseSchemas } = require("../contracts");
 
-const { toProposalCore, parseModelOutput, priceFromComps, enrichProposal, buildDrafts, fullSizeEbayImage } = _internal;
+const {
+  toProposalCore, parseModelOutput, priceFromComps, pickBestComp, usefulSpecifics, googleImages, enrichProposal, buildDrafts,
+} = _internal;
 
 // ── parse mapping ──────────────────────────────────────────────────────────
 
@@ -89,6 +93,28 @@ test("priceFromComps: median of positive prices, whole dollars; null when none",
   assert.equal(priceFromComps([]), null);
 });
 
+// ── sell similar ───────────────────────────────────────────────────────────
+
+test("pickBestComp: most shared title words wins, ties keep eBay's order, photo required", () => {
+  const comps = [
+    { itemId: "1", title: "Just Dance 4 Nintendo Wii CIB", imageUrl: "https://i.ebayimg.com/1/s-l225.jpg" },
+    { itemId: "2", title: "Just Dance 4 2015 2014 Wii bundle lot of 3", imageUrl: "https://i.ebayimg.com/2/s-l225.jpg" },
+    { itemId: "3", title: "Just Dance 4 2015 2014 Wii bundle lot of 3 tested", imageUrl: null },
+  ];
+  assert.equal(pickBestComp(comps, "Just Dance Wii bundle 4 2015 2014").itemId, "2");
+  assert.equal(pickBestComp(comps, "Just Dance 4 Wii").itemId, "1");
+  assert.equal(pickBestComp([comps[2]], "anything"), null);
+  assert.equal(pickBestComp([], "anything"), null);
+});
+
+test("usefulSpecifics: drops per-seller noise, caps the count, keeps the rest in order", () => {
+  const aspects = { Platform: "Nintendo Wii", "Country of Origin": "United States", MPN: "RVL-P-RSBE", "Game Name": "Super Smash Bros. Brawl", UPC: "0045496900397" };
+  assert.deepEqual(usefulSpecifics(aspects), { Platform: "Nintendo Wii", "Game Name": "Super Smash Bros. Brawl", UPC: "0045496900397" });
+  const many = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`A${i}`, String(i)]));
+  assert.equal(Object.keys(usefulSpecifics(many)).length, 20);
+  assert.deepEqual(usefulSpecifics(undefined), {});
+});
+
 // ── photos ─────────────────────────────────────────────────────────────────
 
 test("fullSizeEbayImage: rewrites the Browse thumbnail size to 1600, leaves other URLs alone", () => {
@@ -99,6 +125,23 @@ test("fullSizeEbayImage: rewrites the Browse thumbnail size to 1600, leaves othe
   assert.equal(fullSizeEbayImage("https://i.ebayimg.com/images/g/abc/s-l140.webp"), "https://i.ebayimg.com/images/g/abc/s-l1600.webp");
   assert.equal(fullSizeEbayImage("https://storage.googleapis.com/b/users/u/generated/1.png"), "https://storage.googleapis.com/b/users/u/generated/1.png");
   assert.equal(fullSizeEbayImage(null), null);
+});
+
+test("googleImages: [] without secrets; maps items to https links; never throws", async () => {
+  assert.deepEqual(await googleImages("x", {}), []);
+  assert.deepEqual(await googleImages("x", { key: "unset", cx: "unset", fetchImpl: async () => { throw new Error("must not call"); } }), []);
+  let url;
+  const ok = await googleImages("We Ski Wii", {
+    key: "k", cx: "c",
+    fetchImpl: async (u) => { url = String(u); return { ok: true, json: async () => ({ items: [{ link: "https://a/1.jpg" }, { link: "http://insecure/2.jpg" }, { link: "https://a/3.jpg" }] }) }; },
+  });
+  assert.deepEqual(ok, ["https://a/1.jpg", "https://a/3.jpg"]);
+  assert.match(url, /searchType=image/);
+  assert.match(url, /q=We\+Ski\+Wii/);
+  const failed = await googleImages("x", { key: "k", cx: "c", fetchImpl: async () => ({ ok: false, status: 429, json: async () => ({ error: { message: "quota" } }) }) });
+  assert.deepEqual(failed, []);
+  const threw = await googleImages("x", { key: "k", cx: "c", fetchImpl: async () => { throw new Error("down"); } });
+  assert.deepEqual(threw, []);
 });
 
 // ── enrichment ─────────────────────────────────────────────────────────────
@@ -121,93 +164,106 @@ function core(overrides = {}) {
   };
 }
 
-test("enrichProposal: comps price + first comp photo win; hints are stripped", async () => {
+const SSBB_COMPS = [
+  { itemId: "v1|1|0", title: "SSBB Wii", price: 28, imageUrl: null, itemWebUrl: "https://ebay.com/1" },
+  { itemId: "v1|2|0", title: "Super Smash Bros Brawl Nintendo Wii CIB", price: 32, imageUrl: "https://i.ebayimg.com/images/g/a/s-l225.jpg", itemWebUrl: "https://ebay.com/2" },
+  { itemId: "v1|3|0", title: "Smash lot", price: 44, imageUrl: "https://i.ebayimg.com/images/g/b/s-l225.jpg", itemWebUrl: "https://ebay.com/3" },
+];
+
+const SSBB_DETAIL = {
+  itemId: "v1|2|0",
+  title: "Super Smash Bros Brawl Nintendo Wii CIB",
+  categoryId: "139973",
+  categoryPath: "Video Games & Consoles|Video Games",
+  conditionId: "4000",
+  condition: "Very Good",
+  epid: "24070872136",
+  images: ["https://i.ebayimg.com/images/g/a/s-l1600.jpg", "https://i.ebayimg.com/images/g/a2/s-l1600.jpg"],
+  aspects: { Platform: "Nintendo Wii", "Game Name": "Super Smash Bros. Brawl", "Country of Origin": "United States" },
+};
+
+test("enrichProposal: comps price, sell-similar details and the best comp's photos; hints are stripped", async () => {
   const seen = [];
-  const deps = {
-    comps: async ({ title }) => {
-      seen.push(title);
-      return [
-        { title: "SSBB Wii", price: 28, imageUrl: null, itemWebUrl: "https://ebay.com/1" },
-        { title: "SSBB Wii CIB", price: 32, imageUrl: "https://i.ebayimg.com/images/g/a/s-l225.jpg", itemWebUrl: "https://ebay.com/2" },
-        { title: "SSBB lot", price: 44, imageUrl: "https://i.ebayimg.com/b.jpg", itemWebUrl: "https://ebay.com/3" },
-      ];
-    },
-    generate: async () => { throw new Error("should not generate when a comp photo exists"); },
-  };
-  const p = await enrichProposal(core(), "ebay", deps);
+  const p = await enrichProposal(core(), {
+    comps: async ({ title }) => { seen.push(title); return SSBB_COMPS; },
+    detail: async (id) => { assert.equal(id, "v1|2|0"); return SSBB_DETAIL; },
+    google: async () => { throw new Error("should not hit google when eBay has photos"); },
+  });
   assert.deepEqual(seen, ["Super Smash Bros Brawl Wii CIB"]);
   assert.equal(p.suggestedPrice, 32);
   assert.equal(p.priceSource, "comps");
-  assert.deepEqual(p.imageUrls, ["https://i.ebayimg.com/images/g/a/s-l1600.jpg"]);
+  assert.equal(p.similarItemId, "v1|2|0");
+  assert.equal(p.ebayCategoryId, "139973");
+  assert.equal(p.ebayConditionId, "4000");
+  assert.equal(p.epid, "24070872136");
+  assert.deepEqual(p.itemSpecifics, { Platform: "Nintendo Wii", "Game Name": "Super Smash Bros. Brawl" });
+  assert.deepEqual(p.imageUrls, SSBB_DETAIL.images);
   assert.equal(p.imageSource, "ebay");
   assert.equal(p.comps.length, 3);
-  assert.equal(p.comps[0].title, "SSBB Wii");
   assert.equal("_searchQuery" in p, false);
   assert.equal("_aiPrice" in p, false);
 });
 
-test("enrichProposal: bundle gets one photo per component, priced on the whole-bundle query", async () => {
-  const deps = {
-    comps: async ({ title }) => {
-      if (title === "bundle-q") return [{ title: "lot", price: 60, imageUrl: "https://i.ebayimg.com/lot.jpg", itemWebUrl: null }];
-      return [{ title, price: 15, imageUrl: `https://i.ebayimg.com/${encodeURIComponent(title)}.jpg`, itemWebUrl: null }];
-    },
-  };
+test("enrichProposal: detail failure degrades to the comp's thumbnail (full-size) with no sell-similar fields", async () => {
+  const p = await enrichProposal(core(), {
+    comps: async () => SSBB_COMPS,
+    detail: async () => { throw new Error("eBay 500"); },
+  });
+  assert.deepEqual(p.imageUrls, ["https://i.ebayimg.com/images/g/a/s-l1600.jpg"]);
+  assert.equal(p.imageSource, "ebay");
+  assert.equal(p.ebayCategoryId, undefined);
+  assert.equal(p.itemSpecifics, undefined);
+});
+
+test("enrichProposal: bundle gets one best-comp photo per component, priced on the whole-bundle query", async () => {
   const p = await enrichProposal(core({
     isBundle: true,
     bundleItems: ["Just Dance 4", "Just Dance 2015"],
     _searchQuery: "bundle-q",
     _componentQueries: ["Just Dance 4 Wii", "Just Dance 2015 Wii"],
-  }), "ebay", deps);
+  }), {
+    comps: async ({ title }) => {
+      if (title === "bundle-q") return [{ itemId: "lot", title: "lot", price: 60, imageUrl: "https://i.ebayimg.com/lot/s-l225.jpg", itemWebUrl: null }];
+      return [
+        { itemId: title + "-wrong", title: "Wii Sports", price: 15, imageUrl: "https://i.ebayimg.com/wrong/s-l225.jpg", itemWebUrl: null },
+        { itemId: title, title, price: 15, imageUrl: `https://i.ebayimg.com/${encodeURIComponent(title)}/s-l225.jpg`, itemWebUrl: null },
+      ];
+    },
+    detail: async () => null,
+  });
   assert.equal(p.suggestedPrice, 60);
   assert.deepEqual(p.imageUrls, [
-    "https://i.ebayimg.com/Just%20Dance%204%20Wii.jpg",
-    "https://i.ebayimg.com/Just%20Dance%202015%20Wii.jpg",
+    "https://i.ebayimg.com/Just%20Dance%204%20Wii/s-l1600.jpg",
+    "https://i.ebayimg.com/Just%20Dance%202015%20Wii/s-l1600.jpg",
   ]);
   assert.equal(p.imageSource, "ebay");
 });
 
-test("enrichProposal: no comps → AI price + generated photo; generation failure is non-fatal", async () => {
-  const generated = await enrichProposal(core(), "ebay", {
+test("enrichProposal: no eBay photos → Google; no Google → none (never generated here)", async () => {
+  const fromGoogle = await enrichProposal(core(), {
     comps: async () => [],
-    generate: async () => "https://storage.googleapis.com/b/users/u/generated/1.png",
+    google: async (q) => { assert.equal(q, "Super Smash Bros Brawl Wii CIB"); return ["https://cdn/x.jpg"]; },
   });
-  assert.equal(generated.suggestedPrice, 35);
-  assert.equal(generated.priceSource, "ai");
-  assert.deepEqual(generated.imageUrls, ["https://storage.googleapis.com/b/users/u/generated/1.png"]);
-  assert.equal(generated.imageSource, "generated");
+  assert.equal(fromGoogle.suggestedPrice, 35);
+  assert.equal(fromGoogle.priceSource, "ai");
+  assert.deepEqual(fromGoogle.imageUrls, ["https://cdn/x.jpg"]);
+  assert.equal(fromGoogle.imageSource, "google");
 
-  const failed = await enrichProposal(core({ _aiPrice: undefined }), "ebay", {
+  const nothing = await enrichProposal(core({ _aiPrice: undefined }), {
     comps: async () => { throw new Error("eBay down"); },
-    generate: async () => { throw new Error("quota"); },
+    google: async () => [],
   });
-  assert.equal(failed.priceSource, "none");
-  assert.equal(failed.suggestedPrice, undefined);
-  assert.deepEqual(failed.imageUrls, []);
-  assert.equal(failed.imageSource, "none");
+  assert.equal(nothing.priceSource, "none");
+  assert.equal(nothing.suggestedPrice, undefined);
+  assert.deepEqual(nothing.imageUrls, []);
+  assert.equal(nothing.imageSource, "none");
 });
 
-test("enrichProposal: photoSource 'generate' skips comp photos but still prices from comps; 'none' skips photos", async () => {
-  const deps = {
-    comps: async () => [{ title: "x", price: 20, imageUrl: "https://i.ebayimg.com/x.jpg", itemWebUrl: null }],
-    generate: async () => "https://storage.googleapis.com/b/gen.png",
-  };
-  const gen = await enrichProposal(core(), "generate", deps);
-  assert.equal(gen.suggestedPrice, 20);
-  assert.deepEqual(gen.imageUrls, ["https://storage.googleapis.com/b/gen.png"]);
-  assert.equal(gen.imageSource, "generated");
-
-  const none = await enrichProposal(core(), "none", deps);
-  assert.deepEqual(none.imageUrls, []);
-  assert.equal(none.imageSource, "none");
-});
-
-// ── end to end against the contract ────────────────────────────────────────
+// ── end to end against the contracts ───────────────────────────────────────
 
 test("buildDrafts: output satisfies the response contract and request defaults apply", async () => {
   const data = RequestSchemas.bulkDraftsFromText.parse({ text: "wii games (CIB):\nSuper smash bros brawl\nbundle 1: a, b" });
   assert.equal(data.maxItems, 40);
-  assert.equal(data.photoSource, "ebay");
 
   const result = await buildDrafts(data, {
     parse: async () => parseModelOutput(JSON.stringify({
@@ -217,15 +273,33 @@ test("buildDrafts: output satisfies the response contract and request defaults a
         { sourceText: "bundle 1: a, b", title: "A & B Wii Bundle", isBundle: true, bundleItems: ["A", "B"], condition: "good", componentQueries: ["A Wii", "B Wii"] },
       ],
     }), data.maxItems),
-    comps: async ({ title }) => (title === "ssbb" ? [{ title: "c", price: 25, imageUrl: "https://i.ebayimg.com/c.jpg", itemWebUrl: null }] : []),
-    generate: async () => null,
+    comps: async ({ title }) => (title === "ssbb" ? SSBB_COMPS : []),
+    detail: async () => SSBB_DETAIL,
+    google: async () => [],
   });
 
   const check = ResponseSchemas.bulkDraftsFromText.safeParse(result);
   assert.equal(check.success, true, JSON.stringify(check.error?.errors));
   assert.equal(result.drafts.length, 2);
   assert.equal(result.drafts[0].priceSource, "comps");
+  assert.equal(result.drafts[0].ebayCategoryId, "139973");
   assert.equal(result.drafts[1].isBundle, true);
   assert.equal(result.drafts[1].priceSource, "none");
   assert.equal(result.drafts[1].imageSource, "none");
+});
+
+test("ebay_listing resolveCategoryId: a numeric ebayCategoryId on the product wins over the taxonomy suggestion", async () => {
+  const { resolveCategoryId } = require("../ebay_listing")._internal;
+  assert.equal(await resolveCategoryId("u", "t", { ebayCategoryId: "139973" }), "139973");
+  assert.equal(await resolveCategoryId("u", "t", { ebayCategoryId: 139973 }), "139973");
+  // Anything non-numeric falls through to suggestCategoryId, which needs the
+  // network here — the thrown token error proves the fallthrough happened.
+  await assert.rejects(resolveCategoryId("u", "t", { ebayCategoryId: "junk" }));
+});
+
+test("generateListingPhoto contract: title required, bundleItems/condition default", () => {
+  const data = RequestSchemas.generateListingPhoto.parse({ title: "We Ski Wii" });
+  assert.deepEqual(data, { title: "We Ski Wii", bundleItems: [], condition: "good" });
+  assert.throws(() => RequestSchemas.generateListingPhoto.parse({}));
+  assert.equal(ResponseSchemas.generateListingPhoto.safeParse({ url: null }).success, true);
 });

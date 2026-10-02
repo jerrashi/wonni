@@ -51,6 +51,15 @@ class Item {
     /// FacebookAutoPosterView reads them (the draft is gone by cross-post time).
     var facebookOfferShipping: Bool?
     var facebookHideFromFriends: Bool?
+    /// "Sell similar" carry-over from a draft made out of a pasted list
+    /// (BulkTextDraftService): the eBay category id and item specifics copied
+    /// from the best-matching live eBay listing. Mirrored to products/{id} as
+    /// `ebayCategoryId` / `geminiItemSpecifics`, which is where ebayCreateListing
+    /// reads them (category pinned over a taxonomy guess, specifics merged into
+    /// the offer's aspects). nil for every other draft. Optional so SwiftData's
+    /// lightweight migration adds the columns without a migration plan.
+    var ebayCategoryId: String?
+    var itemSpecifics: [String: String]?
     var isDraft: Bool
     /// Local last-modified time, bumped alongside every `UploadManager.syncProductData`
     /// call. Compared against the shared `products/{id}` doc's own `updatedAt` to decide

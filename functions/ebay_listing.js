@@ -842,6 +842,15 @@ async function suggestCategoryId(uid, title, geminiCategory) {
   return categoryId;
 }
 
+// A draft made from a pasted list ("sell similar", bulk_text_drafts.js)
+// carries the comp's real eBay category id — use it over a taxonomy guess.
+// Anything else (no id, or junk) falls through to the suggestion lookup.
+async function resolveCategoryId(uid, title, product) {
+  const pinned = product?.ebayCategoryId;
+  if (pinned != null && /^\d+$/.test(String(pinned))) return String(pinned);
+  return suggestCategoryId(uid, title, product?.geminiCategory || product?.category);
+}
+
 // All item aspects for a category: [{ name, mode, values, required }].
 // mode = FREE_TEXT | SELECTION_ONLY. Returns [] on failure (the reactive
 // publish-retry is the safety net).
@@ -1456,7 +1465,7 @@ async function ebayCreateListingCore(uid, productId) {
   const [merchantLocationKey, listingPolicies, categoryId] = await Promise.all([
     getMerchantLocationKey(uid),
     getListingPolicies(uid, product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays),
-    suggestCategoryId(uid, title, product.geminiCategory || product.category),
+    resolveCategoryId(uid, title, product),
   ]);
 
   // Fill eBay's category-required fields the user left blank: item aspects
@@ -1805,7 +1814,7 @@ async function syncMultiVariantToEbay(uid, product, productId, docRef) {
   const [merchantLocationKey, listingPolicies, categoryId] = await Promise.all([
     getMerchantLocationKey(uid),
     getListingPolicies(uid, product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays),
-    suggestCategoryId(uid, title, product.geminiCategory || product.category),
+    resolveCategoryId(uid, title, product),
   ]);
   const [categoryAspects, allowedConditionIds] = await Promise.all([
     getCategoryAspects(categoryId),
@@ -2279,6 +2288,7 @@ module.exports = {
   getEbayAppTokenCached,
   // testable core (used by functions/test/ebay_import_listing.test.js)
   _internal: {
+    resolveCategoryId,
     ebayImportListingCore, ebayCreateListingCore,
     buildShippingRuleName, buildShippingRulePayload,
     validateListingFormatInput, buildEbayOfferPayload,

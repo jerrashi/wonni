@@ -24,12 +24,17 @@ final class BulkTextDraftMappingTests: XCTestCase {
             comps: [],
             condition: condition,
             description: "Complete in box with manual.",
+            ebayCategoryId: "139973",
+            ebayConditionId: "4000",
+            epid: "24070872136",
             imageSource: imageSource,
             imageUrls: imageUrls,
             isBundle: isBundle,
+            itemSpecifics: ["Platform": "Nintendo Wii", "Game Name": "Super Smash Bros. Brawl"],
             priceSource: priceSource,
             quantity: 1,
             shortTitle: shortTitle,
+            similarItemId: "v1|398452119919|0",
             sourceText: "Super smash bros brawl",
             suggestedPrice: price,
             tags: ["wii", "nintendo"],
@@ -53,6 +58,9 @@ final class BulkTextDraftMappingTests: XCTestCase {
         XCTAssertEqual(item.aiModel, "gemini-flash-lite-latest")
         XCTAssertEqual(item.aiPromptVersion, "2026-10-01.1")
         XCTAssertEqual(item.personalNote, "From list: Super smash bros brawl")
+        // "Sell similar" carry-over, read back by ebayCreateListing via products/{id}.
+        XCTAssertEqual(item.ebayCategoryId, "139973")
+        XCTAssertEqual(item.itemSpecifics, ["Platform": "Nintendo Wii", "Game Name": "Super Smash Bros. Brawl"])
     }
 
     func testApplyMapsCanonicalConditionOntoItemCondition() {
@@ -72,10 +80,24 @@ final class BulkTextDraftMappingTests: XCTestCase {
         XCTAssertEqual(BulkTextDraftMapper.priceLabel(proposal(price: 20, priceSource: .ai)), "AI estimate")
         XCTAssertEqual(BulkTextDraftMapper.priceLabel(proposal(price: nil, priceSource: .none)), "No price found")
 
-        XCTAssertEqual(BulkTextDraftMapper.photoLabel(proposal()), "Stock photo")
-        XCTAssertEqual(BulkTextDraftMapper.photoLabel(proposal(imageUrls: ["a", "b", "c"])), "3 stock photos")
+        XCTAssertEqual(BulkTextDraftMapper.photoLabel(proposal()), "eBay seller photo")
+        XCTAssertEqual(BulkTextDraftMapper.photoLabel(proposal(imageUrls: ["a", "b", "c"])), "3 eBay seller photos")
+        XCTAssertEqual(BulkTextDraftMapper.photoLabel(proposal(imageSource: .google)), "Web photo")
         XCTAssertEqual(BulkTextDraftMapper.photoLabel(proposal(imageSource: .generated)), "AI-generated photo")
-        XCTAssertEqual(BulkTextDraftMapper.photoLabel(proposal(imageUrls: [], imageSource: .none)), "Placeholder — replace before posting")
+        XCTAssertEqual(BulkTextDraftMapper.photoLabel(proposal(imageUrls: [], imageSource: .none)), "No photo found — placeholder, replace before posting")
+    }
+
+    func testNeedsPhotoOnlyWhenNothingWasFound() {
+        XCTAssertFalse(BulkTextDraftMapper.needsPhoto(proposal()))
+        XCTAssertFalse(BulkTextDraftMapper.needsPhoto(proposal(imageSource: .google)))
+        XCTAssertTrue(BulkTextDraftMapper.needsPhoto(proposal(imageUrls: [], imageSource: .none)))
+    }
+
+    func testConsentedGenerationRelabelsTheProposal() {
+        let generated = proposal(imageUrls: [], imageSource: .none).with(imageSource: .generated, imageUrls: ["https://storage.googleapis.com/b/users/u/generated/1.png"])
+        XCTAssertEqual(generated.imageSource, .generated)
+        XCTAssertFalse(BulkTextDraftMapper.needsPhoto(generated))
+        XCTAssertEqual(BulkTextDraftMapper.photoLabel(generated), "AI-generated photo")
     }
 
     func testPlaceholderImageIsSquareAndEncodable() {
@@ -104,6 +126,9 @@ final class BulkTextDraftMappingTests: XCTestCase {
                 "imageUrls": ["https://i.ebayimg.com/1.jpg", "https://i.ebayimg.com/2.jpg"],
                 "imageSource": "ebay",
                 "comps": [["title": "lot", "price": 30, "itemWebUrl": NSNull()]],
+                "similarItemId": "v1|1|0",
+                "ebayCategoryId": "139973",
+                "itemSpecifics": ["Platform": "Nintendo Wii"],
                 "sourceText": "bundle 1: just dance 4, just dance 2015, just dance 2014"
             ]]
         ]
@@ -114,5 +139,8 @@ final class BulkTextDraftMappingTests: XCTestCase {
         XCTAssertEqual(response.drafts[0].bundleItems.count, 3)
         XCTAssertEqual(response.drafts[0].imageUrls.count, 2)
         XCTAssertNil(response.drafts[0].comps[0].itemWebUrl)
+        XCTAssertEqual(response.drafts[0].ebayCategoryId, "139973")
+        XCTAssertEqual(response.drafts[0].itemSpecifics?["Platform"], "Nintendo Wii")
+        XCTAssertNil(response.drafts[0].epid)
     }
 }

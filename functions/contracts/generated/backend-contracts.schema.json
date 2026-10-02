@@ -244,6 +244,12 @@
     "BulkDraftsFromTextResponse": {
       "$ref": "#/definitions/BulkDraftsFromTextResponse"
     },
+    "GenerateListingPhotoRequest": {
+      "$ref": "#/definitions/GenerateListingPhotoRequest"
+    },
+    "GenerateListingPhotoResponse": {
+      "$ref": "#/definitions/GenerateListingPhotoResponse"
+    },
     "SaleDoc": {
       "$ref": "#/definitions/SaleDoc"
     },
@@ -3000,15 +3006,6 @@
           "minimum": 1,
           "maximum": 60,
           "default": 40
-        },
-        "photoSource": {
-          "type": "string",
-          "enum": [
-            "ebay",
-            "generate",
-            "none"
-          ],
-          "default": "ebay"
         }
       },
       "required": [
@@ -3099,6 +3096,7 @@
                 "type": "string",
                 "enum": [
                   "ebay",
+                  "google",
                   "generated",
                   "none"
                 ]
@@ -3130,6 +3128,24 @@
                     "itemWebUrl"
                   ],
                   "additionalProperties": false
+                }
+              },
+              "similarItemId": {
+                "type": "string"
+              },
+              "ebayCategoryId": {
+                "type": "string"
+              },
+              "ebayConditionId": {
+                "type": "string"
+              },
+              "epid": {
+                "type": "string"
+              },
+              "itemSpecifics": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
                 }
               },
               "sourceText": {
@@ -3166,6 +3182,53 @@
         "drafts",
         "aiModel",
         "aiPromptVersion"
+      ],
+      "additionalProperties": false
+    },
+    "GenerateListingPhotoRequest": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "bundleItems": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "condition": {
+          "type": "string",
+          "enum": [
+            "new",
+            "likenew",
+            "good",
+            "fair",
+            "poor"
+          ],
+          "default": "good"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "additionalProperties": false
+    },
+    "GenerateListingPhotoResponse": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "url"
       ],
       "additionalProperties": false
     },

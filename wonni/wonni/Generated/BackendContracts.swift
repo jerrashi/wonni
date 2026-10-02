@@ -51,6 +51,8 @@ struct BackendContracts: Codable, Sendable {
     let etsyPullSyncResponse: EtsyPullSyncResponse?
     let etsyUpdateListingRequest: EtsyUpdateListingRequest?
     let etsyUpdateListingResponse: EtsyUpdateListingResponse?
+    let generateListingPhotoRequest: GenerateListingPhotoRequest?
+    let generateListingPhotoResponse: GenerateListingPhotoResponse?
     let getEtsyCategoriesRequest: GetEtsyCategoriesRequest?
     let getEtsyCategoriesResponse: GetEtsyCategoriesResponse?
     let getEtsyReturnPoliciesRequest: GetEtsyReturnPoliciesRequest?
@@ -139,6 +141,8 @@ struct BackendContracts: Codable, Sendable {
         case etsyPullSyncResponse = "EtsyPullSyncResponse"
         case etsyUpdateListingRequest = "EtsyUpdateListingRequest"
         case etsyUpdateListingResponse = "EtsyUpdateListingResponse"
+        case generateListingPhotoRequest = "GenerateListingPhotoRequest"
+        case generateListingPhotoResponse = "GenerateListingPhotoResponse"
         case getEtsyCategoriesRequest = "GetEtsyCategoriesRequest"
         case getEtsyCategoriesResponse = "GetEtsyCategoriesResponse"
         case getEtsyReturnPoliciesRequest = "GetEtsyReturnPoliciesRequest"
@@ -247,6 +251,8 @@ extension BackendContracts {
         etsyPullSyncResponse: EtsyPullSyncResponse?? = nil,
         etsyUpdateListingRequest: EtsyUpdateListingRequest?? = nil,
         etsyUpdateListingResponse: EtsyUpdateListingResponse?? = nil,
+        generateListingPhotoRequest: GenerateListingPhotoRequest?? = nil,
+        generateListingPhotoResponse: GenerateListingPhotoResponse?? = nil,
         getEtsyCategoriesRequest: GetEtsyCategoriesRequest?? = nil,
         getEtsyCategoriesResponse: GetEtsyCategoriesResponse?? = nil,
         getEtsyReturnPoliciesRequest: GetEtsyReturnPoliciesRequest?? = nil,
@@ -335,6 +341,8 @@ extension BackendContracts {
             etsyPullSyncResponse: etsyPullSyncResponse ?? self.etsyPullSyncResponse,
             etsyUpdateListingRequest: etsyUpdateListingRequest ?? self.etsyUpdateListingRequest,
             etsyUpdateListingResponse: etsyUpdateListingResponse ?? self.etsyUpdateListingResponse,
+            generateListingPhotoRequest: generateListingPhotoRequest ?? self.generateListingPhotoRequest,
+            generateListingPhotoResponse: generateListingPhotoResponse ?? self.generateListingPhotoResponse,
             getEtsyCategoriesRequest: getEtsyCategoriesRequest ?? self.getEtsyCategoriesRequest,
             getEtsyCategoriesResponse: getEtsyCategoriesResponse ?? self.getEtsyCategoriesResponse,
             getEtsyReturnPoliciesRequest: getEtsyReturnPoliciesRequest ?? self.getEtsyReturnPoliciesRequest,
@@ -517,12 +525,10 @@ extension ApplyCrossPostRulesResponse {
 // MARK: - BulkDraftsFromTextRequest
 struct BulkDraftsFromTextRequest: Codable, Equatable, Sendable {
     let maxItems: Int?
-    let photoSource: PhotoSource?
     let text: String
 
     enum CodingKeys: String, CodingKey {
         case maxItems = "maxItems"
-        case photoSource = "photoSource"
         case text = "text"
     }
 }
@@ -547,12 +553,10 @@ extension BulkDraftsFromTextRequest {
 
     func with(
         maxItems: Int?? = nil,
-        photoSource: PhotoSource?? = nil,
         text: String? = nil
     ) -> BulkDraftsFromTextRequest {
         return BulkDraftsFromTextRequest(
             maxItems: maxItems ?? self.maxItems,
-            photoSource: photoSource ?? self.photoSource,
             text: text ?? self.text
         )
     }
@@ -564,12 +568,6 @@ extension BulkDraftsFromTextRequest {
     func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
         return String(data: try self.jsonData(), encoding: encoding)
     }
-}
-
-enum PhotoSource: String, Codable, Equatable, Sendable {
-    case ebay = "ebay"
-    case generate = "generate"
-    case none = "none"
 }
 
 //
@@ -648,12 +646,17 @@ struct Draft: Codable, Equatable, Sendable {
     let comps: [Comp]
     let condition: Condition
     let description: String
+    let ebayCategoryId: String?
+    let ebayConditionId: String?
+    let epid: String?
     let imageSource: ImageSource
     let imageUrls: [String]
     let isBundle: Bool
+    let itemSpecifics: [String: String]?
     let priceSource: PriceSource
     let quantity: Int
     let shortTitle: String
+    let similarItemId: String?
     let sourceText: String
     let suggestedPrice: Double?
     let tags: [String]
@@ -666,12 +669,17 @@ struct Draft: Codable, Equatable, Sendable {
         case comps = "comps"
         case condition = "condition"
         case description = "description"
+        case ebayCategoryId = "ebayCategoryId"
+        case ebayConditionId = "ebayConditionId"
+        case epid = "epid"
         case imageSource = "imageSource"
         case imageUrls = "imageUrls"
         case isBundle = "isBundle"
+        case itemSpecifics = "itemSpecifics"
         case priceSource = "priceSource"
         case quantity = "quantity"
         case shortTitle = "shortTitle"
+        case similarItemId = "similarItemId"
         case sourceText = "sourceText"
         case suggestedPrice = "suggestedPrice"
         case tags = "tags"
@@ -704,12 +712,17 @@ extension Draft {
         comps: [Comp]? = nil,
         condition: Condition? = nil,
         description: String? = nil,
+        ebayCategoryId: String?? = nil,
+        ebayConditionId: String?? = nil,
+        epid: String?? = nil,
         imageSource: ImageSource? = nil,
         imageUrls: [String]? = nil,
         isBundle: Bool? = nil,
+        itemSpecifics: [String: String]?? = nil,
         priceSource: PriceSource? = nil,
         quantity: Int? = nil,
         shortTitle: String? = nil,
+        similarItemId: String?? = nil,
         sourceText: String? = nil,
         suggestedPrice: Double?? = nil,
         tags: [String]? = nil,
@@ -722,12 +735,17 @@ extension Draft {
             comps: comps ?? self.comps,
             condition: condition ?? self.condition,
             description: description ?? self.description,
+            ebayCategoryId: ebayCategoryId ?? self.ebayCategoryId,
+            ebayConditionId: ebayConditionId ?? self.ebayConditionId,
+            epid: epid ?? self.epid,
             imageSource: imageSource ?? self.imageSource,
             imageUrls: imageUrls ?? self.imageUrls,
             isBundle: isBundle ?? self.isBundle,
+            itemSpecifics: itemSpecifics ?? self.itemSpecifics,
             priceSource: priceSource ?? self.priceSource,
             quantity: quantity ?? self.quantity,
             shortTitle: shortTitle ?? self.shortTitle,
+            similarItemId: similarItemId ?? self.similarItemId,
             sourceText: sourceText ?? self.sourceText,
             suggestedPrice: suggestedPrice ?? self.suggestedPrice,
             tags: tags ?? self.tags,
@@ -813,6 +831,7 @@ enum Condition: String, Codable, Equatable, Sendable {
 enum ImageSource: String, Codable, Equatable, Sendable {
     case ebay = "ebay"
     case generated = "generated"
+    case google = "google"
     case none = "none"
 }
 
@@ -3800,6 +3819,114 @@ extension EtsyUpdateListingResponse {
     ) -> EtsyUpdateListingResponse {
         return EtsyUpdateListingResponse(
             success: success ?? self.success
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - GenerateListingPhotoRequest
+struct GenerateListingPhotoRequest: Codable, Equatable, Sendable {
+    let bundleItems: [String]?
+    let condition: Condition?
+    let title: String
+
+    enum CodingKeys: String, CodingKey {
+        case bundleItems = "bundleItems"
+        case condition = "condition"
+        case title = "title"
+    }
+}
+
+// MARK: GenerateListingPhotoRequest convenience initializers and mutators
+
+extension GenerateListingPhotoRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(GenerateListingPhotoRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        bundleItems: [String]?? = nil,
+        condition: Condition?? = nil,
+        title: String? = nil
+    ) -> GenerateListingPhotoRequest {
+        return GenerateListingPhotoRequest(
+            bundleItems: bundleItems ?? self.bundleItems,
+            condition: condition ?? self.condition,
+            title: title ?? self.title
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - GenerateListingPhotoResponse
+struct GenerateListingPhotoResponse: Codable, Equatable, Sendable {
+    let url: String?
+
+    enum CodingKeys: String, CodingKey {
+        case url = "url"
+    }
+}
+
+// MARK: GenerateListingPhotoResponse convenience initializers and mutators
+
+extension GenerateListingPhotoResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(GenerateListingPhotoResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        url: String?? = nil
+    ) -> GenerateListingPhotoResponse {
+        return GenerateListingPhotoResponse(
+            url: url ?? self.url
         )
     }
 

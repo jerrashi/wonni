@@ -1,21 +1,32 @@
 /**
- * bulk_text_drafts.js — `bulkDraftsFromText`
+ * bulk_text_drafts.js — `bulkDraftsFromText` + `generateListingPhoto`
  *
- * Paste a list → one fully-filled draft proposal per listing. Three stages,
+ * Paste a list → one fully-filled draft proposal per listing. Four stages,
  * each independently testable (see `_internal`):
  *
  *   1. parse     — ONE gemini-flash-lite call splits the text into listings.
  *                  Header lines ("wii games (CIB):") become shared context,
  *                  "bundle N: a, b, c" lines become ONE listing with
  *                  `bundleItems`, parentheticals stay attached to their item.
- *   2. price     — per listing, live eBay Browse comps (ebay_comps.js):
+ *   2. comps     — per listing, live eBay Browse comps (ebay_comps.js):
  *                  median asking price → `suggestedPrice` (priceSource "comps"),
  *                  else the model's estimate ("ai").
- *   3. photos    — per listing, the first comp image(s) as a stock photo
- *                  (bundles: one per component), falling back to an
- *                  AI-generated product shot saved under
- *                  users/{uid}/generated/ (public, storage.googleapis.com URL
- *                  so eBay / web / the Mercari extension can all fetch it).
+ *   3. similar   — the "sell similar" half: Browse `getItem` on the best-
+ *                  matching comp gives its eBay category id, condition id,
+ *                  ePID and item specifics, which ride on the proposal so the
+ *                  eBay create path reuses them instead of guessing
+ *                  (`product.ebayCategoryId`, `product.geminiItemSpecifics`).
+ *   4. photos    — in priority order, agreed 2026-10-01:
+ *                    (a) the best comp's own photos (eBay sellers' photos;
+ *                        bundles get one photo per component),
+ *                    (b) Google Programmable Search image results, when the
+ *                        GOOGLE_CSE_KEY / GOOGLE_CSE_CX secrets are set,
+ *                    (c) nothing — the client shows a placeholder and asks the
+ *                        user, once, whether AI-generated photos are OK; only
+ *                        then does it call `generateListingPhoto`.
+ *                  eBay's Catalog API (official stock photos) would sit at the
+ *                  top of this list but the keyset is not granted the
+ *                  commerce.catalog.readonly scope (checked 2026-10-01).
  *
  * Persists nothing to Firestore — the client reviews the proposals and
  * creates the drafts itself through its normal path, so the proposals go
@@ -27,18 +38,21 @@ const admin = require("firebase-admin");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const { validated } = require("./contracts");
-const { retrieveComps } = require("./ebay_comps")._internal;
+const { retrieveComps, retrieveCompDetail, fullSizeEbayImage } = require("./ebay_comps")._internal;
 const { EBAY_CLIENT_ID, EBAY_CLIENT_SECRET } = require("./ebay_auth");
 const { savePublicBuffer } = require("./product_media");
 const { normalizeCondition } = require("./enrichment")._internal;
 
 const GEMINI_API_KEY = "GEMINI_API_KEY";
+const GOOGLE_CSE_KEY = "GOOGLE_CSE_KEY";
+const GOOGLE_CSE_CX = "GOOGLE_CSE_CX";
 const PARSE_MODEL = "gemini-flash-lite-latest";
 const IMAGE_MODEL = "gemini-2.5-flash-image";
-const PROMPT_VERSION = "2026-10-01.1";
+const PROMPT_VERSION = "2026-10-01.2";
 
 const COMPS_PER_QUERY = 12;
-const MAX_BUNDLE_PHOTOS = 4;
+const MAX_PHOTOS = 4;
+const MAX_SPECIFICS = 20;
 const CONCURRENCY = 6;
 
 const PARSE_SYSTEM_PROMPT = `You turn a reseller's pasted inventory list into marketplace listings (eBay, Mercari, Facebook Marketplace).
@@ -103,9 +117,9 @@ function toProposalCore(item = {}) {
     bundleItems: isBundle ? bundleItems : [],
     quantity,
     sourceText: str(item.sourceText, 500) || title,
-    // Search hints, consumed by stages 2/3 and stripped before returning.
+    // Search hints, consumed by stages 2-4 and stripped before returning.
     _searchQuery: str(item.searchQuery, 200) || shortTitle,
-    _componentQueries: list(item.componentQueries).slice(0, MAX_BUNDLE_PHOTOS),
+    _componentQueries: list(item.componentQueries).slice(0, MAX_PHOTOS),
     _aiPrice: Number.isFinite(aiPrice) && aiPrice > 0 ? Math.round(aiPrice * 100) / 100 : undefined,
   };
 }
@@ -144,24 +158,87 @@ function priceFromComps(comps) {
   return med == null ? null : Math.max(1, Math.round(med));
 }
 
-// ── stage 3: photos ───────────────────────────────────────────────────────
+// ── stage 3: "sell similar" ───────────────────────────────────────────────
 
-/** Browse API hands back 225 px thumbnails (`.../s-l225.jpg`); the same CDN
- *  path serves the full-size upload at `s-l1600` (verified 2026-10-01), which
- *  is what a listing photo needs. Non-eBay URLs pass through untouched. */
-function fullSizeEbayImage(url) {
-  if (typeof url !== "string") return url;
-  return url.replace(/(\/\/i\.ebayimg\.com\/.*\/s-l)\d+(\.(?:jpg|jpeg|png|webp))$/i, "$11600$2");
+const STOP_WORDS = new Set(["the", "a", "an", "and", "of", "for", "with", "cib", "complete", "in", "box", "tested", "game", "games"]);
+
+function tokens(text) {
+  return new Set(
+    String(text || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]+/g, " ")
+      .split(/\s+/)
+      .filter((t) => t && !STOP_WORDS.has(t))
+  );
+}
+
+/** The comp whose title best matches the query — most shared words, ties to
+ *  the earlier (eBay-ranked) result — so a bundle search doesn't latch onto a
+ *  single-game listing or a different platform. Must have a photo. */
+function pickBestComp(comps, query) {
+  const want = tokens(query);
+  let best = null;
+  let bestScore = -1;
+  for (const comp of comps) {
+    if (!comp.imageUrl) continue;
+    const have = tokens(comp.title);
+    let score = 0;
+    for (const t of want) if (have.has(t)) score++;
+    if (score > bestScore) { best = comp; bestScore = score; }
+  }
+  return best;
+}
+
+/** Seller-supplied aspects worth carrying onto the draft. Drops the ones that
+ *  are either per-seller noise or re-derived at post time. */
+const SKIPPED_ASPECTS = new Set(["country of origin", "country/region of manufacture", "mpn", "custom bundle", "modified item", "item height", "item length", "item width", "item weight", "unit quantity", "unit type"]);
+function usefulSpecifics(aspects = {}) {
+  const out = {};
+  for (const [name, value] of Object.entries(aspects)) {
+    if (SKIPPED_ASPECTS.has(name.toLowerCase())) continue;
+    if (Object.keys(out).length >= MAX_SPECIFICS) break;
+    out[name] = value;
+  }
+  return out;
+}
+
+// ── stage 4: photos ───────────────────────────────────────────────────────
+
+/** Google Programmable Search image results for `query`. Returns [] (never
+ *  throws) when the CSE secrets aren't configured or the call fails. */
+async function googleImages(query, { key, cx, fetchImpl = fetch } = {}) {
+  // The secrets exist as "unset" placeholders until a Programmable Search
+  // Engine is configured (BACKEND.md), so deploy can bind them either way.
+  const configured = (v) => typeof v === "string" && v.trim() && v.trim().toLowerCase() !== "unset";
+  if (!configured(key) || !configured(cx) || !query) return [];
+  try {
+    const params = new URLSearchParams({
+      key, cx, q: query, searchType: "image", num: "5", imgType: "photo", safe: "active", imgSize: "large",
+    });
+    const res = await fetchImpl(`https://www.googleapis.com/customsearch/v1?${params}`);
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      console.warn(`[bulkDraftsFromText] google images failed (${res.status}): ${json.error?.message ?? ""}`);
+      return [];
+    }
+    return (json.items ?? [])
+      .map((it) => it.link)
+      .filter((u) => typeof u === "string" && /^https:\/\//i.test(u))
+      .slice(0, MAX_PHOTOS);
+  } catch (e) {
+    console.warn(`[bulkDraftsFromText] google images failed: ${e.message}`);
+    return [];
+  }
 }
 
 /** Gemini image model → PNG buffer, or null when the model returned no image. */
-async function generateProductImage(apiKey, proposal, { fetchImpl = fetch } = {}) {
-  const subject = proposal.isBundle
-    ? `${proposal.bundleItems.join(", ")} (a bundle of ${proposal.bundleItems.length} items sold together)`
-    : proposal.title;
+async function generateProductImage(apiKey, { title, bundleItems = [], condition }, { fetchImpl = fetch } = {}) {
+  const subject = bundleItems.length > 1
+    ? `${bundleItems.join(", ")} (a bundle of ${bundleItems.length} items sold together)`
+    : title;
   const prompt =
     `A clean, realistic product photograph for an online marketplace listing of: ${subject}. ` +
-    `Show the actual physical item(s) as they would be sold${proposal.condition === "new" ? ", new" : ", in good used condition"}, ` +
+    `Show the actual physical item(s) as they would be sold${condition === "new" ? ", new" : ", in good used condition"}, ` +
     `centered on a plain white background, soft even lighting, no people, no text overlays, no watermarks, no logos added.`;
 
   const res = await fetchImpl(
@@ -183,10 +260,10 @@ async function generateProductImage(apiKey, proposal, { fetchImpl = fetch } = {}
   return { buffer: Buffer.from(inline.data, "base64"), mimeType: inline.mimeType || "image/png" };
 }
 
-async function saveGeneratedImage(uid, index, image) {
+async function saveGeneratedImage(uid, image) {
   const bucket = admin.storage().bucket();
   const ext = image.mimeType === "image/jpeg" ? "jpg" : "png";
-  const path = `users/${uid}/generated/${Date.now()}-${index}.${ext}`;
+  const path = `users/${uid}/generated/${Date.now()}-${Math.floor(Math.random() * 1e6)}.${ext}`;
   return savePublicBuffer(bucket.name, bucket.file(path), image.buffer, image.mimeType);
 }
 
@@ -216,14 +293,27 @@ async function safeComps(query, deps) {
   }
 }
 
+async function safeDetail(itemId, deps) {
+  if (!itemId || !deps.detail) return null;
+  try {
+    return await deps.detail(itemId);
+  } catch (e) {
+    console.warn(`[bulkDraftsFromText] comp detail failed for ${itemId}: ${e.message}`);
+    return null;
+  }
+}
+
 /**
- * Price + photo one proposal. `deps` is injectable for tests:
- *   comps({title, limit}) → [{price, imageUrl, title, itemWebUrl}]
- *   generate(proposal)    → https URL | null
+ * Price, "sell similar" details and photos for one proposal. `deps` is
+ * injectable for tests:
+ *   comps({title, limit}) → [{itemId, title, price, imageUrl, itemWebUrl}]
+ *   detail(itemId)        → retrieveCompDetail shape | null
+ *   google(query)         → [https url]
  */
-async function enrichProposal(core, photoSource, deps) {
+async function enrichProposal(core, deps) {
   const { _searchQuery, _componentQueries, _aiPrice, ...proposal } = core;
 
+  // 2. price
   const comps = await safeComps(_searchQuery, deps);
   const compPrice = priceFromComps(comps);
   if (compPrice != null) {
@@ -237,55 +327,64 @@ async function enrichProposal(core, photoSource, deps) {
   }
   proposal.comps = comps.slice(0, 5).map((c) => ({ title: c.title, price: c.price, itemWebUrl: c.itemWebUrl }));
 
-  proposal.imageUrls = [];
-  proposal.imageSource = "none";
+  // 3. sell similar — category / condition / specifics from the best comp
+  const best = pickBestComp(comps, _searchQuery);
+  const detail = best ? await safeDetail(best.itemId, deps) : null;
+  if (detail) {
+    proposal.similarItemId = detail.itemId;
+    if (detail.categoryId) proposal.ebayCategoryId = String(detail.categoryId);
+    if (detail.conditionId) proposal.ebayConditionId = String(detail.conditionId);
+    if (detail.epid) proposal.epid = String(detail.epid);
+    const specifics = usefulSpecifics(detail.aspects);
+    if (Object.keys(specifics).length) proposal.itemSpecifics = specifics;
+  }
 
-  if (photoSource === "ebay") {
-    // Bundle: one photo per component, so the cover shows what's in the lot.
-    // Single: the best-matching comp's photo.
-    const queries = proposal.isBundle && _componentQueries.length ? _componentQueries : [];
-    const componentComps = queries.length
-      ? await mapWithConcurrency(queries, 2, (q) => safeComps(q, deps))
-      : [];
-    const urls = [];
-    for (const list of componentComps) {
-      const hit = list.find((c) => c.imageUrl);
+  // 4. photos — (a) comp photos
+  const urls = [];
+  if (proposal.isBundle && _componentQueries.length) {
+    // One photo per component so the cover shows what's in the lot.
+    const perComponent = await mapWithConcurrency(_componentQueries, 2, async (q) => {
+      const list = await safeComps(q, deps);
+      return pickBestComp(list, q);
+    });
+    for (const hit of perComponent) {
       const url = hit && fullSizeEbayImage(hit.imageUrl);
       if (url && !urls.includes(url)) urls.push(url);
     }
-    if (!urls.length) {
-      const hit = comps.find((c) => c.imageUrl);
-      if (hit) urls.push(fullSizeEbayImage(hit.imageUrl));
-    }
-    if (urls.length) {
-      proposal.imageUrls = urls.slice(0, MAX_BUNDLE_PHOTOS);
-      proposal.imageSource = "ebay";
-    }
   }
-
-  if (photoSource !== "none" && !proposal.imageUrls.length && deps.generate) {
-    try {
-      const url = await deps.generate(proposal);
-      if (url) {
-        proposal.imageUrls = [url];
-        proposal.imageSource = "generated";
-      }
-    } catch (e) {
-      console.warn(`[bulkDraftsFromText] image generation failed for "${proposal.title}": ${e.message}`);
+  if (!urls.length && detail?.images?.length) {
+    urls.push(...detail.images.slice(0, MAX_PHOTOS));
+  }
+  if (!urls.length && best?.imageUrl) {
+    urls.push(fullSizeEbayImage(best.imageUrl));
+  }
+  if (urls.length) {
+    proposal.imageUrls = urls.slice(0, MAX_PHOTOS);
+    proposal.imageSource = "ebay";
+  } else {
+    // (b) Google
+    const fromGoogle = deps.google ? await deps.google(_searchQuery) : [];
+    if (fromGoogle.length) {
+      proposal.imageUrls = fromGoogle.slice(0, MAX_PHOTOS);
+      proposal.imageSource = "google";
+    } else {
+      // (c) nothing — the client asks before generating.
+      proposal.imageUrls = [];
+      proposal.imageSource = "none";
     }
   }
 
   return proposal;
 }
 
-async function buildDrafts({ text, maxItems, photoSource }, deps) {
+async function buildDrafts({ text, maxItems }, deps) {
   const { context, proposals } = await deps.parse(text, maxItems);
-  const drafts = await mapWithConcurrency(proposals, CONCURRENCY, (core) => enrichProposal(core, photoSource, deps));
+  const drafts = await mapWithConcurrency(proposals, CONCURRENCY, (core) => enrichProposal(core, deps));
   return { context, drafts, aiModel: PARSE_MODEL, aiPromptVersion: PROMPT_VERSION };
 }
 
 exports.bulkDraftsFromText = onCall(
-  { secrets: [GEMINI_API_KEY, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 300, memory: "1GiB" },
+  { secrets: [GEMINI_API_KEY, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, GOOGLE_CSE_KEY, GOOGLE_CSE_CX], timeoutSeconds: 300, memory: "1GiB" },
   validated("bulkDraftsFromText", async (data, request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
@@ -302,12 +401,32 @@ exports.bulkDraftsFromText = onCall(
         }
       },
       comps: retrieveComps,
-      generate: async (proposal) => {
-        const image = await generateProductImage(apiKey, proposal);
-        return image ? saveGeneratedImage(uid, Math.floor(Math.random() * 1e6), image) : null;
-      },
+      detail: retrieveCompDetail,
+      google: (query) => googleImages(query, { key: process.env.GOOGLE_CSE_KEY, cx: process.env.GOOGLE_CSE_CX }),
     };
     return buildDrafts(data, deps);
+  })
+);
+
+// Consent-gated: the client only calls this after the user has said, once,
+// that AI-generated photos are acceptable for listings nothing else covered.
+exports.generateListingPhoto = onCall(
+  { secrets: [GEMINI_API_KEY], timeoutSeconds: 60, memory: "512MiB" },
+  validated("generateListingPhoto", async (data, request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new HttpsError("failed-precondition", "AI is not configured.");
+
+    let image;
+    try {
+      image = await generateProductImage(apiKey, data);
+    } catch (e) {
+      console.error(`[generateListingPhoto] failed for "${data.title}": ${e.message}`);
+      throw new HttpsError("internal", e.message);
+    }
+    if (!image) return { url: null };
+    return { url: await saveGeneratedImage(uid, image) };
   })
 );
 
@@ -316,9 +435,11 @@ exports._internal = {
   parseModelOutput,
   priceFromComps,
   median,
+  pickBestComp,
+  usefulSpecifics,
+  googleImages,
   enrichProposal,
   buildDrafts,
   mapWithConcurrency,
-  fullSizeEbayImage,
   PARSE_SYSTEM_PROMPT,
 };

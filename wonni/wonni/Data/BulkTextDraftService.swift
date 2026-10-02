@@ -2,11 +2,13 @@
 //  BulkTextDraftService.swift
 //  wonni
 //
-//  "Paste a list → N ready-to-list drafts." The parsing, comp pricing and
-//  stock/generated photo lookup all happen in the `bulkDraftsFromText` Cloud
-//  Function (functions/bulk_text_drafts.js); this file turns its proposals
-//  into local `Item` drafts that then ride the exact same photo-upload /
-//  products-sync / Review & Publish pipeline as a camera-made draft.
+//  "Paste a list → N ready-to-list drafts." The parsing, comp pricing,
+//  "sell similar" detail copy and stock-photo lookup all happen in the
+//  `bulkDraftsFromText` Cloud Function (functions/bulk_text_drafts.js); this
+//  file turns its proposals into local `Item` drafts that then ride the exact
+//  same photo-upload / products-sync / Review & Publish pipeline as a
+//  camera-made draft. AI-generated photos are a separate, consent-gated call
+//  (`generateListingPhoto`) the sheet only makes after the user says yes.
 //
 
 import Foundation
@@ -35,6 +37,9 @@ enum BulkTextDraftMapper {
         item.tags = proposal.tags
         item.aiModel = aiModel
         item.aiPromptVersion = aiPromptVersion
+        // "Sell similar": the comp's real eBay category + item specifics.
+        item.ebayCategoryId = proposal.ebayCategoryId
+        item.itemSpecifics = proposal.itemSpecifics
         // The source line is the user's own words — keep it where they can see it.
         item.personalNote = "From list: \(proposal.sourceText)"
     }
@@ -49,11 +54,19 @@ enum BulkTextDraftMapper {
     }
 
     static func photoLabel(_ proposal: Draft) -> String {
+        let count = proposal.imageUrls.count
         switch proposal.imageSource {
-        case .ebay: return proposal.imageUrls.count > 1 ? "\(proposal.imageUrls.count) stock photos" : "Stock photo"
+        case .ebay: return count > 1 ? "\(count) eBay seller photos" : "eBay seller photo"
+        case .google: return count > 1 ? "\(count) web photos" : "Web photo"
         case .generated: return "AI-generated photo"
-        case .none: return "Placeholder — replace before posting"
+        case .none: return "No photo found — placeholder, replace before posting"
         }
+    }
+
+    /// Proposals the user should be asked about: nothing in the eBay → Google chain
+    /// produced a photo.
+    static func needsPhoto(_ proposal: Draft) -> Bool {
+        proposal.imageUrls.isEmpty
     }
 
     /// A draft without a photo is invisible in the drafts list and skipped by publish,
@@ -99,29 +112,47 @@ final class BulkTextDraftService {
         var currentTitle: String
     }
 
-    /// One round trip: the Cloud Function parses, prices and finds photos for every
-    /// listing in `text`. Nothing is persisted until `createDrafts`.
-    func propose(text: String, photoSource: PhotoSource) async throws -> BulkDraftsFromTextResponse {
-        let parameters: [String: Any] = [
-            "text": text,
-            "photoSource": photoSource.rawValue
-        ]
-        // Server-side work is one Gemini call plus a comps/photo lookup per listing;
-        // the default 70 s callable timeout is too short for a 20-item list.
+    /// One round trip: the Cloud Function parses, prices, copies sell-similar details
+    /// and finds photos for every listing in `text`. Nothing is persisted until
+    /// `createDrafts`.
+    func propose(text: String) async throws -> BulkDraftsFromTextResponse {
+        // Server-side work is one Gemini call plus comps / item-detail / photo lookups
+        // per listing; the default 70 s callable timeout is too short for a 20-item list.
         let callable = functions.httpsCallable("bulkDraftsFromText")
         callable.timeoutInterval = 300
-        let result: HTTPSCallableResult
+        let result = try await call(callable, ["text": text])
+        return try decode(BulkDraftsFromTextResponse.self, from: result)
+    }
+
+    /// Consent-gated: only called after the user has agreed to AI-generated photos for
+    /// listings the eBay → Google chain couldn't cover. Returns the public URL, or nil
+    /// when the model produced no image.
+    func generatePhoto(for proposal: Draft) async throws -> String? {
+        let callable = functions.httpsCallable("generateListingPhoto")
+        callable.timeoutInterval = 90
+        let result = try await call(callable, [
+            "title": proposal.shortTitle.isEmpty ? proposal.title : proposal.shortTitle,
+            "bundleItems": proposal.bundleItems,
+            "condition": proposal.condition.rawValue
+        ])
+        return try decode(GenerateListingPhotoResponse.self, from: result).url
+    }
+
+    private func call(_ callable: HTTPSCallable, _ parameters: [String: Any]) async throws -> Any {
         do {
-            result = try await callable.call(parameters)
+            return try await callable.call(parameters).data
         } catch let error as NSError {
             let message = error.userInfo["NSLocalizedDescription"] as? String ?? error.localizedDescription
             throw NSError(domain: "BulkTextDraftService", code: error.code, userInfo: [NSLocalizedDescriptionKey: message])
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: result.data),
-              let response = try? JSONDecoder().decode(BulkDraftsFromTextResponse.self, from: data) else {
-            throw NSError(domain: "BulkTextDraftService", code: 500, userInfo: [NSLocalizedDescriptionKey: "Could not read the AI response."])
+    }
+
+    private func decode<T: Decodable>(_ type: T.Type, from payload: Any) throws -> T {
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let decoded = try? JSONDecoder().decode(T.self, from: data) else {
+            throw NSError(domain: "BulkTextDraftService", code: 500, userInfo: [NSLocalizedDescriptionKey: "Could not read the server response."])
         }
-        return response
+        return decoded
     }
 
     /// Turns accepted proposals into real drafts: inserts the `Item`, downloads each
