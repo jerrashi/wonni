@@ -192,10 +192,15 @@ function pickBestComp(comps, query) {
 /** Seller-supplied aspects worth carrying onto the draft. Drops the ones that
  *  are either per-seller noise or re-derived at post time. */
 const SKIPPED_ASPECTS = new Set(["country of origin", "country/region of manufacture", "mpn", "custom bundle", "modified item", "item height", "item length", "item width", "item weight", "unit quantity", "unit type"]);
-function usefulSpecifics(aspects = {}) {
+/** Identity of ONE item — wrong on a bundle, whose best comp is some other
+ *  lot (live run 2026-10-01: a 3-game Just Dance bundle inherited
+ *  "Game Name: Just Dance 1, 2, 3, 2015"). Platform/publisher/genre still hold. */
+const SINGLE_ITEM_ASPECTS = new Set(["game name", "upc", "ean", "isbn", "gtin", "release year", "release date", "model", "model number", "edition", "sku"]);
+function usefulSpecifics(aspects = {}, { isBundle = false } = {}) {
   const out = {};
   for (const [name, value] of Object.entries(aspects)) {
     if (SKIPPED_ASPECTS.has(name.toLowerCase())) continue;
+    if (isBundle && SINGLE_ITEM_ASPECTS.has(name.toLowerCase())) continue;
     if (Object.keys(out).length >= MAX_SPECIFICS) break;
     out[name] = value;
   }
@@ -335,7 +340,7 @@ async function enrichProposal(core, deps) {
     if (detail.categoryId) proposal.ebayCategoryId = String(detail.categoryId);
     if (detail.conditionId) proposal.ebayConditionId = String(detail.conditionId);
     if (detail.epid) proposal.epid = String(detail.epid);
-    const specifics = usefulSpecifics(detail.aspects);
+    const specifics = usefulSpecifics(detail.aspects, { isBundle: proposal.isBundle });
     if (Object.keys(specifics).length) proposal.itemSpecifics = specifics;
   }
 

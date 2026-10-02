@@ -113,6 +113,10 @@ test("usefulSpecifics: drops per-seller noise, caps the count, keeps the rest in
   const many = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`A${i}`, String(i)]));
   assert.equal(Object.keys(usefulSpecifics(many)).length, 20);
   assert.deepEqual(usefulSpecifics(undefined), {});
+  // A bundle's best comp is some other lot — its single-item identity fields are noise.
+  const lot = { "Game Name": "Just Dance 1, 2, 3, 2015", UPC: "0008888", "Release Year": "2012", Platform: "Nintendo Wii", Publisher: "Ubisoft" };
+  assert.deepEqual(usefulSpecifics(lot, { isBundle: true }), { Platform: "Nintendo Wii", Publisher: "Ubisoft" });
+  assert.deepEqual(usefulSpecifics(lot, { isBundle: false }), lot);
 });
 
 // ── photos ─────────────────────────────────────────────────────────────────
