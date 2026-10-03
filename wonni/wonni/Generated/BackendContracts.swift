@@ -653,6 +653,8 @@ struct Draft: Codable, Equatable, Sendable {
     let imageUrls: [String]
     let isBundle: Bool
     let itemSpecifics: [String: String]?
+    let marketPrice: Double?
+    let marketPriceSource: MarketPriceSource?
     let priceSource: PriceSource
     let quantity: Int
     let shortTitle: String
@@ -676,6 +678,8 @@ struct Draft: Codable, Equatable, Sendable {
         case imageUrls = "imageUrls"
         case isBundle = "isBundle"
         case itemSpecifics = "itemSpecifics"
+        case marketPrice = "marketPrice"
+        case marketPriceSource = "marketPriceSource"
         case priceSource = "priceSource"
         case quantity = "quantity"
         case shortTitle = "shortTitle"
@@ -719,6 +723,8 @@ extension Draft {
         imageUrls: [String]? = nil,
         isBundle: Bool? = nil,
         itemSpecifics: [String: String]?? = nil,
+        marketPrice: Double?? = nil,
+        marketPriceSource: MarketPriceSource?? = nil,
         priceSource: PriceSource? = nil,
         quantity: Int? = nil,
         shortTitle: String? = nil,
@@ -742,6 +748,8 @@ extension Draft {
             imageUrls: imageUrls ?? self.imageUrls,
             isBundle: isBundle ?? self.isBundle,
             itemSpecifics: itemSpecifics ?? self.itemSpecifics,
+            marketPrice: marketPrice ?? self.marketPrice,
+            marketPriceSource: marketPriceSource ?? self.marketPriceSource,
             priceSource: priceSource ?? self.priceSource,
             quantity: quantity ?? self.quantity,
             shortTitle: shortTitle ?? self.shortTitle,
@@ -835,10 +843,16 @@ enum ImageSource: String, Codable, Equatable, Sendable {
     case none = "none"
 }
 
+enum MarketPriceSource: String, Codable, Equatable, Sendable {
+    case ai = "ai"
+    case comps = "comps"
+}
+
 enum PriceSource: String, Codable, Equatable, Sendable {
     case ai = "ai"
     case comps = "comps"
     case none = "none"
+    case user = "user"
 }
 
 //

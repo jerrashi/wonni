@@ -19,7 +19,7 @@ const { fullSizeEbayImage } = require("../ebay_comps")._internal;
 const { RequestSchemas, ResponseSchemas } = require("../contracts");
 
 const {
-  toProposalCore, parseModelOutput, priceFromComps, pickBestComp, usefulSpecifics, googleImages, enrichProposal, buildDrafts,
+  toProposalCore, parsePrice, orderBySource, parseModelOutput, priceFromComps, pickBestComp, usefulSpecifics, googleImages, enrichProposal, buildDrafts,
 } = _internal;
 
 // ── parse mapping ──────────────────────────────────────────────────────────
@@ -82,6 +82,59 @@ test("parseModelOutput: strips code fences, keeps order, caps at maxItems", () =
   assert.equal(context, "Nintendo Wii games, complete in box");
   assert.deepEqual(proposals.map((p) => p.title), ["A", "B"]);
   assert.equal(proposals[1].condition, "likenew");
+});
+
+test("parsePrice: numbers and the user's own formatting; junk is undefined", () => {
+  assert.equal(parsePrice(25), 25);
+  assert.equal(parsePrice("$25"), 25);
+  assert.equal(parsePrice("12.50 obo"), 12.5);
+  assert.equal(parsePrice("1,200"), 1200);
+  assert.equal(parsePrice(19.999), 20);
+  for (const junk of [null, undefined, "", "free", 0, -5, NaN]) assert.equal(parsePrice(junk), undefined);
+});
+
+test("toProposalCore: a user-stated price is kept apart from the model's estimate", () => {
+  const withPrice = toProposalCore({ title: "Mario Kart Wii", userPrice: "$25", suggestedPrice: 31 });
+  assert.equal(withPrice._userPrice, 25);
+  assert.equal(withPrice._aiPrice, 31);
+  assert.equal(toProposalCore({ title: "Mario Kart Wii", userPrice: null, suggestedPrice: 31 })._userPrice, undefined);
+});
+
+test("orderBySource: restores input order when the model regrouped; leaves a correct order alone", () => {
+  const text = "Selling my Mario Kart Wii for $25,  then a bundle of Just Dance 4 + Just Dance 2015,\nand finally Wii Sports.";
+  const named = (...names) => names.map((n) => ({ title: n, sourceText: n }));
+  const titles = (list) => list.map((p) => p.title);
+
+  // Model floated the bundle to the top and changed case/spacing.
+  const shuffled = [
+    { title: "bundle", sourceText: "bundle of just dance 4 + just dance 2015" },
+    { title: "sports", sourceText: "WII SPORTS" },
+    { title: "kart", sourceText: "Mario  Kart Wii" },
+  ];
+  assert.deepEqual(titles(orderBySource(shuffled, text)), ["kart", "bundle", "sports"]);
+
+  // Already in order → same array back.
+  const inOrder = named("Mario Kart Wii", "Just Dance 4", "Wii Sports");
+  assert.equal(orderBySource(inOrder, text), inOrder);
+
+  // A paraphrased snippet can't be located: it stays behind the one it followed.
+  const withUnknown = [
+    { title: "sports", sourceText: "Wii Sports" },
+    { title: "mystery", sourceText: "something the model reworded" },
+    { title: "kart", sourceText: "Mario Kart Wii" },
+  ];
+  assert.deepEqual(titles(orderBySource(withUnknown, text)), ["kart", "sports", "mystery"]);
+
+  // The same snippet twice is two listings, not a reason to reorder.
+  const twice = named("mario kart", "zelda", "mario kart");
+  assert.equal(orderBySource(twice, "mario kart, zelda, mario kart"), twice);
+});
+
+test("parseModelOutput: reorders to the source text before capping", () => {
+  const raw = JSON.stringify({ items: [
+    { sourceText: "c", title: "C" }, { sourceText: "a", title: "A" }, { sourceText: "b", title: "B" },
+  ] });
+  assert.deepEqual(parseModelOutput(raw, 2, "a\nb\nc").proposals.map((p) => p.title), ["A", "B"]);
 });
 
 // ── pricing ────────────────────────────────────────────────────────────────
@@ -206,6 +259,29 @@ test("enrichProposal: comps price, sell-similar details and the best comp's phot
   assert.equal(p.comps.length, 3);
   assert.equal("_searchQuery" in p, false);
   assert.equal("_aiPrice" in p, false);
+});
+
+test("enrichProposal: the user's price wins; the comps median rides along as marketPrice and details/photos still come from comps", async () => {
+  const p = await enrichProposal(core({ _userPrice: 25 }), {
+    comps: async () => SSBB_COMPS, detail: async () => SSBB_DETAIL, google: async () => [],
+  });
+  assert.equal(p.suggestedPrice, 25);
+  assert.equal(p.priceSource, "user");
+  assert.equal(p.marketPrice, 32);
+  assert.equal(p.marketPriceSource, "comps");
+  assert.equal(p.ebayCategoryId, "139973");
+  assert.equal(p.imageSource, "ebay");
+  assert.equal("_userPrice" in p, false);
+
+  const noComps = await enrichProposal(core({ _userPrice: 25 }), { comps: async () => [], detail: async () => null, google: async () => [] });
+  assert.equal(noComps.suggestedPrice, 25);
+  assert.equal(noComps.marketPrice, 35);
+  assert.equal(noComps.marketPriceSource, "ai");
+
+  const alone = await enrichProposal(core({ _userPrice: 25, _aiPrice: undefined }), { comps: async () => [], detail: async () => null, google: async () => [] });
+  assert.equal(alone.priceSource, "user");
+  assert.equal("marketPrice" in alone, false);
+  assert.equal(ResponseSchemas.bulkDraftsFromText.shape.drafts.element.safeParse(alone).success, true);
 });
 
 test("enrichProposal: detail failure degrades to the comp's thumbnail (full-size) with no sell-similar fields", async () => {

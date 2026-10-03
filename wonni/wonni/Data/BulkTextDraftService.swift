@@ -29,8 +29,15 @@ enum BulkTextDraftMapper {
         item.userEditedTitle = nil
         item.aiSuggestedDescription = proposal.description
         item.userEditedDescription = nil
-        item.aiSuggestedPrice = proposal.suggestedPrice
-        item.userEditedPrice = nil
+        // A price the user wrote in their text is THEIR price, not a suggestion: it goes
+        // in the user field, and the comps/AI figure stays alongside as the suggestion.
+        if proposal.priceSource == .user {
+            item.userEditedPrice = proposal.suggestedPrice
+            item.aiSuggestedPrice = proposal.marketPrice
+        } else {
+            item.aiSuggestedPrice = proposal.suggestedPrice
+            item.userEditedPrice = nil
+        }
         item.condition = GeminiService.canonicalToItemCondition(proposal.condition.rawValue)
         item.aiSuggestedCategory = proposal.category
         item.aiSuggestedBrand = proposal.brand
@@ -40,13 +47,17 @@ enum BulkTextDraftMapper {
         // "Sell similar": the comp's real eBay category + item specifics.
         item.ebayCategoryId = proposal.ebayCategoryId
         item.itemSpecifics = proposal.itemSpecifics
-        // The source line is the user's own words — keep it where they can see it.
+        // The source snippet is the user's own words — keep it where they can see it.
         item.personalNote = "From list: \(proposal.sourceText)"
     }
 
     /// Short badge text for the review list.
     static func priceLabel(_ proposal: Draft) -> String {
         switch proposal.priceSource {
+        case .user:
+            guard let market = proposal.marketPrice else { return "Your price" }
+            let amount = market.formatted(.currency(code: "USD").precision(.fractionLength(0...2)))
+            return proposal.marketPriceSource == .comps ? "Your price · eBay comps \(amount)" : "Your price · AI estimate \(amount)"
         case .comps: return "eBay comps"
         case .ai: return "AI estimate"
         case .none: return "No price found"
