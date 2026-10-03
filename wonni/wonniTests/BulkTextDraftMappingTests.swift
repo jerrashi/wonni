@@ -12,6 +12,8 @@ final class BulkTextDraftMappingTests: XCTestCase {
         condition: Condition = .good,
         price: Double? = 32,
         priceSource: PriceSource = .comps,
+        marketPrice: Double? = nil,
+        marketPriceSource: MarketPriceSource? = nil,
         imageUrls: [String] = ["https://i.ebayimg.com/a.jpg"],
         imageSource: ImageSource = .ebay,
         isBundle: Bool = false,
@@ -31,6 +33,8 @@ final class BulkTextDraftMappingTests: XCTestCase {
             imageUrls: imageUrls,
             isBundle: isBundle,
             itemSpecifics: ["Platform": "Nintendo Wii", "Game Name": "Super Smash Bros. Brawl"],
+            marketPrice: marketPrice,
+            marketPriceSource: marketPriceSource,
             priceSource: priceSource,
             quantity: 1,
             shortTitle: shortTitle,
@@ -73,6 +77,21 @@ final class BulkTextDraftMappingTests: XCTestCase {
         let item = Item(firestoreListingId: "p3")
         BulkTextDraftMapper.apply(proposal(shortTitle: ""), to: item, aiModel: "m", aiPromptVersion: "v")
         XCTAssertEqual(item.aiSuggestedTitle, "Super Smash Bros. Brawl (Nintendo Wii) Complete in Box")
+    }
+
+    func testUserStatedPriceLandsInTheUserFieldWithCompsAsTheSuggestion() {
+        let item = Item(firestoreListingId: "p-user-price")
+        let stated = proposal(price: 25, priceSource: .user, marketPrice: 32, marketPriceSource: .comps)
+        BulkTextDraftMapper.apply(stated, to: item, aiModel: "m", aiPromptVersion: "v")
+        XCTAssertEqual(item.userEditedPrice, 25)
+        XCTAssertEqual(item.aiSuggestedPrice, 32)
+        XCTAssertEqual(BulkTextDraftMapper.priceLabel(stated), "Your price · eBay comps $32")
+        XCTAssertEqual(BulkTextDraftMapper.priceLabel(proposal(price: 25, priceSource: .user, marketPrice: 30, marketPriceSource: .ai)), "Your price · AI estimate $30")
+        XCTAssertEqual(BulkTextDraftMapper.priceLabel(proposal(price: 25, priceSource: .user)), "Your price")
+
+        BulkTextDraftMapper.apply(proposal(price: 32), to: item, aiModel: "m", aiPromptVersion: "v")
+        XCTAssertNil(item.userEditedPrice)
+        XCTAssertEqual(item.aiSuggestedPrice, 32)
     }
 
     func testLabelsDescribeSources() {

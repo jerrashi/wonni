@@ -2,9 +2,10 @@
 //  BulkTextDraftsSheet.swift
 //  wonni
 //
-//  Paste a plain-text inventory list ("wii games (CIB): / bundle 1: a, b, c /
-//  super smash bros brawl / …") and get one ready-to-list draft per line —
-//  bundles become one listing, headers become shared context. Three steps in
+//  Paste or type anything describing what you're selling — a list, a paragraph,
+//  a message, a pasted table — and get one ready-to-list draft per item, in the
+//  order written. Items sold together become one listing, group notes become
+//  shared context, and a price you wrote is kept as the price. Three steps in
 //  one sheet: paste → review the proposals (uncheck any) → create drafts.
 //  Photos come from eBay sellers' comps, then Google; when neither had one,
 //  the user is asked ONCE whether AI-generated photos are acceptable, and only
@@ -46,12 +47,9 @@ struct BulkTextDraftsSheet: View {
     var offersOpenDrafts = false
 
     private static let placeholder = """
-    wii games (CIB):
-    bundle 1: just dance 4, just dance 2015, just dance 2014
-    bundle 2: need for speed carbon, need for speed pro street
-    Super smash bros brawl
-    Mario strikers charged
-    Link's crossbow training (in cardboard sleeve)
+    Clearing out my Wii stuff, all complete in box. Super Smash Bros Brawl for $30, \
+    Mario Strikers Charged, and Just Dance 4 + Just Dance 2015 together as a bundle. \
+    Also Link's Crossbow Training (in cardboard sleeve), 8 bucks.
     """
 
     var body: some View {
@@ -137,9 +135,9 @@ struct BulkTextDraftsSheet: View {
                         .accessibilityIdentifier("bulkTextDraftsEditor")
                 }
             } header: {
-                Text("Your list")
+                Text("What are you selling?")
             } footer: {
-                Text("One item per line. A line ending in \":\" is a header that applies to everything under it. \"bundle 1: a, b, c\" becomes one listing with all three items. Notes in parentheses stay with that item.")
+                Text("Write it however you like: a list, a paragraph, a pasted message or table. Each item becomes one draft, in the order you wrote them. Items you say are sold together become one bundle listing. Prices you include are kept; the rest are priced from eBay comps.")
             }
 
             Section {

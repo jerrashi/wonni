@@ -1,7 +1,8 @@
 /**
  * contracts/bulk_drafts.js — "paste a list, get N ready-to-list drafts".
  *
- * `bulkDraftsFromText` takes free-form text like
+ * `bulkDraftsFromText` takes ANY unstructured text (list, paragraph, message,
+ * pasted table) such as
  *
  *     wii games (CIB):
  *     bundle 1: just dance 4, just dance 2015, just dance 2014.
@@ -23,7 +24,7 @@ const { z } = require("zod");
 const { ConditionSchema, PositiveMoneySchema } = require("./_shared");
 
 const BulkDraftsFromTextRequestSchema = z.object({
-  text: z.string().min(1).max(8000),
+  text: z.string().min(1).max(20000),
   /** Cap on listings produced (default 40). */
   maxItems: z.number().int().min(1).max(60).default(40),
 });
@@ -49,8 +50,13 @@ const DraftProposalSchema = z.object({
   bundleItems: z.array(z.string()),
   quantity: z.number().int().min(1),
   suggestedPrice: PositiveMoneySchema.optional(),
-  /** "comps" = median of live eBay asking prices; "ai" = model estimate. */
-  priceSource: z.enum(["comps", "ai", "none"]),
+  /** "user" = a price the user wrote in the text (always wins); "comps" =
+   *  median of live eBay asking prices; "ai" = model estimate. */
+  priceSource: z.enum(["user", "comps", "ai", "none"]),
+  /** Only with priceSource "user": what comps (or the model) would have
+   *  suggested, so the review UI can show it next to the user's price. */
+  marketPrice: PositiveMoneySchema.optional(),
+  marketPriceSource: z.enum(["comps", "ai"]).optional(),
   /** https photo URLs, first = cover. */
   imageUrls: z.array(z.string()),
   /** "ebay" = the best comp's own photos; "google" = image search. The
@@ -68,7 +74,7 @@ const DraftProposalSchema = z.object({
   ebayConditionId: z.string().optional(),
   epid: z.string().optional(),
   itemSpecifics: z.record(z.string(), z.string()).optional(),
-  /** The source line(s) this proposal was parsed from, for review. */
+  /** The snippet of the input this proposal was parsed from, for review. */
   sourceText: z.string(),
 });
 

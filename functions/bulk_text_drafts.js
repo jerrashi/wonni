@@ -4,13 +4,17 @@
  * Paste a list → one fully-filled draft proposal per listing. Four stages,
  * each independently testable (see `_internal`):
  *
- *   1. parse     — ONE gemini-flash-lite call splits the text into listings.
- *                  Header lines ("wii games (CIB):") become shared context,
- *                  "bundle N: a, b, c" lines become ONE listing with
- *                  `bundleItems`, parentheticals stay attached to their item.
- *   2. comps     — per listing, live eBay Browse comps (ebay_comps.js):
- *                  median asking price → `suggestedPrice` (priceSource "comps"),
- *                  else the model's estimate ("ai").
+ *   1. parse     — ONE gemini-flash-lite call splits ANY unstructured text
+ *                  (list, paragraph, message, pasted table) into listings.
+ *                  Group text ("wii games (CIB):") becomes shared context,
+ *                  items sold together become ONE listing with `bundleItems`,
+ *                  per-item notes stay attached to their item, and a price
+ *                  the user wrote is captured as `userPrice`. `orderBySource`
+ *                  then restores the input order if the model regrouped.
+ *   2. comps     — per listing, live eBay Browse comps (ebay_comps.js).
+ *                  Price precedence: the user's own price ("user", with the
+ *                  comps/AI figure kept as `marketPrice`) > median asking
+ *                  price ("comps") > the model's estimate ("ai").
  *   3. similar   — the "sell similar" half: Browse `getItem` on the best-
  *                  matching comp gives its eBay category id, condition id,
  *                  ePID and item specifics, which ride on the proposal so the
@@ -48,45 +52,66 @@ const GOOGLE_CSE_KEY = "GOOGLE_CSE_KEY";
 const GOOGLE_CSE_CX = "GOOGLE_CSE_CX";
 const PARSE_MODEL = "gemini-flash-lite-latest";
 const IMAGE_MODEL = "gemini-2.5-flash-image";
-const PROMPT_VERSION = "2026-10-01.2";
+const PROMPT_VERSION = "2026-10-03.1";
 
 const COMPS_PER_QUERY = 12;
 const MAX_PHOTOS = 4;
 const MAX_SPECIFICS = 20;
 const CONCURRENCY = 6;
 
-const PARSE_SYSTEM_PROMPT = `You turn a reseller's pasted inventory list into marketplace listings (eBay, Mercari, Facebook Marketplace).
+const PARSE_SYSTEM_PROMPT = `You turn a reseller's notes about things they want to sell into marketplace listings (eBay, Mercari, Facebook Marketplace).
 
-Rules for reading the list:
-- A line ending in ":" that is not an item (e.g. "wii games (CIB):", "PS2 lot, all tested:") is a HEADER. It is context for every line under it: platform/system, condition ("CIB" = complete in box, "loose", "sealed"), lot notes. Headers are never listings.
-- A line like "bundle 1: a, b, c" or "lot: a + b" is ONE listing containing several items (isBundle=true, bundleItems = each item). The title should name all the items ("Just Dance 4, 2015 & 2014 Wii Bundle (3 Games, CIB)").
-- Every other non-empty line is ONE single-item listing.
-- Text in parentheses attaches to that item only (e.g. "(in cardboard sleeve)" affects condition/description of that item alone).
+The input is ANY unstructured text: a tidy list, one long paragraph, a comma- or slash-separated run, a text message, a pasted spreadsheet or table, voice-dictated notes, or a mix. Do not rely on line breaks. Work out what the separate things for sale are from the meaning.
+
+How to read it:
+- Each distinct thing for sale is ONE listing. Items can be separated by new lines, commas, semicolons, "and", bullets, numbering, or sentences.
+- Text that describes a group rather than an item ("wii games (CIB):", "all of these are tested", "everything below is PS2", a table header row, a sentence like "I have a bunch of sealed lego sets") is CONTEXT. It applies to every item it covers: platform/system, condition ("CIB" = complete in box, "loose", "sealed"), notes, and prices like "$10 each". Context is never a listing by itself.
+- Items the text says are sold together ("bundle 1: a, b, c", "lot: a + b", "selling x and y together", "a with b and c included") are ONE listing: isBundle=true, bundleItems = each item. The title should name all the items ("Just Dance 4, 2015 & 2014 Wii Bundle (3 Games, CIB)"). Items merely mentioned in the same sentence are NOT a bundle unless the text says they sell together.
+- Notes attached to one item (parentheses, "- missing manual", "the blue one has a scratch") affect only that item's condition/description.
+- A count ("3x", "two copies of", "qty 4") is the quantity of one listing, not several listings.
+- Ignore chatter that is not about an item for sale (greetings, questions, shipping remarks, signatures).
 - Fix obvious typos and expand abbreviations in titles. Never invent items that are not in the text.
-- Keep the input order.
+- ORDER: output listings in the order they first appear in the text, top to bottom. Never regroup, sort, or move bundles to the front.
+
+Prices written by the user:
+- If the text states an asking price for a listing ("$25", "25 bucks", "asking 40", "15 obo", a price column), put that number in "userPrice", in USD, for ONE unit of that listing. A bundle's stated price is the price of the whole bundle.
+- A group price "each" ("$10 each", "all $5") applies to every listing it covers. A single total for several separate items that are not a bundle ("$50 for everything") is NOT a per-listing price: leave userPrice null.
+- Numbers that are not asking prices (what they paid, retail/MSRP, model numbers, years, quantities) are NOT userPrice.
+- No stated price: userPrice is null. Never guess userPrice.
 
 For each listing produce:
-- "sourceText": the exact input line(s) it came from.
+- "sourceText": the snippet of the input it came from, copied character for character (the item's own words, not the surrounding context).
 - "title": searchable marketplace title, <= 140 chars, includes platform/system and key condition note.
 - "shortTitle": eBay title, AT MOST 80 characters.
 - "bundleItems": array of item names (empty for a single item).
 - "isBundle": boolean.
-- "description": 3-6 factual buyer-facing sentences: what is included, system/platform, condition from the header + parentheticals. No price, shipping, returns or markdown.
+- "description": 3-6 factual buyer-facing sentences: what is included, system/platform, condition from the context + item notes. No price, shipping, returns or markdown.
 - "brand": publisher/manufacturer/franchise owner, or "Unbranded".
 - "category": hierarchical path hint like "Video Games & Consoles > Video Games".
 - "condition": exactly one of "new", "likenew", "good", "fair", "poor". "CIB"/"complete" with no other note = "good". "sealed" = "new".
 - "tags": up to 8 lowercase search tags.
 - "searchQuery": a short eBay search string for comparable listings of the WHOLE listing (e.g. "Super Smash Bros Brawl Wii CIB"). For a bundle, a query for the bundle as a whole.
 - "componentQueries": for a bundle, one short eBay search string per bundleItem (same order); empty array for single items.
-- "suggestedPrice": your estimated USD resale asking price for the whole listing (number).
+- "userPrice": the user's stated asking price (number) or null, per the rules above.
+- "suggestedPrice": your own estimated USD resale asking price for the whole listing (number), independent of userPrice.
 - "quantity": 1 unless the text says otherwise.
 
-Return ONLY JSON: {"context": "<one-line summary of the header context>", "items": [ ... ]}.`;
+Return ONLY JSON: {"context": "<one-line summary of the shared context, or empty>", "items": [ ... ]}.`;
 
 // ── stage 1: parse ────────────────────────────────────────────────────────
 
 function cleanJsonText(raw) {
   return String(raw).replace(/```json\s*/gi, "").replace(/```/g, "").trim();
+}
+
+/** A model-supplied price → positive number rounded to cents, else undefined.
+ *  Tolerates "$25", "25.00 obo" and "1,200" since the model sometimes echoes
+ *  the user's own formatting. */
+function parsePrice(value) {
+  const num = typeof value === "number"
+    ? value
+    : typeof value === "string" ? Number((value.replace(/,/g, "").match(/\d+(\.\d+)?/) || [])[0]) : NaN;
+  return Number.isFinite(num) && num > 0 && num < 1e6 ? Math.round(num * 100) / 100 : undefined;
 }
 
 /** Raw model item → the contract's DraftProposal core (no pricing/photos yet). */
@@ -103,7 +128,6 @@ function toProposalCore(item = {}) {
   const condition = normalizeCondition(item.condition) || "good";
   const tags = list(item.tags).map((t) => t.toLowerCase()).slice(0, 8);
   const quantity = Number.isInteger(item.quantity) && item.quantity > 0 ? item.quantity : 1;
-  const aiPrice = Number(item.suggestedPrice);
 
   return {
     title,
@@ -120,14 +144,61 @@ function toProposalCore(item = {}) {
     // Search hints, consumed by stages 2-4 and stripped before returning.
     _searchQuery: str(item.searchQuery, 200) || shortTitle,
     _componentQueries: list(item.componentQueries).slice(0, MAX_PHOTOS),
-    _aiPrice: Number.isFinite(aiPrice) && aiPrice > 0 ? Math.round(aiPrice * 100) / 100 : undefined,
+    _aiPrice: parsePrice(item.suggestedPrice),
+    // A price the user wrote in the text. Always wins over comps / the estimate.
+    _userPrice: parsePrice(item.userPrice),
   };
 }
 
-function parseModelOutput(raw, maxItems) {
+/** Lowercased, whitespace-collapsed — so a snippet still matches when the
+ *  model normalised spacing or case while "copying" it. */
+function squash(text) {
+  return String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Put proposals back in the order their source snippets appear in `text`.
+ * The prompt already asks for input order; this is the guard for when the
+ * model regroups anyway (it likes to float bundles to the top).
+ *
+ * Each proposal is located at the first occurrence of its `sourceText` that
+ * starts at or after the previous proposal's match, so a repeated snippet
+ * ("mario kart" twice) maps to successive occurrences when the model kept
+ * order. If that forward scan can place everything, the model's order is
+ * already right and is returned untouched. Otherwise proposals are sorted by
+ * first occurrence; ones whose snippet can't be found (paraphrased) stay
+ * right after the proposal they followed.
+ */
+function orderBySource(proposals, text) {
+  const hay = squash(text);
+  if (!hay || proposals.length < 2) return proposals;
+  const needles = proposals.map((p) => squash(p.sourceText));
+
+  let cursor = 0;
+  let monotonic = true;
+  for (const needle of needles) {
+    if (!needle) continue;
+    const at = hay.indexOf(needle, cursor);
+    if (at >= 0) { cursor = at + 1; continue; }
+    if (hay.indexOf(needle) >= 0) { monotonic = false; break; }
+  }
+  if (monotonic) return proposals;
+
+  let last = -1;
+  const keyed = proposals.map((p, i) => {
+    const at = needles[i] ? hay.indexOf(needles[i]) : -1;
+    if (at >= 0) last = at;
+    return { p, i, pos: at >= 0 ? at : last };
+  });
+  keyed.sort((x, y) => x.pos - y.pos || x.i - y.i);
+  return keyed.map((k) => k.p);
+}
+
+function parseModelOutput(raw, maxItems, text = "") {
   const json = JSON.parse(cleanJsonText(raw));
   const items = Array.isArray(json.items) ? json.items : [];
-  const proposals = items.map(toProposalCore).filter(Boolean).slice(0, maxItems);
+  // Order first, cap second, so a long list loses its tail, not random items.
+  const proposals = orderBySource(items.map(toProposalCore).filter(Boolean), text).slice(0, maxItems);
   return { context: typeof json.context === "string" ? json.context.trim() : "", proposals };
 }
 
@@ -138,8 +209,8 @@ async function parseListWithGemini(apiKey, text, maxItems) {
     systemInstruction: PARSE_SYSTEM_PROMPT,
     generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
   });
-  const raw = (await model.generateContent(`Inventory list:\n\n${text}`)).response.text();
-  return parseModelOutput(raw, maxItems);
+  const raw = (await model.generateContent(`Text from the seller:\n\n${text}`)).response.text();
+  return parseModelOutput(raw, maxItems, text);
 }
 
 // ── stage 2: price ────────────────────────────────────────────────────────
@@ -316,12 +387,22 @@ async function safeDetail(itemId, deps) {
  *   google(query)         → [https url]
  */
 async function enrichProposal(core, deps) {
-  const { _searchQuery, _componentQueries, _aiPrice, ...proposal } = core;
+  const { _searchQuery, _componentQueries, _aiPrice, _userPrice, ...proposal } = core;
 
-  // 2. price
+  // 2. price — the user's own price always wins; comps still run because the
+  // sell-similar details and photos come from them, and the market figure is
+  // returned alongside so the review list can show both.
   const comps = await safeComps(_searchQuery, deps);
   const compPrice = priceFromComps(comps);
-  if (compPrice != null) {
+  if (_userPrice) {
+    proposal.suggestedPrice = _userPrice;
+    proposal.priceSource = "user";
+    const market = compPrice ?? _aiPrice;
+    if (market) {
+      proposal.marketPrice = market;
+      proposal.marketPriceSource = compPrice != null ? "comps" : "ai";
+    }
+  } else if (compPrice != null) {
     proposal.suggestedPrice = compPrice;
     proposal.priceSource = "comps";
   } else if (_aiPrice) {
@@ -437,7 +518,10 @@ exports.generateListingPhoto = onCall(
 
 exports._internal = {
   toProposalCore,
+  parsePrice,
+  orderBySource,
   parseModelOutput,
+  parseListWithGemini,
   priceFromComps,
   median,
   pickBestComp,
