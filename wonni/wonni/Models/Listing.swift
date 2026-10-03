@@ -84,6 +84,13 @@ class Item {
     /// re-processing (the photos are the AI's actual input). nil (pre-migration drafts)
     /// is treated as unchanged so existing processed drafts aren't re-billed.
     var processedPhotoIDs: [String]?
+    /// "Don't rewrite this draft with AI." Set by the pasted-list import (its fields are
+    /// already AI-written, from the text) and by the drafts overview's "Skip AI" action.
+    /// Unlike `processedAt`, it survives a photo change: swapping a placeholder photo on
+    /// a list-made draft must not send it back through photo identification. Honoured
+    /// only while the draft still has a title and a price (see DraftAIProcessingPolicy)
+    /// — an incomplete draft is processed normally. Optional for lightweight migration.
+    var skipAIProcessing: Bool?
     /// Set the moment `UploadManager.publishDrafts` successfully writes this item's
     /// Firestore listing doc. Distinguishes "still an unpublished draft" from "kept alive
     /// locally only so a queued cross-post job can read its photos" (the item survives in
@@ -596,9 +603,21 @@ enum DraftAIProcessingPolicy {
     /// input, so those drafts are re-processed. A nil snapshot means the draft was
     /// processed before `processedPhotoIDs` existed — treated as unchanged so
     /// pre-migration drafts aren't re-billed.
-    static func shouldSkip(processedAt: Date?, processedPhotoIDs: [String]?, currentPhotoIDs: [String]) -> Bool {
+    ///
+    /// `skipRequested` (Item.skipAIProcessing — list-made drafts and the "Skip AI"
+    /// action) skips regardless of photos, but only while the draft `isComplete`
+    /// (has a title and a price): an incomplete draft still gets the normal AI pass,
+    /// so there is exactly one enrichment path and nothing publishes half-filled.
+    static func shouldSkip(processedAt: Date?, processedPhotoIDs: [String]?, currentPhotoIDs: [String], skipRequested: Bool = false, isComplete: Bool = true) -> Bool {
+        if skipRequested && isComplete { return true }
         guard processedAt != nil else { return false }
         guard let snapshot = processedPhotoIDs else { return true }
         return Set(snapshot) == Set(currentPhotoIDs)
+    }
+
+    /// The minimum a draft needs to be listed without AI: a title and a price.
+    static func isComplete(title: String?, price: Double?) -> Bool {
+        let hasTitle = !(title ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return hasTitle && (price ?? 0) > 0
     }
 }

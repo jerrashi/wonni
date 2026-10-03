@@ -63,6 +63,41 @@ final class DraftAIProcessingPolicyTests: XCTestCase {
             processedAt: processed, processedPhotoIDs: [], currentPhotoIDs: []
         ))
     }
+
+    // MARK: Skip requested (list-made drafts, "Skip AI")
+
+    func test_skipRequested_skipsEvenWhenNeverProcessedOrPhotosChanged() {
+        XCTAssertTrue(DraftAIProcessingPolicy.shouldSkip(
+            processedAt: nil, processedPhotoIDs: nil, currentPhotoIDs: ["a"],
+            skipRequested: true, isComplete: true
+        ))
+        // A list-made draft whose placeholder photo was swapped for a real one.
+        XCTAssertTrue(DraftAIProcessingPolicy.shouldSkip(
+            processedAt: Date(), processedPhotoIDs: ["placeholder"], currentPhotoIDs: ["mine"],
+            skipRequested: true, isComplete: true
+        ))
+    }
+
+    func test_skipRequested_isIgnoredWhileTheDraftIsIncomplete() {
+        // No title or price: the normal AI pass fills it in, whatever was requested.
+        XCTAssertFalse(DraftAIProcessingPolicy.shouldSkip(
+            processedAt: nil, processedPhotoIDs: nil, currentPhotoIDs: ["a"],
+            skipRequested: true, isComplete: false
+        ))
+        // ...but an incomplete draft that WAS processed with unchanged photos still skips.
+        XCTAssertTrue(DraftAIProcessingPolicy.shouldSkip(
+            processedAt: Date(), processedPhotoIDs: ["a"], currentPhotoIDs: ["a"],
+            skipRequested: true, isComplete: false
+        ))
+    }
+
+    func test_isComplete_needsATitleAndAPositivePrice() {
+        XCTAssertTrue(DraftAIProcessingPolicy.isComplete(title: "Wii Sports", price: 12))
+        XCTAssertFalse(DraftAIProcessingPolicy.isComplete(title: "  ", price: 12))
+        XCTAssertFalse(DraftAIProcessingPolicy.isComplete(title: nil, price: 12))
+        XCTAssertFalse(DraftAIProcessingPolicy.isComplete(title: "Wii Sports", price: nil))
+        XCTAssertFalse(DraftAIProcessingPolicy.isComplete(title: "Wii Sports", price: 0))
+    }
 }
 
 /// DraftHistoryView's selection-mode controls — see the layout notes on

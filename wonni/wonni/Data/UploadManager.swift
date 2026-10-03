@@ -705,7 +705,12 @@ class UploadManager: ObservableObject {
                 let skipAI = DraftAIProcessingPolicy.shouldSkip(
                     processedAt: draft.processedAt,
                     processedPhotoIDs: draft.processedPhotoIDs,
-                    currentPhotoIDs: draft.sourceAssetIdentifiers
+                    currentPhotoIDs: draft.sourceAssetIdentifiers,
+                    skipRequested: draft.skipAIProcessing == true,
+                    isComplete: DraftAIProcessingPolicy.isComplete(
+                        title: draft.userEditedTitle ?? draft.aiSuggestedTitle,
+                        price: draft.userEditedPrice ?? draft.aiSuggestedPrice
+                    )
                 )
                 if draft.processedAt != nil && !skipAI {
                     print("[UploadManager] Re-processing \(draft.id) — photos changed since last AI run")
@@ -847,6 +852,27 @@ class UploadManager: ObservableObject {
             showProgressSheet = false
             showProcessResults = true
         }
+    }
+
+    /// The drafts overview's "Skip AI" action: marks drafts that already have a title and
+    /// a price as ready, so Process passes them straight to Review & Publish without a
+    /// Gemini call. Returns how many were NOT marked because they're missing a title or
+    /// price — those are processed normally (one enrichment path, nothing half-filled).
+    @discardableResult
+    func skipAIProcessing(for drafts: [Item], modelContext: ModelContext) -> Int {
+        var incomplete = 0
+        for draft in drafts {
+            let complete = DraftAIProcessingPolicy.isComplete(
+                title: draft.userEditedTitle ?? draft.aiSuggestedTitle,
+                price: draft.userEditedPrice ?? draft.aiSuggestedPrice
+            )
+            guard complete else { incomplete += 1; continue }
+            draft.skipAIProcessing = true
+            draft.processedAt = draft.processedAt ?? Date()
+            draft.processedPhotoIDs = draft.sourceAssetIdentifiers
+        }
+        try? modelContext.save()
+        return incomplete
     }
 
     /// Syncs a draft's fields into the shared `products/{id}` doc — see

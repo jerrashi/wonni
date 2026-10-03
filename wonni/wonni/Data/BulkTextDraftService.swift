@@ -202,6 +202,9 @@ final class BulkTextDraftService {
             // in Review & Publish immediately (same bookkeeping processDrafts does).
             item.processedAt = Date()
             item.processedPhotoIDs = item.sourceAssetIdentifiers
+            // ...and keep skipping it even after the user swaps the stock/placeholder
+            // photo for their own — the text, not the photo, is what described the item.
+            item.skipAIProcessing = true
             try? modelContext.save()
 
             if !uploadManager.sessionDraftIDs.contains(item.id) {
