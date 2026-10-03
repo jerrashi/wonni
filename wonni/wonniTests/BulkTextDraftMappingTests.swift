@@ -17,7 +17,9 @@ final class BulkTextDraftMappingTests: XCTestCase {
         imageUrls: [String] = ["https://i.ebayimg.com/a.jpg"],
         imageSource: ImageSource = .ebay,
         isBundle: Bool = false,
-        bundleItems: [String] = []
+        bundleItems: [String] = [],
+        sourceText: String = "Super smash bros brawl",
+        weightOz: Double? = nil
     ) -> Draft {
         Draft(
             brand: "Nintendo",
@@ -29,20 +31,24 @@ final class BulkTextDraftMappingTests: XCTestCase {
             ebayCategoryId: "139973",
             ebayConditionId: "4000",
             epid: "24070872136",
+            heightIn: weightOz == nil ? nil : 1,
             imageSource: imageSource,
             imageUrls: imageUrls,
             isBundle: isBundle,
             itemSpecifics: ["Platform": "Nintendo Wii", "Game Name": "Super Smash Bros. Brawl"],
+            lengthIn: weightOz == nil ? nil : 7.5,
             marketPrice: marketPrice,
             marketPriceSource: marketPriceSource,
             priceSource: priceSource,
             quantity: 1,
             shortTitle: shortTitle,
             similarItemId: "v1|398452119919|0",
-            sourceText: "Super smash bros brawl",
+            sourceText: sourceText,
             suggestedPrice: price,
             tags: ["wii", "nintendo"],
-            title: title
+            title: title,
+            weightOz: weightOz,
+            widthIn: weightOz == nil ? nil : 5.5
         )
     }
 
@@ -148,8 +154,24 @@ final class BulkTextDraftMappingTests: XCTestCase {
                 "similarItemId": "v1|1|0",
                 "ebayCategoryId": "139973",
                 "itemSpecifics": ["Platform": "Nintendo Wii"],
+                "weightOz": 12,
                 "sourceText": "bundle 1: just dance 4, just dance 2015, just dance 2014"
-            ]]
+            ]],
+            "remaining": [[
+                "title": "Mario Kart Wii (Nintendo Wii) Complete in Box",
+                "shortTitle": "Mario Kart Wii CIB",
+                "description": "Complete in box.",
+                "condition": "good",
+                "tags": ["wii"],
+                "isBundle": false,
+                "bundleItems": [],
+                "quantity": 1,
+                "sourceText": "mario kart",
+                "searchQuery": "Mario Kart Wii CIB",
+                "componentQueries": [],
+                "userPrice": 10
+            ]],
+            "unparsedText": ""
         ]
         let data = try JSONSerialization.data(withJSONObject: payload)
         let response = try JSONDecoder().decode(BulkDraftsFromTextResponse.self, from: data)
@@ -161,5 +183,65 @@ final class BulkTextDraftMappingTests: XCTestCase {
         XCTAssertEqual(response.drafts[0].ebayCategoryId, "139973")
         XCTAssertEqual(response.drafts[0].itemSpecifics?["Platform"], "Nintendo Wii")
         XCTAssertNil(response.drafts[0].epid)
+        XCTAssertEqual(response.drafts[0].weightOz, 12)
+
+        // The un-enriched tail must survive the round trip back to the server intact:
+        // it is sent as `pendingItems` exactly as it was received.
+        XCTAssertEqual(response.remaining.count, 1)
+        let resent = try JSONSerialization.jsonObject(with: JSONEncoder().encode(response.remaining)) as? [[String: Any]]
+        XCTAssertEqual(resent?.first?["searchQuery"] as? String, "Mario Kart Wii CIB")
+        XCTAssertEqual(resent?.first?["userPrice"] as? Double, 10)
+        XCTAssertEqual(resent?.first?["sourceText"] as? String, "mario kart")
+        XCTAssertNil(resent?.first?["brand"], "absent optionals must stay absent, not become null")
+    }
+
+    // MARK: Shipping estimates
+
+    func testShippingEstimatesLandOnTheDraftSoNoSecondAIPassIsNeeded() {
+        let item = Item(firestoreListingId: "p-ship")
+        BulkTextDraftMapper.apply(proposal(weightOz: 6), to: item, aiModel: "m", aiPromptVersion: "v")
+        XCTAssertEqual(item.weightLbs ?? 0, 0.375, accuracy: 0.0001)
+        XCTAssertEqual(item.lengthIn, 7.5)
+        XCTAssertEqual(item.widthIn, 5.5)
+        XCTAssertEqual(item.heightIn, 1)
+
+        let bare = Item(firestoreListingId: "p-no-ship")
+        BulkTextDraftMapper.apply(proposal(), to: bare, aiModel: "m", aiPromptVersion: "v")
+        XCTAssertNil(bare.weightLbs)
+        XCTAssertNil(bare.lengthIn)
+    }
+
+    // MARK: Leftover text
+
+    func testLeftoverTextKeepsContextOrderAndGroupPrices() {
+        let lines = [
+            BulkTextDraftMapper.LeftoverLine(sourceText: "mario kart wii", userPrice: 10),
+            BulkTextDraftMapper.LeftoverLine(sourceText: "zelda twilight princess $25", userPrice: 25),
+            BulkTextDraftMapper.LeftoverLine(sourceText: "  wii fit (no board) ", userPrice: nil),
+            BulkTextDraftMapper.LeftoverLine(sourceText: "okami", userPrice: 12.5)
+        ]
+        let text = BulkTextDraftMapper.leftoverText(context: "Wii games, complete in box", lines: lines, unparsedText: "\nand a gamecube controller\n")
+        XCTAssertEqual(text, """
+        Wii games, complete in box:
+        mario kart wii $10
+        zelda twilight princess $25
+        wii fit (no board)
+        okami $12.50
+        and a gamecube controller
+        """)
+    }
+
+    func testLeftoverTextIsEmptyWhenEverythingWasConverted() {
+        XCTAssertEqual(BulkTextDraftMapper.leftoverText(context: "Wii games", lines: [], unparsedText: "  "), "")
+        // Only an unparsed tail: no header invented for it.
+        XCTAssertEqual(BulkTextDraftMapper.leftoverText(context: "Wii games", lines: [], unparsedText: "ps2 games: gta 3"), "ps2 games: gta 3")
+    }
+
+    func testLeftoverLineFromAPreparedDraftCarriesOnlyAUserPrice() {
+        let userPriced = BulkTextDraftMapper.LeftoverLine(proposal(price: 30, priceSource: .user, sourceText: "smash"))
+        XCTAssertEqual(userPriced, BulkTextDraftMapper.LeftoverLine(sourceText: "smash", userPrice: 30))
+        // A comps price is ours, not the user's: it must not be written into their text.
+        let compsPriced = BulkTextDraftMapper.LeftoverLine(proposal(price: 32, priceSource: .comps, sourceText: "smash"))
+        XCTAssertNil(compsPriced.userPrice)
     }
 }

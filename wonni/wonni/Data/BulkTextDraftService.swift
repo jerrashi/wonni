@@ -47,6 +47,12 @@ enum BulkTextDraftMapper {
         // "Sell similar": the comp's real eBay category + item specifics.
         item.ebayCategoryId = proposal.ebayCategoryId
         item.itemSpecifics = proposal.itemSpecifics
+        // Shipping estimates — the same fields the photo AI pass fills, so a list-made
+        // draft is complete on arrival and never needs that pass.
+        item.weightLbs = proposal.weightOz.map { $0 / 16.0 }
+        item.lengthIn = proposal.lengthIn
+        item.widthIn = proposal.widthIn
+        item.heightIn = proposal.heightIn
         // The source snippet is the user's own words — keep it where they can see it.
         item.personalNote = "From list: \(proposal.sourceText)"
     }
@@ -78,6 +84,54 @@ enum BulkTextDraftMapper {
     /// produced a photo.
     static func needsPhoto(_ proposal: Draft) -> Bool {
         proposal.imageUrls.isEmpty
+    }
+
+    /// How many listings to price and photograph per round trip. The server parses the
+    /// whole text once; comps, details and photos are fetched this many at a time.
+    static let batchSize = 40
+
+    /// One listing the run did not turn into a draft: the user's own words for it, and
+    /// the price they wrote for it (which may have come from a group line like
+    /// "$10 each" and so not be in the snippet itself).
+    struct LeftoverLine: Equatable {
+        let sourceText: String
+        let userPrice: Double?
+
+        init(sourceText: String, userPrice: Double?) {
+            self.sourceText = sourceText
+            self.userPrice = userPrice
+        }
+        /// Parsed but never priced / photographed.
+        init(_ pending: Remaining) {
+            self.init(sourceText: pending.sourceText, userPrice: pending.userPrice)
+        }
+        /// Fully prepared but never saved (the run was stopped first).
+        init(_ proposal: Draft) {
+            self.init(sourceText: proposal.sourceText, userPrice: proposal.priceSource == .user ? proposal.suggestedPrice : nil)
+        }
+    }
+
+    /// The part of a run that did NOT become drafts, as text the user can run again:
+    /// the shared context as a header line, one line per unconverted listing, then
+    /// whatever the parser never reached. Empty when everything was converted.
+    static func leftoverText(context: String, lines: [LeftoverLine], unparsedText: String) -> String {
+        var out: [String] = []
+        for item in lines {
+            var line = item.sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            if let price = item.userPrice {
+                let amount = price == price.rounded() ? String(Int(price)) : String(format: "%.2f", price)
+                if !line.contains(amount) { line += " $\(amount)" }
+            }
+            out.append(line)
+        }
+        let header = context.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !out.isEmpty && !header.isEmpty {
+            out.insert(header.hasSuffix(":") ? header : header + ":", at: 0)
+        }
+        let tail = unparsedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !tail.isEmpty { out.append(tail) }
+        return out.joined(separator: "\n")
     }
 
     /// A draft without a photo is invisible in the drafts list and skipped by publish,
@@ -126,12 +180,33 @@ final class BulkTextDraftService {
     /// One round trip: the Cloud Function parses, prices, copies sell-similar details
     /// and finds photos for every listing in `text`. Nothing is persisted until
     /// `createDrafts`.
-    func propose(text: String) async throws -> BulkDraftsFromTextResponse {
-        // Server-side work is one Gemini call plus comps / item-detail / photo lookups
-        // per listing; the default 70 s callable timeout is too short for a 20-item list.
+    ///
+    /// The first call sends the text: the server parses ALL of it, fully prepares the
+    /// first batch, and returns the rest as `remaining`. Follow-up calls send those
+    /// back with `propose(pending:)`, so a long list is never cut off at the batch size.
+    /// `context` carries the shared context when continuing after `unparsedText`.
+    func propose(text: String, context: String = "") async throws -> BulkDraftsFromTextResponse {
+        var parameters: [String: Any] = ["text": text, "maxItems": BulkTextDraftMapper.batchSize]
+        if !context.isEmpty { parameters["context"] = String(context.prefix(500)) }
+        return try await proposeCall(parameters)
+    }
+
+    /// Prices and photographs listings a previous response returned in `remaining`.
+    func propose(pending: [Remaining], context: String) async throws -> BulkDraftsFromTextResponse {
+        let data = try JSONEncoder().encode(pending)
+        let items = try JSONSerialization.jsonObject(with: data)
+        var parameters: [String: Any] = ["pendingItems": items, "maxItems": BulkTextDraftMapper.batchSize]
+        if !context.isEmpty { parameters["context"] = String(context.prefix(500)) }
+        return try await proposeCall(parameters)
+    }
+
+    private func proposeCall(_ parameters: [String: Any]) async throws -> BulkDraftsFromTextResponse {
+        // Server-side work is one Gemini call over the whole text (about half a second
+        // per listing) plus comps / item-detail / photo lookups for the batch; the
+        // default 70 s callable timeout is far too short. Matches the function's 540 s.
         let callable = functions.httpsCallable("bulkDraftsFromText")
-        callable.timeoutInterval = 300
-        let result = try await call(callable, ["text": text])
+        callable.timeoutInterval = 540
+        let result = try await call(callable, parameters)
         return try decode(BulkDraftsFromTextResponse.self, from: result)
     }
 
@@ -171,15 +246,19 @@ final class BulkTextDraftService {
     /// none), then hands it to UploadManager exactly like `commitActiveDraft` does —
     /// background Storage upload + products/{id} sync — and marks it processed so it
     /// shows up straight in Review & Publish instead of waiting for another AI pass.
+    /// `shouldStop` is checked between drafts so a cancelled run stops cleanly with
+    /// every draft made so far intact.
     func createDrafts(
         from proposals: [Draft],
         response: BulkDraftsFromTextResponse,
         modelContext: ModelContext,
         uploadManager: UploadManager,
+        shouldStop: () -> Bool = { false },
         progress: @escaping (CreationProgress) -> Void
     ) async -> [Item] {
         var created: [Item] = []
         for (index, proposal) in proposals.enumerated() {
+            if shouldStop() { break }
             progress(CreationProgress(completed: index, total: proposals.count, currentTitle: proposal.shortTitle))
 
             let item = Item(firestoreListingId: UUID().uuidString)
@@ -217,26 +296,37 @@ final class BulkTextDraftService {
             uploadManager.syncProductData(item)
             created.append(item)
         }
-        progress(CreationProgress(completed: proposals.count, total: proposals.count, currentTitle: ""))
+        progress(CreationProgress(completed: created.count, total: proposals.count, currentTitle: ""))
         return created
     }
 
     /// Fetches each photo URL and normalises it to a ≤1200 px JPEG, matching what the
-    /// camera path stores. A failed download just drops that one photo.
+    /// camera path stores. A draft's photos (at most four) download together; order is
+    /// kept, and a failed download just drops that one photo.
     private func downloadPhotos(_ urls: [String]) async -> [Data] {
-        var out: [Data] = []
-        for raw in urls {
-            guard let url = URL(string: raw) else { continue }
-            do {
-                let (bytes, httpResponse) = try await URLSession.shared.data(from: url)
-                if let http = httpResponse as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { continue }
-                guard let image = UIImage(data: bytes), image.size.width > 0, image.size.height > 0 else { continue }
-                let resized = ImageCompressor.resize(image: image, maxDimension: 1200)
-                if let jpeg = resized.jpegData(compressionQuality: 0.85) { out.append(jpeg) }
-            } catch {
-                print("[BulkTextDraftService] photo download failed for \(raw): \(error)")
+        await withTaskGroup(of: (Int, Data?).self) { group in
+            for (index, raw) in urls.enumerated() {
+                group.addTask { (index, await Self.downloadPhoto(raw)) }
             }
+            var byIndex: [Int: Data] = [:]
+            for await (index, data) in group {
+                if let data { byIndex[index] = data }
+            }
+            return urls.indices.compactMap { byIndex[$0] }
         }
-        return out
+    }
+
+    private nonisolated static func downloadPhoto(_ raw: String) async -> Data? {
+        guard let url = URL(string: raw) else { return nil }
+        do {
+            let (bytes, httpResponse) = try await URLSession.shared.data(from: url)
+            if let http = httpResponse as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { return nil }
+            guard let image = UIImage(data: bytes), image.size.width > 0, image.size.height > 0 else { return nil }
+            let resized = ImageCompressor.resize(image: image, maxDimension: 1200)
+            return resized.jpegData(compressionQuality: 0.85)
+        } catch {
+            print("[BulkTextDraftService] photo download failed for \(raw): \(error)")
+            return nil
+        }
     }
 }

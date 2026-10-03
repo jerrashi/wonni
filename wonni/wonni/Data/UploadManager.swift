@@ -561,9 +561,66 @@ class UploadManager: ObservableObject {
         activeUploadCount += 1
         uploadStatuses[draft.id] = .pending
 
+        // At most `maxConcurrentUploads` drafts upload at once. Each running upload holds
+        // its draft's decoded photos in memory, and a list import can commit 100+ drafts
+        // in a couple of minutes — unbounded, that was hundreds of images in memory at
+        // once. Anything still waiting when the user publishes is uploaded inline by
+        // publishDrafts, so a queued upload never blocks a listing.
+        if runningUploadTasks >= maxConcurrentUploads {
+            uploadWaitlist.append(PendingUpload(draftID: draft.id, draft: draft, modelContext: modelContext, userId: userId, listingId: listingId))
+            return
+        }
+        runUpload(draft: draft, modelContext: modelContext, userId: userId, listingId: listingId)
+    }
+
+    private struct PendingUpload {
+        /// Captured up front: a deleted SwiftData object can't even be asked for its id.
+        let draftID: UUID
+        let draft: Item
+        let modelContext: ModelContext
+        let userId: String
+        let listingId: String
+    }
+    private var uploadWaitlist: [PendingUpload] = []
+    private var runningUploadTasks = 0
+    private let maxConcurrentUploads = 4
+
+    /// Bookkeeping for an upload that ended — finished, failed, or abandoned because the
+    /// draft was deleted. Always runs (the deleted-mid-upload exits used to return without
+    /// it, leaving `isUploadingPhotos` stuck true and Publish disabled), then starts the
+    /// next waiting upload.
+    private func uploadDidEnd() {
+        runningUploadTasks -= 1
+        activeUploadCount -= 1
+        if activeUploadCount <= 0 {
+            activeUploadCount = 0
+            isUploadingPhotos = false
+        }
+        while runningUploadTasks < maxConcurrentUploads, !uploadWaitlist.isEmpty {
+            let next = uploadWaitlist.removeFirst()
+            let gone = deletedDraftIDs.contains(next.draftID) || Item.deletedIDs.contains(next.draftID)
+            // Published while waiting: publishDrafts already uploaded its photos inline.
+            // (Checked second — a deleted item's properties must not be read.)
+            if gone || next.draft.orderedFirebasePhotoPaths.count >= next.draft.sourceAssetIdentifiers.count {
+                // Never started, so only the pending count unwinds.
+                uploadStatuses[next.draftID] = gone ? nil : .done
+                activeUploadCount -= 1
+                if activeUploadCount <= 0 {
+                    activeUploadCount = 0
+                    isUploadingPhotos = false
+                }
+                continue
+            }
+            runUpload(draft: next.draft, modelContext: next.modelContext, userId: next.userId, listingId: next.listingId)
+        }
+    }
+
+    private func runUpload(draft: Item, modelContext: ModelContext, userId: String, listingId: String) {
+        runningUploadTasks += 1
         let draftID = draft.id
         let assetIdentifiers = draft.sourceAssetIdentifiers
         Task {
+            defer { uploadDidEnd() }
             uploadStatuses[draftID] = .uploading(0)
 
             print("[UploadManager] Fetching \(assetIdentifiers.count) images for \(draftID)...")
@@ -631,12 +688,9 @@ class UploadManager: ObservableObject {
                 print("[UploadManager] Draft \(draftID) deleted mid-upload — discarding \(photoPathsByAsset.count) uploaded paths")
             }
             uploadStatuses[draftID] = failed ? .failed : .done
-            activeUploadCount -= 1
-            if activeUploadCount <= 0 {
-                isUploadingPhotos = false
-            }
         }
     }
+
 
     private func recalcUploadProgress() {
         let statuses = uploadStatuses.values
@@ -1557,6 +1611,7 @@ class UploadManager: ObservableObject {
         shouldReturnToRoot = false
         uploadStartTime = nil
         activeUploadCount = 0
+        uploadWaitlist.removeAll()
         sessionDraftIDs.removeAll()
         activeDraftID = nil
         crossPostStatusPending = false

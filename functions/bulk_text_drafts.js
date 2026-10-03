@@ -45,19 +45,25 @@ const { validated } = require("./contracts");
 const { retrieveComps, retrieveCompDetail, fullSizeEbayImage } = require("./ebay_comps")._internal;
 const { EBAY_CLIENT_ID, EBAY_CLIENT_SECRET } = require("./ebay_auth");
 const { savePublicBuffer } = require("./product_media");
-const { normalizeCondition } = require("./enrichment")._internal;
+const { normalizeCondition, toListingFields } = require("./enrichment")._internal;
 
 const GEMINI_API_KEY = "GEMINI_API_KEY";
 const GOOGLE_CSE_KEY = "GOOGLE_CSE_KEY";
 const GOOGLE_CSE_CX = "GOOGLE_CSE_CX";
 const PARSE_MODEL = "gemini-flash-lite-latest";
 const IMAGE_MODEL = "gemini-2.5-flash-image";
-const PROMPT_VERSION = "2026-10-03.1";
+const PROMPT_VERSION = "2026-10-03.2";
 
 const COMPS_PER_QUERY = 12;
 const MAX_PHOTOS = 4;
 const MAX_SPECIFICS = 20;
 const CONCURRENCY = 6;
+// The parse is one call over the whole text. Measured 2026-10-03: 150 items →
+// ~32k output tokens in ~75 s, so the model's 65k output ceiling is ~300 items.
+// Past it the JSON is cut mid-item; `salvageItems` keeps the complete ones and
+// `unparsedTail` hands the rest of the text back to the client.
+const MAX_OUTPUT_TOKENS = 65536;
+const MAX_PARSED_ITEMS = 400;
 
 const PARSE_SYSTEM_PROMPT = `You turn a reseller's notes about things they want to sell into marketplace listings (eBay, Mercari, Facebook Marketplace).
 
@@ -95,6 +101,8 @@ For each listing produce:
 - "userPrice": the user's stated asking price (number) or null, per the rules above.
 - "suggestedPrice": your own estimated USD resale asking price for the whole listing (number), independent of userPrice.
 - "quantity": 1 unless the text says otherwise.
+- "weightOz": estimated shipping weight of the packed listing in ounces (number). For a bundle or quantity > 1 listing, ONE unit of the listing as it ships (the whole bundle).
+- "lengthIn", "widthIn", "heightIn": estimated shipping box or mailer dimensions in inches (numbers).
 
 Return ONLY JSON: {"context": "<one-line summary of the shared context, or empty>", "items": [ ... ]}.`;
 
@@ -112,6 +120,32 @@ function parsePrice(value) {
     ? value
     : typeof value === "string" ? Number((value.replace(/,/g, "").match(/\d+(\.\d+)?/) || [])[0]) : NaN;
   return Number.isFinite(num) && num > 0 && num < 1e6 ? Math.round(num * 100) / 100 : undefined;
+}
+
+/** weightOz / lengthIn / widthIn / heightIn via enrichListing's own normaliser. */
+function shippingFields(item) {
+  const { weightOz, lengthIn, widthIn, heightIn } = toListingFields({
+    weightOz: item.weightOz, weightLbs: item.weightLbs,
+    lengthIn: item.lengthIn, widthIn: item.widthIn, heightIn: item.heightIn,
+  });
+  return Object.fromEntries(Object.entries({ weightOz, lengthIn, widthIn, heightIn }).filter(([, v]) => v !== undefined));
+}
+
+/**
+ * A parsed-but-not-yet-enriched core → the plain shape the client holds and
+ * sends back in `pendingItems` for the next batch (contract `PendingItemSchema`).
+ * It is deliberately the same shape the model emits, so `toProposalCore`
+ * reads it back with no second code path.
+ */
+function toPendingItem(core) {
+  const { _searchQuery, _componentQueries, _aiPrice, _userPrice, ...rest } = core;
+  return {
+    ...rest,
+    searchQuery: _searchQuery,
+    componentQueries: _componentQueries,
+    ...(_aiPrice ? { suggestedPrice: _aiPrice } : {}),
+    ...(_userPrice ? { userPrice: _userPrice } : {}),
+  };
 }
 
 /** Raw model item → the contract's DraftProposal core (no pricing/photos yet). */
@@ -141,6 +175,10 @@ function toProposalCore(item = {}) {
     bundleItems: isBundle ? bundleItems : [],
     quantity,
     sourceText: str(item.sourceText, 500) || title,
+    // Shipping estimates — same normalisation as the photo path (enrichListing),
+    // so a list-made draft carries every field a photo-identified one does and
+    // never needs a second AI pass.
+    ...shippingFields(item),
     // Search hints, consumed by stages 2-4 and stripped before returning.
     _searchQuery: str(item.searchQuery, 200) || shortTitle,
     _componentQueries: list(item.componentQueries).slice(0, MAX_PHOTOS),
@@ -194,23 +232,104 @@ function orderBySource(proposals, text) {
   return keyed.map((k) => k.p);
 }
 
-function parseModelOutput(raw, maxItems, text = "") {
-  const json = JSON.parse(cleanJsonText(raw));
+/**
+ * The complete item objects from a model response that was cut off mid-JSON
+ * (output-token ceiling on a very long list). Walks the `items` array with a
+ * string-aware brace counter and keeps every object that closed.
+ */
+function salvageItems(raw) {
+  const text = cleanJsonText(raw);
+  const start = text.search(/"items"\s*:\s*\[/);
+  if (start < 0) return { context: "", items: [] };
+  const contextMatch = /"context"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(text);
+  let context = "";
+  try { context = contextMatch ? JSON.parse(contextMatch[1]) : ""; } catch { context = ""; }
+
+  const items = [];
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let objectStart = -1;
+  for (let i = text.indexOf("[", start) + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === "{") { if (depth === 0) objectStart = i; depth++; continue; }
+    if (ch === "}") {
+      depth--;
+      if (depth === 0 && objectStart >= 0) {
+        try { items.push(JSON.parse(text.slice(objectStart, i + 1))); } catch { /* skip a malformed object */ }
+        objectStart = -1;
+      }
+      continue;
+    }
+    if (ch === "]" && depth === 0) break;
+  }
+  return { context, items };
+}
+
+/**
+ * The part of `text` after the last proposal that could be located in it —
+ * what a truncated parse never got to. Snippets are matched in order, case-
+ * and whitespace-insensitively, each from where the previous one ended.
+ * Returns "" when nothing can be located (better to hand back nothing than
+ * to make the client re-list items it already has).
+ */
+function unparsedTail(text, proposals) {
+  let cursor = 0;
+  let found = false;
+  for (const p of proposals) {
+    const words = String(p.sourceText || "").trim().split(/\s+/).filter(Boolean);
+    if (!words.length) continue;
+    const pattern = new RegExp(words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+"), "i");
+    const match = pattern.exec(text.slice(cursor));
+    if (match) { cursor += match.index + match[0].length; found = true; }
+  }
+  return found ? text.slice(cursor).trim() : "";
+}
+
+/**
+ * Model output → ordered proposal cores. `truncated` = the response hit the
+ * output ceiling; complete items are salvaged and `unparsedText` is the tail
+ * of the input they did not cover.
+ */
+function parseModelOutput(raw, maxItems, text = "", { truncated = false } = {}) {
+  let json;
+  try {
+    json = JSON.parse(cleanJsonText(raw));
+  } catch (e) {
+    if (!truncated) throw e;
+    json = salvageItems(raw);
+  }
   const items = Array.isArray(json.items) ? json.items : [];
   // Order first, cap second, so a long list loses its tail, not random items.
   const proposals = orderBySource(items.map(toProposalCore).filter(Boolean), text).slice(0, maxItems);
-  return { context: typeof json.context === "string" ? json.context.trim() : "", proposals };
+  return {
+    context: typeof json.context === "string" ? json.context.trim() : "",
+    proposals,
+    unparsedText: truncated ? unparsedTail(text, proposals) : "",
+  };
 }
 
-async function parseListWithGemini(apiKey, text, maxItems) {
+/** `context` = shared context carried over from an earlier part of the same
+ *  text, when the client is continuing after a truncated parse. */
+async function parseListWithGemini(apiKey, text, maxItems, context = "") {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
     model: PARSE_MODEL,
     systemInstruction: PARSE_SYSTEM_PROMPT,
-    generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
+    generationConfig: { responseMimeType: "application/json", temperature: 0.2, maxOutputTokens: MAX_OUTPUT_TOKENS },
   });
-  const raw = (await model.generateContent(`Text from the seller:\n\n${text}`)).response.text();
-  return parseModelOutput(raw, maxItems, text);
+  const carried = context ? `Context that applies to this text (from earlier in the same notes): ${context}\n\n` : "";
+  const response = (await model.generateContent(`${carried}Text from the seller:\n\n${text}`)).response;
+  const truncated = response.candidates?.[0]?.finishReason === "MAX_TOKENS";
+  const parsed = parseModelOutput(response.text(), maxItems, text, { truncated });
+  return { ...parsed, context: parsed.context || context };
 }
 
 // ── stage 2: price ────────────────────────────────────────────────────────
@@ -463,14 +582,42 @@ async function enrichProposal(core, deps) {
   return proposal;
 }
 
-async function buildDrafts({ text, maxItems }, deps) {
-  const { context, proposals } = await deps.parse(text, maxItems);
-  const drafts = await mapWithConcurrency(proposals, CONCURRENCY, (core) => enrichProposal(core, deps));
-  return { context, drafts, aiModel: PARSE_MODEL, aiPromptVersion: PROMPT_VERSION };
+/**
+ * One batch. Two entry modes, one enrichment path:
+ *   { text }  — parse the WHOLE text (cheap), enrich the first `maxItems`
+ *               listings (comps + details + photos are the expensive part),
+ *               and return the rest un-enriched in `remaining`.
+ *   { pendingItems } — enrich listings a previous call returned in `remaining`.
+ *               No model call; order and wording stay exactly as first parsed.
+ * The client loops until `remaining` is empty, so a long list is never cut
+ * off at the batch size (it used to silently drop everything past 40).
+ */
+async function buildDrafts({ text, pendingItems: items, context: carriedContext = "", maxItems }, deps) {
+  let context = carriedContext;
+  let cores;
+  let unparsedText = "";
+  if (Array.isArray(items) && items.length) {
+    cores = items.map(toProposalCore).filter(Boolean);
+  } else {
+    const parsed = await deps.parse(text, MAX_PARSED_ITEMS, carriedContext);
+    context = parsed.context;
+    cores = parsed.proposals;
+    unparsedText = parsed.unparsedText || "";
+  }
+  const batch = cores.slice(0, maxItems);
+  const drafts = await mapWithConcurrency(batch, CONCURRENCY, (core) => enrichProposal(core, deps));
+  return {
+    context,
+    drafts,
+    remaining: cores.slice(maxItems).map(toPendingItem),
+    unparsedText,
+    aiModel: PARSE_MODEL,
+    aiPromptVersion: PROMPT_VERSION,
+  };
 }
 
 exports.bulkDraftsFromText = onCall(
-  { secrets: [GEMINI_API_KEY, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, GOOGLE_CSE_KEY, GOOGLE_CSE_CX], timeoutSeconds: 300, memory: "1GiB" },
+  { secrets: [GEMINI_API_KEY, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, GOOGLE_CSE_KEY, GOOGLE_CSE_CX], timeoutSeconds: 540, memory: "1GiB" },
   validated("bulkDraftsFromText", async (data, request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
@@ -478,9 +625,9 @@ exports.bulkDraftsFromText = onCall(
     if (!apiKey) throw new HttpsError("failed-precondition", "AI is not configured.");
 
     const deps = {
-      parse: async (text, maxItems) => {
+      parse: async (text, maxItems, context) => {
         try {
-          return await parseListWithGemini(apiKey, text, maxItems);
+          return await parseListWithGemini(apiKey, text, maxItems, context);
         } catch (e) {
           console.error(`[bulkDraftsFromText] parse failed: ${e.message}`);
           throw new HttpsError("internal", `Could not read the list: ${e.message}`);
@@ -490,6 +637,9 @@ exports.bulkDraftsFromText = onCall(
       detail: retrieveCompDetail,
       google: (query) => googleImages(query, { key: process.env.GOOGLE_CSE_KEY, cx: process.env.GOOGLE_CSE_CX }),
     };
+    if (!data.text && !(data.pendingItems && data.pendingItems.length)) {
+      throw new HttpsError("invalid-argument", "Provide text or pendingItems.");
+    }
     return buildDrafts(data, deps);
   })
 );
@@ -521,6 +671,9 @@ exports._internal = {
   parsePrice,
   orderBySource,
   parseModelOutput,
+  salvageItems,
+  unparsedTail,
+  toPendingItem,
   parseListWithGemini,
   priceFromComps,
   median,
