@@ -284,13 +284,14 @@ struct BulkTextDraftsSheet: View {
                 response: response,
                 modelContext: modelContext,
                 uploadManager: uploadManager,
-                shouldStop: { stopRequested }
-            ) { progress in
-                status.created = alreadyCreated + progress.completed
-                status.step = "Saving drafts…"
-                status.detail = progress.currentTitle
-                phase = .working(status)
-            }
+                shouldStop: { stopRequested },
+                progress: { progress in
+                    status.created = alreadyCreated + progress.completed
+                    status.step = "Saving drafts…"
+                    status.detail = progress.currentTitle
+                    phase = .working(status)
+                }
+            )
             createdItems.append(contentsOf: made)
             status.created = createdItems.count
             let saved = prepared.prefix(made.count)

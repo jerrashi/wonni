@@ -698,7 +698,6 @@ class UploadManager: ObservableObject {
         }
     }
 
-
     private func recalcUploadProgress() {
         let statuses = uploadStatuses.values
         guard !statuses.isEmpty else { uploadProgress = 0; return }
