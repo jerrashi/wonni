@@ -138,3 +138,69 @@ final class CrossPostRunStoreTests: XCTestCase {
         XCTAssertEqual(replay.suggestedBrand, "Nintendo")
     }
 }
+
+/// An edit saved to `listings/{id}` has to reach `products/{id}` before the eBay /
+/// Etsy update functions run — they read the product doc. Until 2026-10-03 nothing
+/// copied it over, so edited photos and prices never reached eBay.
+final class ListingEditProductPatchTests: XCTestCase {
+    private func url(_ path: String) -> String { "https://storage.googleapis.com/bucket/\(path)" }
+
+    func testAnEditedListingMapsToTheFieldsTheUpdateFunctionsRead() {
+        let listing = UserListing(
+            id: "L1", userId: "u1", catalogItemId: "c1",
+            customTitle: "Fire Emblem The Sacred Stones GBA CIB",
+            customDescription: "Complete in box.",
+            price: 174.99,
+            quantity: 2,
+            condition: .likeNew,
+            photoPaths: ["users/u1/L1/NEW-A.jpg", "https://cdn.example.com/b.jpg"],
+            shippingInfo: ShippingInfo(
+                buyerPaysShipping: false, handlingFee: 0, estimatedShippingDays: 3,
+                weightLbs: 0.5, packageDimensions: PackageDimensions(lengthIn: 6, widthIn: 4, heightIn: 1),
+                handlingTimeDays: 2
+            ),
+            crossPostStatus: ["mercari": "posted", "ebay": "posted"],
+            crossPostListingIds: ["ebay": "147617462316"]
+        )
+        let patch = ProductRepository.editPatch(from: listing, publicURL: url)
+
+        XCTAssertEqual(patch["title"] as? String, "Fire Emblem The Sacred Stones GBA CIB")
+        XCTAssertEqual(patch["description"] as? String, "Complete in box.")
+        XCTAssertEqual(patch["listingPrice"] as? Double, 174.99)
+        XCTAssertEqual(patch["quantity"] as? Int, 2)
+        XCTAssertEqual(patch["condition"] as? String, "likenew")
+        // Bare Storage keys become public URLs; a full URL is left alone.
+        XCTAssertEqual(patch["images"] as? [String], [
+            "https://storage.googleapis.com/bucket/users/u1/L1/NEW-A.jpg",
+            "https://cdn.example.com/b.jpg"
+        ])
+        XCTAssertEqual(patch["buyerPaysShipping"] as? Bool, false)
+        XCTAssertEqual(patch["weightLbs"] as? Double, 0.5)
+        XCTAssertEqual(patch["lengthIn"] as? Double, 6)
+        XCTAssertEqual(patch["widthIn"] as? Double, 4)
+        XCTAssertEqual(patch["heightIn"] as? Double, 1)
+        XCTAssertEqual(patch["handlingTimeDays"] as? Int, 2)
+    }
+
+    func testThePatchNeverTouchesWhatTheCloudFunctionsOwn() {
+        let listing = UserListing(
+            id: "L1", userId: "u1", catalogItemId: "c1", customTitle: "T", price: 5,
+            crossPostStatus: ["ebay": "posted"], crossPostListingIds: ["ebay": "1"]
+        )
+        let patch = ProductRepository.editPatch(from: listing, publicURL: url)
+        // products says "active" where the app says "posted"; overwriting it would make
+        // ebayCreateListing think the product is not live and post a duplicate.
+        for key in ["crossPostStatus", "crossPostListingIds", "isDraft", "userId", "ebayOfferId", "source"] {
+            XCTAssertNil(patch[key], "\(key) must not be written by an edit")
+        }
+    }
+
+    func testAbsentValuesAreLeftOutRatherThanNulled() {
+        let listing = UserListing(id: "L1", userId: "u1", catalogItemId: "c1")
+        let patch = ProductRepository.editPatch(from: listing, publicURL: url)
+        for key in ["title", "description", "listingPrice", "quantity", "weightLbs", "lengthIn", "category", "brand", "buyerPaysShipping"] {
+            XCTAssertNil(patch[key], "\(key) should be absent")
+        }
+        XCTAssertEqual(patch["images"] as? [String], [])
+    }
+}

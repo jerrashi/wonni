@@ -499,7 +499,7 @@ struct BulkEditSheet: View {
                     if !markOutOfStock {
                         for id in ebayIds {
                             Task {
-                                _ = try? await callCloudFunction("ebayUpdateListing", ["productId": id])
+                                try? await ProductRepository.shared.pushListingEdits(listingId: id)
                             }
                         }
                     }

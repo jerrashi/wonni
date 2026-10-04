@@ -232,6 +232,57 @@ class ProductRepository: ObservableObject {
         )
     }
 
+    // MARK: Edits → API platforms
+
+    /// The fields of `products/{id}` an edit to a `UserListing` can change, mapped the
+    /// way the Cloud Functions read them. Deliberately NOT the cross-post status / ids
+    /// (the eBay and Etsy functions own those on the product doc, with their own
+    /// vocabulary — "active", not the app's "posted"), nor `isDraft` / `userId`.
+    /// Pure, so the mapping is unit-tested (ListingEditProductPatchTests).
+    static func editPatch(from listing: UserListing, publicURL: (String) -> String) -> [String: Any] {
+        var data: [String: Any] = [:]
+        // Only what the listing actually has: an absent value must not null out the
+        // product's own (a missing price would unpublish-proof the product).
+        if let title = listing.customTitle, !title.isEmpty { data["title"] = title }
+        if let description = listing.customDescription { data["description"] = description }
+        if let price = listing.price, price > 0 { data["listingPrice"] = price }
+        data["condition"] = webCondition(for: listing.condition)
+        if let category = listing.category { data["category"] = category }
+        if let brand = listing.brand { data["brand"] = brand }
+        // `listing.photoPaths` is mixed: bare Storage keys and full URLs. The functions
+        // read `products.images` as fetchable URLs (eBay downloads them).
+        data["images"] = listing.photoPaths.map { $0.hasPrefix("http") ? $0 : publicURL($0) }
+        if let quantity = listing.quantity { data["quantity"] = quantity }
+        if let shipping = listing.shippingInfo {
+            data["buyerPaysShipping"] = shipping.buyerPaysShipping
+            if let handling = shipping.handlingTimeDays { data["handlingTimeDays"] = handling }
+            if let weight = shipping.weightLbs { data["weightLbs"] = weight }
+            if let dims = shipping.packageDimensions {
+                data["lengthIn"] = dims.lengthIn
+                data["widthIn"] = dims.widthIn
+                data["heightIn"] = dims.heightIn
+            }
+        }
+        return data
+    }
+
+    /// Pushes an edited listing to an API platform (eBay / Etsy).
+    ///
+    /// The app edits `listings/{id}`; `ebayUpdateListing` / `etsyUpdateListing` read
+    /// `products/{id}`. Nothing copied one to the other, so until 2026-10-03 an edit
+    /// (photos, price, title, description) never reached the platform: the function
+    /// re-sent the product doc's stale values — including photo URLs the edit screen
+    /// had just deleted from Storage. EVERY "save edits, then update the platform"
+    /// call site must go through here rather than calling the function directly.
+    func pushListingEdits(listingId: String, function: String = "ebayUpdateListing") async throws {
+        if let listing = try await ListingRepository.shared.fetchListing(id: listingId) {
+            var patch = Self.editPatch(from: listing) { StorageService.shared.publicURL(forPath: $0) }
+            patch["updatedAt"] = Timestamp(date: Date())
+            try await syncProduct(productId: listingId, data: patch)
+        }
+        try await callCloudFunction(function, ["productId": listingId])
+    }
+
     /// `products/{listing.id}` twin for a `UserListing` written straight into `listings`
     /// (bulk Mercari import, single-URL import, "sell similar" duplication — none of
     /// these go through UploadManager's `Item`-draft flow, so nothing else ever calls

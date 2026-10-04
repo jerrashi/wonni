@@ -2047,7 +2047,9 @@ struct EditListingSheet: View {
                 let fn = platform == "ebay" ? "ebayUpdateListing" : "etsyUpdateListing"
                 Task {
                     do {
-                        let _ = try await Functions.functions().httpsCallable(fn).call(["productId": id])
+                        // Copies the edit into products/{id} first — the update functions
+                        // read that doc, not the listing this screen just saved.
+                        try await ProductRepository.shared.pushListingEdits(listingId: id, function: fn)
                     } catch {
                         let msg = extractCrossPostErrorMessage(error)
                         if msg.localizedLowercase.contains("not found") {

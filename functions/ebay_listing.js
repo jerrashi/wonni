@@ -1683,6 +1683,135 @@ exports.ebayGetListingDetails = onCall(
   }
 );
 
+// ── In-place edit of a live single-variation listing ──────────────────────
+//
+// Shared by `ebayUpdateListing` (the app's "save edits" push) and
+// `ebaySyncListing({applyFrom:"wonni"})`. Rewritten 2026-10-03: the old inline
+// version PUT a bare `{product, condition:"NEW", availability}` inventory
+// item — which REPLACES the item, so it wiped the item specifics and package
+// weight the create path had filled and relabelled every used item "NEW" —
+// then sent `PATCH /offer/{id}` (updateOffer is a PUT), so every call ended
+// in an error after the item had already been overwritten. Verified live
+// 2026-10-03 on listings 147617463800 / 147617462316: photos, price, condition
+// and specifics all land on the public listing with this version.
+//
+// This builds the item exactly the way `postSingleVariant` does (same
+// aspects, condition and package helpers) and updates the offer with the
+// real `PUT /offer/{id}` (updateOffer), which eBay applies to the live
+// listing when the offer is published.
+
+/** Pure: the two request bodies for an in-place edit. `existingItem` is the
+ *  current eBay inventory item — its aspects are kept under ours so a value
+ *  eBay already accepted is never dropped by a replace. */
+function buildSingleVariantEditPayloads({
+  product, title, description, basePrice, offer, existingItem,
+  categoryAspects, brand, conditionEnum, listingPolicies, merchantLocationKey,
+}) {
+  const qty = typeof product.quantity === "number" && product.quantity >= 0 ? product.quantity : 1;
+  const aspects = {
+    ...(existingItem?.product?.aspects || {}),
+    ...buildProductAspects(categoryAspects, brand, title, {}, {
+      ...toAspectArrays(product.geminiItemSpecifics),
+      ...toAspectArrays(product.ebayAspects),
+    }),
+  };
+  const itemPayload = {
+    product: { ...toEbayInventoryProduct(product, { imageLimit: 12, title }), aspects },
+    condition: conditionEnum,
+    packageWeightAndSize: ebayPackageWeightAndSize(product),
+    availability: { shipToLocationAvailability: { quantity: qty } },
+  };
+  const offerPayload = buildEbayOfferPayload({
+    sku: offer?.sku,
+    price: basePrice,
+    quantity: qty,
+    categoryId: offer?.categoryId,
+    description,
+    listingPolicies,
+    merchantLocationKey,
+  }, { forUpdate: true });
+  // updateOffer replaces the offer: with no policies to send (account without
+  // business policies, or the lookup failed) leave the key out rather than
+  // send `undefined`/an empty object that would clear what the offer has.
+  if (!listingPolicies) delete offerPayload.listingPolicies;
+  if (!merchantLocationKey) delete offerPayload.merchantLocationKey;
+  return { itemPayload, offerPayload };
+}
+
+/** The current offer for a product: the stored pointer first (cheap, exact),
+ *  the migrate/search recovery only when that is missing or gone. */
+async function currentSingleOffer(uid, product, productId) {
+  if (product.ebayOfferId) {
+    const offer = await getOfferOrNull(uid, product.ebayOfferId);
+    if (offer?.offerId) return { offer, offerId: offer.offerId, sku: offer.sku || productId };
+  }
+  const resolved = await resolveEbayOffer(uid, product, productId);
+  const offer = resolved.offer || await ebayRequest(uid, "GET", `/sell/inventory/v1/offer/${resolved.offerId}`);
+  return { offer, offerId: resolved.offerId, sku: resolved.sku || offer?.sku || productId };
+}
+
+async function pushSingleVariantEdit(uid, product, productId) {
+  const { offer, offerId, sku } = await currentSingleOffer(uid, product, productId);
+
+  const title = (product.title ?? "").slice(0, 80);
+  const description = canonicalDescription(product);
+  const basePrice = resolveListingPrice(product);
+  const categoryId = offer?.categoryId || await resolveCategoryId(uid, title, product);
+
+  const handlingTimeDays = product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays;
+  const [categoryAspects, allowedConditionIds, existingItem, freshPolicies] = await Promise.all([
+    getCategoryAspects(categoryId),
+    getAllowedConditionIds(uid, categoryId),
+    ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`).catch(() => null),
+    getListingPolicies(uid, handlingTimeDays).catch((e) => {
+      console.warn("[ebay edit] keeping the offer's existing listing policies:", e.message);
+      return null;
+    }),
+  ]);
+  const brand = resolveBrand(product);
+  const conditionEnum = resolveCondition(productConditionToEbayEnum(product), allowedConditionIds);
+  const existingPolicies = offer?.listingPolicies?.fulfillmentPolicyId ? offer.listingPolicies : null;
+
+  const build = ({ addedAspects = {}, condition } = {}) => {
+    const payloads = buildSingleVariantEditPayloads({
+      product, title, description, basePrice,
+      offer: { ...offer, sku, categoryId },
+      existingItem, categoryAspects, brand,
+      conditionEnum: condition || conditionEnum,
+      listingPolicies: freshPolicies || existingPolicies,
+      merchantLocationKey: offer?.merchantLocationKey,
+    });
+    Object.assign(payloads.itemPayload.product.aspects, addedAspects);
+    return payloads;
+  };
+  // Recovery overrides (aspects eBay asked for, a fallback condition) stick for
+  // every later attempt, not just the refresh that introduced them.
+  let overrides = {};
+  const putItem = (next) => {
+    if (next) overrides = next;
+    return ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, build(overrides).itemPayload);
+  };
+
+  // Item first (title, photos, specifics, condition, package), then the offer
+  // (price, description, quantity, policies). Both revise a published listing
+  // in place. A missing-aspect / rejected-condition answer is retried through
+  // the same recovery loop the create path uses.
+  await publishWithRecovery({
+    doPublish: async () => {
+      await putItem();
+      await ebayRequest(uid, "PUT", `/sell/inventory/v1/offer/${offerId}`, build(overrides).offerPayload);
+      // Only an unpublished (withdrawn / never published) offer needs publishing.
+      if (offer?.status !== "PUBLISHED") {
+        await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`);
+      }
+    },
+    refresh: putItem,
+    categoryAspects, brand, title,
+  });
+  return { offerId, sku };
+}
+
+
 // Sync bidirectional: apply chosen version (wonni or ebay) to the other platform
 exports.ebaySyncListing = onCall(
   { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 60, memory: "256MiB" },
@@ -1746,44 +1875,7 @@ exports.ebaySyncListing = onCall(
       } else {
         // applyFrom === "wonni": push Wonni version to eBay (title,
         // description, price, photos, shipping/handling time, quantity).
-        const { offerId, sku } = await resolveEbayOffer(uid, product, productId);
-
-        const title = (product.title ?? "").slice(0, 80);
-        const description = canonicalDescription(product);
-        const basePrice = resolveListingPrice(product);
-
-        const qty = typeof product.quantity === "number" && product.quantity >= 0 ? product.quantity : 1;
-        const inventoryPayload = {
-          product: toEbayInventoryProduct(product, { imageLimit: 12, title }),
-          condition: "NEW",
-          availability: { shipToLocationAvailability: { quantity: qty } },
-        };
-
-        await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, inventoryPayload);
-
-        // Re-resolve policies for handling time updates
-        const handlingTimeDays = product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays;
-        let listingPolicies = null;
-        try {
-          listingPolicies = await getListingPolicies(uid, handlingTimeDays);
-        } catch (polErr) {
-          console.warn("[ebaySyncListing] Retaining existing listing policies:", polErr.message);
-        }
-
-        const offerPatchPayload = {
-          listingDescription: description,
-        };
-        if (listingPolicies) {
-          offerPatchPayload.listingPolicies = listingPolicies;
-        }
-
-        offerPatchPayload.availableQuantity = qty;
-        offerPatchPayload.pricingSummary = { price: { value: basePrice.toFixed(2), currency: "USD" } };
-
-        await ebayRequest(uid, "PATCH", `/sell/inventory/v1/offer/${offerId}`, offerPatchPayload);
-
-        // Re-publish existing offer to apply changes in-place
-        await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`);
+        await pushSingleVariantEdit(uid, product, productId);
       }
 
       // Update sync timestamp
@@ -1794,6 +1886,7 @@ exports.ebaySyncListing = onCall(
 
       return { success: true };
     } catch (e) {
+      console.error(`[ebaySyncListing] ${productId} failed: ${e.message}`);
       throw new HttpsError("internal", `Failed to sync listing: ${e.message}`);
     }
   }
@@ -1894,14 +1987,8 @@ exports.ebayUpdateListing = onCall(
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
 
     try {
-      const { offerId, sku } = await resolveEbayOffer(uid, product, productId);
-
-      const title = (product.title ?? "").slice(0, 80);
-      const description = canonicalDescription(product);
-      const basePrice = resolveListingPrice(product);
-
       // Multi-variation in-place edit isn't wired to the Inventory API's
-      // item-group flow yet (a single-offer PATCH can't express N variations).
+      // item-group flow yet (a single offer update can't express N variations).
       if (buildEbayVariations(product) !== null) {
         throw new HttpsError(
           "unimplemented",
@@ -1909,41 +1996,7 @@ exports.ebayUpdateListing = onCall(
         );
       }
 
-      const qty = typeof product.quantity === "number" && product.quantity >= 0 ? product.quantity : 1;
-
-      // 1. Update inventory item in-place via idempotent PUT
-      const inventoryPayload = {
-        product: toEbayInventoryProduct(product, { imageLimit: 12, title }),
-        condition: "NEW",
-        availability: { shipToLocationAvailability: { quantity: qty } },
-      };
-
-      await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, inventoryPayload);
-
-      // Re-resolve policies for handling time updates
-      const handlingTimeDays = product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays;
-      let listingPolicies = null;
-      try {
-        listingPolicies = await getListingPolicies(uid, handlingTimeDays);
-      } catch (polErr) {
-        console.warn("[ebayUpdateListing] Retaining existing listing policies:", polErr.message);
-      }
-
-      // 2. Update the existing offer in-place (PATCH)
-      const offerPatchPayload = {
-        listingDescription: description,
-      };
-      if (listingPolicies) {
-        offerPatchPayload.listingPolicies = listingPolicies;
-      }
-
-      offerPatchPayload.availableQuantity = qty;
-      offerPatchPayload.pricingSummary = { price: { value: basePrice.toFixed(2), currency: "USD" } };
-
-      await ebayRequest(uid, "PATCH", `/sell/inventory/v1/offer/${offerId}`, offerPatchPayload);
-
-      // 3. Re-publish the existing offer to apply changes to the live listing without deleting/recreating
-      await ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`);
+      await pushSingleVariantEdit(uid, product, productId);
 
       // Update last-synced timestamp
       await docRef.update({
@@ -1953,6 +2006,10 @@ exports.ebayUpdateListing = onCall(
 
       return { success: true };
     } catch (e) {
+      // Logged, not just thrown: four failed calls on 2026-10-03 left nothing in the
+      // logs to say which eBay step had rejected what.
+      console.error(`[ebayUpdateListing] ${productId} failed: ${e.message}`);
+      if (e instanceof HttpsError) throw e;
       throw new HttpsError("internal", `Failed to update eBay listing: ${e.message}`);
     }
   }
@@ -2292,5 +2349,6 @@ module.exports = {
     ebayImportListingCore, ebayCreateListingCore,
     buildShippingRuleName, buildShippingRulePayload,
     validateListingFormatInput, buildEbayOfferPayload,
+    buildSingleVariantEditPayloads, pushSingleVariantEdit,
   },
 };
