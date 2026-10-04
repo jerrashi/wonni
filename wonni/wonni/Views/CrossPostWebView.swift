@@ -2979,7 +2979,7 @@ struct MercariSyncSheet: View {
             // Cascade any field changes to eBay in one call
             let anyFieldChanged = priceDiffers || titleDiffers || descriptionDiffers
             if anyFieldChanged && listing.crossPostStatus?["ebay"] == "posted" {
-                Task { _ = try? await callCloudFunction("ebayUpdateListing", ["productId": listingId]) }
+                Task { try? await ProductRepository.shared.pushListingEdits(listingId: listingId) }
             }
             if soldDiffers {
                 // Enrich before recording so the sale is written complete on the common path
@@ -4883,7 +4883,7 @@ class MercariSyncManager: ObservableObject {
             }
 
             if applyPrice && priceDiff && ebayIsPosted {
-                _ = try? await callCloudFunction("ebayUpdateListing", ["productId": listingId])
+                try? await ProductRepository.shared.pushListingEdits(listingId: listingId)
             }
 
             if applyStatus && mercariIsSold {

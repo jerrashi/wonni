@@ -18,6 +18,7 @@ struct MainView: View {
     @EnvironmentObject var mercariSyncManager: MercariSyncManager
     @Environment(\.modelContext) private var modelContext
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
+    @Environment(\.scenePhase) private var scenePhase
 
     /// Lets XCUITest runs (launched with `-uiTesting`) skip the Sign in with Apple
     /// and onboarding gates and land directly on the tab bar. #if DEBUG-gated so a
@@ -32,6 +33,33 @@ struct MainView: View {
 
     var body: some View {
         tabContent
+        // Cross-posting can't run while the app is closed (iOS suspends the web view),
+        // so leaving mid-queue pauses it. These two hooks finish the listing in flight,
+        // line up a "paused" notice, and on return offer to resume what's left.
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background: uploadManager.appDidEnterBackground()
+            case .active: uploadManager.appDidBecomeActive()
+            default: break
+            }
+        }
+        .alert(
+            "Cross-posting was interrupted",
+            isPresented: Binding(
+                get: { uploadManager.interruptedCrossPost != nil },
+                set: { if !$0 { uploadManager.dismissInterruptedCrossPosts() } }
+            ),
+            presenting: uploadManager.interruptedCrossPost
+        ) { summary in
+            Button("Retry \(summary.remaining.count)") {
+                uploadManager.retryInterruptedCrossPosts(modelContext: modelContext)
+            }
+            Button("Dismiss", role: .cancel) {
+                uploadManager.dismissInterruptedCrossPosts()
+            }
+        } message: { summary in
+            Text(summary.message)
+        }
         .background(
             Group {
                 MercariSheetWebView(webView: bulkImportManager.urlExtractor.webView)
@@ -77,6 +105,7 @@ struct MainView: View {
             uploadManager.cleanupOrphanedPublishedDrafts(modelContext: modelContext)
             uploadManager.migrateDraftPhotoStorage(modelContext: modelContext)
             uploadManager.sweepFailedPublishDrafts(modelContext: modelContext)
+            await uploadManager.checkInterruptedCrossPosts()
         }
         .sheet(isPresented: $uploadManager.showProgressSheet) {
             NavigationStack { ProcessProgressView() }

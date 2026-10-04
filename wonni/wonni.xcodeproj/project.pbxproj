@@ -17,6 +17,8 @@
 		D7A10001C0FFEE000000000F /* BulkTextDraftMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE0000000010 /* BulkTextDraftMappingTests.swift */; };
 		D7A10001C0FFEE000000000D /* BulkTextDraftsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE000000000E /* BulkTextDraftsSheet.swift */; };
 		D7A10001C0FFEE000000000B /* BulkTextDraftService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE000000000C /* BulkTextDraftService.swift */; };
+		D7A10001C0FFEE0000000011 /* CrossPostRunStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE0000000012 /* CrossPostRunStore.swift */; };
+		D7A10001C0FFEE0000000013 /* CrossPostRunStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE0000000014 /* CrossPostRunStoreTests.swift */; };
 		10C28802920C6151581A6530 /* WeverseURL.swift in Sources */ = {isa = PBXBuildFile; fileRef = A01EEF505FA085AC4A238CA4 /* WeverseURL.swift */; };
 		147096BF7F09296C73526449 /* PendingMercariSale.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76BC65B5E09E487A41EA3CCE /* PendingMercariSale.swift */; };
 		19BE5E984ECA727D0E9A513A /* MercariDateParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63AE5A91B4E5B0F695600110 /* MercariDateParsingTests.swift */; };
@@ -230,6 +232,8 @@
 		D7A10001C0FFEE0000000010 /* BulkTextDraftMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkTextDraftMappingTests.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE000000000E /* BulkTextDraftsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkTextDraftsSheet.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE000000000C /* BulkTextDraftService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkTextDraftService.swift; sourceTree = "<group>"; };
+		D7A10001C0FFEE0000000012 /* CrossPostRunStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossPostRunStore.swift; sourceTree = "<group>"; };
+		D7A10001C0FFEE0000000014 /* CrossPostRunStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossPostRunStoreTests.swift; sourceTree = "<group>"; };
 		A01EEF505FA085AC4A238CA4 /* WeverseURL.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WeverseURL.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B82E9D0002 /* ActiveDraftCarouselView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveDraftCarouselView.swift; sourceTree = "<group>"; };
 		A9D1D2B4BED80AB257DFE4C7 /* MercariScanJSTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MercariScanJSTests.swift; sourceTree = "<group>"; };
@@ -445,6 +449,7 @@
 			children = (
 				61FAA5682FAE227F001C28CE /* GeminiService.swift */,
 				D7A10001C0FFEE000000000C /* BulkTextDraftService.swift */,
+				D7A10001C0FFEE0000000012 /* CrossPostRunStore.swift */,
 				61FAA5692FAE227F001C28CE /* ImageCompressor.swift */,
 				D7A10001C0FFEE0000000002 /* DraftPhotoStore.swift */,
 				61FAA56A2FAE227F001C28CE /* ListingRepository.swift */,
@@ -496,6 +501,7 @@
 				D7A10001C0FFEE0000000006 /* LayoutRegressionTests.swift */,
 				D7A10001C0FFEE000000000A /* FacebookAutofillPolicyTests.swift */,
 				D7A10001C0FFEE0000000010 /* BulkTextDraftMappingTests.swift */,
+				D7A10001C0FFEE0000000014 /* CrossPostRunStoreTests.swift */,
 				2C8E7F46193D0A5B5F624E78 /* AIQualityTrackingTests.swift */,
 				570CA587E17CD5EDC122D8CE /* VariantEditingTests.swift */,
 				E85E88794B38261E935C2BDC /* VariantMercariPostQueueTests.swift */,
@@ -649,6 +655,7 @@
 				D7A10001C0FFEE0000000001 /* DraftPhotoStore.swift in Sources */,
 				61FAA56E2FAE227F001C28CE /* GeminiService.swift in Sources */,
 				D7A10001C0FFEE000000000B /* BulkTextDraftService.swift in Sources */,
+				D7A10001C0FFEE0000000011 /* CrossPostRunStore.swift in Sources */,
 				61FAA56F2FAE227F001C28CE /* StorageService.swift in Sources */,
 				6192AA622D7F585C00EC2EFA /* InboxView.swift in Sources */,
 				61EE00772D778B42006063C3 /* Helper.swift in Sources */,
@@ -744,6 +751,7 @@
 				D7A10001C0FFEE0000000005 /* LayoutRegressionTests.swift in Sources */,
 				D7A10001C0FFEE0000000009 /* FacebookAutofillPolicyTests.swift in Sources */,
 				D7A10001C0FFEE000000000F /* BulkTextDraftMappingTests.swift in Sources */,
+				D7A10001C0FFEE0000000013 /* CrossPostRunStoreTests.swift in Sources */,
 				1B7D6E35082CF94A4E513D67 /* AIQualityTrackingTests.swift in Sources */,
 				5AE27094F4F4DED09BBA82BE /* VariantEditingTests.swift in Sources */,
 				460667840A20621A2C2DF35F /* VariantMercariPostQueueTests.swift in Sources */,

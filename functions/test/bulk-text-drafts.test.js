@@ -19,7 +19,7 @@ const { fullSizeEbayImage } = require("../ebay_comps")._internal;
 const { RequestSchemas, ResponseSchemas } = require("../contracts");
 
 const {
-  toProposalCore, parsePrice, orderBySource, parseModelOutput, priceFromComps, pickBestComp, usefulSpecifics, googleImages, enrichProposal, buildDrafts,
+  toProposalCore, parsePrice, orderBySource, parseModelOutput, priceFromComps, comparableComps, pickBestComp, usefulSpecifics, googleImages, enrichProposal, buildDrafts, salvageItems, unparsedTail, toPendingItem,
 } = _internal;
 
 // ── parse mapping ──────────────────────────────────────────────────────────
@@ -139,11 +139,53 @@ test("parseModelOutput: reorders to the source text before capping", () => {
 
 // ── pricing ────────────────────────────────────────────────────────────────
 
-test("priceFromComps: median of positive prices, whole dollars; null when none", () => {
-  assert.equal(priceFromComps([{ price: 10 }, { price: 40 }, { price: 22.49 }]), 22);
-  assert.equal(priceFromComps([{ price: 10 }, { price: 30 }]), 20);
-  assert.equal(priceFromComps([{ price: null }, { price: 0 }, { price: -5 }]), null);
-  assert.equal(priceFromComps([]), null);
+test("priceFromComps: the lowest comparable asking price, to the cent; null when none", () => {
+  const q = "Super Smash Bros Brawl Wii CIB";
+  const comps = [
+    { title: "Super Smash Bros Brawl Nintendo Wii Complete CIB", price: 34.99 },
+    { title: "Super Smash Bros. Brawl (Nintendo Wii, 2008) Tested", price: 27.5 },
+    { title: "Super Smash Bros Brawl Wii w/ manual", price: 41 },
+  ];
+  assert.equal(priceFromComps(comps, q), 27.5);
+  assert.equal(priceFromComps([{ price: null }, { price: 0 }, { price: -5 }], q), null);
+  assert.equal(priceFromComps([], q), null);
+});
+
+test("priceFromComps: not-comparable listings and outliers never set the price", () => {
+  const q = "Super Smash Bros Brawl Wii CIB";
+  const good = [
+    { title: "Super Smash Bros Brawl Nintendo Wii Complete", price: 30 },
+    { title: "Super Smash Bros Brawl Wii CIB Tested", price: 33 },
+    { title: "Super Smash Bros Brawl Wii", price: 36 },
+  ];
+  // Cheaper, but not the same thing: disc only, for parts, a different game.
+  assert.equal(priceFromComps([
+    ...good,
+    { title: "Super Smash Bros Brawl Wii DISC ONLY", price: 12 },
+    { title: "Super Smash Bros Brawl Wii for parts not working", price: 6 },
+    { title: "Mario Kart Wii CIB", price: 9 },
+  ], q), 30);
+  // Same words, but under half the comparable median: an outlier, skipped.
+  assert.equal(priceFromComps([...good, { title: "Super Smash Bros Brawl Wii", price: 4 }], q), 30);
+  // The user IS selling a disc-only copy: those listings are the comparables.
+  assert.equal(priceFromComps([
+    { title: "Super Smash Bros Brawl Wii Disc Only", price: 12 },
+    { title: "Super Smash Bros Brawl Wii disc only tested", price: 14 },
+  ], "Super Smash Bros Brawl Wii disc only"), 12);
+});
+
+test("priceFromComps: a different model number is a different item", () => {
+  const q = "Lego 75192 Millennium Falcon sealed";
+  assert.equal(priceFromComps([
+    { title: "LEGO Star Wars Millennium Falcon 75105 NEW SEALED", price: 250 },
+    { title: "LEGO 75192 UCS Millennium Falcon New Sealed", price: 780 },
+    { title: "LEGO Star Wars 75192 Millennium Falcon Sealed Box", price: 849.99 },
+  ], q), 780);
+});
+
+test("priceFromComps: nothing comparable → lowest non-outlier of whatever eBay returned", () => {
+  assert.equal(priceFromComps([{ title: "lot a", price: 20 }, { title: "lot b", price: 24.99 }, { title: "junk", price: 2 }], "obscure thing xyz"), 20);
+  assert.equal(comparableComps([{ title: "lot a", price: 20 }], "obscure thing xyz").length, 0);
 });
 
 // ── sell similar ───────────────────────────────────────────────────────────
@@ -366,6 +408,86 @@ test("buildDrafts: output satisfies the response contract and request defaults a
   assert.equal(result.drafts[1].isBundle, true);
   assert.equal(result.drafts[1].priceSource, "none");
   assert.equal(result.drafts[1].imageSource, "none");
+});
+
+// ── batching, shipping fields, truncated parses ────────────────────────────
+
+const RAW_ITEM = (n, extra = {}) => ({
+  sourceText: `game ${n}`, title: `Game ${n} (Wii) CIB`, condition: "good", searchQuery: `game ${n} wii`, suggestedPrice: 10 + n, ...extra,
+});
+
+test("toProposalCore: shipping estimates ride on the proposal (lbs → oz, junk dropped)", () => {
+  const core = toProposalCore(RAW_ITEM(1, { weightOz: 5.4, lengthIn: 7.52, widthIn: "5", heightIn: -1 }));
+  assert.equal(core.weightOz, 5);
+  assert.equal(core.lengthIn, 7.5);
+  assert.equal(core.widthIn, 5);
+  assert.equal("heightIn" in core, false);
+  assert.equal(toProposalCore(RAW_ITEM(2, { weightLbs: 1.5 })).weightOz, 24);
+  assert.equal("weightOz" in toProposalCore(RAW_ITEM(3)), false);
+});
+
+test("toPendingItem: round-trips through toProposalCore unchanged and satisfies the request contract", () => {
+  const core = toProposalCore(RAW_ITEM(1, { userPrice: "$25", weightOz: 6, isBundle: true, bundleItems: ["a", "b"], componentQueries: ["a wii", "b wii"] }));
+  const pending = toPendingItem(core);
+  assert.equal(Object.keys(pending).some((k) => k.startsWith("_")), false);
+  assert.equal(pending.userPrice, 25);
+  assert.deepEqual(toProposalCore(pending), core);
+  const req = RequestSchemas.bulkDraftsFromText.safeParse({ pendingItems: [pending] });
+  assert.equal(req.success, true, JSON.stringify(req.error?.errors));
+});
+
+test("buildDrafts: text mode enriches the first batch and returns the rest in order, un-enriched", async () => {
+  const raw = JSON.stringify({ context: "wii", items: [1, 2, 3, 4, 5].map((n) => RAW_ITEM(n)) });
+  let compCalls = 0;
+  const deps = {
+    parse: async (text, maxItems) => parseModelOutput(raw, maxItems, text),
+    comps: async () => { compCalls++; return []; },
+    detail: async () => null,
+    google: async () => [],
+  };
+  const first = await buildDrafts({ text: "game 1\ngame 2\ngame 3\ngame 4\ngame 5", maxItems: 2 }, deps);
+  assert.deepEqual(first.drafts.map((d) => d.title), ["Game 1 (Wii) CIB", "Game 2 (Wii) CIB"]);
+  assert.deepEqual(first.remaining.map((r) => r.sourceText), ["game 3", "game 4", "game 5"]);
+  assert.equal(first.unparsedText, "");
+  assert.equal(compCalls, 2, "only the batch is enriched");
+  assert.equal(ResponseSchemas.bulkDraftsFromText.safeParse(first).success, true);
+
+  // items mode: no parse call, same enrichment, order kept.
+  const second = await buildDrafts({ pendingItems: first.remaining, context: first.context, maxItems: 2 }, {
+    ...deps, parse: async () => { throw new Error("must not re-parse"); },
+  });
+  assert.deepEqual(second.drafts.map((d) => d.title), ["Game 3 (Wii) CIB", "Game 4 (Wii) CIB"]);
+  assert.deepEqual(second.remaining.map((r) => r.sourceText), ["game 5"]);
+  assert.equal(second.context, "wii");
+  assert.equal(second.drafts[0].priceSource, "ai");
+  assert.equal(second.drafts[0].suggestedPrice, 13);
+});
+
+test("salvageItems: keeps every complete object from JSON cut off mid-item", () => {
+  const full = JSON.stringify({ context: "wii \"cib\"", items: [RAW_ITEM(1, { description: "has } and { and \"quotes\"" }), RAW_ITEM(2), RAW_ITEM(3)] });
+  const cut = full.slice(0, full.lastIndexOf('{"sourceText"') + 40);
+  const { context, items } = salvageItems(cut);
+  assert.equal(context, 'wii "cib"');
+  assert.deepEqual(items.map((i) => i.sourceText), ["game 1", "game 2"]);
+  assert.equal(items[0].description, 'has } and { and "quotes"');
+  assert.deepEqual(salvageItems("not json at all"), { context: "", items: [] });
+});
+
+test("parseModelOutput: a truncated response salvages items and reports the unparsed tail", () => {
+  const text = "wii games:\nGame 1\nGAME   2\ngame 3\ngame 4 - missing manual";
+  const full = JSON.stringify({ context: "wii", items: [RAW_ITEM(1), RAW_ITEM(2), RAW_ITEM(3)] });
+  const cut = full.slice(0, full.lastIndexOf('{"sourceText"') + 30);
+  const out = parseModelOutput(cut, 400, text, { truncated: true });
+  assert.deepEqual(out.proposals.map((p) => p.sourceText), ["game 1", "game 2"]);
+  assert.equal(out.unparsedText, "game 3\ngame 4 - missing manual");
+  // Not truncated: malformed JSON is still an error, and the tail is empty.
+  assert.throws(() => parseModelOutput(cut, 400, text));
+  assert.equal(parseModelOutput(full, 400, text).unparsedText, "");
+});
+
+test("unparsedTail: nothing locatable → empty, never a guess", () => {
+  assert.equal(unparsedTail("a\nb\nc", [{ sourceText: "zzz" }]), "");
+  assert.equal(unparsedTail("mario kart, mario kart, zelda", [{ sourceText: "mario kart" }, { sourceText: "Mario  Kart" }]), ", zelda");
 });
 
 test("ebay_listing resolveCategoryId: a numeric ebayCategoryId on the product wins over the taxonomy suggestion", async () => {

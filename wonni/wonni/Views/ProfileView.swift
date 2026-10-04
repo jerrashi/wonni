@@ -874,6 +874,8 @@ struct ProfileView: View {
     private func enqueueWebJobs(_ jobs: [CrossPostJob]) {
         uploadManager.webAutofillQueue.append(contentsOf: jobs)
         uploadManager.pendingAutofillJobsCount = uploadManager.webAutofillQueue.count
+        // Durable record of the run, so leaving the app mid-queue can be resumed.
+        uploadManager.trackCrossPostJobs(web: jobs)
         uploadManager.onWebQueueDrained = { Task { await loadListings() } }
         // Delay so the initiating sheet fully dismisses before the pill/sheet presents.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -2045,7 +2047,9 @@ struct EditListingSheet: View {
                 let fn = platform == "ebay" ? "ebayUpdateListing" : "etsyUpdateListing"
                 Task {
                     do {
-                        let _ = try await Functions.functions().httpsCallable(fn).call(["productId": id])
+                        // Copies the edit into products/{id} first — the update functions
+                        // read that doc, not the listing this screen just saved.
+                        try await ProductRepository.shared.pushListingEdits(listingId: id, function: fn)
                     } catch {
                         let msg = extractCrossPostErrorMessage(error)
                         if msg.localizedLowercase.contains("not found") {
