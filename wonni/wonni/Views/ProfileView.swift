@@ -874,6 +874,8 @@ struct ProfileView: View {
     private func enqueueWebJobs(_ jobs: [CrossPostJob]) {
         uploadManager.webAutofillQueue.append(contentsOf: jobs)
         uploadManager.pendingAutofillJobsCount = uploadManager.webAutofillQueue.count
+        // Durable record of the run, so leaving the app mid-queue can be resumed.
+        uploadManager.trackCrossPostJobs(web: jobs)
         uploadManager.onWebQueueDrained = { Task { await loadListings() } }
         // Delay so the initiating sheet fully dismisses before the pill/sheet presents.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {

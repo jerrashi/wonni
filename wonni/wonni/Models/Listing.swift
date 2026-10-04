@@ -84,6 +84,13 @@ class Item {
     /// re-processing (the photos are the AI's actual input). nil (pre-migration drafts)
     /// is treated as unchanged so existing processed drafts aren't re-billed.
     var processedPhotoIDs: [String]?
+    /// "Don't rewrite this draft with AI." Set by the pasted-list import (its fields are
+    /// already AI-written, from the text) and by the drafts overview's "Skip AI" action.
+    /// Unlike `processedAt`, it survives a photo change: swapping a placeholder photo on
+    /// a list-made draft must not send it back through photo identification. Honoured
+    /// only while the draft still has a title and a price (see DraftAIProcessingPolicy)
+    /// — an incomplete draft is processed normally. Optional for lightweight migration.
+    var skipAIProcessing: Bool?
     /// Set the moment `UploadManager.publishDrafts` successfully writes this item's
     /// Firestore listing doc. Distinguishes "still an unpublished draft" from "kept alive
     /// locally only so a queued cross-post job can read its photos" (the item survives in
@@ -596,9 +603,59 @@ enum DraftAIProcessingPolicy {
     /// input, so those drafts are re-processed. A nil snapshot means the draft was
     /// processed before `processedPhotoIDs` existed — treated as unchanged so
     /// pre-migration drafts aren't re-billed.
-    static func shouldSkip(processedAt: Date?, processedPhotoIDs: [String]?, currentPhotoIDs: [String]) -> Bool {
+    ///
+    /// `skipRequested` (Item.skipAIProcessing — list-made drafts and the "Skip AI"
+    /// action) skips regardless of photos, but only while the draft `isComplete`
+    /// (`missingFields` is empty): an incomplete draft still gets the normal AI pass,
+    /// so there is exactly one enrichment path and nothing publishes half-filled.
+    static func shouldSkip(processedAt: Date?, processedPhotoIDs: [String]?, currentPhotoIDs: [String], skipRequested: Bool = false, isComplete: Bool = true) -> Bool {
+        if skipRequested && isComplete { return true }
         guard processedAt != nil else { return false }
         guard let snapshot = processedPhotoIDs else { return true }
         return Set(snapshot) == Set(currentPhotoIDs)
+    }
+
+    /// What a draft still lacks to be listed without AI, in user terms. Empty = complete.
+    /// Everything the AI pass would otherwise fill counts: title, description, price,
+    /// shipping weight and box size, and a category. A title and price alone are NOT
+    /// enough (decided 2026-10-03) — such a draft still gets the normal AI pass, which
+    /// fills the rest and keeps the user's own text as hints.
+    static func missingFields(_ fields: ListingFields) -> [String] {
+        func blank(_ text: String?) -> Bool {
+            (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        func unset(_ number: Double?) -> Bool { (number ?? 0) <= 0 }
+        var missing: [String] = []
+        if blank(fields.title) { missing.append("title") }
+        if blank(fields.description) { missing.append("description") }
+        if unset(fields.price) { missing.append("price") }
+        if unset(fields.weightLbs) { missing.append("shipping weight") }
+        if unset(fields.lengthIn) || unset(fields.widthIn) || unset(fields.heightIn) { missing.append("box size") }
+        if blank(fields.category) { missing.append("category") }
+        return missing
+    }
+
+    /// The values `missingFields` checks, as publishing would read them.
+    struct ListingFields {
+        var title: String?
+        var description: String?
+        var price: Double?
+        var weightLbs: Double?
+        var lengthIn: Double?
+        var widthIn: Double?
+        var heightIn: Double?
+        var category: String?
+    }
+
+    /// `missingFields` for a draft, reading each value the way publishing does
+    /// (the user's edit wins over the AI suggestion).
+    static func missingFields(for draft: Item) -> [String] {
+        missingFields(ListingFields(
+            title: draft.userEditedTitle ?? draft.aiSuggestedTitle,
+            description: draft.userEditedDescription ?? draft.aiSuggestedDescription,
+            price: draft.userEditedPrice ?? draft.aiSuggestedPrice,
+            weightLbs: draft.weightLbs, lengthIn: draft.lengthIn, widthIn: draft.widthIn, heightIn: draft.heightIn,
+            category: draft.ebayCategoryId ?? draft.aiSuggestedCategory
+        ))
     }
 }

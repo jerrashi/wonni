@@ -23,9 +23,45 @@
 const { z } = require("zod");
 const { ConditionSchema, PositiveMoneySchema } = require("./_shared");
 
+/**
+ * A listing the parser found but has not priced / photographed yet. Returned
+ * in `remaining` and sent back verbatim in the next request's `pendingItems`, so a
+ * long list is enriched 40 at a time without re-reading the text. Same shape
+ * the model emits — the server re-validates every field on the way back in.
+ */
+const PendingItemSchema = z.object({
+  title: z.string().max(140),
+  shortTitle: z.string().max(80),
+  description: z.string().max(2000),
+  brand: z.string().max(60).optional(),
+  category: z.string().max(200).optional(),
+  condition: ConditionSchema,
+  tags: z.array(z.string()).max(8),
+  isBundle: z.boolean(),
+  bundleItems: z.array(z.string()),
+  quantity: z.number().int().min(1),
+  sourceText: z.string(),
+  searchQuery: z.string().max(200),
+  componentQueries: z.array(z.string()),
+  /** The model's own price estimate. */
+  suggestedPrice: PositiveMoneySchema.optional(),
+  /** A price the user wrote in the text. */
+  userPrice: PositiveMoneySchema.optional(),
+  weightOz: z.number().positive().optional(),
+  lengthIn: z.number().positive().optional(),
+  widthIn: z.number().positive().optional(),
+  heightIn: z.number().positive().optional(),
+});
+
 const BulkDraftsFromTextRequestSchema = z.object({
-  text: z.string().min(1).max(20000),
-  /** Cap on listings produced (default 40). */
+  /** The text to parse. Omit when sending `pendingItems`. */
+  text: z.string().min(1).max(20000).optional(),
+  /** Listings from a previous response's `remaining`, to enrich next. */
+  pendingItems: z.array(PendingItemSchema).max(60).optional(),
+  /** Shared context from an earlier part of the same text (continuing after
+   *  `unparsedText`). */
+  context: z.string().max(500).optional(),
+  /** Listings enriched per call (default 40) — the rest come back in `remaining`. */
   maxItems: z.number().int().min(1).max(60).default(40),
 });
 
@@ -74,6 +110,12 @@ const DraftProposalSchema = z.object({
   ebayConditionId: z.string().optional(),
   epid: z.string().optional(),
   itemSpecifics: z.record(z.string(), z.string()).optional(),
+  /** Shipping estimates (same fields as enrichListing's ListingFields), so a
+   *  list-made draft needs no second AI pass. */
+  weightOz: z.number().positive().optional(),
+  lengthIn: z.number().positive().optional(),
+  widthIn: z.number().positive().optional(),
+  heightIn: z.number().positive().optional(),
   /** The snippet of the input this proposal was parsed from, for review. */
   sourceText: z.string(),
 });
@@ -82,6 +124,12 @@ const BulkDraftsFromTextResponseSchema = z.object({
   /** Shared context the parser pulled from header lines, e.g. "Nintendo Wii games, complete in box". */
   context: z.string(),
   drafts: z.array(DraftProposalSchema),
+  /** Parsed listings beyond this batch, in source order. Send them back as
+   *  `pendingItems` (up to 60 at a time) until this is empty. */
+  remaining: z.array(PendingItemSchema),
+  /** Tail of the input the parser never reached (only when a very long text
+   *  hit the model's output ceiling). Send it back as `text` to continue. */
+  unparsedText: z.string(),
   aiModel: z.string(),
   aiPromptVersion: z.string(),
 });
@@ -100,6 +148,7 @@ const GenerateListingPhotoResponseSchema = z.object({
 
 module.exports = {
   DraftProposalSchema,
+  PendingItemSchema,
   contracts: [
     {
       name: "bulkDraftsFromText",

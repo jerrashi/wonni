@@ -13,8 +13,8 @@
  *                  then restores the input order if the model regrouped.
  *   2. comps     — per listing, live eBay Browse comps (ebay_comps.js).
  *                  Price precedence: the user's own price ("user", with the
- *                  comps/AI figure kept as `marketPrice`) > median asking
- *                  price ("comps") > the model's estimate ("ai").
+ *                  comps/AI figure kept as `marketPrice`) > lowest comparable
+ *                  asking price ("comps") > the model's estimate ("ai").
  *   3. similar   — the "sell similar" half: Browse `getItem` on the best-
  *                  matching comp gives its eBay category id, condition id,
  *                  ePID and item specifics, which ride on the proposal so the
@@ -45,19 +45,27 @@ const { validated } = require("./contracts");
 const { retrieveComps, retrieveCompDetail, fullSizeEbayImage } = require("./ebay_comps")._internal;
 const { EBAY_CLIENT_ID, EBAY_CLIENT_SECRET } = require("./ebay_auth");
 const { savePublicBuffer } = require("./product_media");
-const { normalizeCondition } = require("./enrichment")._internal;
+const { normalizeCondition, toListingFields } = require("./enrichment")._internal;
 
 const GEMINI_API_KEY = "GEMINI_API_KEY";
 const GOOGLE_CSE_KEY = "GOOGLE_CSE_KEY";
 const GOOGLE_CSE_CX = "GOOGLE_CSE_CX";
 const PARSE_MODEL = "gemini-flash-lite-latest";
 const IMAGE_MODEL = "gemini-2.5-flash-image";
-const PROMPT_VERSION = "2026-10-03.1";
+const PROMPT_VERSION = "2026-10-03.2";
 
-const COMPS_PER_QUERY = 12;
+// 25, not 12: the price is the LOWEST comparable listing, so a wider sample of
+// eBay's best matches matters more than it did for a median.
+const COMPS_PER_QUERY = 25;
 const MAX_PHOTOS = 4;
 const MAX_SPECIFICS = 20;
 const CONCURRENCY = 6;
+// The parse is one call over the whole text. Measured 2026-10-03: 150 items →
+// ~32k output tokens in ~75 s, so the model's 65k output ceiling is ~300 items.
+// Past it the JSON is cut mid-item; `salvageItems` keeps the complete ones and
+// `unparsedTail` hands the rest of the text back to the client.
+const MAX_OUTPUT_TOKENS = 65536;
+const MAX_PARSED_ITEMS = 400;
 
 const PARSE_SYSTEM_PROMPT = `You turn a reseller's notes about things they want to sell into marketplace listings (eBay, Mercari, Facebook Marketplace).
 
@@ -95,6 +103,8 @@ For each listing produce:
 - "userPrice": the user's stated asking price (number) or null, per the rules above.
 - "suggestedPrice": your own estimated USD resale asking price for the whole listing (number), independent of userPrice.
 - "quantity": 1 unless the text says otherwise.
+- "weightOz": estimated shipping weight of the packed listing in ounces (number). For a bundle or quantity > 1 listing, ONE unit of the listing as it ships (the whole bundle).
+- "lengthIn", "widthIn", "heightIn": estimated shipping box or mailer dimensions in inches (numbers).
 
 Return ONLY JSON: {"context": "<one-line summary of the shared context, or empty>", "items": [ ... ]}.`;
 
@@ -112,6 +122,32 @@ function parsePrice(value) {
     ? value
     : typeof value === "string" ? Number((value.replace(/,/g, "").match(/\d+(\.\d+)?/) || [])[0]) : NaN;
   return Number.isFinite(num) && num > 0 && num < 1e6 ? Math.round(num * 100) / 100 : undefined;
+}
+
+/** weightOz / lengthIn / widthIn / heightIn via enrichListing's own normaliser. */
+function shippingFields(item) {
+  const { weightOz, lengthIn, widthIn, heightIn } = toListingFields({
+    weightOz: item.weightOz, weightLbs: item.weightLbs,
+    lengthIn: item.lengthIn, widthIn: item.widthIn, heightIn: item.heightIn,
+  });
+  return Object.fromEntries(Object.entries({ weightOz, lengthIn, widthIn, heightIn }).filter(([, v]) => v !== undefined));
+}
+
+/**
+ * A parsed-but-not-yet-enriched core → the plain shape the client holds and
+ * sends back in `pendingItems` for the next batch (contract `PendingItemSchema`).
+ * It is deliberately the same shape the model emits, so `toProposalCore`
+ * reads it back with no second code path.
+ */
+function toPendingItem(core) {
+  const { _searchQuery, _componentQueries, _aiPrice, _userPrice, ...rest } = core;
+  return {
+    ...rest,
+    searchQuery: _searchQuery,
+    componentQueries: _componentQueries,
+    ...(_aiPrice ? { suggestedPrice: _aiPrice } : {}),
+    ...(_userPrice ? { userPrice: _userPrice } : {}),
+  };
 }
 
 /** Raw model item → the contract's DraftProposal core (no pricing/photos yet). */
@@ -141,6 +177,10 @@ function toProposalCore(item = {}) {
     bundleItems: isBundle ? bundleItems : [],
     quantity,
     sourceText: str(item.sourceText, 500) || title,
+    // Shipping estimates — same normalisation as the photo path (enrichListing),
+    // so a list-made draft carries every field a photo-identified one does and
+    // never needs a second AI pass.
+    ...shippingFields(item),
     // Search hints, consumed by stages 2-4 and stripped before returning.
     _searchQuery: str(item.searchQuery, 200) || shortTitle,
     _componentQueries: list(item.componentQueries).slice(0, MAX_PHOTOS),
@@ -194,23 +234,104 @@ function orderBySource(proposals, text) {
   return keyed.map((k) => k.p);
 }
 
-function parseModelOutput(raw, maxItems, text = "") {
-  const json = JSON.parse(cleanJsonText(raw));
+/**
+ * The complete item objects from a model response that was cut off mid-JSON
+ * (output-token ceiling on a very long list). Walks the `items` array with a
+ * string-aware brace counter and keeps every object that closed.
+ */
+function salvageItems(raw) {
+  const text = cleanJsonText(raw);
+  const start = text.search(/"items"\s*:\s*\[/);
+  if (start < 0) return { context: "", items: [] };
+  const contextMatch = /"context"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(text);
+  let context = "";
+  try { context = contextMatch ? JSON.parse(contextMatch[1]) : ""; } catch { context = ""; }
+
+  const items = [];
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let objectStart = -1;
+  for (let i = text.indexOf("[", start) + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === "{") { if (depth === 0) objectStart = i; depth++; continue; }
+    if (ch === "}") {
+      depth--;
+      if (depth === 0 && objectStart >= 0) {
+        try { items.push(JSON.parse(text.slice(objectStart, i + 1))); } catch { /* skip a malformed object */ }
+        objectStart = -1;
+      }
+      continue;
+    }
+    if (ch === "]" && depth === 0) break;
+  }
+  return { context, items };
+}
+
+/**
+ * The part of `text` after the last proposal that could be located in it —
+ * what a truncated parse never got to. Snippets are matched in order, case-
+ * and whitespace-insensitively, each from where the previous one ended.
+ * Returns "" when nothing can be located (better to hand back nothing than
+ * to make the client re-list items it already has).
+ */
+function unparsedTail(text, proposals) {
+  let cursor = 0;
+  let found = false;
+  for (const p of proposals) {
+    const words = String(p.sourceText || "").trim().split(/\s+/).filter(Boolean);
+    if (!words.length) continue;
+    const pattern = new RegExp(words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+"), "i");
+    const match = pattern.exec(text.slice(cursor));
+    if (match) { cursor += match.index + match[0].length; found = true; }
+  }
+  return found ? text.slice(cursor).trim() : "";
+}
+
+/**
+ * Model output → ordered proposal cores. `truncated` = the response hit the
+ * output ceiling; complete items are salvaged and `unparsedText` is the tail
+ * of the input they did not cover.
+ */
+function parseModelOutput(raw, maxItems, text = "", { truncated = false } = {}) {
+  let json;
+  try {
+    json = JSON.parse(cleanJsonText(raw));
+  } catch (e) {
+    if (!truncated) throw e;
+    json = salvageItems(raw);
+  }
   const items = Array.isArray(json.items) ? json.items : [];
   // Order first, cap second, so a long list loses its tail, not random items.
   const proposals = orderBySource(items.map(toProposalCore).filter(Boolean), text).slice(0, maxItems);
-  return { context: typeof json.context === "string" ? json.context.trim() : "", proposals };
+  return {
+    context: typeof json.context === "string" ? json.context.trim() : "",
+    proposals,
+    unparsedText: truncated ? unparsedTail(text, proposals) : "",
+  };
 }
 
-async function parseListWithGemini(apiKey, text, maxItems) {
+/** `context` = shared context carried over from an earlier part of the same
+ *  text, when the client is continuing after a truncated parse. */
+async function parseListWithGemini(apiKey, text, maxItems, context = "") {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
     model: PARSE_MODEL,
     systemInstruction: PARSE_SYSTEM_PROMPT,
-    generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
+    generationConfig: { responseMimeType: "application/json", temperature: 0.2, maxOutputTokens: MAX_OUTPUT_TOKENS },
   });
-  const raw = (await model.generateContent(`Text from the seller:\n\n${text}`)).response.text();
-  return parseModelOutput(raw, maxItems, text);
+  const carried = context ? `Context that applies to this text (from earlier in the same notes): ${context}\n\n` : "";
+  const response = (await model.generateContent(`${carried}Text from the seller:\n\n${text}`)).response;
+  const truncated = response.candidates?.[0]?.finishReason === "MAX_TOKENS";
+  const parsed = parseModelOutput(response.text(), maxItems, text, { truncated });
+  return { ...parsed, context: parsed.context || context };
 }
 
 // ── stage 2: price ────────────────────────────────────────────────────────
@@ -222,11 +343,56 @@ function median(values) {
   return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
 }
 
-/** Median of comp asking prices, rounded to whole dollars (asking prices on
- *  eBay cluster on round numbers; a $23.47 suggestion reads as noise). */
-function priceFromComps(comps) {
-  const med = median(comps.map((c) => c.price));
-  return med == null ? null : Math.max(1, Math.round(med));
+// Words that mean a listing is NOT the same thing as a complete, working item.
+// A comp whose title has one of these (and the query doesn't) is not comparable:
+// it is exactly the kind of listing that sits at the bottom of the price range.
+const NOT_COMPARABLE = [
+  "disc only", "game only", "case only", "manual only", "box only", "cartridge only", "cart only",
+  "no game", "no disc", "no manual", "no case", "no box", "empty", "replacement case",
+  "for parts", "parts only", "not working", "broken", "as is", "as-is", "untested", "read description",
+];
+const COMPARABLE_MATCH = 0.8;   // share of the query's words a comp title must contain
+const OUTLIER_FLOOR = 0.5;      // a "lowest" under half the comparable median is noise
+
+/** Comps that are the same thing as `query`: enough shared title words, and no
+ *  the same model numbers, and no "disc only"-style marker the query didn't
+ *  ask for. */
+function comparableComps(comps, query) {
+  const want = tokens(query);
+  const queryText = ` ${String(query || "").toLowerCase()} `;
+  const need = Math.max(1, Math.ceil(want.size * COMPARABLE_MATCH));
+  // Model / set / edition numbers identify the item outright: LEGO 75192 is not
+  // 75105, Just Dance 2015 is not 2014. Every one in the query must be present.
+  const mustHave = [...want].filter((t) => t.length >= 3 && /\d/.test(t));
+  return comps.filter((comp) => {
+    if (!(Number.isFinite(comp.price) && comp.price > 0)) return false;
+    const title = ` ${String(comp.title || "").toLowerCase()} `;
+    if (NOT_COMPARABLE.some((phrase) => title.includes(phrase) && !queryText.includes(phrase))) return false;
+    const have = tokens(comp.title);
+    if (mustHave.some((t) => !have.has(t))) return false;
+    let shared = 0;
+    for (const t of want) if (have.has(t)) shared++;
+    return shared >= need;
+  });
+}
+
+/**
+ * The lowest asking price among comparable live eBay listings, to the cent —
+ * the draft is priced to MATCH the cheapest real competitor (user decision
+ * 2026-10-03; it used to be the median). "Comparable" is what keeps that from
+ * being a disc-only or for-parts listing: see `comparableComps`. A price
+ * under half the comparable median is treated as an outlier and skipped.
+ * When no comp is comparable enough, falls back to the lowest non-outlier
+ * price of everything eBay returned. Item price only — shipping is not added.
+ */
+function priceFromComps(comps, query = "") {
+  const priced = comps.filter((c) => Number.isFinite(c.price) && c.price > 0);
+  if (!priced.length) return null;
+  const comparable = comparableComps(priced, query);
+  const pool = comparable.length ? comparable : priced;
+  const floor = median(pool.map((c) => c.price)) * OUTLIER_FLOOR;
+  const lowest = Math.min(...pool.map((c) => c.price).filter((price) => price >= floor));
+  return Math.round(lowest * 100) / 100;
 }
 
 // ── stage 3: "sell similar" ───────────────────────────────────────────────
@@ -393,7 +559,7 @@ async function enrichProposal(core, deps) {
   // sell-similar details and photos come from them, and the market figure is
   // returned alongside so the review list can show both.
   const comps = await safeComps(_searchQuery, deps);
-  const compPrice = priceFromComps(comps);
+  const compPrice = priceFromComps(comps, _searchQuery);
   if (_userPrice) {
     proposal.suggestedPrice = _userPrice;
     proposal.priceSource = "user";
@@ -463,14 +629,42 @@ async function enrichProposal(core, deps) {
   return proposal;
 }
 
-async function buildDrafts({ text, maxItems }, deps) {
-  const { context, proposals } = await deps.parse(text, maxItems);
-  const drafts = await mapWithConcurrency(proposals, CONCURRENCY, (core) => enrichProposal(core, deps));
-  return { context, drafts, aiModel: PARSE_MODEL, aiPromptVersion: PROMPT_VERSION };
+/**
+ * One batch. Two entry modes, one enrichment path:
+ *   { text }  — parse the WHOLE text (cheap), enrich the first `maxItems`
+ *               listings (comps + details + photos are the expensive part),
+ *               and return the rest un-enriched in `remaining`.
+ *   { pendingItems } — enrich listings a previous call returned in `remaining`.
+ *               No model call; order and wording stay exactly as first parsed.
+ * The client loops until `remaining` is empty, so a long list is never cut
+ * off at the batch size (it used to silently drop everything past 40).
+ */
+async function buildDrafts({ text, pendingItems: items, context: carriedContext = "", maxItems }, deps) {
+  let context = carriedContext;
+  let cores;
+  let unparsedText = "";
+  if (Array.isArray(items) && items.length) {
+    cores = items.map(toProposalCore).filter(Boolean);
+  } else {
+    const parsed = await deps.parse(text, MAX_PARSED_ITEMS, carriedContext);
+    context = parsed.context;
+    cores = parsed.proposals;
+    unparsedText = parsed.unparsedText || "";
+  }
+  const batch = cores.slice(0, maxItems);
+  const drafts = await mapWithConcurrency(batch, CONCURRENCY, (core) => enrichProposal(core, deps));
+  return {
+    context,
+    drafts,
+    remaining: cores.slice(maxItems).map(toPendingItem),
+    unparsedText,
+    aiModel: PARSE_MODEL,
+    aiPromptVersion: PROMPT_VERSION,
+  };
 }
 
 exports.bulkDraftsFromText = onCall(
-  { secrets: [GEMINI_API_KEY, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, GOOGLE_CSE_KEY, GOOGLE_CSE_CX], timeoutSeconds: 300, memory: "1GiB" },
+  { secrets: [GEMINI_API_KEY, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, GOOGLE_CSE_KEY, GOOGLE_CSE_CX], timeoutSeconds: 540, memory: "1GiB" },
   validated("bulkDraftsFromText", async (data, request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
@@ -478,9 +672,9 @@ exports.bulkDraftsFromText = onCall(
     if (!apiKey) throw new HttpsError("failed-precondition", "AI is not configured.");
 
     const deps = {
-      parse: async (text, maxItems) => {
+      parse: async (text, maxItems, context) => {
         try {
-          return await parseListWithGemini(apiKey, text, maxItems);
+          return await parseListWithGemini(apiKey, text, maxItems, context);
         } catch (e) {
           console.error(`[bulkDraftsFromText] parse failed: ${e.message}`);
           throw new HttpsError("internal", `Could not read the list: ${e.message}`);
@@ -490,6 +684,9 @@ exports.bulkDraftsFromText = onCall(
       detail: retrieveCompDetail,
       google: (query) => googleImages(query, { key: process.env.GOOGLE_CSE_KEY, cx: process.env.GOOGLE_CSE_CX }),
     };
+    if (!data.text && !(data.pendingItems && data.pendingItems.length)) {
+      throw new HttpsError("invalid-argument", "Provide text or pendingItems.");
+    }
     return buildDrafts(data, deps);
   })
 );
@@ -521,8 +718,12 @@ exports._internal = {
   parsePrice,
   orderBySource,
   parseModelOutput,
+  salvageItems,
+  unparsedTail,
+  toPendingItem,
   parseListWithGemini,
   priceFromComps,
+  comparableComps,
   median,
   pickBestComp,
   usefulSpecifics,

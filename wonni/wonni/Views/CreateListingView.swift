@@ -1958,6 +1958,7 @@ struct BulkListingOverviewView: View {
     @State private var showDraftBulkEdit = false
     @State private var showDesktopDrafts = false
     @State private var showBulkTextDrafts = false
+    @State private var skipAIMessage: String?
     /// Direction of the last arrow-key move, so continuing past a description slot (see
     /// DraftRow.onDescriptionAutoAdvance) keeps going the same way the user was already moving.
     @State private var lastFocusMoveDelta = 1
@@ -2059,6 +2060,27 @@ struct BulkListingOverviewView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
+                    // Marks drafts that already have everything listing needs as ready, so
+                    // Process sends them to Review & Publish without an AI call.
+                    Button("Skip AI") {
+                        let chosen = drafts.filter { selectedItemIDs.contains($0.id) }
+                        let result = uploadManager.skipAIProcessing(for: chosen, modelContext: modelContext)
+                        var lines: [String] = []
+                        if result.marked > 0 {
+                            lines.append("\(result.marked) draft\(result.marked == 1 ? "" : "s") will skip AI processing.")
+                        }
+                        if result.incomplete > 0 {
+                            lines.append("\(result.incomplete) \(result.incomplete == 1 ? "is" : "are") missing \(result.missing.formatted(.list(type: .or))), so AI will still process \(result.incomplete == 1 ? "it" : "them").")
+                        }
+                        skipAIMessage = lines.joined(separator: " ")
+                        isSelectMode = false
+                        selectedItemIDs.removeAll()
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color(.systemGray5), in: Capsule())
+                    .accessibilityIdentifier("draftsSkipAIButton")
                     Button("Edit \(selectedItemIDs.count) selected") {
                         showDraftBulkEdit = true
                     }
@@ -2092,24 +2114,32 @@ struct BulkListingOverviewView: View {
                 if !isSelectMode { processButton }
             }
             if !isSelectMode {
-                // The iOS half of cross-platform draft continuity — see
-                // DesktopDraftsView. Mirrors wonni_dropship's own "Mobile Drafts"
-                // folder on its web Dashboard, opposite direction.
+                // ONE explicit Menu for the secondary "bring drafts in" actions. As loose
+                // icons (desktop + list, next to Select) they crowded the bar enough that
+                // iOS collapsed "Process" — the screen's primary action — into the system
+                // "..." overflow (2026-10-03). A Menu is a single item, so the bar holds
+                // exactly Select · this · Process and nothing is left to collapse.
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        showDesktopDrafts = true
+                    Menu {
+                        // Paste any text → one ready-to-list draft per item (BulkTextDraftsSheet).
+                        Button {
+                            showBulkTextDrafts = true
+                        } label: {
+                            Label("Drafts from a List", systemImage: "text.badge.plus")
+                        }
+                        .accessibilityIdentifier("draftsFromTextButton")
+                        // The iOS half of cross-platform draft continuity — see
+                        // DesktopDraftsView. Mirrors the web Dashboard's "Mobile Drafts"
+                        // folder, opposite direction.
+                        Button {
+                            showDesktopDrafts = true
+                        } label: {
+                            Label("Desktop Drafts", systemImage: "desktopcomputer")
+                        }
                     } label: {
-                        Image(systemName: "desktopcomputer")
+                        Image(systemName: "tray.and.arrow.down")
                     }
-                }
-                // Paste a text list → one ready-to-list draft per line (BulkTextDraftsSheet).
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        showBulkTextDrafts = true
-                    } label: {
-                        Image(systemName: "text.badge.plus")
-                    }
-                    .accessibilityIdentifier("draftsFromTextButton")
+                    .accessibilityIdentifier("draftsImportMenu")
                 }
             }
             ToolbarItemGroup(placement: .keyboard) {
@@ -2152,6 +2182,11 @@ struct BulkListingOverviewView: View {
         .sheet(isPresented: $showBulkTextDrafts) {
             BulkTextDraftsSheet()
                 .environmentObject(uploadManager)
+        }
+        .alert("Skip AI", isPresented: Binding(get: { skipAIMessage != nil }, set: { if !$0 { skipAIMessage = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(skipAIMessage ?? "")
         }
     }
 
@@ -3394,20 +3429,10 @@ struct PublishConfirmationSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section(header: Text("Publishing \(itemsToPublish.count) Listing(s) to Wonni")) {
-                    ForEach(itemsToPublish) { item in
-                        HStack {
-                            Text(item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled")
-                                .font(.subheadline)
-                                .lineLimit(1)
-                            Spacer()
-                            Text(String(format: "$%.2f", item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0))
-                                .font(.subheadline.weight(.semibold))
-                        }
-                    }
-                }
-                
-                Section(header: Text("Cross-Post Options")) {
+                // Platforms only. The per-listing title/price rows that used to sit here
+                // pushed the actual decision off-screen on a bulk publish, and repeated
+                // what Review & Publish (one screen back) already shows.
+                Section(header: Text("Cross-Post Options"), footer: Text(publishSummary)) {
                     if integrationRepo.integrations.isEmpty {
                         Text("No integrations available. Set them up in Profile Settings.")
                             .font(.caption)
@@ -3523,6 +3548,14 @@ struct PublishConfirmationSheet: View {
         }
     }
     
+    /// One line standing in for the old per-listing rows: how many, and the total ask.
+    private var publishSummary: String {
+        let count = itemsToPublish.count
+        let total = itemsToPublish.reduce(0.0) { $0 + ($1.userEditedPrice ?? $1.aiSuggestedPrice ?? 0) }
+        let amount = total.formatted(.currency(code: "USD").precision(.fractionLength(0...2)))
+        return "\(count) listing\(count == 1 ? "" : "s") · \(amount) total. Every listing is also published to Wonni."
+    }
+
     private func platformDisplayName(_ platform: String) -> String {
         switch platform {
         case "ebay": return "eBay"

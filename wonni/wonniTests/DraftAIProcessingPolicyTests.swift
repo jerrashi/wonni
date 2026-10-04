@@ -63,6 +63,73 @@ final class DraftAIProcessingPolicyTests: XCTestCase {
             processedAt: processed, processedPhotoIDs: [], currentPhotoIDs: []
         ))
     }
+
+    // MARK: Skip requested (list-made drafts, "Skip AI")
+
+    func test_skipRequested_skipsEvenWhenNeverProcessedOrPhotosChanged() {
+        XCTAssertTrue(DraftAIProcessingPolicy.shouldSkip(
+            processedAt: nil, processedPhotoIDs: nil, currentPhotoIDs: ["a"],
+            skipRequested: true, isComplete: true
+        ))
+        // A list-made draft whose placeholder photo was swapped for a real one.
+        XCTAssertTrue(DraftAIProcessingPolicy.shouldSkip(
+            processedAt: Date(), processedPhotoIDs: ["placeholder"], currentPhotoIDs: ["mine"],
+            skipRequested: true, isComplete: true
+        ))
+    }
+
+    func test_skipRequested_isIgnoredWhileTheDraftIsIncomplete() {
+        // No title or price: the normal AI pass fills it in, whatever was requested.
+        XCTAssertFalse(DraftAIProcessingPolicy.shouldSkip(
+            processedAt: nil, processedPhotoIDs: nil, currentPhotoIDs: ["a"],
+            skipRequested: true, isComplete: false
+        ))
+        // ...but an incomplete draft that WAS processed with unchanged photos still skips.
+        XCTAssertTrue(DraftAIProcessingPolicy.shouldSkip(
+            processedAt: Date(), processedPhotoIDs: ["a"], currentPhotoIDs: ["a"],
+            skipRequested: true, isComplete: false
+        ))
+    }
+
+    func test_missingFields_needsEverythingListingNeeds_notJustTitleAndPrice() {
+        func missing(
+            title: String? = "Wii Sports", description: String? = "Complete in box.", price: Double? = 12,
+            weightLbs: Double? = 0.25, lengthIn: Double? = 7.5, widthIn: Double? = 5.5, heightIn: Double? = 0.5,
+            category: String? = "139973"
+        ) -> [String] {
+            DraftAIProcessingPolicy.missingFields(.init(
+                title: title, description: description, price: price,
+                weightLbs: weightLbs, lengthIn: lengthIn, widthIn: widthIn, heightIn: heightIn, category: category
+            ))
+        }
+        XCTAssertEqual(missing(), [])
+        // A title and a price alone are not enough to skip AI.
+        XCTAssertEqual(
+            missing(description: nil, weightLbs: nil, lengthIn: nil, widthIn: nil, heightIn: nil, category: nil),
+            ["description", "shipping weight", "box size", "category"]
+        )
+        XCTAssertEqual(missing(title: "  "), ["title"])
+        XCTAssertEqual(missing(price: 0), ["price"])
+        XCTAssertEqual(missing(price: nil), ["price"])
+        XCTAssertEqual(missing(weightLbs: 0), ["shipping weight"])
+        XCTAssertEqual(missing(heightIn: nil), ["box size"], "one missing dimension is a missing box size")
+        XCTAssertEqual(missing(category: ""), ["category"])
+    }
+
+    func test_missingFieldsForADraft_readsUserEditsOverAISuggestions() {
+        let draft = Item(firestoreListingId: "p-complete")
+        XCTAssertEqual(DraftAIProcessingPolicy.missingFields(for: draft), ["title", "description", "price", "shipping weight", "box size", "category"])
+        draft.userEditedTitle = "Wii Sports"
+        draft.aiSuggestedDescription = "Complete in box."
+        draft.userEditedPrice = 12
+        draft.weightLbs = 0.25
+        draft.lengthIn = 7.5
+        draft.widthIn = 5.5
+        draft.heightIn = 0.5
+        XCTAssertEqual(DraftAIProcessingPolicy.missingFields(for: draft), ["category"])
+        draft.aiSuggestedCategory = "Video Games & Consoles > Video Games"
+        XCTAssertEqual(DraftAIProcessingPolicy.missingFields(for: draft), [])
+    }
 }
 
 /// DraftHistoryView's selection-mode controls — see the layout notes on

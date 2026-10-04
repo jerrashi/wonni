@@ -524,11 +524,15 @@ extension ApplyCrossPostRulesResponse {
 
 // MARK: - BulkDraftsFromTextRequest
 struct BulkDraftsFromTextRequest: Codable, Equatable, Sendable {
+    let context: String?
     let maxItems: Int?
-    let text: String
+    let pendingItems: [PendingItem]?
+    let text: String?
 
     enum CodingKeys: String, CodingKey {
+        case context = "context"
         case maxItems = "maxItems"
+        case pendingItems = "pendingItems"
         case text = "text"
     }
 }
@@ -552,11 +556,15 @@ extension BulkDraftsFromTextRequest {
     }
 
     func with(
+        context: String?? = nil,
         maxItems: Int?? = nil,
-        text: String? = nil
+        pendingItems: [PendingItem]?? = nil,
+        text: String?? = nil
     ) -> BulkDraftsFromTextRequest {
         return BulkDraftsFromTextRequest(
+            context: context ?? self.context,
             maxItems: maxItems ?? self.maxItems,
+            pendingItems: pendingItems ?? self.pendingItems,
             text: text ?? self.text
         )
     }
@@ -576,18 +584,152 @@ extension BulkDraftsFromTextRequest {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
+// MARK: - PendingItem
+struct PendingItem: Codable, Equatable, Sendable {
+    let brand: String?
+    let bundleItems: [String]
+    let category: String?
+    let componentQueries: [String]
+    let condition: Condition
+    let description: String
+    let heightIn: Double?
+    let isBundle: Bool
+    let lengthIn: Double?
+    let quantity: Int
+    let searchQuery: String
+    let shortTitle: String
+    let sourceText: String
+    let suggestedPrice: Double?
+    let tags: [String]
+    let title: String
+    let userPrice: Double?
+    let weightOz: Double?
+    let widthIn: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case brand = "brand"
+        case bundleItems = "bundleItems"
+        case category = "category"
+        case componentQueries = "componentQueries"
+        case condition = "condition"
+        case description = "description"
+        case heightIn = "heightIn"
+        case isBundle = "isBundle"
+        case lengthIn = "lengthIn"
+        case quantity = "quantity"
+        case searchQuery = "searchQuery"
+        case shortTitle = "shortTitle"
+        case sourceText = "sourceText"
+        case suggestedPrice = "suggestedPrice"
+        case tags = "tags"
+        case title = "title"
+        case userPrice = "userPrice"
+        case weightOz = "weightOz"
+        case widthIn = "widthIn"
+    }
+}
+
+// MARK: PendingItem convenience initializers and mutators
+
+extension PendingItem {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(PendingItem.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        brand: String?? = nil,
+        bundleItems: [String]? = nil,
+        category: String?? = nil,
+        componentQueries: [String]? = nil,
+        condition: Condition? = nil,
+        description: String? = nil,
+        heightIn: Double?? = nil,
+        isBundle: Bool? = nil,
+        lengthIn: Double?? = nil,
+        quantity: Int? = nil,
+        searchQuery: String? = nil,
+        shortTitle: String? = nil,
+        sourceText: String? = nil,
+        suggestedPrice: Double?? = nil,
+        tags: [String]? = nil,
+        title: String? = nil,
+        userPrice: Double?? = nil,
+        weightOz: Double?? = nil,
+        widthIn: Double?? = nil
+    ) -> PendingItem {
+        return PendingItem(
+            brand: brand ?? self.brand,
+            bundleItems: bundleItems ?? self.bundleItems,
+            category: category ?? self.category,
+            componentQueries: componentQueries ?? self.componentQueries,
+            condition: condition ?? self.condition,
+            description: description ?? self.description,
+            heightIn: heightIn ?? self.heightIn,
+            isBundle: isBundle ?? self.isBundle,
+            lengthIn: lengthIn ?? self.lengthIn,
+            quantity: quantity ?? self.quantity,
+            searchQuery: searchQuery ?? self.searchQuery,
+            shortTitle: shortTitle ?? self.shortTitle,
+            sourceText: sourceText ?? self.sourceText,
+            suggestedPrice: suggestedPrice ?? self.suggestedPrice,
+            tags: tags ?? self.tags,
+            title: title ?? self.title,
+            userPrice: userPrice ?? self.userPrice,
+            weightOz: weightOz ?? self.weightOz,
+            widthIn: widthIn ?? self.widthIn
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+enum Condition: String, Codable, Equatable, Sendable {
+    case fair = "fair"
+    case good = "good"
+    case likenew = "likenew"
+    case new = "new"
+    case poor = "poor"
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - BulkDraftsFromTextResponse
 struct BulkDraftsFromTextResponse: Codable, Equatable, Sendable {
     let aiModel: String
     let aiPromptVersion: String
     let context: String
     let drafts: [Draft]
+    let remaining: [Remaining]
+    let unparsedText: String
 
     enum CodingKeys: String, CodingKey {
         case aiModel = "aiModel"
         case aiPromptVersion = "aiPromptVersion"
         case context = "context"
         case drafts = "drafts"
+        case remaining = "remaining"
+        case unparsedText = "unparsedText"
     }
 }
 
@@ -613,13 +755,17 @@ extension BulkDraftsFromTextResponse {
         aiModel: String? = nil,
         aiPromptVersion: String? = nil,
         context: String? = nil,
-        drafts: [Draft]? = nil
+        drafts: [Draft]? = nil,
+        remaining: [Remaining]? = nil,
+        unparsedText: String? = nil
     ) -> BulkDraftsFromTextResponse {
         return BulkDraftsFromTextResponse(
             aiModel: aiModel ?? self.aiModel,
             aiPromptVersion: aiPromptVersion ?? self.aiPromptVersion,
             context: context ?? self.context,
-            drafts: drafts ?? self.drafts
+            drafts: drafts ?? self.drafts,
+            remaining: remaining ?? self.remaining,
+            unparsedText: unparsedText ?? self.unparsedText
         )
     }
 
@@ -649,10 +795,12 @@ struct Draft: Codable, Equatable, Sendable {
     let ebayCategoryId: String?
     let ebayConditionId: String?
     let epid: String?
+    let heightIn: Double?
     let imageSource: ImageSource
     let imageUrls: [String]
     let isBundle: Bool
     let itemSpecifics: [String: String]?
+    let lengthIn: Double?
     let marketPrice: Double?
     let marketPriceSource: MarketPriceSource?
     let priceSource: PriceSource
@@ -663,6 +811,8 @@ struct Draft: Codable, Equatable, Sendable {
     let suggestedPrice: Double?
     let tags: [String]
     let title: String
+    let weightOz: Double?
+    let widthIn: Double?
 
     enum CodingKeys: String, CodingKey {
         case brand = "brand"
@@ -674,10 +824,12 @@ struct Draft: Codable, Equatable, Sendable {
         case ebayCategoryId = "ebayCategoryId"
         case ebayConditionId = "ebayConditionId"
         case epid = "epid"
+        case heightIn = "heightIn"
         case imageSource = "imageSource"
         case imageUrls = "imageUrls"
         case isBundle = "isBundle"
         case itemSpecifics = "itemSpecifics"
+        case lengthIn = "lengthIn"
         case marketPrice = "marketPrice"
         case marketPriceSource = "marketPriceSource"
         case priceSource = "priceSource"
@@ -688,6 +840,8 @@ struct Draft: Codable, Equatable, Sendable {
         case suggestedPrice = "suggestedPrice"
         case tags = "tags"
         case title = "title"
+        case weightOz = "weightOz"
+        case widthIn = "widthIn"
     }
 }
 
@@ -719,10 +873,12 @@ extension Draft {
         ebayCategoryId: String?? = nil,
         ebayConditionId: String?? = nil,
         epid: String?? = nil,
+        heightIn: Double?? = nil,
         imageSource: ImageSource? = nil,
         imageUrls: [String]? = nil,
         isBundle: Bool? = nil,
         itemSpecifics: [String: String]?? = nil,
+        lengthIn: Double?? = nil,
         marketPrice: Double?? = nil,
         marketPriceSource: MarketPriceSource?? = nil,
         priceSource: PriceSource? = nil,
@@ -732,7 +888,9 @@ extension Draft {
         sourceText: String? = nil,
         suggestedPrice: Double?? = nil,
         tags: [String]? = nil,
-        title: String? = nil
+        title: String? = nil,
+        weightOz: Double?? = nil,
+        widthIn: Double?? = nil
     ) -> Draft {
         return Draft(
             brand: brand ?? self.brand,
@@ -744,10 +902,12 @@ extension Draft {
             ebayCategoryId: ebayCategoryId ?? self.ebayCategoryId,
             ebayConditionId: ebayConditionId ?? self.ebayConditionId,
             epid: epid ?? self.epid,
+            heightIn: heightIn ?? self.heightIn,
             imageSource: imageSource ?? self.imageSource,
             imageUrls: imageUrls ?? self.imageUrls,
             isBundle: isBundle ?? self.isBundle,
             itemSpecifics: itemSpecifics ?? self.itemSpecifics,
+            lengthIn: lengthIn ?? self.lengthIn,
             marketPrice: marketPrice ?? self.marketPrice,
             marketPriceSource: marketPriceSource ?? self.marketPriceSource,
             priceSource: priceSource ?? self.priceSource,
@@ -757,7 +917,9 @@ extension Draft {
             sourceText: sourceText ?? self.sourceText,
             suggestedPrice: suggestedPrice ?? self.suggestedPrice,
             tags: tags ?? self.tags,
-            title: title ?? self.title
+            title: title ?? self.title,
+            weightOz: weightOz ?? self.weightOz,
+            widthIn: widthIn ?? self.widthIn
         )
     }
 
@@ -828,14 +990,6 @@ extension Comp {
     }
 }
 
-enum Condition: String, Codable, Equatable, Sendable {
-    case fair = "fair"
-    case good = "good"
-    case likenew = "likenew"
-    case new = "new"
-    case poor = "poor"
-}
-
 enum ImageSource: String, Codable, Equatable, Sendable {
     case ebay = "ebay"
     case generated = "generated"
@@ -853,6 +1007,128 @@ enum PriceSource: String, Codable, Equatable, Sendable {
     case comps = "comps"
     case none = "none"
     case user = "user"
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - Remaining
+struct Remaining: Codable, Equatable, Sendable {
+    let brand: String?
+    let bundleItems: [String]
+    let category: String?
+    let componentQueries: [String]
+    let condition: Condition
+    let description: String
+    let heightIn: Double?
+    let isBundle: Bool
+    let lengthIn: Double?
+    let quantity: Int
+    let searchQuery: String
+    let shortTitle: String
+    let sourceText: String
+    let suggestedPrice: Double?
+    let tags: [String]
+    let title: String
+    let userPrice: Double?
+    let weightOz: Double?
+    let widthIn: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case brand = "brand"
+        case bundleItems = "bundleItems"
+        case category = "category"
+        case componentQueries = "componentQueries"
+        case condition = "condition"
+        case description = "description"
+        case heightIn = "heightIn"
+        case isBundle = "isBundle"
+        case lengthIn = "lengthIn"
+        case quantity = "quantity"
+        case searchQuery = "searchQuery"
+        case shortTitle = "shortTitle"
+        case sourceText = "sourceText"
+        case suggestedPrice = "suggestedPrice"
+        case tags = "tags"
+        case title = "title"
+        case userPrice = "userPrice"
+        case weightOz = "weightOz"
+        case widthIn = "widthIn"
+    }
+}
+
+// MARK: Remaining convenience initializers and mutators
+
+extension Remaining {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(Remaining.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        brand: String?? = nil,
+        bundleItems: [String]? = nil,
+        category: String?? = nil,
+        componentQueries: [String]? = nil,
+        condition: Condition? = nil,
+        description: String? = nil,
+        heightIn: Double?? = nil,
+        isBundle: Bool? = nil,
+        lengthIn: Double?? = nil,
+        quantity: Int? = nil,
+        searchQuery: String? = nil,
+        shortTitle: String? = nil,
+        sourceText: String? = nil,
+        suggestedPrice: Double?? = nil,
+        tags: [String]? = nil,
+        title: String? = nil,
+        userPrice: Double?? = nil,
+        weightOz: Double?? = nil,
+        widthIn: Double?? = nil
+    ) -> Remaining {
+        return Remaining(
+            brand: brand ?? self.brand,
+            bundleItems: bundleItems ?? self.bundleItems,
+            category: category ?? self.category,
+            componentQueries: componentQueries ?? self.componentQueries,
+            condition: condition ?? self.condition,
+            description: description ?? self.description,
+            heightIn: heightIn ?? self.heightIn,
+            isBundle: isBundle ?? self.isBundle,
+            lengthIn: lengthIn ?? self.lengthIn,
+            quantity: quantity ?? self.quantity,
+            searchQuery: searchQuery ?? self.searchQuery,
+            shortTitle: shortTitle ?? self.shortTitle,
+            sourceText: sourceText ?? self.sourceText,
+            suggestedPrice: suggestedPrice ?? self.suggestedPrice,
+            tags: tags ?? self.tags,
+            title: title ?? self.title,
+            userPrice: userPrice ?? self.userPrice,
+            weightOz: weightOz ?? self.weightOz,
+            widthIn: widthIn ?? self.widthIn
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
 }
 
 //

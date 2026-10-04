@@ -10,6 +10,7 @@ import FirebaseAuth
 import FirebaseFirestore
 import FirebaseFunctions
 import UIKit
+import UserNotifications
 import Vision
 
 // MARK: - Status Enum
@@ -356,8 +357,14 @@ class UploadManager: ObservableObject {
     /// on this object, so a fresh launch always starts empty — nothing here races it).
     /// New publishes are unaffected; publishDrafts now sets `isDraft = false` itself.
     func cleanupOrphanedPublishedDrafts(modelContext: ModelContext) {
+        // Launch-time only in practice, but never while a queue in THIS process may
+        // still be holding these items alive on purpose.
+        guard !hasLiveCrossPostWork else { return }
+        // Also catches items publishDrafts kept alive (isDraft already false) for a
+        // web cross-post queue that then died with the process — those jobs are replayed
+        // from CrossPostRunStore using Storage paths, so the local copy is not needed.
         let orphaned = (try? modelContext.fetch(FetchDescriptor<Item>()))?
-            .filter { $0.isDraft && $0.publishedAt != nil } ?? []
+            .filter { $0.publishedAt != nil } ?? []
         guard !orphaned.isEmpty else { return }
         print("[UploadManager] Cleaning up \(orphaned.count) orphaned published draft(s) from a previous launch")
         for item in orphaned {
@@ -561,9 +568,66 @@ class UploadManager: ObservableObject {
         activeUploadCount += 1
         uploadStatuses[draft.id] = .pending
 
+        // At most `maxConcurrentUploads` drafts upload at once. Each running upload holds
+        // its draft's decoded photos in memory, and a list import can commit 100+ drafts
+        // in a couple of minutes — unbounded, that was hundreds of images in memory at
+        // once. Anything still waiting when the user publishes is uploaded inline by
+        // publishDrafts, so a queued upload never blocks a listing.
+        if runningUploadTasks >= maxConcurrentUploads {
+            uploadWaitlist.append(PendingUpload(draftID: draft.id, draft: draft, modelContext: modelContext, userId: userId, listingId: listingId))
+            return
+        }
+        runUpload(draft: draft, modelContext: modelContext, userId: userId, listingId: listingId)
+    }
+
+    private struct PendingUpload {
+        /// Captured up front: a deleted SwiftData object can't even be asked for its id.
+        let draftID: UUID
+        let draft: Item
+        let modelContext: ModelContext
+        let userId: String
+        let listingId: String
+    }
+    private var uploadWaitlist: [PendingUpload] = []
+    private var runningUploadTasks = 0
+    private let maxConcurrentUploads = 4
+
+    /// Bookkeeping for an upload that ended — finished, failed, or abandoned because the
+    /// draft was deleted. Always runs (the deleted-mid-upload exits used to return without
+    /// it, leaving `isUploadingPhotos` stuck true and Publish disabled), then starts the
+    /// next waiting upload.
+    private func uploadDidEnd() {
+        runningUploadTasks -= 1
+        activeUploadCount -= 1
+        if activeUploadCount <= 0 {
+            activeUploadCount = 0
+            isUploadingPhotos = false
+        }
+        while runningUploadTasks < maxConcurrentUploads, !uploadWaitlist.isEmpty {
+            let next = uploadWaitlist.removeFirst()
+            let gone = deletedDraftIDs.contains(next.draftID) || Item.deletedIDs.contains(next.draftID)
+            // Published while waiting: publishDrafts already uploaded its photos inline.
+            // (Checked second — a deleted item's properties must not be read.)
+            if gone || next.draft.orderedFirebasePhotoPaths.count >= next.draft.sourceAssetIdentifiers.count {
+                // Never started, so only the pending count unwinds.
+                uploadStatuses[next.draftID] = gone ? nil : .done
+                activeUploadCount -= 1
+                if activeUploadCount <= 0 {
+                    activeUploadCount = 0
+                    isUploadingPhotos = false
+                }
+                continue
+            }
+            runUpload(draft: next.draft, modelContext: next.modelContext, userId: next.userId, listingId: next.listingId)
+        }
+    }
+
+    private func runUpload(draft: Item, modelContext: ModelContext, userId: String, listingId: String) {
+        runningUploadTasks += 1
         let draftID = draft.id
         let assetIdentifiers = draft.sourceAssetIdentifiers
         Task {
+            defer { uploadDidEnd() }
             uploadStatuses[draftID] = .uploading(0)
 
             print("[UploadManager] Fetching \(assetIdentifiers.count) images for \(draftID)...")
@@ -631,10 +695,6 @@ class UploadManager: ObservableObject {
                 print("[UploadManager] Draft \(draftID) deleted mid-upload — discarding \(photoPathsByAsset.count) uploaded paths")
             }
             uploadStatuses[draftID] = failed ? .failed : .done
-            activeUploadCount -= 1
-            if activeUploadCount <= 0 {
-                isUploadingPhotos = false
-            }
         }
     }
 
@@ -705,7 +765,9 @@ class UploadManager: ObservableObject {
                 let skipAI = DraftAIProcessingPolicy.shouldSkip(
                     processedAt: draft.processedAt,
                     processedPhotoIDs: draft.processedPhotoIDs,
-                    currentPhotoIDs: draft.sourceAssetIdentifiers
+                    currentPhotoIDs: draft.sourceAssetIdentifiers,
+                    skipRequested: draft.skipAIProcessing == true,
+                    isComplete: DraftAIProcessingPolicy.missingFields(for: draft).isEmpty
                 )
                 if draft.processedAt != nil && !skipAI {
                     print("[UploadManager] Re-processing \(draft.id) — photos changed since last AI run")
@@ -847,6 +909,39 @@ class UploadManager: ObservableObject {
             showProgressSheet = false
             showProcessResults = true
         }
+    }
+
+    /// The drafts overview's "Skip AI" action: marks drafts that already have everything
+    /// listing needs (title, description, price, shipping weight and box size, category)
+    /// as ready, so Process passes them straight to Review & Publish without a Gemini
+    /// call. Drafts missing any of it are left alone and processed normally — one
+    /// enrichment path, nothing half-filled. Returns how many were marked, how many
+    /// were not, and what the incomplete ones lack (deduplicated, in a stable order).
+    struct SkipAIResult {
+        let marked: Int
+        let incomplete: Int
+        let missing: [String]
+    }
+
+    @discardableResult
+    func skipAIProcessing(for drafts: [Item], modelContext: ModelContext) -> SkipAIResult {
+        var marked = 0
+        var incomplete = 0
+        var missing: [String] = []
+        for draft in drafts {
+            let lacks = DraftAIProcessingPolicy.missingFields(for: draft)
+            guard lacks.isEmpty else {
+                incomplete += 1
+                for field in lacks where !missing.contains(field) { missing.append(field) }
+                continue
+            }
+            draft.skipAIProcessing = true
+            draft.processedAt = draft.processedAt ?? Date()
+            draft.processedPhotoIDs = draft.sourceAssetIdentifiers
+            marked += 1
+        }
+        try? modelContext.save()
+        return SkipAIResult(marked: marked, incomplete: incomplete, missing: missing)
     }
 
     /// Syncs a draft's fields into the shared `products/{id}` doc — see
@@ -1335,10 +1430,13 @@ class UploadManager: ObservableObject {
             return
         }
         // Fire deferred API cross-posts now that the Firestore write has completed.
-        if !pendingAPITriggers.isEmpty {
-            let triggers = pendingAPITriggers
+        let apiTriggers = pendingAPITriggers
+        if !apiTriggers.isEmpty {
+            let triggers = apiTriggers
             pendingAPITriggers = []
+            apiTriggersInFlight += 1
             Task {
+                defer { apiTriggersInFlight -= 1 }
                 var errorMessages: [String] = []
                 for trigger in triggers {
                     do {
@@ -1349,6 +1447,7 @@ class UploadManager: ObservableObject {
                     } catch {
                         errorMessages.append(Self.formatCrossPostError(error, title: trigger.title))
                     }
+                    markCrossPostEnded { $0.kind == .api && $0.listingId == trigger.listingId }
                 }
                 if !errorMessages.isEmpty {
                     // Review & Publish is very likely already dismissed by the time this
@@ -1388,6 +1487,9 @@ class UploadManager: ObservableObject {
         pendingWebJobItems = []
         webAutofillQueue = jobs
         pendingAutofillJobsCount = jobs.count
+        // Write the whole run to disk before any of it starts, so leaving the app
+        // mid-run can be reported and resumed (see CrossPostRunStore).
+        trackCrossPostJobs(web: jobs, api: apiTriggers)
         // Start web autofill jobs (Mercari, Facebook) after publish completes. If there are
         // none (e.g. eBay-only), transition to the global CrossPostStatusView sheet.
         if !webAutofillQueue.isEmpty {
@@ -1434,6 +1536,11 @@ class UploadManager: ObservableObject {
     /// so the queue keeps advancing even if Review & Publish has already been dismissed.
     func checkAndStartNextWebJob(modelContext: ModelContext) {
         guard activeAutofillJob == nil, globalMercariJob == nil else { return }
+        // The visible-sheet job (Facebook) that was up has been dismissed: its attempt is over.
+        if let finished = presentedAutofillJobID {
+            presentedAutofillJobID = nil
+            markCrossPostEnded { $0.id == finished }
+        }
         if !webAutofillQueue.isEmpty {
             let nextJob = webAutofillQueue.removeFirst()
             pendingAutofillJobsCount = webAutofillQueue.count + 1
@@ -1442,7 +1549,10 @@ class UploadManager: ObservableObject {
                 // (Q1/Q2) instead of its own separate pill. Tapping it requests the
                 // full-screen WebView via mercariPillExpandRequested.
                 globalMercariJob = nextJob
-                onMercariJobComplete = { [weak self] in self?.checkAndStartNextWebJob(modelContext: modelContext) }
+                onMercariJobComplete = { [weak self] in
+                    self?.markCrossPostEnded { $0.id == nextJob.id }
+                    self?.checkAndStartNextWebJob(modelContext: modelContext)
+                }
                 AppTaskQueue.shared.begin(
                     id: nextJob.id,
                     label: "Posting to Mercari…",
@@ -1454,6 +1564,7 @@ class UploadManager: ObservableObject {
                 // Facebook and other web platforms require a visible sheet.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
                     self?.activeAutofillJob = nextJob
+                    self?.presentedAutofillJobID = nextJob.id
                 }
             }
         } else {
@@ -1490,6 +1601,175 @@ class UploadManager: ObservableObject {
             onWebQueueDrained = nil
             drained?()
         }
+    }
+
+    // MARK: – Interrupted cross-post runs
+
+    /// Set when a previous run was cut off (app closed mid-queue) and something is still
+    /// unposted. MainView shows it as "17 of 40 listings posted to Mercari" + Retry.
+    @Published var interruptedCrossPost: InterruptedCrossPostSummary?
+    /// eBay/Etsy trigger loops currently running in this process.
+    private var apiTriggersInFlight = 0
+    /// The web job currently shown in the visible autofill sheet (Facebook).
+    private var presentedAutofillJobID: UUID?
+    private var crossPostBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private static let crossPostPausedNotificationID = "crossPostPaused"
+
+    /// True while this process is still working through a run — the queue is alive, so
+    /// a stored unfinished run is NOT an interruption (yet).
+    private var hasLiveCrossPostWork: Bool {
+        !webAutofillQueue.isEmpty || globalMercariJob != nil || activeAutofillJob != nil
+            || presentedAutofillJobID != nil || apiTriggersInFlight > 0 || isPublishing
+    }
+
+    /// Records queued cross-post jobs durably. Call for every job handed to the web
+    /// queue or fired as an API trigger, whichever screen it came from.
+    func trackCrossPostJobs(web: [CrossPostJob], api: [PendingAPITrigger] = []) {
+        guard let userId = Auth.auth().currentUser?.uid else { return }
+        var jobs = web.map(PersistedCrossPostJob.init)
+        for trigger in api {
+            for platform in trigger.platforms {
+                jobs.append(PersistedCrossPostJob(id: UUID(), kind: .api, platform: platform, title: trigger.title, listingId: trigger.listingId))
+            }
+        }
+        guard !jobs.isEmpty else { return }
+        CrossPostRunStore.add(jobs, userId: userId)
+        // Quiet (provisional) permission: no prompt, and the "posting paused" notice
+        // lands in Notification Center if the user leaves mid-run.
+        if jobs.count > 1 {
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .provisional]) { _, _ in }
+        }
+    }
+
+    private func markCrossPostEnded(where matches: (PersistedCrossPostJob) -> Bool) {
+        let run = CrossPostRunStore.markEnded(where: matches)
+        // Finished one while in the background: keep the pending notice's count current.
+        if UIApplication.shared.applicationState != .active {
+            schedulePausedNotification(for: run)
+        }
+    }
+
+    /// App left the foreground. iOS will suspend the web view within seconds, so ask for
+    /// the short grace period (enough to finish the listing in flight) and line up a
+    /// notice in case the user doesn't come back.
+    func appDidEnterBackground() {
+        guard hasLiveCrossPostWork, let run = CrossPostRunStore.load(), run.hasUnfinishedJobs else { return }
+        if crossPostBackgroundTask == .invalid {
+            crossPostBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "crossPostQueue") { [weak self] in
+                Task { @MainActor in self?.endCrossPostBackgroundTask() }
+            }
+        }
+        schedulePausedNotification(for: run)
+    }
+
+    private func endCrossPostBackgroundTask() {
+        guard crossPostBackgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(crossPostBackgroundTask)
+        crossPostBackgroundTask = .invalid
+    }
+
+    /// (Re)schedules the "posting paused" notice, or cancels it when nothing is left.
+    /// Delayed so a quick app switch and return never produces one.
+    private func schedulePausedNotification(for run: CrossPostRun?) {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [Self.crossPostPausedNotificationID])
+        guard let run, run.hasUnfinishedJobs,
+              let summary = InterruptedCrossPostSummary.make(run: run, isPosted: { _ in nil }) else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Cross-posting paused"
+        content.body = summary.message.replacingOccurrences(of: "\n", with: " ") + " Open Wonni to finish the rest."
+        content.sound = .default
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 30, repeats: false)
+        center.add(UNNotificationRequest(identifier: Self.crossPostPausedNotificationID, content: content, trigger: trigger))
+    }
+
+    /// App is active again (launch, or back from the background).
+    func appDidBecomeActive() {
+        endCrossPostBackgroundTask()
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.crossPostPausedNotificationID])
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [Self.crossPostPausedNotificationID])
+        Task { await checkInterruptedCrossPosts() }
+    }
+
+    /// If a stored run has unfinished jobs and nothing in this process is working on it,
+    /// it was interrupted. Firestore's `crossPostStatus` decides what actually posted
+    /// (a job cut off just after submitting counts; one that ended in failure doesn't).
+    func checkInterruptedCrossPosts() async {
+        guard !hasLiveCrossPostWork, interruptedCrossPost == nil,
+              let run = CrossPostRunStore.load(), run.hasUnfinishedJobs else { return }
+        guard run.userId == Auth.auth().currentUser?.uid else { return }
+
+        var statusByListing: [String: [String: String]] = [:]
+        let listingIds = Set(run.jobs.compactMap(\.listingId))
+        await withTaskGroup(of: (String, [String: String]?).self) { group in
+            for id in listingIds {
+                group.addTask {
+                    let snapshot = try? await Firestore.firestore().collection("listings").document(id).getDocument()
+                    return (id, snapshot?.data()?["crossPostStatus"] as? [String: String])
+                }
+            }
+            for await (id, status) in group {
+                if let status { statusByListing[id] = status }
+            }
+        }
+        // The queue may have come back to life while we were asking.
+        guard !hasLiveCrossPostWork else { return }
+
+        let summary = InterruptedCrossPostSummary.make(run: run) { job in
+            // Per-variant Mercari jobs record their status on the product's variant, not
+            // the listing doc — no answer here, so the local flag decides.
+            guard job.variantId == nil, let id = job.listingId, let status = statusByListing[id] else { return nil }
+            return status[job.platform] == "posted" || status[job.platform] == "active"
+        }
+        if let summary {
+            interruptedCrossPost = summary
+        } else {
+            // Everything turned out to be posted: nothing to report.
+            CrossPostRunStore.clear()
+        }
+    }
+
+    /// Replays everything the interrupted run left unposted, as a fresh tracked run.
+    func retryInterruptedCrossPosts(modelContext: ModelContext) {
+        guard let summary = interruptedCrossPost else { return }
+        interruptedCrossPost = nil
+        CrossPostRunStore.clear()
+
+        let webJobs = summary.remaining.filter { $0.kind == .web }.map(\.replayJob)
+        var apiPlatforms: [String: (title: String, platforms: [String])] = [:]
+        for job in summary.remaining where job.kind == .api {
+            guard let listingId = job.listingId else { continue }
+            apiPlatforms[listingId, default: (job.title, [])].platforms.append(job.platform)
+        }
+        let triggers = apiPlatforms.map { PendingAPITrigger(listingId: $0.key, title: $0.value.title, platforms: $0.value.platforms) }
+        trackCrossPostJobs(web: webJobs, api: triggers)
+
+        if !triggers.isEmpty {
+            apiTriggersInFlight += 1
+            Task {
+                defer { apiTriggersInFlight -= 1 }
+                var errorMessages: [String] = []
+                for trigger in triggers {
+                    do {
+                        try await IntegrationRepository.shared.triggerCrossPost(listingId: trigger.listingId, platforms: trigger.platforms)
+                    } catch {
+                        errorMessages.append(Self.formatCrossPostError(error, title: trigger.title))
+                    }
+                    markCrossPostEnded { $0.kind == .api && $0.listingId == trigger.listingId }
+                }
+                if !errorMessages.isEmpty { crossPostError = errorMessages.joined(separator: "\n\n") }
+            }
+        }
+        if !webJobs.isEmpty {
+            webAutofillQueue.append(contentsOf: webJobs)
+            pendingAutofillJobsCount = webAutofillQueue.count
+            checkAndStartNextWebJob(modelContext: modelContext)
+        }
+    }
+
+    func dismissInterruptedCrossPosts() {
+        interruptedCrossPost = nil
+        CrossPostRunStore.clear()
     }
 
     // MARK: – Cancel / Reset
@@ -1531,6 +1811,7 @@ class UploadManager: ObservableObject {
         shouldReturnToRoot = false
         uploadStartTime = nil
         activeUploadCount = 0
+        uploadWaitlist.removeAll()
         sessionDraftIDs.removeAll()
         activeDraftID = nil
         crossPostStatusPending = false

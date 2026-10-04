@@ -3001,6 +3001,120 @@
           "minLength": 1,
           "maxLength": 20000
         },
+        "pendingItems": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "maxLength": 140
+              },
+              "shortTitle": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 2000
+              },
+              "brand": {
+                "type": "string",
+                "maxLength": 60
+              },
+              "category": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "condition": {
+                "type": "string",
+                "enum": [
+                  "new",
+                  "likenew",
+                  "good",
+                  "fair",
+                  "poor"
+                ]
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 8
+              },
+              "isBundle": {
+                "type": "boolean"
+              },
+              "bundleItems": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "quantity": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "sourceText": {
+                "type": "string"
+              },
+              "searchQuery": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "componentQueries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "suggestedPrice": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "userPrice": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "weightOz": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "lengthIn": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "widthIn": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "heightIn": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "title",
+              "shortTitle",
+              "description",
+              "condition",
+              "tags",
+              "isBundle",
+              "bundleItems",
+              "quantity",
+              "sourceText",
+              "searchQuery",
+              "componentQueries"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 60
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 500
+        },
         "maxItems": {
           "type": "integer",
           "minimum": 1,
@@ -3008,9 +3122,6 @@
           "default": 40
         }
       },
-      "required": [
-        "text"
-      ],
       "additionalProperties": false
     },
     "BulkDraftsFromTextResponse": {
@@ -3160,6 +3271,22 @@
                   "type": "string"
                 }
               },
+              "weightOz": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "lengthIn": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "widthIn": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "heightIn": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
               "sourceText": {
                 "type": "string"
               }
@@ -3182,6 +3309,118 @@
             "additionalProperties": false
           }
         },
+        "remaining": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "maxLength": 140
+              },
+              "shortTitle": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 2000
+              },
+              "brand": {
+                "type": "string",
+                "maxLength": 60
+              },
+              "category": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "condition": {
+                "type": "string",
+                "enum": [
+                  "new",
+                  "likenew",
+                  "good",
+                  "fair",
+                  "poor"
+                ]
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 8
+              },
+              "isBundle": {
+                "type": "boolean"
+              },
+              "bundleItems": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "quantity": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "sourceText": {
+                "type": "string"
+              },
+              "searchQuery": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "componentQueries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "suggestedPrice": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "userPrice": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "weightOz": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "lengthIn": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "widthIn": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "heightIn": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "title",
+              "shortTitle",
+              "description",
+              "condition",
+              "tags",
+              "isBundle",
+              "bundleItems",
+              "quantity",
+              "sourceText",
+              "searchQuery",
+              "componentQueries"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "unparsedText": {
+          "type": "string"
+        },
         "aiModel": {
           "type": "string"
         },
@@ -3192,6 +3431,8 @@
       "required": [
         "context",
         "drafts",
+        "remaining",
+        "unparsedText",
         "aiModel",
         "aiPromptVersion"
       ],
