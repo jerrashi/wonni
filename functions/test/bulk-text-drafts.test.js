@@ -19,7 +19,7 @@ const { fullSizeEbayImage } = require("../ebay_comps")._internal;
 const { RequestSchemas, ResponseSchemas } = require("../contracts");
 
 const {
-  toProposalCore, parsePrice, orderBySource, parseModelOutput, priceFromComps, pickBestComp, usefulSpecifics, googleImages, enrichProposal, buildDrafts, salvageItems, unparsedTail, toPendingItem,
+  toProposalCore, parsePrice, orderBySource, parseModelOutput, priceFromComps, comparableComps, pickBestComp, usefulSpecifics, googleImages, enrichProposal, buildDrafts, salvageItems, unparsedTail, toPendingItem,
 } = _internal;
 
 // ── parse mapping ──────────────────────────────────────────────────────────
@@ -139,11 +139,53 @@ test("parseModelOutput: reorders to the source text before capping", () => {
 
 // ── pricing ────────────────────────────────────────────────────────────────
 
-test("priceFromComps: median of positive prices, whole dollars; null when none", () => {
-  assert.equal(priceFromComps([{ price: 10 }, { price: 40 }, { price: 22.49 }]), 22);
-  assert.equal(priceFromComps([{ price: 10 }, { price: 30 }]), 20);
-  assert.equal(priceFromComps([{ price: null }, { price: 0 }, { price: -5 }]), null);
-  assert.equal(priceFromComps([]), null);
+test("priceFromComps: the lowest comparable asking price, to the cent; null when none", () => {
+  const q = "Super Smash Bros Brawl Wii CIB";
+  const comps = [
+    { title: "Super Smash Bros Brawl Nintendo Wii Complete CIB", price: 34.99 },
+    { title: "Super Smash Bros. Brawl (Nintendo Wii, 2008) Tested", price: 27.5 },
+    { title: "Super Smash Bros Brawl Wii w/ manual", price: 41 },
+  ];
+  assert.equal(priceFromComps(comps, q), 27.5);
+  assert.equal(priceFromComps([{ price: null }, { price: 0 }, { price: -5 }], q), null);
+  assert.equal(priceFromComps([], q), null);
+});
+
+test("priceFromComps: not-comparable listings and outliers never set the price", () => {
+  const q = "Super Smash Bros Brawl Wii CIB";
+  const good = [
+    { title: "Super Smash Bros Brawl Nintendo Wii Complete", price: 30 },
+    { title: "Super Smash Bros Brawl Wii CIB Tested", price: 33 },
+    { title: "Super Smash Bros Brawl Wii", price: 36 },
+  ];
+  // Cheaper, but not the same thing: disc only, for parts, a different game.
+  assert.equal(priceFromComps([
+    ...good,
+    { title: "Super Smash Bros Brawl Wii DISC ONLY", price: 12 },
+    { title: "Super Smash Bros Brawl Wii for parts not working", price: 6 },
+    { title: "Mario Kart Wii CIB", price: 9 },
+  ], q), 30);
+  // Same words, but under half the comparable median: an outlier, skipped.
+  assert.equal(priceFromComps([...good, { title: "Super Smash Bros Brawl Wii", price: 4 }], q), 30);
+  // The user IS selling a disc-only copy: those listings are the comparables.
+  assert.equal(priceFromComps([
+    { title: "Super Smash Bros Brawl Wii Disc Only", price: 12 },
+    { title: "Super Smash Bros Brawl Wii disc only tested", price: 14 },
+  ], "Super Smash Bros Brawl Wii disc only"), 12);
+});
+
+test("priceFromComps: a different model number is a different item", () => {
+  const q = "Lego 75192 Millennium Falcon sealed";
+  assert.equal(priceFromComps([
+    { title: "LEGO Star Wars Millennium Falcon 75105 NEW SEALED", price: 250 },
+    { title: "LEGO 75192 UCS Millennium Falcon New Sealed", price: 780 },
+    { title: "LEGO Star Wars 75192 Millennium Falcon Sealed Box", price: 849.99 },
+  ], q), 780);
+});
+
+test("priceFromComps: nothing comparable → lowest non-outlier of whatever eBay returned", () => {
+  assert.equal(priceFromComps([{ title: "lot a", price: 20 }, { title: "lot b", price: 24.99 }, { title: "junk", price: 2 }], "obscure thing xyz"), 20);
+  assert.equal(comparableComps([{ title: "lot a", price: 20 }], "obscure thing xyz").length, 0);
 });
 
 // ── sell similar ───────────────────────────────────────────────────────────

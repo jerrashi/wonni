@@ -13,8 +13,8 @@
  *                  then restores the input order if the model regrouped.
  *   2. comps     — per listing, live eBay Browse comps (ebay_comps.js).
  *                  Price precedence: the user's own price ("user", with the
- *                  comps/AI figure kept as `marketPrice`) > median asking
- *                  price ("comps") > the model's estimate ("ai").
+ *                  comps/AI figure kept as `marketPrice`) > lowest comparable
+ *                  asking price ("comps") > the model's estimate ("ai").
  *   3. similar   — the "sell similar" half: Browse `getItem` on the best-
  *                  matching comp gives its eBay category id, condition id,
  *                  ePID and item specifics, which ride on the proposal so the
@@ -54,7 +54,9 @@ const PARSE_MODEL = "gemini-flash-lite-latest";
 const IMAGE_MODEL = "gemini-2.5-flash-image";
 const PROMPT_VERSION = "2026-10-03.2";
 
-const COMPS_PER_QUERY = 12;
+// 25, not 12: the price is the LOWEST comparable listing, so a wider sample of
+// eBay's best matches matters more than it did for a median.
+const COMPS_PER_QUERY = 25;
 const MAX_PHOTOS = 4;
 const MAX_SPECIFICS = 20;
 const CONCURRENCY = 6;
@@ -341,11 +343,56 @@ function median(values) {
   return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
 }
 
-/** Median of comp asking prices, rounded to whole dollars (asking prices on
- *  eBay cluster on round numbers; a $23.47 suggestion reads as noise). */
-function priceFromComps(comps) {
-  const med = median(comps.map((c) => c.price));
-  return med == null ? null : Math.max(1, Math.round(med));
+// Words that mean a listing is NOT the same thing as a complete, working item.
+// A comp whose title has one of these (and the query doesn't) is not comparable:
+// it is exactly the kind of listing that sits at the bottom of the price range.
+const NOT_COMPARABLE = [
+  "disc only", "game only", "case only", "manual only", "box only", "cartridge only", "cart only",
+  "no game", "no disc", "no manual", "no case", "no box", "empty", "replacement case",
+  "for parts", "parts only", "not working", "broken", "as is", "as-is", "untested", "read description",
+];
+const COMPARABLE_MATCH = 0.8;   // share of the query's words a comp title must contain
+const OUTLIER_FLOOR = 0.5;      // a "lowest" under half the comparable median is noise
+
+/** Comps that are the same thing as `query`: enough shared title words, and no
+ *  the same model numbers, and no "disc only"-style marker the query didn't
+ *  ask for. */
+function comparableComps(comps, query) {
+  const want = tokens(query);
+  const queryText = ` ${String(query || "").toLowerCase()} `;
+  const need = Math.max(1, Math.ceil(want.size * COMPARABLE_MATCH));
+  // Model / set / edition numbers identify the item outright: LEGO 75192 is not
+  // 75105, Just Dance 2015 is not 2014. Every one in the query must be present.
+  const mustHave = [...want].filter((t) => t.length >= 3 && /\d/.test(t));
+  return comps.filter((comp) => {
+    if (!(Number.isFinite(comp.price) && comp.price > 0)) return false;
+    const title = ` ${String(comp.title || "").toLowerCase()} `;
+    if (NOT_COMPARABLE.some((phrase) => title.includes(phrase) && !queryText.includes(phrase))) return false;
+    const have = tokens(comp.title);
+    if (mustHave.some((t) => !have.has(t))) return false;
+    let shared = 0;
+    for (const t of want) if (have.has(t)) shared++;
+    return shared >= need;
+  });
+}
+
+/**
+ * The lowest asking price among comparable live eBay listings, to the cent —
+ * the draft is priced to MATCH the cheapest real competitor (user decision
+ * 2026-10-03; it used to be the median). "Comparable" is what keeps that from
+ * being a disc-only or for-parts listing: see `comparableComps`. A price
+ * under half the comparable median is treated as an outlier and skipped.
+ * When no comp is comparable enough, falls back to the lowest non-outlier
+ * price of everything eBay returned. Item price only — shipping is not added.
+ */
+function priceFromComps(comps, query = "") {
+  const priced = comps.filter((c) => Number.isFinite(c.price) && c.price > 0);
+  if (!priced.length) return null;
+  const comparable = comparableComps(priced, query);
+  const pool = comparable.length ? comparable : priced;
+  const floor = median(pool.map((c) => c.price)) * OUTLIER_FLOOR;
+  const lowest = Math.min(...pool.map((c) => c.price).filter((price) => price >= floor));
+  return Math.round(lowest * 100) / 100;
 }
 
 // ── stage 3: "sell similar" ───────────────────────────────────────────────
@@ -512,7 +559,7 @@ async function enrichProposal(core, deps) {
   // sell-similar details and photos come from them, and the market figure is
   // returned alongside so the review list can show both.
   const comps = await safeComps(_searchQuery, deps);
-  const compPrice = priceFromComps(comps);
+  const compPrice = priceFromComps(comps, _searchQuery);
   if (_userPrice) {
     proposal.suggestedPrice = _userPrice;
     proposal.priceSource = "user";
@@ -676,6 +723,7 @@ exports._internal = {
   toPendingItem,
   parseListWithGemini,
   priceFromComps,
+  comparableComps,
   median,
   pickBestComp,
   usefulSpecifics,
