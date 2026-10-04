@@ -767,10 +767,7 @@ class UploadManager: ObservableObject {
                     processedPhotoIDs: draft.processedPhotoIDs,
                     currentPhotoIDs: draft.sourceAssetIdentifiers,
                     skipRequested: draft.skipAIProcessing == true,
-                    isComplete: DraftAIProcessingPolicy.isComplete(
-                        title: draft.userEditedTitle ?? draft.aiSuggestedTitle,
-                        price: draft.userEditedPrice ?? draft.aiSuggestedPrice
-                    )
+                    isComplete: DraftAIProcessingPolicy.missingFields(for: draft).isEmpty
                 )
                 if draft.processedAt != nil && !skipAI {
                     print("[UploadManager] Re-processing \(draft.id) — photos changed since last AI run")
@@ -914,25 +911,37 @@ class UploadManager: ObservableObject {
         }
     }
 
-    /// The drafts overview's "Skip AI" action: marks drafts that already have a title and
-    /// a price as ready, so Process passes them straight to Review & Publish without a
-    /// Gemini call. Returns how many were NOT marked because they're missing a title or
-    /// price — those are processed normally (one enrichment path, nothing half-filled).
+    /// The drafts overview's "Skip AI" action: marks drafts that already have everything
+    /// listing needs (title, description, price, shipping weight and box size, category)
+    /// as ready, so Process passes them straight to Review & Publish without a Gemini
+    /// call. Drafts missing any of it are left alone and processed normally — one
+    /// enrichment path, nothing half-filled. Returns how many were marked, how many
+    /// were not, and what the incomplete ones lack (deduplicated, in a stable order).
+    struct SkipAIResult {
+        let marked: Int
+        let incomplete: Int
+        let missing: [String]
+    }
+
     @discardableResult
-    func skipAIProcessing(for drafts: [Item], modelContext: ModelContext) -> Int {
+    func skipAIProcessing(for drafts: [Item], modelContext: ModelContext) -> SkipAIResult {
+        var marked = 0
         var incomplete = 0
+        var missing: [String] = []
         for draft in drafts {
-            let complete = DraftAIProcessingPolicy.isComplete(
-                title: draft.userEditedTitle ?? draft.aiSuggestedTitle,
-                price: draft.userEditedPrice ?? draft.aiSuggestedPrice
-            )
-            guard complete else { incomplete += 1; continue }
+            let lacks = DraftAIProcessingPolicy.missingFields(for: draft)
+            guard lacks.isEmpty else {
+                incomplete += 1
+                for field in lacks where !missing.contains(field) { missing.append(field) }
+                continue
+            }
             draft.skipAIProcessing = true
             draft.processedAt = draft.processedAt ?? Date()
             draft.processedPhotoIDs = draft.sourceAssetIdentifiers
+            marked += 1
         }
         try? modelContext.save()
-        return incomplete
+        return SkipAIResult(marked: marked, incomplete: incomplete, missing: missing)
     }
 
     /// Syncs a draft's fields into the shared `products/{id}` doc — see

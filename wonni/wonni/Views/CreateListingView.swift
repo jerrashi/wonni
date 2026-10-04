@@ -2060,15 +2060,19 @@ struct BulkListingOverviewView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    // Marks drafts that already have a title + price as ready, so Process
-                    // sends them to Review & Publish without an AI call.
+                    // Marks drafts that already have everything listing needs as ready, so
+                    // Process sends them to Review & Publish without an AI call.
                     Button("Skip AI") {
                         let chosen = drafts.filter { selectedItemIDs.contains($0.id) }
-                        let incomplete = uploadManager.skipAIProcessing(for: chosen, modelContext: modelContext)
-                        let marked = chosen.count - incomplete
-                        skipAIMessage = incomplete == 0
-                            ? "\(marked) draft\(marked == 1 ? "" : "s") will skip AI processing."
-                            : "\(marked) draft\(marked == 1 ? "" : "s") will skip AI processing. \(incomplete) still need\(incomplete == 1 ? "s" : "") a title and a price, so AI will fill \(incomplete == 1 ? "it" : "them") in."
+                        let result = uploadManager.skipAIProcessing(for: chosen, modelContext: modelContext)
+                        var lines: [String] = []
+                        if result.marked > 0 {
+                            lines.append("\(result.marked) draft\(result.marked == 1 ? "" : "s") will skip AI processing.")
+                        }
+                        if result.incomplete > 0 {
+                            lines.append("\(result.incomplete) \(result.incomplete == 1 ? "is" : "are") missing \(result.missing.formatted(.list(type: .or))), so AI will still process \(result.incomplete == 1 ? "it" : "them").")
+                        }
+                        skipAIMessage = lines.joined(separator: " ")
                         isSelectMode = false
                         selectedItemIDs.removeAll()
                     }

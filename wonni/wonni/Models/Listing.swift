@@ -606,7 +606,7 @@ enum DraftAIProcessingPolicy {
     ///
     /// `skipRequested` (Item.skipAIProcessing — list-made drafts and the "Skip AI"
     /// action) skips regardless of photos, but only while the draft `isComplete`
-    /// (has a title and a price): an incomplete draft still gets the normal AI pass,
+    /// (`missingFields` is empty): an incomplete draft still gets the normal AI pass,
     /// so there is exactly one enrichment path and nothing publishes half-filled.
     static func shouldSkip(processedAt: Date?, processedPhotoIDs: [String]?, currentPhotoIDs: [String], skipRequested: Bool = false, isComplete: Bool = true) -> Bool {
         if skipRequested && isComplete { return true }
@@ -615,9 +615,47 @@ enum DraftAIProcessingPolicy {
         return Set(snapshot) == Set(currentPhotoIDs)
     }
 
-    /// The minimum a draft needs to be listed without AI: a title and a price.
-    static func isComplete(title: String?, price: Double?) -> Bool {
-        let hasTitle = !(title ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return hasTitle && (price ?? 0) > 0
+    /// What a draft still lacks to be listed without AI, in user terms. Empty = complete.
+    /// Everything the AI pass would otherwise fill counts: title, description, price,
+    /// shipping weight and box size, and a category. A title and price alone are NOT
+    /// enough (decided 2026-10-03) — such a draft still gets the normal AI pass, which
+    /// fills the rest and keeps the user's own text as hints.
+    static func missingFields(_ fields: ListingFields) -> [String] {
+        func blank(_ text: String?) -> Bool {
+            (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        func unset(_ number: Double?) -> Bool { (number ?? 0) <= 0 }
+        var missing: [String] = []
+        if blank(fields.title) { missing.append("title") }
+        if blank(fields.description) { missing.append("description") }
+        if unset(fields.price) { missing.append("price") }
+        if unset(fields.weightLbs) { missing.append("shipping weight") }
+        if unset(fields.lengthIn) || unset(fields.widthIn) || unset(fields.heightIn) { missing.append("box size") }
+        if blank(fields.category) { missing.append("category") }
+        return missing
+    }
+
+    /// The values `missingFields` checks, as publishing would read them.
+    struct ListingFields {
+        var title: String?
+        var description: String?
+        var price: Double?
+        var weightLbs: Double?
+        var lengthIn: Double?
+        var widthIn: Double?
+        var heightIn: Double?
+        var category: String?
+    }
+
+    /// `missingFields` for a draft, reading each value the way publishing does
+    /// (the user's edit wins over the AI suggestion).
+    static func missingFields(for draft: Item) -> [String] {
+        missingFields(ListingFields(
+            title: draft.userEditedTitle ?? draft.aiSuggestedTitle,
+            description: draft.userEditedDescription ?? draft.aiSuggestedDescription,
+            price: draft.userEditedPrice ?? draft.aiSuggestedPrice,
+            weightLbs: draft.weightLbs, lengthIn: draft.lengthIn, widthIn: draft.widthIn, heightIn: draft.heightIn,
+            category: draft.ebayCategoryId ?? draft.aiSuggestedCategory
+        ))
     }
 }
