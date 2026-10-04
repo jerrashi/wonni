@@ -991,12 +991,29 @@ function normalizeVariationValue(rawValue, allowedValues) {
 // product.aspects satisfying every required aspect (+ Size Type / Department
 // when the category has them) so the publish validates.
 // { "Type": "Photo Card" } | { "Type": ["Photo Card"] } → { "Type": ["Photo Card"] }
+// eBay rejects any item-specific value over 65 characters (err 25002), and one
+// bad value fails the whole publish. Specifics copied from another seller's
+// listing ("sell similar") do carry such values: a sentence in "Features", or
+// several names joined in "Game Name". Keep the first comma/semicolon part
+// that fits; a value with no part that fits is dropped (a specific we cannot
+// state legally is better missing — required ones are refilled afterwards).
+const MAX_ASPECT_VALUE_LENGTH = 65;
+function fitAspectValue(value) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  if (text.length <= MAX_ASPECT_VALUE_LENGTH) return text;
+  const part = text.split(/\s*[,;|]\s*/).find((p) => p && p.length <= MAX_ASPECT_VALUE_LENGTH);
+  return part || null;
+}
+
 function toAspectArrays(obj = {}) {
-  return Object.fromEntries(
-    Object.entries(obj)
-      .filter(([, v]) => v != null && v !== "")
-      .map(([k, v]) => [k, (Array.isArray(v) ? v : [v]).map(String)])
-  );
+  const out = {};
+  for (const [name, raw] of Object.entries(obj || {})) {
+    if (raw == null || raw === "") continue;
+    const values = [...new Set((Array.isArray(raw) ? raw : [raw]).map(fitAspectValue).filter(Boolean))];
+    if (values.length) out[name] = values;
+  }
+  return out;
 }
 
 function buildProductAspects(categoryAspects, brand, title = "", optionValues = {}, customAspects = {}) {
@@ -2345,6 +2362,7 @@ module.exports = {
   getEbayAppTokenCached,
   // testable core (used by functions/test/ebay_import_listing.test.js)
   _internal: {
+    toAspectArrays,
     resolveCategoryId,
     ebayImportListingCore, ebayCreateListingCore,
     buildShippingRuleName, buildShippingRulePayload,

@@ -152,3 +152,23 @@ test("buildSingleVariantEditPayloads: with no policies or location to send, the 
   assert.equal(offerPayload.availableQuantity, 0, "an out-of-stock edit stays at zero");
   assert.equal(itemPayload.availability.shipToLocationAvailability.quantity, 0);
 });
+
+// ── item-specific value length (eBay err 25002, max 65 chars) ──────────────
+
+test("toAspectArrays: values over eBay's 65-character limit never reach the payload", () => {
+  const { toAspectArrays } = _internal;
+  const out = toAspectArrays({
+    // Live failures 2026-10-03/04, both copied from a comp's item specifics.
+    Features: "Locate and catch up to 139 Pocket Monsters Play the Red version to \"Catche 'em All\" Battle a friend by connecting via the Game Link cable",
+    "Game Name": "Dissidia 012: Duodecim Final Fantasy, Dissidia 012[Duodecim] Final Fantasy",
+    Platform: "Nintendo Game Boy",
+    Genre: ["Role Playing", "Role Playing", ""],
+    Empty: "",
+  });
+  assert.equal("Features" in out, false, "a sentence with no short part is dropped");
+  assert.deepEqual(out["Game Name"], ["Dissidia 012: Duodecim Final Fantasy"], "first part that fits");
+  assert.deepEqual(out.Platform, ["Nintendo Game Boy"]);
+  assert.deepEqual(out.Genre, ["Role Playing"]);
+  assert.equal("Empty" in out, false);
+  for (const values of Object.values(out)) for (const v of values) assert.ok(v.length <= 65);
+});
