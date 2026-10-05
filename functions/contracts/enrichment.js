@@ -40,6 +40,14 @@ const ListingFieldsSchema = z.object({
   /** Attributes buyers filter on, e.g. {"Type":"Photo Card","Character":"Jungkook"}. */
   itemSpecifics: z.record(z.string(), z.string()).optional(),
   confidence: z.number().min(0).max(1).optional(),
+  /** Professional grading, only for a graded item (a slabbed trading card,
+   *  a WATA/VGA game): the company ("PSA"), the grade as printed on the label
+   *  ("10", "9.5", "Authentic") and the certificate number. eBay's card
+   *  categories require grader + grade to list as "Graded" — see
+   *  functions/ebay_condition.js. Absent for ungraded items. */
+  grader: z.string().max(40).optional(),
+  grade: z.string().max(20).optional(),
+  gradeCertNumber: z.string().max(20).optional(),
 });
 
 // ── Request ────────────────────────────────────────────────────────────────

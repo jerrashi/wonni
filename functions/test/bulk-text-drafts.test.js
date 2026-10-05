@@ -19,7 +19,7 @@ const { fullSizeEbayImage } = require("../ebay_comps")._internal;
 const { RequestSchemas, ResponseSchemas } = require("../contracts");
 
 const {
-  toProposalCore, parsePrice, orderBySource, parseModelOutput, priceFromComps, comparableComps, pickBestComp, usefulSpecifics, googleImages, enrichProposal, buildDrafts, salvageItems, unparsedTail, toPendingItem,
+  toProposalCore, parsePrice, orderBySource, parseModelOutput, priceFromComps, comparableComps, pickBestComp, rankPhotoComps, choosePhotoComp, parseListWithGemini, usefulSpecifics, googleImages, enrichProposal, buildDrafts, salvageItems, unparsedTail, toPendingItem,
 } = _internal;
 
 // ── parse mapping ──────────────────────────────────────────────────────────
@@ -391,11 +391,11 @@ test("buildDrafts: output satisfies the response contract and request defaults a
     parse: async () => parseModelOutput(JSON.stringify({
       context: "Wii games CIB",
       items: [
-        { sourceText: "Super smash bros brawl", title: "Super Smash Bros. Brawl (Wii) CIB", condition: "good", searchQuery: "ssbb", suggestedPrice: 30 },
+        { sourceText: "Super smash bros brawl", title: "Super Smash Bros. Brawl (Wii) CIB", condition: "good", searchQuery: "Super Smash Bros Brawl Wii", suggestedPrice: 30 },
         { sourceText: "bundle 1: a, b", title: "A & B Wii Bundle", isBundle: true, bundleItems: ["A", "B"], condition: "good", componentQueries: ["A Wii", "B Wii"] },
       ],
     }), data.maxItems),
-    comps: async ({ title }) => (title === "ssbb" ? SSBB_COMPS : []),
+    comps: async ({ title }) => (title === "Super Smash Bros Brawl Wii" ? SSBB_COMPS : []),
     detail: async () => SSBB_DETAIL,
     google: async () => [],
   });
@@ -470,7 +470,7 @@ test("salvageItems: keeps every complete object from JSON cut off mid-item", () 
   assert.equal(context, 'wii "cib"');
   assert.deepEqual(items.map((i) => i.sourceText), ["game 1", "game 2"]);
   assert.equal(items[0].description, 'has } and { and "quotes"');
-  assert.deepEqual(salvageItems("not json at all"), { context: "", items: [] });
+  assert.deepEqual(salvageItems("not json at all"), { context: "", items: [], lost: [] });
 });
 
 test("parseModelOutput: a truncated response salvages items and reports the unparsed tail", () => {
@@ -504,4 +504,121 @@ test("generateListingPhoto contract: title required, bundleItems/condition defau
   assert.deepEqual(data, { title: "We Ski Wii", bundleItems: [], condition: "good" });
   assert.throws(() => RequestSchemas.generateListingPhoto.parse({}));
   assert.equal(ResponseSchemas.generateListingPhoto.safeParse({ url: null }).success, true);
+});
+
+// ── photo / price matching by what is included (comp_match.js) ─────────────
+
+const POKEMON_COMPS = [
+  { itemId: "cib", title: "Pokemon Blue Version Nintendo Game Boy Complete In Box CIB", price: 500, imageUrl: "https://i.ebayimg.com/cib/s-l225.jpg" },
+  { itemId: "silent", title: "Pokemon Blue Version (Nintendo Game Boy, 1998)", price: 64.99, imageUrl: "https://i.ebayimg.com/silent/s-l225.jpg", shortDescription: "Game is tested and works great" },
+  { itemId: "box", title: "Pokemon Blue Version Nintendo Game Boy 1998 *** BOX ONLY ***", price: 169.99, imageUrl: "https://i.ebayimg.com/box/s-l225.jpg" },
+  { itemId: "repro", title: "NEW Pokemon Blue Version GBC Cartridge Only Tested Saves", price: 24.99, imageUrl: "https://i.ebayimg.com/repro/s-l225.jpg", shortDescription: "These cartridges are newly made and are not the originally published version." },
+  { itemId: "loose1", title: "Pokemon Blue Version (Game Boy, 1998) Authentic Cartridge Only", price: 57, imageUrl: "https://i.ebayimg.com/loose1/s-l225.jpg" },
+  { itemId: "loose2", title: "Pokemon Blue Version (Game Boy, 1998)", price: 54.99, imageUrl: "https://i.ebayimg.com/loose2/s-l225.jpg", shortDescription: "Fully working, cartridge only." },
+  { itemId: "cib2", title: "Pokemon Blue Version (Game Boy, 1998) Complete", price: 350, imageUrl: "https://i.ebayimg.com/cib2/s-l225.jpg" },
+];
+const POKEMON_Q = "Pokemon Blue Version Game Boy";
+
+test("rankPhotoComps: explicit same-state comps first; contradictions, packaging and repros never", () => {
+  const ids = (included) => rankPhotoComps(POKEMON_COMPS, POKEMON_Q, included).map((r) => `${r.comp.itemId}:${r.level}`);
+  assert.deepEqual(ids("loose"), ["loose1:2", "loose2:2", "silent:1"]);
+  assert.deepEqual(ids("complete"), ["cib:2", "cib2:2", "silent:1"]);
+  // Nothing stated: best match as before, minus the empty box and the repro.
+  assert.deepEqual(ids("unknown"), ["cib:1", "silent:1", "loose1:1", "loose2:1", "cib2:1"]);
+});
+
+test("priceFromComps: a loose cartridge and a boxed copy of the same game get different prices", () => {
+  assert.equal(priceFromComps(POKEMON_COMPS, POKEMON_Q, "loose"), 54.99);
+  assert.equal(priceFromComps(POKEMON_COMPS, POKEMON_Q, "complete"), 350);
+});
+
+test("enrichProposal: a cartridge-only listing never gets a boxed copy's photo", async () => {
+  const p = await enrichProposal(core({ _searchQuery: POKEMON_Q, included: "loose", media: "cartridge" }), {
+    comps: async () => POKEMON_COMPS,
+    detail: async (id) => ({ itemId: id, categoryId: "139973", images: [`https://i.ebayimg.com/${id}/full.jpg`], aspects: {} }),
+  });
+  assert.deepEqual(p.imageUrls, ["https://i.ebayimg.com/loose1/full.jpg"]);
+  assert.equal(p.included, "loose");
+  assert.equal(p.media, "cartridge");
+});
+
+test("choosePhotoComp: a silent title is used only when its full description confirms the state", async () => {
+  const comps = [
+    { itemId: "a", title: "Chrono Trigger SNES", imageUrl: "https://i.ebayimg.com/a/s-l225.jpg" },
+    { itemId: "b", title: "Chrono Trigger Super Nintendo SNES", imageUrl: "https://i.ebayimg.com/b/s-l225.jpg" },
+  ];
+  const descriptions = { a: "Comes with the original box and manual.", b: "<p>You get the <b>cartridge only</b>.</p>" };
+  const calls = [];
+  const detail = async (id) => { calls.push(id); return { itemId: id, title: "", description: descriptions[id], images: [] }; };
+  const loose = await choosePhotoComp(comps, "Chrono Trigger SNES", "loose", { detail });
+  assert.equal(loose.photoComp.itemId, "b");
+  assert.deepEqual(calls, ["a", "b"]);
+  // Sell-similar details still come from the first comp looked at.
+  assert.equal(loose.detail.itemId, "b");
+
+  // Nothing confirms "sealed": no photo comp (→ placeholder), details kept.
+  const sealed = await choosePhotoComp(comps, "Chrono Trigger SNES", "sealed", { detail });
+  assert.equal(sealed.photoComp, null);
+  assert.equal(sealed.detail.itemId, "a");
+
+  // The listing says nothing: first candidate, one lookup.
+  calls.length = 0;
+  const any = await choosePhotoComp(comps, "Chrono Trigger SNES", "unknown", { detail });
+  assert.equal(any.photoComp.itemId, "a");
+  assert.deepEqual(calls, ["a"]);
+});
+
+test("enrichProposal: no comp in the same state → no eBay photo, sell-similar details kept", async () => {
+  const p = await enrichProposal(core({ _searchQuery: POKEMON_Q, included: "sealed" }), {
+    comps: async () => POKEMON_COMPS.filter((c) => c.itemId !== "silent"),
+    detail: async (id) => ({ itemId: id, categoryId: "139973", images: ["https://i.ebayimg.com/x/full.jpg"], aspects: { Platform: "Nintendo Game Boy" } }),
+  });
+  assert.deepEqual(p.imageUrls, []);
+  assert.equal(p.imageSource, "none");
+  assert.equal(p.ebayCategoryId, "139973");
+});
+
+test("toProposalCore: included comes from the model, else from the item's own words", () => {
+  assert.equal(toProposalCore({ title: "Pokemon Blue", included: "loose", media: "cartridge" }).included, "loose");
+  assert.equal(toProposalCore({ title: "Pokemon Blue", included: "loose", media: "cartridge" }).media, "cartridge");
+  assert.equal(toProposalCore({ title: "Halo 3 Xbox 360", sourceText: "halo 3 (disc only)", included: "nonsense" }).included, "loose");
+  assert.equal(toProposalCore({ title: "Halo 3 Xbox 360", sourceText: "halo 3" }).included, "unknown");
+  assert.equal(toProposalCore({ title: "Halo 3 Xbox 360", media: "vinyl" }).media, "other");
+  // Survives the pendingItems round trip.
+  const pending = toPendingItem(toProposalCore({ title: "Pokemon Blue", included: "complete", media: "cartridge" }));
+  assert.equal(toProposalCore(pending).included, "complete");
+  assert.equal(RequestSchemas.bulkDraftsFromText.safeParse({ pendingItems: [pending] }).success, true);
+});
+
+// ── malformed model JSON (the "INTERNAL" error, 2026-10-05) ────────────────
+
+const BAD_JSON = () => {
+  const good = JSON.stringify({ context: "ps2", items: [RAW_ITEM(1), RAW_ITEM(2), RAW_ITEM(3)] });
+  // An unescaped quote inside item 2's description, as the model produced.
+  return good.replace('"sourceText":"game 2"', '"sourceText":"game 2","note":"3.5" disk"');
+};
+
+test("salvageItems: one malformed item does not take its neighbours down; its words are reported", () => {
+  const { items, lost } = salvageItems(BAD_JSON());
+  assert.deepEqual(items.map((i) => i.sourceText), ["game 1", "game 3"]);
+  assert.deepEqual(lost, ["game 2"]);
+});
+
+test("parseListWithGemini: invalid JSON is retried once; a second failure keeps what parses", async () => {
+  const good = JSON.stringify({ context: "ps2", items: [RAW_ITEM(1), RAW_ITEM(2)] });
+  const attempts = [];
+  const retried = await parseListWithGemini("k", "game 1\ngame 2", 400, "", {
+    generate: async (_prompt, attempt) => { attempts.push(attempt); return { raw: attempt ? good : BAD_JSON(), truncated: false }; },
+  });
+  assert.deepEqual(attempts, [0, 1]);
+  assert.equal(retried.proposals.length, 2);
+  assert.equal(retried.unparsedText, "");
+
+  const twice = await parseListWithGemini("k", "game 1\ngame 2\ngame 3", 400, "", {
+    generate: async () => ({ raw: BAD_JSON(), truncated: false }),
+  });
+  assert.deepEqual(twice.proposals.map((p) => p.sourceText), ["game 1", "game 3"]);
+  assert.equal(twice.unparsedText, "game 2", "the item that could not be read goes back to the user");
+
+  await assert.rejects(parseListWithGemini("k", "x", 400, "", { generate: async () => ({ raw: "sorry, I cannot", truncated: false }) }));
 });

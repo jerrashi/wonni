@@ -593,8 +593,10 @@ struct PendingItem: Codable, Equatable, Sendable {
     let condition: Condition
     let description: String
     let heightIn: Double?
+    let included: Included?
     let isBundle: Bool
     let lengthIn: Double?
+    let media: Media?
     let quantity: Int
     let searchQuery: String
     let shortTitle: String
@@ -614,8 +616,10 @@ struct PendingItem: Codable, Equatable, Sendable {
         case condition = "condition"
         case description = "description"
         case heightIn = "heightIn"
+        case included = "included"
         case isBundle = "isBundle"
         case lengthIn = "lengthIn"
+        case media = "media"
         case quantity = "quantity"
         case searchQuery = "searchQuery"
         case shortTitle = "shortTitle"
@@ -655,8 +659,10 @@ extension PendingItem {
         condition: Condition? = nil,
         description: String? = nil,
         heightIn: Double?? = nil,
+        included: Included?? = nil,
         isBundle: Bool? = nil,
         lengthIn: Double?? = nil,
+        media: Media?? = nil,
         quantity: Int? = nil,
         searchQuery: String? = nil,
         shortTitle: String? = nil,
@@ -676,8 +682,10 @@ extension PendingItem {
             condition: condition ?? self.condition,
             description: description ?? self.description,
             heightIn: heightIn ?? self.heightIn,
+            included: included ?? self.included,
             isBundle: isBundle ?? self.isBundle,
             lengthIn: lengthIn ?? self.lengthIn,
+            media: media ?? self.media,
             quantity: quantity ?? self.quantity,
             searchQuery: searchQuery ?? self.searchQuery,
             shortTitle: shortTitle ?? self.shortTitle,
@@ -706,6 +714,21 @@ enum Condition: String, Codable, Equatable, Sendable {
     case likenew = "likenew"
     case new = "new"
     case poor = "poor"
+}
+
+enum Included: String, Codable, Equatable, Sendable {
+    case complete = "complete"
+    case loose = "loose"
+    case packaging = "packaging"
+    case partial = "partial"
+    case sealed = "sealed"
+    case unknown = "unknown"
+}
+
+enum Media: String, Codable, Equatable, Sendable {
+    case cartridge = "cartridge"
+    case disc = "disc"
+    case other = "other"
 }
 
 //
@@ -798,11 +821,13 @@ struct Draft: Codable, Equatable, Sendable {
     let heightIn: Double?
     let imageSource: ImageSource
     let imageUrls: [String]
+    let included: Included?
     let isBundle: Bool
     let itemSpecifics: [String: String]?
     let lengthIn: Double?
     let marketPrice: Double?
     let marketPriceSource: MarketPriceSource?
+    let media: Media?
     let priceSource: PriceSource
     let quantity: Int
     let shortTitle: String
@@ -827,11 +852,13 @@ struct Draft: Codable, Equatable, Sendable {
         case heightIn = "heightIn"
         case imageSource = "imageSource"
         case imageUrls = "imageUrls"
+        case included = "included"
         case isBundle = "isBundle"
         case itemSpecifics = "itemSpecifics"
         case lengthIn = "lengthIn"
         case marketPrice = "marketPrice"
         case marketPriceSource = "marketPriceSource"
+        case media = "media"
         case priceSource = "priceSource"
         case quantity = "quantity"
         case shortTitle = "shortTitle"
@@ -876,11 +903,13 @@ extension Draft {
         heightIn: Double?? = nil,
         imageSource: ImageSource? = nil,
         imageUrls: [String]? = nil,
+        included: Included?? = nil,
         isBundle: Bool? = nil,
         itemSpecifics: [String: String]?? = nil,
         lengthIn: Double?? = nil,
         marketPrice: Double?? = nil,
         marketPriceSource: MarketPriceSource?? = nil,
+        media: Media?? = nil,
         priceSource: PriceSource? = nil,
         quantity: Int? = nil,
         shortTitle: String? = nil,
@@ -905,11 +934,13 @@ extension Draft {
             heightIn: heightIn ?? self.heightIn,
             imageSource: imageSource ?? self.imageSource,
             imageUrls: imageUrls ?? self.imageUrls,
+            included: included ?? self.included,
             isBundle: isBundle ?? self.isBundle,
             itemSpecifics: itemSpecifics ?? self.itemSpecifics,
             lengthIn: lengthIn ?? self.lengthIn,
             marketPrice: marketPrice ?? self.marketPrice,
             marketPriceSource: marketPriceSource ?? self.marketPriceSource,
+            media: media ?? self.media,
             priceSource: priceSource ?? self.priceSource,
             quantity: quantity ?? self.quantity,
             shortTitle: shortTitle ?? self.shortTitle,
@@ -1024,8 +1055,10 @@ struct Remaining: Codable, Equatable, Sendable {
     let condition: Condition
     let description: String
     let heightIn: Double?
+    let included: Included?
     let isBundle: Bool
     let lengthIn: Double?
+    let media: Media?
     let quantity: Int
     let searchQuery: String
     let shortTitle: String
@@ -1045,8 +1078,10 @@ struct Remaining: Codable, Equatable, Sendable {
         case condition = "condition"
         case description = "description"
         case heightIn = "heightIn"
+        case included = "included"
         case isBundle = "isBundle"
         case lengthIn = "lengthIn"
+        case media = "media"
         case quantity = "quantity"
         case searchQuery = "searchQuery"
         case shortTitle = "shortTitle"
@@ -1086,8 +1121,10 @@ extension Remaining {
         condition: Condition? = nil,
         description: String? = nil,
         heightIn: Double?? = nil,
+        included: Included?? = nil,
         isBundle: Bool? = nil,
         lengthIn: Double?? = nil,
+        media: Media?? = nil,
         quantity: Int? = nil,
         searchQuery: String? = nil,
         shortTitle: String? = nil,
@@ -1107,8 +1144,10 @@ extension Remaining {
             condition: condition ?? self.condition,
             description: description ?? self.description,
             heightIn: heightIn ?? self.heightIn,
+            included: included ?? self.included,
             isBundle: isBundle ?? self.isBundle,
             lengthIn: lengthIn ?? self.lengthIn,
+            media: media ?? self.media,
             quantity: quantity ?? self.quantity,
             searchQuery: searchQuery ?? self.searchQuery,
             shortTitle: shortTitle ?? self.shortTitle,
@@ -2987,6 +3026,9 @@ struct Suggested: Codable, Equatable, Sendable {
     let condition: Condition?
     let confidence: Double?
     let description: String?
+    let grade: String?
+    let gradeCertNumber: String?
+    let grader: String?
     let heightIn: Double?
     let itemSpecifics: [String: String]?
     let lengthIn: Double?
@@ -3003,6 +3045,9 @@ struct Suggested: Codable, Equatable, Sendable {
         case condition = "condition"
         case confidence = "confidence"
         case description = "description"
+        case grade = "grade"
+        case gradeCertNumber = "gradeCertNumber"
+        case grader = "grader"
         case heightIn = "heightIn"
         case itemSpecifics = "itemSpecifics"
         case lengthIn = "lengthIn"
@@ -3039,6 +3084,9 @@ extension Suggested {
         condition: Condition?? = nil,
         confidence: Double?? = nil,
         description: String?? = nil,
+        grade: String?? = nil,
+        gradeCertNumber: String?? = nil,
+        grader: String?? = nil,
         heightIn: Double?? = nil,
         itemSpecifics: [String: String]?? = nil,
         lengthIn: Double?? = nil,
@@ -3055,6 +3103,9 @@ extension Suggested {
             condition: condition ?? self.condition,
             confidence: confidence ?? self.confidence,
             description: description ?? self.description,
+            grade: grade ?? self.grade,
+            gradeCertNumber: gradeCertNumber ?? self.gradeCertNumber,
+            grader: grader ?? self.grader,
             heightIn: heightIn ?? self.heightIn,
             itemSpecifics: itemSpecifics ?? self.itemSpecifics,
             lengthIn: lengthIn ?? self.lengthIn,
@@ -3089,6 +3140,9 @@ struct Writes: Codable, Equatable, Sendable {
     let condition: Condition?
     let confidence: Double?
     let description: String?
+    let grade: String?
+    let gradeCertNumber: String?
+    let grader: String?
     let heightIn: Double?
     let itemSpecifics: [String: String]?
     let lengthIn: Double?
@@ -3105,6 +3159,9 @@ struct Writes: Codable, Equatable, Sendable {
         case condition = "condition"
         case confidence = "confidence"
         case description = "description"
+        case grade = "grade"
+        case gradeCertNumber = "gradeCertNumber"
+        case grader = "grader"
         case heightIn = "heightIn"
         case itemSpecifics = "itemSpecifics"
         case lengthIn = "lengthIn"
@@ -3141,6 +3198,9 @@ extension Writes {
         condition: Condition?? = nil,
         confidence: Double?? = nil,
         description: String?? = nil,
+        grade: String?? = nil,
+        gradeCertNumber: String?? = nil,
+        grader: String?? = nil,
         heightIn: Double?? = nil,
         itemSpecifics: [String: String]?? = nil,
         lengthIn: Double?? = nil,
@@ -3157,6 +3217,9 @@ extension Writes {
             condition: condition ?? self.condition,
             confidence: confidence ?? self.confidence,
             description: description ?? self.description,
+            grade: grade ?? self.grade,
+            gradeCertNumber: gradeCertNumber ?? self.gradeCertNumber,
+            grader: grader ?? self.grader,
             heightIn: heightIn ?? self.heightIn,
             itemSpecifics: itemSpecifics ?? self.itemSpecifics,
             lengthIn: lengthIn ?? self.lengthIn,
@@ -5281,6 +5344,9 @@ struct ListingFields: Codable, Equatable, Sendable {
     let condition: Condition?
     let confidence: Double?
     let description: String?
+    let grade: String?
+    let gradeCertNumber: String?
+    let grader: String?
     let heightIn: Double?
     let itemSpecifics: [String: String]?
     let lengthIn: Double?
@@ -5297,6 +5363,9 @@ struct ListingFields: Codable, Equatable, Sendable {
         case condition = "condition"
         case confidence = "confidence"
         case description = "description"
+        case grade = "grade"
+        case gradeCertNumber = "gradeCertNumber"
+        case grader = "grader"
         case heightIn = "heightIn"
         case itemSpecifics = "itemSpecifics"
         case lengthIn = "lengthIn"
@@ -5333,6 +5402,9 @@ extension ListingFields {
         condition: Condition?? = nil,
         confidence: Double?? = nil,
         description: String?? = nil,
+        grade: String?? = nil,
+        gradeCertNumber: String?? = nil,
+        grader: String?? = nil,
         heightIn: Double?? = nil,
         itemSpecifics: [String: String]?? = nil,
         lengthIn: Double?? = nil,
@@ -5349,6 +5421,9 @@ extension ListingFields {
             condition: condition ?? self.condition,
             confidence: confidence ?? self.confidence,
             description: description ?? self.description,
+            grade: grade ?? self.grade,
+            gradeCertNumber: gradeCertNumber ?? self.gradeCertNumber,
+            grader: grader ?? self.grader,
             heightIn: heightIn ?? self.heightIn,
             itemSpecifics: itemSpecifics ?? self.itemSpecifics,
             lengthIn: lengthIn ?? self.lengthIn,

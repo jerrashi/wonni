@@ -11,21 +11,33 @@
  *                  per-item notes stay attached to their item, and a price
  *                  the user wrote is captured as `userPrice`. `orderBySource`
  *                  then restores the input order if the model regrouped.
+ *                  Each listing also gets `included` — what physically comes
+ *                  with it (complete / partial / loose / sealed / packaging /
+ *                  unknown) — and `media` (disc / cartridge / other).
+ *                  Invalid JSON from the model is retried once, then salvaged
+ *                  item by item (`salvageItems`).
  *   2. comps     — per listing, live eBay Browse comps (ebay_comps.js).
  *                  Price precedence: the user's own price ("user", with the
  *                  comps/AI figure kept as `marketPrice`) > lowest comparable
  *                  asking price ("comps") > the model's estimate ("ai").
+ *                  "Comparable" includes being in the same `included` state:
+ *                  a boxed copy is never priced against loose cartridges.
+ *                  The matching rules live in comp_match.js — read its header
+ *                  first; README § "Drafts from a List" has the overview.
  *   3. similar   — the "sell similar" half: Browse `getItem` on the best-
  *                  matching comp gives its eBay category id, condition id,
  *                  ePID and item specifics, which ride on the proposal so the
  *                  eBay create path reuses them instead of guessing
  *                  (`product.ebayCategoryId`, `product.geminiItemSpecifics`).
  *   4. photos    — in priority order, agreed 2026-10-01:
- *                    (a) the best comp's own photos (eBay sellers' photos;
- *                        bundles get one photo per component),
+ *                    (a) the photos of the best comp that is IN THE SAME
+ *                        STATE as our listing (`choosePhotoComp`; bundles get
+ *                        one photo per component). A "cartridge only" listing
+ *                        never gets a boxed copy's photo — no match, no photo,
  *                    (b) Google Programmable Search image results, when the
  *                        GOOGLE_CSE_KEY / GOOGLE_CSE_CX secrets are set,
- *                    (c) nothing — the client shows a placeholder and asks the
+ *                    (c) nothing — the client draws a placeholder card (a disc
+ *                        or cartridge shape for a loose disc / cartridge) and asks the
  *                        user, once, whether AI-generated photos are OK; only
  *                        then does it call `generateListingPhoto`.
  *                  eBay's Catalog API (official stock photos) would sit at the
@@ -46,17 +58,24 @@ const { retrieveComps, retrieveCompDetail, fullSizeEbayImage } = require("./ebay
 const { EBAY_CLIENT_ID, EBAY_CLIENT_SECRET } = require("./ebay_auth");
 const { savePublicBuffer } = require("./product_media");
 const { normalizeCondition, toListingFields } = require("./enrichment")._internal;
+const { classifyIncluded, normalizeIncluded, matchLevel, descriptionConfirms } = require("./comp_match");
 
 const GEMINI_API_KEY = "GEMINI_API_KEY";
 const GOOGLE_CSE_KEY = "GOOGLE_CSE_KEY";
 const GOOGLE_CSE_CX = "GOOGLE_CSE_CX";
 const PARSE_MODEL = "gemini-flash-lite-latest";
 const IMAGE_MODEL = "gemini-2.5-flash-image";
-const PROMPT_VERSION = "2026-10-03.2";
+const PROMPT_VERSION = "2026-10-04.1";
 
 // 25, not 12: the price is the LOWEST comparable listing, so a wider sample of
 // eBay's best matches matters more than it did for a median.
-const COMPS_PER_QUERY = 25;
+// 50 is the most one Browse search returns that we read. A plain search mixes
+// loose, boxed and sealed copies, so the wider net is what gives comp_match.js
+// enough listings in the SAME state as ours to price and photograph from.
+const COMPS_PER_QUERY = 50;
+// Full-detail lookups allowed per listing while looking for a photo whose
+// description confirms the same state (see comp_match.js).
+const MAX_DETAIL_CHECKS = 3;
 const MAX_PHOTOS = 4;
 const MAX_SPECIFICS = 20;
 const CONCURRENCY = 6;
@@ -98,8 +117,17 @@ For each listing produce:
 - "category": hierarchical path hint like "Video Games & Consoles > Video Games".
 - "condition": exactly one of "new", "likenew", "good", "fair", "poor". "CIB"/"complete" with no other note = "good". "sealed" = "new".
 - "tags": up to 8 lowercase search tags.
-- "searchQuery": a short eBay search string for comparable listings of the WHOLE listing (e.g. "Super Smash Bros Brawl Wii CIB"). For a bundle, a query for the bundle as a whole.
-- "componentQueries": for a bundle, one short eBay search string per bundleItem (same order); empty array for single items.
+- "included": what the seller's text SAYS physically comes with the listing. Exactly one of:
+  "complete" = the text says every original part is there ("CIB", "complete", "complete in box", "disc + manual + case", "with box and manual");
+  "partial" = original case or box but the text says something is missing ("no manual");
+  "loose" = the item alone ("cartridge only", "cart only", "disc only", "loose", "no box", "no case", a disc in a generic or replacement case);
+  "sealed" = factory sealed / unopened / new in box;
+  "packaging" = only a box, case or manual, not the item itself;
+  "unknown" = the text does not say.
+  Words from the group context count ("game boy stuff, cartridge only:" makes every item under it "loose"). Do NOT infer it from the kind of item or from the condition: an item with no such words is "unknown", and so is anything that never had a box worth mentioning (trading cards, clothing, most electronics).
+- "media": "disc" for a disc-based game, movie or album, "cartridge" for a cartridge game, otherwise "other".
+- "searchQuery": a short eBay search string that IDENTIFIES the item: name, platform/system, model or edition (e.g. "Super Smash Bros Brawl Wii"). Do NOT put what is included or the condition in it (no "CIB", "cartridge only", "sealed", "tested"): that goes in "included". For a bundle, a query for the bundle as a whole.
+- "componentQueries": for a bundle, one short eBay search string per bundleItem (same order, same rule: identity only); empty array for single items.
 - "userPrice": the user's stated asking price (number) or null, per the rules above.
 - "suggestedPrice": your own estimated USD resale asking price for the whole listing (number), independent of userPrice.
 - "quantity": 1 unless the text says otherwise.
@@ -177,6 +205,14 @@ function toProposalCore(item = {}) {
     bundleItems: isBundle ? bundleItems : [],
     quantity,
     sourceText: str(item.sourceText, 500) || title,
+    // What physically comes with it (comp_match.js). The model reads it from
+    // the text + shared context; when it gave nothing usable, the item's own
+    // words are classified the same way a comp's title is.
+    included: normalizeIncluded(item.included) !== "unknown"
+      ? normalizeIncluded(item.included)
+      : classifyIncluded(`${str(item.sourceText, 500)} ${title}`),
+    // Drives the shape of the client's placeholder card when no photo matched.
+    media: ["disc", "cartridge"].includes(item.media) ? item.media : "other",
     // Shipping estimates — same normalisation as the photo path (enrichListing),
     // so a list-made draft carries every field a photo-identified one does and
     // never needs a second AI pass.
@@ -235,44 +271,45 @@ function orderBySource(proposals, text) {
 }
 
 /**
- * The complete item objects from a model response that was cut off mid-JSON
- * (output-token ceiling on a very long list). Walks the `items` array with a
- * string-aware brace counter and keeps every object that closed.
+ * The usable item objects from a model response that is not valid JSON —
+ * either cut off mid-item (output-token ceiling on a very long list) or
+ * malformed in the middle (the model sometimes leaves a quote unescaped: one
+ * bad character used to fail the whole list with "INTERNAL", seen live
+ * 2026-10-05).
+ *
+ * Items are flat objects, so the array is split on the `}, {` between them and
+ * each piece is parsed alone: one broken item cannot take its neighbours down
+ * (a brace/quote counter can, because a stray quote flips its string state for
+ * the rest of the text). `lost` = the `sourceText` of every piece that would
+ * not parse, so the caller can hand those words back to the user.
  */
 function salvageItems(raw) {
   const text = cleanJsonText(raw);
   const start = text.search(/"items"\s*:\s*\[/);
-  if (start < 0) return { context: "", items: [] };
+  if (start < 0) return { context: "", items: [], lost: [] };
   const contextMatch = /"context"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(text);
   let context = "";
   try { context = contextMatch ? JSON.parse(contextMatch[1]) : ""; } catch { context = ""; }
 
+  const body = text.slice(text.indexOf("[", start) + 1);
+  const pieces = body.split(/\}\s*,\s*\{(?=\s*")/);
   const items = [];
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  let objectStart = -1;
-  for (let i = text.indexOf("[", start) + 1; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
+  const lost = [];
+  pieces.forEach((piece, i) => {
+    let chunk = piece.trim();
+    if (i > 0) chunk = `{${chunk}`;
+    if (i < pieces.length - 1) chunk = `${chunk}}`;
+    else chunk = chunk.replace(/\]\s*\}?\s*$/, "").trim(); // the array's and root object's own closers
+    if (!chunk) return;
+    try {
+      const parsed = JSON.parse(chunk);
+      if (parsed && typeof parsed === "object") items.push(parsed);
+    } catch {
+      const source = /"sourceText"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(chunk);
+      try { if (source) lost.push(JSON.parse(source[1])); } catch { /* nothing recoverable */ }
     }
-    if (ch === '"') { inString = true; continue; }
-    if (ch === "{") { if (depth === 0) objectStart = i; depth++; continue; }
-    if (ch === "}") {
-      depth--;
-      if (depth === 0 && objectStart >= 0) {
-        try { items.push(JSON.parse(text.slice(objectStart, i + 1))); } catch { /* skip a malformed object */ }
-        objectStart = -1;
-      }
-      continue;
-    }
-    if (ch === "]" && depth === 0) break;
-  }
-  return { context, items };
+  });
+  return { context, items, lost };
 }
 
 /**
@@ -296,41 +333,66 @@ function unparsedTail(text, proposals) {
 }
 
 /**
- * Model output → ordered proposal cores. `truncated` = the response hit the
- * output ceiling; complete items are salvaged and `unparsedText` is the tail
- * of the input they did not cover.
+ * Model output → ordered proposal cores.
+ *   truncated — the response hit the output ceiling: complete items are
+ *               salvaged and `unparsedText` is the tail of the input they did
+ *               not cover.
+ *   malformed — the caller already retried and the JSON is still invalid:
+ *               every item that parses alone is kept and `unparsedText` is
+ *               the source words of the ones that did not.
+ * With neither flag a JSON error is thrown, so the caller can retry.
  */
-function parseModelOutput(raw, maxItems, text = "", { truncated = false } = {}) {
+function parseModelOutput(raw, maxItems, text = "", { truncated = false, malformed = false } = {}) {
   let json;
+  let lost = [];
   try {
     json = JSON.parse(cleanJsonText(raw));
   } catch (e) {
-    if (!truncated) throw e;
+    if (!truncated && !malformed) throw e;
     json = salvageItems(raw);
+    lost = json.lost || [];
+    if (!json.items.length) throw e;
   }
   const items = Array.isArray(json.items) ? json.items : [];
   // Order first, cap second, so a long list loses its tail, not random items.
   const proposals = orderBySource(items.map(toProposalCore).filter(Boolean), text).slice(0, maxItems);
+  const unparsed = truncated ? unparsedTail(text, proposals) : lost.join("\n");
   return {
     context: typeof json.context === "string" ? json.context.trim() : "",
     proposals,
-    unparsedText: truncated ? unparsedTail(text, proposals) : "",
+    unparsedText: unparsed,
   };
 }
 
 /** `context` = shared context carried over from an earlier part of the same
  *  text, when the client is continuing after a truncated parse. */
-async function parseListWithGemini(apiKey, text, maxItems, context = "") {
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: PARSE_MODEL,
-    systemInstruction: PARSE_SYSTEM_PROMPT,
-    generationConfig: { responseMimeType: "application/json", temperature: 0.2, maxOutputTokens: MAX_OUTPUT_TOKENS },
-  });
+async function parseListWithGemini(apiKey, text, maxItems, context = "", { generate } = {}) {
   const carried = context ? `Context that applies to this text (from earlier in the same notes): ${context}\n\n` : "";
-  const response = (await model.generateContent(`${carried}Text from the seller:\n\n${text}`)).response;
-  const truncated = response.candidates?.[0]?.finishReason === "MAX_TOKENS";
-  const parsed = parseModelOutput(response.text(), maxItems, text, { truncated });
+  const prompt = `${carried}Text from the seller:\n\n${text}`;
+  // `generate` is injectable for tests: (prompt, attempt) → { raw, truncated }.
+  const ask = generate || (async (input, attempt) => {
+    const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({
+      model: PARSE_MODEL,
+      systemInstruction: PARSE_SYSTEM_PROMPT,
+      // A retry runs slightly warmer so it does not repeat the same bad output.
+      generationConfig: { responseMimeType: "application/json", temperature: attempt ? 0.4 : 0.2, maxOutputTokens: MAX_OUTPUT_TOKENS },
+    });
+    const response = (await model.generateContent(input)).response;
+    return { raw: response.text(), truncated: response.candidates?.[0]?.finishReason === "MAX_TOKENS" };
+  });
+
+  // Invalid JSON that was NOT cut off is the model's own slip: ask once more,
+  // and if the second answer is bad too, keep every item that parses alone.
+  let parsed;
+  for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+    const { raw, truncated } = await ask(prompt, attempt);
+    try {
+      parsed = parseModelOutput(raw, maxItems, text, { truncated, malformed: attempt === 1 });
+    } catch (e) {
+      if (attempt === 1) throw e;
+      console.warn(`[bulkDraftsFromText] model returned invalid JSON, retrying: ${e.message}`);
+    }
+  }
   return { ...parsed, context: parsed.context || context };
 }
 
@@ -343,37 +405,45 @@ function median(values) {
   return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
 }
 
-// Words that mean a listing is NOT the same thing as a complete, working item.
-// A comp whose title has one of these (and the query doesn't) is not comparable:
-// it is exactly the kind of listing that sits at the bottom of the price range.
-const NOT_COMPARABLE = [
-  "disc only", "game only", "case only", "manual only", "box only", "cartridge only", "cart only",
-  "no game", "no disc", "no manual", "no case", "no box", "empty", "replacement case",
-  "for parts", "parts only", "not working", "broken", "as is", "as-is", "untested", "read description",
-];
 const COMPARABLE_MATCH = 0.8;   // share of the query's words a comp title must contain
 const OUTLIER_FLOOR = 0.5;      // a "lowest" under half the comparable median is noise
 
-/** Comps that are the same thing as `query`: enough shared title words, and no
- *  the same model numbers, and no "disc only"-style marker the query didn't
- *  ask for. */
-function comparableComps(comps, query) {
+/**
+ * Comps that are the same thing as our listing, in the same state:
+ *   - enough shared title words, and every model / set number in the query;
+ *   - not a different item (repro, graded, for parts…) and not in a state
+ *     that contradicts ours — `matchLevel` in comp_match.js;
+ *   - when our state is unknown, a comp that says it is loose, partial or
+ *     packaging is dropped too (the long-standing rule: an unqualified listing
+ *     is not priced against "disc only").
+ * When our state is known, only comps that explicitly state the SAME state
+ * are returned: a boxed copy is priced against boxed copies, not against
+ * silent titles that are mostly loose cartridges.
+ */
+function comparableComps(comps, query, included = "unknown") {
   const want = tokens(query);
-  const queryText = ` ${String(query || "").toLowerCase()} `;
   const need = Math.max(1, Math.ceil(want.size * COMPARABLE_MATCH));
+  const ours = normalizeIncluded(included);
   // Model / set / edition numbers identify the item outright: LEGO 75192 is not
   // 75105, Just Dance 2015 is not 2014. Every one in the query must be present.
   const mustHave = [...want].filter((t) => t.length >= 3 && /\d/.test(t));
-  return comps.filter((comp) => {
-    if (!(Number.isFinite(comp.price) && comp.price > 0)) return false;
-    const title = ` ${String(comp.title || "").toLowerCase()} `;
-    if (NOT_COMPARABLE.some((phrase) => title.includes(phrase) && !queryText.includes(phrase))) return false;
+  const kept = [];
+  for (const comp of comps) {
+    if (!(Number.isFinite(comp.price) && comp.price > 0)) continue;
+    const level = matchLevel(ours, comp, query);
+    if (level === 0) continue;
+    if (ours === "unknown" && ["loose", "partial"].includes(classifyIncluded(comp.title))) continue;
     const have = tokens(comp.title);
-    if (mustHave.some((t) => !have.has(t))) return false;
+    if (mustHave.some((t) => !have.has(t))) continue;
     let shared = 0;
     for (const t of want) if (have.has(t)) shared++;
-    return shared >= need;
-  });
+    if (shared >= need) kept.push({ comp, level });
+  }
+  // We know our state: only comps that explicitly share it set the price. A
+  // silent title is usually the cheapest form of the item, which would price
+  // a sealed or boxed copy like a loose one (seen live: sealed Zelda at $14.99).
+  if (ours !== "unknown") return kept.filter((k) => k.level === 2).map((k) => k.comp);
+  return kept.map((k) => k.comp);
 }
 
 /**
@@ -385,11 +455,17 @@ function comparableComps(comps, query) {
  * When no comp is comparable enough, falls back to the lowest non-outlier
  * price of everything eBay returned. Item price only — shipping is not added.
  */
-function priceFromComps(comps, query = "") {
+function priceFromComps(comps, query = "", included = "unknown") {
   const priced = comps.filter((c) => Number.isFinite(c.price) && c.price > 0);
   if (!priced.length) return null;
-  const comparable = comparableComps(priced, query);
-  const pool = comparable.length ? comparable : priced;
+  const comparable = comparableComps(priced, query, included);
+  // Nothing close enough in wording: any comp that is at least not a different
+  // item / contradicting state, and only then everything eBay returned.
+  // ...but never when we know our state and no comp shares it: the caller
+  // falls back to the model's estimate, which does know the state.
+  if (!comparable.length && normalizeIncluded(included) !== "unknown") return null;
+  const usable = priced.filter((c) => matchLevel(included, c, query) > 0);
+  const pool = comparable.length ? comparable : usable.length ? usable : priced;
   const floor = median(pool.map((c) => c.price)) * OUTLIER_FLOOR;
   const lowest = Math.min(...pool.map((c) => c.price).filter((price) => price >= floor));
   return Math.round(lowest * 100) / 100;
@@ -424,6 +500,56 @@ function pickBestComp(comps, query) {
     if (score > bestScore) { best = comp; bestScore = score; }
   }
   return best;
+}
+
+/**
+ * Photo candidates for a listing, best first: comps with a photo that
+ * comp_match.js does not rule out, explicit same-state matches (level 2)
+ * ahead of unverified ones (level 1), then by shared title words, then eBay's
+ * own order. Each entry is `{ comp, level }`.
+ */
+function rankPhotoComps(comps, query, included = "unknown") {
+  const want = tokens(query);
+  return comps
+    .map((comp, index) => {
+      if (!comp.imageUrl) return null;
+      const level = matchLevel(included, comp, query);
+      if (level === 0) return null;
+      const have = tokens(comp.title);
+      let score = 0;
+      for (const t of want) if (have.has(t)) score++;
+      return { comp, level, score, index };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.level - a.level || b.score - a.score || a.index - b.index)
+    .map(({ comp, level }) => ({ comp, level }));
+}
+
+/**
+ * The comp whose photos the draft may use, plus the details fetched on the
+ * way. See comp_match.js for the rule; in short:
+ *   - our listing does not say what is included → the best-ranked candidate;
+ *   - it does → the first candidate that is explicitly in the same state, by
+ *     title / short description (level 2) or by its full description (a
+ *     level-1 candidate whose detail text confirms it). At most
+ *     MAX_DETAIL_CHECKS detail lookups; none confirmed → `photoComp: null`
+ *     and the draft gets a placeholder rather than a wrong photo.
+ * `detail` is the photo comp's detail when there is one, else the first one
+ * fetched — still good for category / specifics ("sell similar"), which do
+ * not depend on what is in the box.
+ */
+async function choosePhotoComp(comps, query, included, deps) {
+  const ours = normalizeIncluded(included);
+  const candidates = rankPhotoComps(comps, query, ours).slice(0, MAX_DETAIL_CHECKS);
+  let firstDetail = null;
+  for (const { comp, level } of candidates) {
+    const detail = await safeDetail(comp.itemId, deps);
+    firstDetail = firstDetail || detail;
+    if (ours === "unknown" || level === 2) return { photoComp: comp, detail, photoDetail: detail };
+    const text = detail ? `${detail.title || ""} ${detail.shortDescription || ""} ${detail.description || ""}` : "";
+    if (descriptionConfirms(ours, text) === true) return { photoComp: comp, detail, photoDetail: detail };
+  }
+  return { photoComp: null, detail: firstDetail, photoDetail: null };
 }
 
 /** Seller-supplied aspects worth carrying onto the draft. Drops the ones that
@@ -554,12 +680,15 @@ async function safeDetail(itemId, deps) {
  */
 async function enrichProposal(core, deps) {
   const { _searchQuery, _componentQueries, _aiPrice, _userPrice, ...proposal } = core;
+  // What comes with the listing; "unknown" when an older client's pending
+  // item carries none. Every comp decision below goes through it.
+  const included = normalizeIncluded(proposal.included);
 
   // 2. price — the user's own price always wins; comps still run because the
   // sell-similar details and photos come from them, and the market figure is
   // returned alongside so the review list can show both.
   const comps = await safeComps(_searchQuery, deps);
-  const compPrice = priceFromComps(comps, _searchQuery);
+  const compPrice = priceFromComps(comps, _searchQuery, included);
   if (_userPrice) {
     proposal.suggestedPrice = _userPrice;
     proposal.priceSource = "user";
@@ -579,9 +708,14 @@ async function enrichProposal(core, deps) {
   }
   proposal.comps = comps.slice(0, 5).map((c) => ({ title: c.title, price: c.price, itemWebUrl: c.itemWebUrl }));
 
-  // 3. sell similar — category / condition / specifics from the best comp
-  const best = pickBestComp(comps, _searchQuery);
-  const detail = best ? await safeDetail(best.itemId, deps) : null;
+  // 3. sell similar — category / condition / specifics from a comp. The same
+  // lookup decides whose photos may be used (state must match: comp_match.js).
+  const picked = await choosePhotoComp(comps, _searchQuery, included, deps);
+  const { photoComp, photoDetail } = picked;
+  // Nothing usable as a photo source (every comp ruled out): details can still
+  // come from the closest title, as before.
+  const fallback = picked.detail ? null : pickBestComp(comps, _searchQuery);
+  const detail = picked.detail || (fallback ? await safeDetail(fallback.itemId, deps) : null);
   if (detail) {
     proposal.similarItemId = detail.itemId;
     if (detail.categoryId) proposal.ebayCategoryId = String(detail.categoryId);
@@ -591,24 +725,26 @@ async function enrichProposal(core, deps) {
     if (Object.keys(specifics).length) proposal.itemSpecifics = specifics;
   }
 
-  // 4. photos — (a) comp photos
+  // 4. photos — (a) comp photos, only from comps in the same state as ours
   const urls = [];
   if (proposal.isBundle && _componentQueries.length) {
-    // One photo per component so the cover shows what's in the lot.
+    // One photo per component so the cover shows what's in the lot. No detail
+    // lookups here: when our state is known a component needs an explicit
+    // (level 2) match, otherwise the best-ranked candidate.
     const perComponent = await mapWithConcurrency(_componentQueries, 2, async (q) => {
-      const list = await safeComps(q, deps);
-      return pickBestComp(list, q);
+      const top = rankPhotoComps(await safeComps(q, deps), q, included)[0];
+      return top && (included === "unknown" || top.level === 2) ? top.comp : null;
     });
     for (const hit of perComponent) {
       const url = hit && fullSizeEbayImage(hit.imageUrl);
       if (url && !urls.includes(url)) urls.push(url);
     }
   }
-  if (!urls.length && detail?.images?.length) {
-    urls.push(...detail.images.slice(0, MAX_PHOTOS));
+  if (!urls.length && photoDetail?.images?.length) {
+    urls.push(...photoDetail.images.slice(0, MAX_PHOTOS));
   }
-  if (!urls.length && best?.imageUrl) {
-    urls.push(fullSizeEbayImage(best.imageUrl));
+  if (!urls.length && photoComp?.imageUrl) {
+    urls.push(fullSizeEbayImage(photoComp.imageUrl));
   }
   if (urls.length) {
     proposal.imageUrls = urls.slice(0, MAX_PHOTOS);
@@ -677,7 +813,9 @@ exports.bulkDraftsFromText = onCall(
           return await parseListWithGemini(apiKey, text, maxItems, context);
         } catch (e) {
           console.error(`[bulkDraftsFromText] parse failed: ${e.message}`);
-          throw new HttpsError("internal", `Could not read the list: ${e.message}`);
+          // "unavailable", not "internal": the client shows an internal
+          // error's message as the bare word "INTERNAL".
+          throw new HttpsError("unavailable", "The AI could not read that list. Please try again.");
         }
       },
       comps: retrieveComps,
@@ -726,6 +864,8 @@ exports._internal = {
   comparableComps,
   median,
   pickBestComp,
+  rankPhotoComps,
+  choosePhotoComp,
   usefulSpecifics,
   googleImages,
   enrichProposal,

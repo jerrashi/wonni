@@ -3,6 +3,7 @@ const admin = require("firebase-admin");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { downloadBuffer, isOwner } = require("./product_media");
 const { listingImagesFor } = require("./platform_adapters");
+const { toGrading } = require("./ebay_condition");
 
 // Plain secret name — Firebase v2 `secrets: []` accepts the string form.
 const geminiApiKey = "GEMINI_API_KEY";
@@ -59,6 +60,7 @@ Given a product's title, its current description (may be empty), and one photo, 
 - "category": a short category path hint like "Collectibles > K-pop > Photocards" (a hint for a marketplace category picker, NOT an ID).
 - "facebookCategory": ONLY if asked — must be EXACTLY one string from the provided candidate list, verbatim, no variation.
 - "itemSpecifics": object of extra attributes buyers filter on, e.g. {"Type":"Photo Card","Character":"Jungkook"}. Use {} if unsure.
+- "grader", "grade", "gradeCertNumber": include these three ONLY when the title, description or photo shows the item is professionally graded and in a grading-company holder (slabbed card, WATA/VGA game): the company abbreviation ("PSA", "BGS", "CGC"), the grade on the label ("10", "9.5", "Authentic") and the certificate number if readable. Omit them for anything else; never estimate a grade for a raw card.
 Return ONLY valid JSON, no code fences.`;
 
 async function callGemini(apiKey, product, keys) {
@@ -69,6 +71,7 @@ async function callGemini(apiKey, product, keys) {
     `Title: ${product.title || "(none)"}`,
     product.description ? `Current description: ${String(product.description).slice(0, 600)}` : "Current description: (empty)",
     `Fill these keys: ${keys.join(", ")}`,
+    "Also add grader, grade and gradeCertNumber, but only if the item is professionally graded (see the rules).",
   ];
   if (keys.includes("facebookCategory")) {
     promptLines.push(`facebookCategory candidates (pick exactly one, verbatim): ${FACEBOOK_CATEGORIES.join(" | ")}`);
@@ -151,6 +154,13 @@ async function resolveListingFields(product, { apiKey, includeFacebookCategory =
 
   if (g.itemSpecifics && typeof g.itemSpecifics === "object" && Object.keys(g.itemSpecifics).length) {
     writes.geminiItemSpecifics = g.itemSpecifics;
+  }
+
+  // Professional grading, when the model saw one and the product has none.
+  // eBay's card categories need it to list as "Graded" (ebay_condition.js).
+  if (isBlank(product.grade) && isBlank(product.grader)) {
+    const grading = toGrading(g);
+    if (grading) Object.assign(writes, grading);
   }
 
   if (blanks.includes("facebookCategory") && FACEBOOK_CATEGORY_SET.has(g.facebookCategory)) {

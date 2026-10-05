@@ -28,6 +28,10 @@ async function retrieveComps({ title, categoryId, condition, limit }, { fetchImp
   // already resolved (see platform_adapters' condition mapping); no new
   // condition-name mapping is introduced here.
   if (condition) params.set("filter", `conditionIds:{${condition}}`);
+  // EXTENDED adds each result's `shortDescription` (verified live 2026-10-04).
+  // comp_match.js reads it to tell a loose cartridge from a boxed copy when
+  // the title does not say.
+  params.set("fieldgroups", "MATCHING_ITEMS,EXTENDED");
 
   const res = await fetchImpl(
     `https://${ebayApiHost()}/buy/browse/v1/item_summary/search?${params.toString()}`,
@@ -56,6 +60,7 @@ async function retrieveComps({ title, categoryId, condition, limit }, { fetchImp
     condition: item.condition ?? null,
     itemWebUrl: item.itemWebUrl ?? null,
     imageUrl: item.image?.imageUrl ?? item.thumbnailImages?.[0]?.imageUrl ?? null,
+    shortDescription: item.shortDescription ?? null,
   }));
 }
 
@@ -64,6 +69,16 @@ async function retrieveComps({ title, categoryId, condition, limit }, { fetchImp
 function fullSizeEbayImage(url) {
   if (typeof url !== "string") return url;
   return url.replace(/(\/\/i\.ebayimg\.com\/.*\/s-l)\d+(\.(?:jpg|jpeg|png|webp))$/i, "$11600$2");
+}
+
+/** HTML → readable text: tags, scripts/styles and entities removed. */
+function plainText(html) {
+  return String(html || "")
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&#?\w+;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 // The "sell similar" half of a comp: Browse `getItem` returns what a search
@@ -104,6 +119,8 @@ async function retrieveCompDetail(itemId, { fetchImpl = fetch } = {}) {
     images: [...new Set(images)],
     aspects,
     shortDescription: json.shortDescription ?? null,
+    // The seller's full description as plain text (it arrives as HTML).
+    description: plainText(json.description).slice(0, 4000),
   };
 }
 

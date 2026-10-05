@@ -19,7 +19,9 @@ final class BulkTextDraftMappingTests: XCTestCase {
         isBundle: Bool = false,
         bundleItems: [String] = [],
         sourceText: String = "Super smash bros brawl",
-        weightOz: Double? = nil
+        weightOz: Double? = nil,
+        included: Included? = nil,
+        media: Media? = nil
     ) -> Draft {
         Draft(
             brand: "Nintendo",
@@ -34,11 +36,13 @@ final class BulkTextDraftMappingTests: XCTestCase {
             heightIn: weightOz == nil ? nil : 1,
             imageSource: imageSource,
             imageUrls: imageUrls,
+            included: included,
             isBundle: isBundle,
             itemSpecifics: ["Platform": "Nintendo Wii", "Game Name": "Super Smash Bros. Brawl"],
             lengthIn: weightOz == nil ? nil : 7.5,
             marketPrice: marketPrice,
             marketPriceSource: marketPriceSource,
+            media: media,
             priceSource: priceSource,
             quantity: 1,
             shortTitle: shortTitle,
@@ -130,6 +134,29 @@ final class BulkTextDraftMappingTests: XCTestCase {
         XCTAssertEqual(image.size.width, 256)
         XCTAssertEqual(image.size.height, 256)
         XCTAssertNotNil(image.jpegData(compressionQuality: 0.8))
+    }
+
+    /// A bare disc or cartridge with no matching photo gets a drawn disc / cartridge;
+    /// everything else (boxed, sealed, unstated, non-media) keeps the plain card.
+    func testPlaceholderStyleFollowsWhatTheListingIncludes() {
+        XCTAssertEqual(BulkTextDraftMapper.placeholderStyle(for: proposal(included: .loose, media: .disc)), .disc)
+        XCTAssertEqual(BulkTextDraftMapper.placeholderStyle(for: proposal(included: .loose, media: .cartridge)), .cartridge)
+        XCTAssertEqual(BulkTextDraftMapper.placeholderStyle(for: proposal(included: .loose, media: .other)), .card)
+        XCTAssertEqual(BulkTextDraftMapper.placeholderStyle(for: proposal(included: .complete, media: .disc)), .card)
+        XCTAssertEqual(BulkTextDraftMapper.placeholderStyle(for: proposal(included: .unknown, media: .cartridge)), .card)
+        // A response from a server older than these fields.
+        XCTAssertEqual(BulkTextDraftMapper.placeholderStyle(for: proposal()), .card)
+    }
+
+    func testEveryPlaceholderStyleRendersADifferentSquareImage() {
+        let styles: [BulkTextDraftMapper.PlaceholderStyle] = [.card, .disc, .cartridge]
+        let images = styles.map { BulkTextDraftMapper.placeholderImage(title: "Wii Sports", style: $0, size: 256) }
+        for image in images {
+            XCTAssertEqual(image.size, CGSize(width: 256, height: 256))
+            XCTAssertNotNil(image.jpegData(compressionQuality: 0.8))
+        }
+        let data = images.compactMap { $0.pngData() }
+        XCTAssertEqual(Set(data).count, 3)
     }
 
     func testResponseDecodesFromCallablePayload() throws {

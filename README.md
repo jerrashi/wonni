@@ -91,6 +91,41 @@ All data lives in Firebase:
 
 5-tab navigation: Home (feed), Search, Sell (camera → AI → publish), Inbox (messages/offers), Profile (listings management).
 
+### Drafts from a List: how prices and photos are matched
+
+"Drafts from a List" turns pasted text into ready-to-post drafts. It borrows a price and a photo from live eBay listings ("comps"). A search for one game returns loose cartridges, boxed copies, sealed copies and empty boxes, so every listing carries an **included** state and a comp is only used when it is in the same state.
+
+| State | Meaning | Example wording |
+|---|---|---|
+| `complete` | Every original part | "CIB", "complete in box", "disc + manual + case" |
+| `partial` | Original case or box, something missing | "no manual" |
+| `loose` | The item alone | "cartridge only", "disc only", "generic case" |
+| `sealed` | Factory sealed | "sealed", "new in box" |
+| `packaging` | Not the item itself | "box only", "case only" |
+| `unknown` | The text does not say | |
+
+How a draft is built, in order:
+
+1. **Parse.** One Gemini call reads the whole text and returns each listing with its `included` state and `media` type (`functions/bulk_text_drafts.js`). Invalid JSON from the model is retried once, then salvaged item by item.
+2. **Search.** One eBay Browse search per listing, 50 results, with each result's short description.
+3. **Classify.** `functions/comp_match.js` reads each comp's title, then its short description, and gives it a state. This is plain phrase matching with no AI call.
+4. **Price.** The lowest asking price among comps in the same state. If our state is known and no comp shares it, the model's own estimate is used.
+5. **Photo.** The best-ranked comp that is explicitly in the same state. A comp with a silent title is used only if its full description confirms the state. At most three comps are looked up.
+6. **Placeholder.** If no comp qualifies, the draft gets no borrowed photo. The app draws a card: a disc or cartridge with the title for a loose disc or cartridge, a plain title card otherwise (`BulkTextDraftMapper.placeholderImage`). A wrong photo is never used as a stand-in.
+
+When the seller's text does not say what is included, the best title match is used, minus empty boxes, reproductions, graded copies and broken items.
+
+To teach the matcher a new phrase, add it to the lists in `functions/comp_match.js` and add the real eBay title to `functions/test/comp-match.test.js`. Run `npm test` in `functions/`.
+
+### eBay conditions for trading cards
+
+eBay's card categories use two conditions, "Graded" and "Ungraded", and each needs extra fields. `functions/ebay_condition.js` reads the category's condition policy at post time and builds them:
+
+- **Graded** needs a grader and a grade, for example PSA 10. The grade comes from the product's `grader` and `grade` fields, from its item specifics, or from the title.
+- **Ungraded** needs a card condition such as "Near mint or better". It is picked from the app's condition and from words like "lightly played" in the title.
+
+The AI enrichment (`enrichListing`) returns optional `grader`, `grade` and `gradeCertNumber` fields when a photo or the text shows a graded item. Categories without grading are not affected.
+
 Open feature work, backlog, and known bugs are tracked in [GitHub Issues](../../issues), not in this README.
 
 ---
