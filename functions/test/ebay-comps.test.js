@@ -84,6 +84,7 @@ test("retrieveComps: maps Browse API itemSummaries into the comps shape", async 
     condition: "Used",
     itemWebUrl: "https://ebay.com/itm/123",
     imageUrl: "https://img.example/1.jpg",
+    shortDescription: null,
   });
   // Falls back to thumbnailImages when `image` is absent
   assert.equal(comps[1].imageUrl, "https://img.example/2.jpg");
@@ -97,6 +98,8 @@ test("retrieveComps: builds the search query from title + optional filters", asy
   assert.ok(lastUrl.includes("category_ids=183454"));
   assert.ok(lastUrl.includes("conditionIds"));
   assert.ok(lastUrl.includes("limit=10"));
+  // EXTENDED is what returns each result's shortDescription (comp_match.js).
+  assert.ok(decodeURIComponent(lastUrl).includes("fieldgroups=MATCHING_ITEMS,EXTENDED"));
 });
 
 test("retrieveComps: title-only search omits category/condition filters", async () => {

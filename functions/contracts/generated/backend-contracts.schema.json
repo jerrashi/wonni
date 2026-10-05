@@ -2565,6 +2565,18 @@
               "type": "number",
               "minimum": 0,
               "maximum": 1
+            },
+            "grader": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "grade": {
+              "type": "string",
+              "maxLength": 20
+            },
+            "gradeCertNumber": {
+              "type": "string",
+              "maxLength": 20
             }
           },
           "additionalProperties": false
@@ -2639,6 +2651,18 @@
               "type": "number",
               "minimum": 0,
               "maximum": 1
+            },
+            "grader": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "grade": {
+              "type": "string",
+              "maxLength": 20
+            },
+            "gradeCertNumber": {
+              "type": "string",
+              "maxLength": 20
             }
           },
           "additionalProperties": false
@@ -3059,6 +3083,25 @@
               "sourceText": {
                 "type": "string"
               },
+              "included": {
+                "type": "string",
+                "enum": [
+                  "complete",
+                  "partial",
+                  "loose",
+                  "sealed",
+                  "packaging",
+                  "unknown"
+                ]
+              },
+              "media": {
+                "type": "string",
+                "enum": [
+                  "disc",
+                  "cartridge",
+                  "other"
+                ]
+              },
               "searchQuery": {
                 "type": "string",
                 "maxLength": 200
@@ -3287,6 +3330,25 @@
                 "type": "number",
                 "exclusiveMinimum": 0
               },
+              "included": {
+                "type": "string",
+                "enum": [
+                  "complete",
+                  "partial",
+                  "loose",
+                  "sealed",
+                  "packaging",
+                  "unknown"
+                ]
+              },
+              "media": {
+                "type": "string",
+                "enum": [
+                  "disc",
+                  "cartridge",
+                  "other"
+                ]
+              },
               "sourceText": {
                 "type": "string"
               }
@@ -3366,6 +3428,25 @@
               },
               "sourceText": {
                 "type": "string"
+              },
+              "included": {
+                "type": "string",
+                "enum": [
+                  "complete",
+                  "partial",
+                  "loose",
+                  "sealed",
+                  "packaging",
+                  "unknown"
+                ]
+              },
+              "media": {
+                "type": "string",
+                "enum": [
+                  "disc",
+                  "cartridge",
+                  "other"
+                ]
               },
               "searchQuery": {
                 "type": "string",
@@ -3970,6 +4051,18 @@
           "type": "number",
           "minimum": 0,
           "maximum": 1
+        },
+        "grader": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "grade": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "gradeCertNumber": {
+          "type": "string",
+          "maxLength": 20
         }
       },
       "additionalProperties": false

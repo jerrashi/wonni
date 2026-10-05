@@ -134,10 +134,36 @@ enum BulkTextDraftMapper {
         return out.joined(separator: "\n")
     }
 
+    /// What the placeholder card is drawn as when no photo could be used.
+    enum PlaceholderStyle: Equatable {
+        /// Plain title card.
+        case card
+        /// A disc with the title on it — the listing is a bare disc.
+        case disc
+        /// A cartridge with the title on its label — the listing is a bare cartridge.
+        case cartridge
+    }
+
+    /// A drawn disc or cartridge only when the listing IS just that ("disc only",
+    /// "disc in a generic case", "cartridge only"). The server only uses another
+    /// seller's photo when that listing is in the same state as ours
+    /// (functions/comp_match.js); when none is, this card says what the buyer gets
+    /// instead of showing a boxed copy. Anything else keeps the plain card.
+    static func placeholderStyle(for proposal: Draft) -> PlaceholderStyle {
+        guard proposal.included == .loose else { return .card }
+        switch proposal.media {
+        case .disc: return .disc
+        case .cartridge: return .cartridge
+        default: return .card
+        }
+    }
+
     /// A draft without a photo is invisible in the drafts list and skipped by publish,
-    /// so a proposal with no usable photo gets a clearly-labelled title card instead.
-    /// The user replaces it like any other photo.
-    static func placeholderImage(title: String, size: CGFloat = 1024) -> UIImage {
+    /// so a proposal with no usable photo gets a clearly-labelled card instead: a
+    /// plain title card, or a drawn disc / cartridge carrying the title (see
+    /// `placeholderStyle`). Drawn locally — not a photo and not AI-generated. The user
+    /// replaces it like any other photo.
+    static func placeholderImage(title: String, style: PlaceholderStyle = .card, size: CGFloat = 1024) -> UIImage {
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
         return renderer.image { ctx in
             UIColor(white: 0.93, alpha: 1).setFill()
@@ -145,21 +171,55 @@ enum BulkTextDraftMapper {
             let paragraph = NSMutableParagraphStyle()
             paragraph.alignment = .center
             paragraph.lineBreakMode = .byWordWrapping
-            let titleAttrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.systemFont(ofSize: size * 0.07, weight: .semibold),
-                .foregroundColor: UIColor.darkGray,
-                .paragraphStyle: paragraph
-            ]
-            let noteAttrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.systemFont(ofSize: size * 0.035, weight: .regular),
-                .foregroundColor: UIColor.gray,
-                .paragraphStyle: paragraph
-            ]
-            let inset = size * 0.1
-            let titleRect = CGRect(x: inset, y: size * 0.3, width: size - 2 * inset, height: size * 0.4)
-            (title as NSString).draw(in: titleRect, withAttributes: titleAttrs)
-            let noteRect = CGRect(x: inset, y: size * 0.78, width: size - 2 * inset, height: size * 0.1)
-            ("Placeholder — add a photo" as NSString).draw(in: noteRect, withAttributes: noteAttrs)
+            func attrs(_ scale: CGFloat, _ weight: UIFont.Weight, _ color: UIColor) -> [NSAttributedString.Key: Any] {
+                [.font: UIFont.systemFont(ofSize: size * scale, weight: weight), .foregroundColor: color, .paragraphStyle: paragraph]
+            }
+            let note = "Placeholder — add a photo" as NSString
+            // Where the title and the note go, after the shape (if any) is drawn.
+            var titleRect = CGRect(x: size * 0.1, y: size * 0.3, width: size * 0.8, height: size * 0.4)
+            var noteRect = CGRect(x: size * 0.1, y: size * 0.78, width: size * 0.8, height: size * 0.1)
+            var titleScale: CGFloat = 0.07
+
+            switch style {
+            case .card:
+                break
+            case .disc:
+                let center = CGPoint(x: size / 2, y: size / 2)
+                func ring(_ radius: CGFloat) -> UIBezierPath {
+                    UIBezierPath(arcCenter: center, radius: size * radius, startAngle: 0, endAngle: .pi * 2, clockwise: true)
+                }
+                UIColor(white: 0.82, alpha: 1).setFill()
+                ring(0.44).fill()
+                UIColor(white: 0.97, alpha: 1).setFill()
+                ring(0.42).fill()
+                UIColor(white: 0.82, alpha: 1).setFill()
+                ring(0.11).fill()
+                UIColor(white: 0.93, alpha: 1).setFill()
+                ring(0.05).fill()
+                // Title on the upper half of the disc, note on the lower half.
+                titleRect = CGRect(x: size * 0.24, y: size * 0.16, width: size * 0.52, height: size * 0.22)
+                noteRect = CGRect(x: size * 0.26, y: size * 0.66, width: size * 0.48, height: size * 0.1)
+                titleScale = 0.05
+            case .cartridge:
+                let body = CGRect(x: size * 0.2, y: size * 0.1, width: size * 0.6, height: size * 0.8)
+                UIColor(white: 0.74, alpha: 1).setFill()
+                UIBezierPath(roundedRect: body, cornerRadius: size * 0.04).fill()
+                // Grip lines across the top, like the ridges on a cartridge shell.
+                UIColor(white: 0.66, alpha: 1).setFill()
+                for row in 0..<3 {
+                    let lineY = size * (0.14 + CGFloat(row) * 0.025)
+                    UIBezierPath(roundedRect: CGRect(x: size * 0.27, y: lineY, width: size * 0.46, height: size * 0.01), cornerRadius: size * 0.005).fill()
+                }
+                let label = CGRect(x: size * 0.26, y: size * 0.26, width: size * 0.48, height: size * 0.44)
+                UIColor(white: 0.97, alpha: 1).setFill()
+                UIBezierPath(roundedRect: label, cornerRadius: size * 0.02).fill()
+                titleRect = label.insetBy(dx: size * 0.03, dy: size * 0.06)
+                noteRect = CGRect(x: size * 0.22, y: size * 0.76, width: size * 0.56, height: size * 0.1)
+                titleScale = 0.05
+            }
+
+            (title as NSString).draw(in: titleRect, withAttributes: attrs(titleScale, .semibold, .darkGray))
+            note.draw(in: noteRect, withAttributes: attrs(0.035, .regular, style == .cartridge ? .white : .gray))
         }
     }
 }
@@ -267,7 +327,10 @@ final class BulkTextDraftService {
 
             var photos = await downloadPhotos(proposal.imageUrls)
             if photos.isEmpty {
-                let card = BulkTextDraftMapper.placeholderImage(title: item.aiSuggestedTitle ?? proposal.title)
+                let card = BulkTextDraftMapper.placeholderImage(
+                    title: item.aiSuggestedTitle ?? proposal.title,
+                    style: BulkTextDraftMapper.placeholderStyle(for: proposal)
+                )
                 if let data = card.jpegData(compressionQuality: 0.85) { photos = [data] }
             }
             for data in photos {

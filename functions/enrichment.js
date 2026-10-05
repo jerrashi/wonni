@@ -21,10 +21,11 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { validated } = require("./contracts");
 const { downloadBuffer, isOwner } = require("./product_media");
 const { resolveListingFields } = require("./listing_fields");
+const { toGrading } = require("./ebay_condition");
 
 const GEMINI_API_KEY = "GEMINI_API_KEY";
 const GEMINI_MODEL = "gemini-flash-lite-latest";
-const PROMPT_VERSION = "2026-09-09.1";
+const PROMPT_VERSION = "2026-10-04.1";
 const TITLE_CAP = 140;
 const SHORT_TITLE_CAP = 80;
 
@@ -82,6 +83,21 @@ function toListingFields(g = {}) {
     if (Object.keys(specifics).length) out.itemSpecifics = specifics;
   }
 
+  // Professional grading (optional). Kept as fields AND mirrored into
+  // itemSpecifics under eBay's own names, which every client already stores
+  // and sends back — so a grade read from a slab photo reaches the eBay post
+  // (ebay_condition.js `gradingOf`) without new client fields.
+  const grading = toGrading(g);
+  if (grading) {
+    Object.assign(out, grading);
+    out.itemSpecifics = {
+      ...(out.itemSpecifics || {}),
+      "Professional Grader": grading.grader,
+      Grade: grading.grade,
+      ...(grading.gradeCertNumber ? { "Certification Number": grading.gradeCertNumber } : {}),
+    };
+  }
+
   const conf = Number(g.confidence);
   if (Number.isFinite(conf)) out.confidence = Math.min(1, Math.max(0, conf));
 
@@ -94,6 +110,7 @@ function writesToContract(writes = {}) {
   const map = {
     description: "description", brand: "brand", condition: "condition", tags: "tags",
     geminiCategory: "category", geminiItemSpecifics: "itemSpecifics",
+    grader: "grader", grade: "grade", gradeCertNumber: "gradeCertNumber",
   };
   const out = {};
   for (const [docKey, contractKey] of Object.entries(map)) {
@@ -114,6 +131,7 @@ Given photos and optional user hints, return ONLY a JSON object (no code fences)
 - "weightOz": estimated shipping weight in ounces (number).
 - "lengthIn","widthIn","heightIn": estimated shipping box dimensions in inches (numbers).
 - "itemSpecifics": object of attributes buyers filter on, e.g. {"Type":"Photo Card","Member":"Jungkook"}. {} if unsure.
+- "grader", "grade", "gradeCertNumber": ONLY when the item is professionally graded and sealed in a grading-company holder (a slabbed trading card, a WATA/VGA graded game). "grader" is the company abbreviation on the label ("PSA", "BGS", "CGC", "SGC"), "grade" is the grade printed on the label ("10", "9.5", "Authentic"), "gradeCertNumber" is the certificate number on the label if readable. Read them from the label in the photos or from the hints. Omit all three for anything not in a grading holder; never estimate a grade for a raw card.
 - "confidence": 0.0-1.0.
 Count the shortTitle characters carefully — 80 max.`;
 
@@ -203,4 +221,4 @@ exports.enrichListing = onCall(
   }),
 );
 
-exports._internal = { normalizeCondition, toListingFields, writesToContract, toInlineData };
+exports._internal = { normalizeCondition, toListingFields, toGrading, writesToContract, toInlineData };

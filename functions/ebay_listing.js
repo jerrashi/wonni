@@ -6,6 +6,7 @@ const {
   resolveListingPrice, variantPriceOr,
 } = require("./platform_adapters");
 const { fillBlankFieldsInline, geminiApiKey } = require("./listing_fields");
+const { parseConditionPolicy, cardCondition } = require("./ebay_condition");
 
 const MARKETPLACE_ID = "EBAY_US";
 
@@ -874,17 +875,16 @@ async function getCategoryAspects(categoryId) {
   }
 }
 
-// Condition IDs a category accepts (Sell Metadata API, user token).
-// null on failure → caller keeps its mapped condition.
-async function getAllowedConditionIds(uid, categoryId) {
+// A category's condition policy (Sell Metadata API, user token): the condition
+// ids it accepts plus any condition descriptors (trading cards — see
+// ebay_condition.js). null on failure → caller keeps its mapped condition.
+async function getConditionPolicy(uid, categoryId) {
   try {
     const filter = encodeURIComponent(`categoryIds:{${categoryId}}`);
     const data = await ebayRequest(uid, "GET", `/sell/metadata/v1/marketplace/${MARKETPLACE_ID}/get_item_condition_policies?filter=${filter}`);
-    const policy = (data?.itemConditionPolicies || [])[0];
-    if (!policy) return null;
-    return (policy.itemConditions || []).map((c) => String(c.conditionId));
+    return parseConditionPolicy((data?.itemConditionPolicies || [])[0]);
   } catch (err) {
-    console.warn(`[getAllowedConditionIds] ${err.message}`);
+    console.warn(`[getConditionPolicy] ${err.message}`);
     return null;
   }
 }
@@ -1081,6 +1081,25 @@ function productConditionToEbayEnum(product) {
   }[raw] || "USED_GOOD";
 }
 
+// The condition to send for a product in a category: the graded / ungraded
+// card condition with its descriptors when the category has them
+// (ebay_condition.js), otherwise the ordinary one-word mapping below.
+function resolveItemCondition(product, policy) {
+  const card = cardCondition(product, policy);
+  if (card && CONDITION_ID_TO_ENUM[card.conditionId]) {
+    return { conditionEnum: CONDITION_ID_TO_ENUM[card.conditionId], conditionDescriptors: card.conditionDescriptors };
+  }
+  return { conditionEnum: resolveCondition(productConditionToEbayEnum(product), policy?.allowedIds ?? null), conditionDescriptors: undefined };
+}
+
+// The condition keys of an inventory-item payload. `override` is the publish
+// recovery's fallback condition (generic Used): descriptors belong to the
+// condition they were built for, so they are dropped with it.
+function conditionFields(conditionEnum, conditionDescriptors, override) {
+  if (override) return { condition: override };
+  return { condition: conditionEnum, ...(conditionDescriptors?.length ? { conditionDescriptors } : {}) };
+}
+
 // Pick a condition enum the category will accept.
 function resolveCondition(intendedEnum, allowedIds) {
   if (!allowedIds || allowedIds.length === 0) return intendedEnum;
@@ -1179,7 +1198,7 @@ async function publishWithRecovery({ doPublish, refresh, categoryAspects, brand,
 
 // Single-variation listing: one inventory item → one offer → publish.
 async function postSingleVariant(ctx) {
-  const { uid, product, productId, docRef, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description, categoryAspects, brand, conditionEnum } = ctx;
+  const { uid, product, productId, docRef, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description, categoryAspects, brand, conditionEnum, conditionDescriptors } = ctx;
   const sku = productId;
   const itemQty = typeof product.quantity === "number" && product.quantity > 0 ? product.quantity : 1;
   const productAspects = buildProductAspects(categoryAspects, brand, title, {}, { ...toAspectArrays(product.geminiItemSpecifics), ...toAspectArrays(product.ebayAspects) });
@@ -1187,7 +1206,7 @@ async function postSingleVariant(ctx) {
   const putItem = ({ addedAspects = {}, condition } = {}) =>
     ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
       product: { ...toEbayInventoryProduct(product, { imageLimit: 12, title }), aspects: { ...productAspects, ...addedAspects } },
-      condition: condition || conditionEnum,
+      ...conditionFields(conditionEnum, conditionDescriptors, condition),
       packageWeightAndSize: ebayPackageWeightAndSize(product),
       availability: { shipToLocationAvailability: { quantity: itemQty } },
     });
@@ -1245,7 +1264,7 @@ async function postSingleVariant(ctx) {
 // inventory item group → one offer per variant → publishOfferByInventoryItemGroup.
 // Result is ONE eBay listing with N selectable variations.
 async function postMultiVariant(ctx) {
-  const { uid, product, productId, docRef, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description, categoryAspects, brand, conditionEnum } = ctx;
+  const { uid, product, productId, docRef, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description, categoryAspects, brand, conditionEnum, conditionDescriptors } = ctx;
   const groupKey = productId;
   const options = Array.isArray(product.options) ? product.options : [];
   const productVariants = Array.isArray(product.variants)
@@ -1367,7 +1386,7 @@ async function postMultiVariant(ctx) {
   const putAllItems = ({ addedAspects = {}, condition } = {}) => Promise.all(
     perVariant.map((pv) => ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(pv.sku)}`, {
       product: { ...sharedProduct, aspects: { ...productAspects, ...addedAspects, ...pv.aspects } },
-      condition: condition || conditionEnum,
+      ...conditionFields(conditionEnum, conditionDescriptors, condition),
       packageWeightAndSize,
       availability: { shipToLocationAvailability: { quantity: pv.qty } },
     }))
@@ -1488,16 +1507,16 @@ async function ebayCreateListingCore(uid, productId) {
   // Fill eBay's category-required fields the user left blank: item aspects
   // (Brand/Type/…) from the title + known brands, and a category-valid
   // condition. Both degrade gracefully — the publish retry loop is the net.
-  const [categoryAspects, allowedConditionIds] = await Promise.all([
+  const [categoryAspects, conditionPolicy] = await Promise.all([
     getCategoryAspects(categoryId),
-    getAllowedConditionIds(uid, categoryId),
+    getConditionPolicy(uid, categoryId),
   ]);
   const brand = resolveBrand(product);
-  const conditionEnum = resolveCondition(productConditionToEbayEnum(product), allowedConditionIds);
+  const { conditionEnum, conditionDescriptors } = resolveItemCondition(product, conditionPolicy);
 
   const ctx = {
     uid, product, productId, docRef, basePrice, categoryId, listingPolicies,
-    merchantLocationKey, title, description, categoryAspects, brand, conditionEnum,
+    merchantLocationKey, title, description, categoryAspects, brand, conditionEnum, conditionDescriptors,
   };
   const hasVariations = buildEbayVariations(product) !== null;
   return hasVariations ? postMultiVariant(ctx) : postSingleVariant(ctx);
@@ -1722,7 +1741,7 @@ exports.ebayGetListingDetails = onCall(
  *  eBay already accepted is never dropped by a replace. */
 function buildSingleVariantEditPayloads({
   product, title, description, basePrice, offer, existingItem,
-  categoryAspects, brand, conditionEnum, listingPolicies, merchantLocationKey,
+  categoryAspects, brand, conditionEnum, conditionDescriptors, listingPolicies, merchantLocationKey,
 }) {
   const qty = typeof product.quantity === "number" && product.quantity >= 0 ? product.quantity : 1;
   const aspects = {
@@ -1734,7 +1753,7 @@ function buildSingleVariantEditPayloads({
   };
   const itemPayload = {
     product: { ...toEbayInventoryProduct(product, { imageLimit: 12, title }), aspects },
-    condition: conditionEnum,
+    ...conditionFields(conditionEnum, conditionDescriptors),
     packageWeightAndSize: ebayPackageWeightAndSize(product),
     availability: { shipToLocationAvailability: { quantity: qty } },
   };
@@ -1776,9 +1795,9 @@ async function pushSingleVariantEdit(uid, product, productId) {
   const categoryId = offer?.categoryId || await resolveCategoryId(uid, title, product);
 
   const handlingTimeDays = product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays;
-  const [categoryAspects, allowedConditionIds, existingItem, freshPolicies] = await Promise.all([
+  const [categoryAspects, conditionPolicy, existingItem, freshPolicies] = await Promise.all([
     getCategoryAspects(categoryId),
-    getAllowedConditionIds(uid, categoryId),
+    getConditionPolicy(uid, categoryId),
     ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`).catch(() => null),
     getListingPolicies(uid, handlingTimeDays).catch((e) => {
       console.warn("[ebay edit] keeping the offer's existing listing policies:", e.message);
@@ -1786,7 +1805,7 @@ async function pushSingleVariantEdit(uid, product, productId) {
     }),
   ]);
   const brand = resolveBrand(product);
-  const conditionEnum = resolveCondition(productConditionToEbayEnum(product), allowedConditionIds);
+  const { conditionEnum, conditionDescriptors } = resolveItemCondition(product, conditionPolicy);
   const existingPolicies = offer?.listingPolicies?.fulfillmentPolicyId ? offer.listingPolicies : null;
 
   const build = ({ addedAspects = {}, condition } = {}) => {
@@ -1795,6 +1814,7 @@ async function pushSingleVariantEdit(uid, product, productId) {
       offer: { ...offer, sku, categoryId },
       existingItem, categoryAspects, brand,
       conditionEnum: condition || conditionEnum,
+      conditionDescriptors: condition ? undefined : conditionDescriptors,
       listingPolicies: freshPolicies || existingPolicies,
       merchantLocationKey: offer?.merchantLocationKey,
     });
@@ -1926,16 +1946,16 @@ async function syncMultiVariantToEbay(uid, product, productId, docRef) {
     getListingPolicies(uid, product.shippingInfo?.handlingTimeDays ?? product.handlingTimeDays),
     resolveCategoryId(uid, title, product),
   ]);
-  const [categoryAspects, allowedConditionIds] = await Promise.all([
+  const [categoryAspects, conditionPolicy] = await Promise.all([
     getCategoryAspects(categoryId),
-    getAllowedConditionIds(uid, categoryId),
+    getConditionPolicy(uid, categoryId),
   ]);
   const brand = resolveBrand(product);
-  const conditionEnum = resolveCondition(productConditionToEbayEnum(product), allowedConditionIds);
+  const { conditionEnum, conditionDescriptors } = resolveItemCondition(product, conditionPolicy);
 
   await postMultiVariant({
     uid, product, productId, docRef, basePrice, categoryId, listingPolicies,
-    merchantLocationKey, title, description, categoryAspects, brand, conditionEnum,
+    merchantLocationKey, title, description, categoryAspects, brand, conditionEnum, conditionDescriptors,
   });
 }
 
@@ -2362,7 +2382,7 @@ module.exports = {
   getEbayAppTokenCached,
   // testable core (used by functions/test/ebay_import_listing.test.js)
   _internal: {
-    toAspectArrays,
+    toAspectArrays, resolveItemCondition, conditionFields,
     resolveCategoryId,
     ebayImportListingCore, ebayCreateListingCore,
     buildShippingRuleName, buildShippingRulePayload,

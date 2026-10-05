@@ -29,6 +29,11 @@ const { ConditionSchema, PositiveMoneySchema } = require("./_shared");
  * long list is enriched 40 at a time without re-reading the text. Same shape
  * the model emits — the server re-validates every field on the way back in.
  */
+/** What physically comes with a listing — see functions/comp_match.js. */
+const IncludedSchema = z.enum(["complete", "partial", "loose", "sealed", "packaging", "unknown"]);
+/** Shapes the client's placeholder card: a disc, a cartridge or a plain card. */
+const MediaSchema = z.enum(["disc", "cartridge", "other"]);
+
 const PendingItemSchema = z.object({
   title: z.string().max(140),
   shortTitle: z.string().max(80),
@@ -41,6 +46,8 @@ const PendingItemSchema = z.object({
   bundleItems: z.array(z.string()),
   quantity: z.number().int().min(1),
   sourceText: z.string(),
+  included: IncludedSchema.optional(),
+  media: MediaSchema.optional(),
   searchQuery: z.string().max(200),
   componentQueries: z.array(z.string()),
   /** The model's own price estimate. */
@@ -116,6 +123,12 @@ const DraftProposalSchema = z.object({
   lengthIn: z.number().positive().optional(),
   widthIn: z.number().positive().optional(),
   heightIn: z.number().positive().optional(),
+  /** What comes with the listing (CIB vs cartridge only…). Comp photos are
+   *  only used from eBay listings in the same state; when none is found
+   *  `imageSource` is "none" and the client draws a placeholder. Optional so
+   *  older servers / clients stay compatible. */
+  included: IncludedSchema.optional(),
+  media: MediaSchema.optional(),
   /** The snippet of the input this proposal was parsed from, for review. */
   sourceText: z.string(),
 });
