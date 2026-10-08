@@ -159,7 +159,7 @@ jobs:
 
       - name: Upload archive as artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: wonni-xcarchive
           path: wonni/build/wonni.xcarchive
