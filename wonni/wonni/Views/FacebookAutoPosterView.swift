@@ -56,16 +56,25 @@ struct FacebookAutoPosterView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                statusBanner
-                if fbFinishedOnSellingPage && fbPostedId == nil {
-                    Button("I published it — mark as posted") {
-                        Task { await markFacebookPosted(id: nil) }
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .padding(8)
-                }
+            // The web view fills the screen and the banner floats over its top edge,
+            // the same shape as the Mercari sheet (CrossPostWebView's fullScreenCover).
+            // It used to be a VStack sibling above the web view: every phase change
+            // resized the WKWebView, and the multi-line review banner plus Retry pushed
+            // Facebook's own pickers off the bottom of the screen (reported 2026-10-10).
+            ZStack(alignment: .top) {
                 CrossPostWebView(url: Self.createURL, webView: webView)
+                VStack(spacing: 0) {
+                    statusBanner
+                    if fbFinishedOnSellingPage && fbPostedId == nil {
+                        Button("I published it — mark as posted") {
+                            Task { await markFacebookPosted(id: nil) }
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .padding(8)
+                        .frame(maxWidth: .infinity)
+                        .background(.ultraThinMaterial)
+                    }
+                }
             }
             .onReceive(webView.publisher(for: \.url)) { url in
                 handleFacebookURLChange(url)
@@ -134,7 +143,7 @@ struct FacebookAutoPosterView: View {
                     if !issues.isEmpty {
                         Text(issues.joined(separator: " · "))
                             .font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .lineLimit(2)
                     }
                 }
                 Spacer()
@@ -252,19 +261,23 @@ struct FacebookAutoPosterView: View {
         }
         if let category, !category.isEmpty {
             let result = (try? await webView.callJS(Self.fillCategoryJS, args: ["category": category])) as? String ?? "error"
-            // "already" = the control no longer reads "Select" — set by an earlier pass or
-            // by hand. Never re-open the picker in that case (the old view did, on every tap).
-            if !(result.hasPrefix("selected") || result == "already") { issues.append("category") }
+            print("[FacebookAutofill] category=\(category) → \(result)")
+            // "already:<text>" = the control no longer reads "Select" — set by an earlier
+            // pass or by hand. Never re-open the picker in that case.
+            if !(result.hasPrefix("selected") || result.hasPrefix("already")) { issues.append("category") }
         } else {
             issues.append("category")
         }
 
         if let brand, !brand.isEmpty {
-            _ = try? await webView.callJS(Self.fillBrandJS, args: ["brand": brand])
+            let brandR = (try? await webView.callJS(Self.fillBrandJS, args: ["brand": brand])) as? String ?? "error"
+            print("[FacebookAutofill] brand=\(brand) → \(brandR)")
         }
         phase = .filling("Setting condition…")
-        let conditionR = (try? await webView.callJS(Self.fillConditionJS, args: ["condition": Self.facebookConditionLabel(job.condition)])) as? String ?? "error"
-        if !conditionR.hasPrefix("selected") { issues.append("condition") }
+        let conditionLabel = Self.facebookConditionLabel(job.condition)
+        let conditionR = (try? await webView.callJS(Self.fillConditionJS, args: ["condition": conditionLabel])) as? String ?? "error"
+        print("[FacebookAutofill] condition=\(conditionLabel) → \(conditionR)")
+        if !(conditionR.hasPrefix("selected") || conditionR.hasPrefix("already")) { issues.append("condition") }
 
         // Shipping + visibility toggles: per-listing override on the product doc wins,
         // otherwise the account default collected on first post.
@@ -514,10 +527,16 @@ struct FacebookAutoPosterView: View {
     return new Promise(function(resolve) {
         var ctl = controlForLabel('Category');
         if (!ctl) { resolve('no-category-field'); return; }
-        var current = (ctl.innerText || '').trim();
-        if (current && current !== 'Select') { resolve('already'); return; }
+        // Read the control's own text span, not the whole control: the control also
+        // holds an aria-hidden chevron glyph, so innerText of the control was never
+        // exactly "Select" and every run resolved "already" without opening the picker
+        // (the suspected reason Condition could never be filled, 2026-10-10).
+        var ctlSpan = ctl.querySelector('span.f1') || ctl.querySelector('span.f2');
+        var current = ((ctlSpan ? ctlSpan.innerText : ctl.innerText) || '').replace(/\\s+/g, ' ').trim();
+        if (current && current !== 'Select' && current.indexOf('Select') !== 0) { resolve('already:' + current); return; }
         ctl.click();
         var deadline = Date.now() + 4000;
+        var seen = [];
         function waitForRow() {
             var rows = document.querySelectorAll('[data-focusable="true"]');
             for (var i = 0; i < rows.length; i++) {
@@ -525,15 +544,27 @@ struct FacebookAutoPosterView: View {
                 if (el.querySelector('[aria-hidden="true"]')) continue;
                 var span = el.querySelector('span.f1');
                 var t = span ? span.innerText.trim() : '';
-                if (t === category) { el.click(); resolve('selected:' + t); return; }
+                if (t && seen.length < 12 && seen.indexOf(t) < 0) seen.push(t);
+                if (t === category) { el.click(); waitForForm(t); return; }
             }
             if (Date.now() > deadline) {
                 var back = document.querySelector('[aria-label="Back"]');
                 if (back) back.click();
-                resolve('option-not-found');
+                resolve('option-not-found; rows=' + seen.join('|'));
                 return;
             }
             setTimeout(waitForRow, 250);
+        }
+        // Picking a row navigates back to the form. Brand and Condition are read off
+        // the form, so do not resolve until the Title field is back in the DOM.
+        function waitForForm(picked) {
+            var formDeadline = Date.now() + 4000;
+            function check() {
+                if (controlForLabel('Title') || document.querySelector('[data-name="title"]')) { resolve('selected:' + picked); return; }
+                if (Date.now() > formDeadline) { resolve('selected-no-form:' + picked); return; }
+                setTimeout(check, 200);
+            }
+            setTimeout(check, 300);
         }
         setTimeout(waitForRow, 300);
     });
@@ -560,22 +591,52 @@ struct FacebookAutoPosterView: View {
     });
     """
 
-    /// Condition's option rows render inline once a category is picked. Polls for them
-    /// (the category re-render takes a beat) and clicks the matching row. `+` in
-    /// Facebook's label markup is a space-encoding artifact, normalized before comparing.
-    private static let fillConditionJS = """
+    /// Condition only exists once a category is picked. Its options were assumed to
+    /// render inline; the DOM capture (docs/dom-captures/facebook-marketplace.md) never
+    /// confirmed that, and every other picker on this form is a "Select" control that
+    /// opens a sub-page. So: look for inline rows briefly, then open the Condition
+    /// control and look again, skipping aria-hidden header rows. `+` in Facebook's
+    /// label markup is a space-encoding artifact, normalized before comparing. The
+    /// result string carries the row texts it saw so a failed run can be diagnosed
+    /// from the console line alone.
+    private static let fillConditionJS = controlForLabelJS + """
     return new Promise(function(resolve) {
         var target = condition.trim();
-        var deadline = Date.now() + 4000;
-        function tryPick() {
+        var seen = [];
+        function findRow() {
             var rows = document.querySelectorAll('[data-focusable="true"]');
             for (var i = 0; i < rows.length; i++) {
+                if (rows[i].querySelector('[aria-hidden="true"]')) continue;
                 var span = rows[i].querySelector('span.f1');
                 if (!span) continue;
-                var t = (span.innerText || '').split('+').join(' ').trim();
-                if (t === target) { rows[i].click(); resolve('selected:' + t); return; }
+                var t = (span.innerText || '').split('+').join(' ').replace(/\\s+/g, ' ').trim();
+                if (t && seen.length < 12 && seen.indexOf(t) < 0) seen.push(t);
+                if (t === target) return rows[i];
             }
-            if (Date.now() > deadline) { resolve('option-not-found:' + target); return; }
+            return null;
+        }
+        var ctl = controlForLabel('Condition');
+        var ctlSpan = ctl && (ctl.querySelector('span.f1') || ctl.querySelector('span.f2'));
+        var current = ctl ? ((ctlSpan ? ctlSpan.innerText : ctl.innerText) || '').replace(/\\s+/g, ' ').trim() : '';
+        if (current === target) { resolve('already:' + current); return; }
+        var opened = false;
+        var deadline = Date.now() + 1500;
+        function tryPick() {
+            var row = findRow();
+            if (row) { row.click(); resolve('selected:' + target + (opened ? ' (picker)' : ' (inline)')); return; }
+            if (Date.now() > deadline) {
+                if (!opened && ctl) {
+                    opened = true;
+                    ctl.click();
+                    deadline = Date.now() + 4000;
+                    setTimeout(tryPick, 400);
+                    return;
+                }
+                var back = opened ? document.querySelector('[aria-label="Back"]') : null;
+                if (back) back.click();
+                resolve('option-not-found:' + target + '; control=' + (ctl ? JSON.stringify(current) : 'none') + '; rows=' + seen.join('|'));
+                return;
+            }
             setTimeout(tryPick, 300);
         }
         tryPick();
