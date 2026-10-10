@@ -122,6 +122,13 @@ Publish themselves.
 Confirms the category-dependent design: Condition only appears once a category is picked.
 Still needs its own capture (after selecting a category).
 
+2026-10-10: `fillConditionJS` no longer assumes inline option rows. It looks for them
+for 1.5 s, then clicks the Condition control (same label → control lookup as Category)
+and looks again on whatever page opens. Until the capture exists, the console line
+`[FacebookAutofill] condition=<label> → option-not-found:…; control="…"; rows=a|b|c`
+is the capture: `control` is the control's current text, `rows` the first 12
+focusable row labels seen. Paste that line into the next bug report.
+
 ### Location — "Change location" screen (captured 2026-09-27)
 Tapping the Location field does NOT reveal an inline text field like Title/Price — it
 pushes a full-screen search-and-pick UI. **Gotcha: this does not change `webView.url`**
