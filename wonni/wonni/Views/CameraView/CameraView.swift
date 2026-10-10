@@ -16,10 +16,9 @@ enum CameraRoute: Hashable {
     /// The photo picker editing one draft. A new listing gets an empty draft created
     /// just before the push; it is deleted again if the picker is popped with no photos.
     case picker(UUID)
-    /// The drafts drawer (every committed draft with its photo strip and "+").
+    /// The one drafts screen (`DraftsView`): photo strips with "+", inline title and
+    /// price, Select mode, Process. Both the carousels' stack icon and Proceed land here.
     case drafts
-    /// The post-Proceed drafts overview (titles, prices, Process).
-    case overview
 }
 
 struct CameraView: View {
@@ -161,7 +160,7 @@ struct CameraView: View {
         }
         .sheet(isPresented: $showBulkTextDrafts) {
             // "Open drafts" sets uploadManager.openDraftsOverview, which the onChange
-            // below turns into a push of the overview once the sheet is gone.
+            // below turns into a push of the drafts screen once the sheet is gone.
             BulkTextDraftsSheet(offersOpenDrafts: true)
                 .environmentObject(uploadManager)
         }
@@ -174,18 +173,15 @@ struct CameraView: View {
                 CustomPhotoPickerView(
                     draftID: draftID,
                     photoCollection: model.photoCollection,
-                    onProceed: { path.append(.overview) },
+                    onProceed: { path.append(.drafts) },
                     onOpenDrafts: { path.append(.drafts) }
                 )
             case .drafts:
-                // "+" on a draft pushes a picker for THAT draft on top of the drawer, so
-                // "<" from it lands back on the drawer. The drawer itself stays in the
-                // path underneath, untouched.
-                DraftHistoryView(photoCollection: model.photoCollection, onAddPhotos: { draftID in
+                // "+" on a draft pushes a picker for THAT draft on top of this screen, so
+                // "<" from it lands back here. This screen stays in the path underneath.
+                DraftsView(photoCollection: model.photoCollection, onAddPhotos: { draftID in
                     path.append(.picker(draftID))
                 })
-            case .overview:
-                BulkListingOverviewView()
             }
         }
         .onChange(of: uploadManager.shouldReturnToRoot) { _, should in
@@ -249,7 +245,7 @@ struct CameraView: View {
         // doesn't get a sheet dismissal and a navigation push in the same frame (same
         // pattern as ProcessProgressView's onMinimize).
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            path.append(.overview)
+            path.append(.drafts)
         }
     }
 
@@ -305,7 +301,7 @@ struct CameraView: View {
                     if hasActiveDraft {
                         uploadManager.commitActiveDraft(modelContext: modelContext)
                     }
-                    path.append(.overview)
+                    path.append(.drafts)
                 } label: {
                     HStack(spacing: 6) {
                         Text("Proceed")
