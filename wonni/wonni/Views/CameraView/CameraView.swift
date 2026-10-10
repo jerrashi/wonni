@@ -5,6 +5,23 @@ CameraView.swift
 import SwiftUI
 import SwiftData
 
+/// Every screen the Sell tab can push, as a value. The tab's NavigationStack is driven
+/// by an array of these (`CameraView.path`), so every move is an append or a pop and
+/// "back" is always the previous element. Until 2026-10-10 the tab had one optional
+/// destination slot plus a second nested slot inside the picker; the drafts drawer's
+/// "+" either popped the drawer or swapped it for a new picker in place, so "<" from
+/// that picker went to the camera instead of the drawer, and the in-place swap
+/// crashed on the user's phone.
+enum CameraRoute: Hashable {
+    /// The photo picker editing one draft. A new listing gets an empty draft created
+    /// just before the push; it is deleted again if the picker is popped with no photos.
+    case picker(UUID)
+    /// The drafts drawer (every committed draft with its photo strip and "+").
+    case drafts
+    /// The post-Proceed drafts overview (titles, prices, Process).
+    case overview
+}
+
 struct CameraView: View {
     @StateObject private var model = DataModel()
     @EnvironmentObject private var uploadManager: UploadManager
@@ -12,15 +29,8 @@ struct CameraView: View {
     @Query private var allItems: [Item]
 
     @State private var isFlashing = false
-    /// Single source of truth for camera-tab navigation. Two separate
-    /// `navigationDestination(isPresented:)` modifiers on the same NavigationStack
-    /// collide and wedge the UI, so we drive one destination off this enum instead.
-    private enum CameraRoute: Hashable {
-        case picker
-        case drafts
-        case draftHistory
-    }
-    @State private var route: CameraRoute?
+    /// Owned by CameraViewController's NavigationStack. See `CameraRoute`.
+    @Binding var path: [CameraRoute]
     @AppStorage("showCameraGrid") private var showGrid: Bool = false
     /// "Paste a list" — drafts without photos (BulkTextDraftsSheet). Lives here, next
     /// to the shutter, because this is where every listing starts.
@@ -86,7 +96,7 @@ struct CameraView: View {
                     // instead of finishing. Appearing instantly avoids the window.
                     ActiveDraftCarouselView(
                         cache: model.photoCollection.cache,
-                        onOpenDraftHistory: { route = .draftHistory }
+                        onOpenDraftHistory: { path.append(.drafts) }
                     )
                 }
                 cameraButtonsView()
@@ -122,7 +132,7 @@ struct CameraView: View {
             }
             // .task re-runs on every appear (incl. returning from another tab) — only
             // start the session when the camera itself is what's on screen.
-            if route == nil {
+            if path.isEmpty {
                 await model.camera.start()
             }
             await model.loadPhotos()
@@ -134,8 +144,9 @@ struct CameraView: View {
         // overview used to fire the picker's onDisappear and resume the preview UNDER
         // the drafts screen. isPreviewPaused stops viewfinder frames instantly; stop()
         // tears the AVCaptureSession down (spec N1: no rendering or capture while hidden).
-        .onChange(of: route) { _, newRoute in
-            if newRoute == nil {
+        .onChange(of: path) { oldPath, newPath in
+            pathDidChange(from: oldPath, to: newPath)
+            if newPath.isEmpty {
                 model.camera.isPreviewPaused = false
                 Task { await model.camera.start() }
             } else {
@@ -150,25 +161,36 @@ struct CameraView: View {
         }
         .sheet(isPresented: $showBulkTextDrafts) {
             // "Open drafts" sets uploadManager.openDraftsOverview, which the onChange
-            // below turns into route = .drafts once the sheet is gone.
+            // below turns into a push of the overview once the sheet is gone.
             BulkTextDraftsSheet(offersOpenDrafts: true)
                 .environmentObject(uploadManager)
         }
-        .navigationDestination(item: $route) { destination in
+        .navigationDestination(for: CameraRoute.self) { destination in
             switch destination {
-            case .picker:
-                CustomPhotoPickerView(onProceed: { route = .drafts })
+            case .picker(let draftID):
+                // One PhotoCollection for the whole tab (the camera's). The picker used
+                // to create its own, so every picker on screen was another photo-library
+                // observer and another full fetch.
+                CustomPhotoPickerView(
+                    draftID: draftID,
+                    photoCollection: model.photoCollection,
+                    onProceed: { path.append(.overview) },
+                    onOpenDrafts: { path.append(.drafts) }
+                )
             case .drafts:
+                // "+" on a draft pushes a picker for THAT draft on top of the drawer, so
+                // "<" from it lands back on the drawer. The drawer itself stays in the
+                // path underneath, untouched.
+                DraftHistoryView(photoCollection: model.photoCollection, onAddPhotos: { draftID in
+                    path.append(.picker(draftID))
+                })
+            case .overview:
                 BulkListingOverviewView()
-            case .draftHistory:
-                // N2: "+" on a draft reopens the EXISTING picker screen (route swap on
-                // this same stack) with that draft active in the carousel — no nested sheet.
-                DraftHistoryView(photoCollection: model.photoCollection, onAddPhotos: { route = .picker })
             }
         }
         .onChange(of: uploadManager.shouldReturnToRoot) { _, should in
             if should {
-                route = nil
+                path.removeAll()
                 uploadManager.shouldReturnToRoot = false
                 uploadManager.selectedTab = 4
             }
@@ -184,8 +206,37 @@ struct CameraView: View {
         // view and pops this stack back to the camera, drafts intact.
         .onChange(of: uploadManager.returnToCameraRoot) { _, should in
             if should {
-                route = nil
+                path.removeAll()
                 uploadManager.returnToCameraRoot = false
+            }
+        }
+    }
+
+    /// Pushes the picker for the draft the camera is building, creating an empty one
+    /// when there is none. The picker is keyed by that id, so the same screen serves a
+    /// new listing and a reopened draft.
+    private func openPicker() {
+        let draftID = uploadManager.ensureActiveDraft(modelContext: modelContext)
+        path.append(.picker(draftID))
+    }
+
+    /// Runs on every path change (Back chevron, swipe-back, `dismiss()` and our own
+    /// pops all end up here). Pickers that left the path get their draft closed out
+    /// (empty → deleted, reopened-and-changed → re-uploaded), and the topmost picker
+    /// still on the path becomes the active draft again. With no picker left, the last
+    /// closed picker's draft stays active when it has photos, so the camera keeps adding
+    /// to it; `pickerDidClose` clears it when it was empty and deleted.
+    private func pathDidChange(from oldPath: [CameraRoute], to newPath: [CameraRoute]) {
+        let remaining = Set(newPath)
+        for route in oldPath where !remaining.contains(route) {
+            if case .picker(let draftID) = route {
+                uploadManager.pickerDidClose(draftID: draftID, modelContext: modelContext)
+            }
+        }
+        for route in newPath.reversed() {
+            if case .picker(let draftID) = route {
+                uploadManager.activeDraftID = draftID
+                break
             }
         }
     }
@@ -198,7 +249,7 @@ struct CameraView: View {
         // doesn't get a sheet dismissal and a navigation push in the same frame (same
         // pattern as ProcessProgressView's onMinimize).
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            route = .drafts
+            path.append(.overview)
         }
     }
 
@@ -254,7 +305,7 @@ struct CameraView: View {
                     if hasActiveDraft {
                         uploadManager.commitActiveDraft(modelContext: modelContext)
                     }
-                    route = .drafts
+                    path.append(.overview)
                 } label: {
                     HStack(spacing: 6) {
                         Text("Proceed")
@@ -281,7 +332,7 @@ struct CameraView: View {
         HStack(spacing: 0) {
             // Gallery button
             Button {
-                route = .picker
+                openPicker()
             } label: {
                 ThumbnailView(image: model.thumbnailImage)
                     .frame(width: 46, height: 46)

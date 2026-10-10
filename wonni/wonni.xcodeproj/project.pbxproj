@@ -11,6 +11,7 @@
 		0685922FCBC971E8E5A74D30 /* MercariFlagCriteriaTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03D0C11455159C543D7730AA /* MercariFlagCriteriaTests.swift */; };
 		0A6C5D24F71BE8393D402C56 /* VisionTitlePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F5B4C13E60AD7282C3F1B45 /* VisionTitlePolicyTests.swift */; };
 		D7A10001C0FFEE0000000003 /* DraftPhotoStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE0000000004 /* DraftPhotoStoreTests.swift */; };
+		D7A10001C0FFEE0000000015 /* PickerCloseoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE0000000016 /* PickerCloseoutTests.swift */; };
 		D7A10001C0FFEE0000000005 /* LayoutRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE0000000006 /* LayoutRegressionTests.swift */; };
 		D7A10001C0FFEE0000000007 /* FacebookAutoPosterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE0000000008 /* FacebookAutoPosterView.swift */; };
 		D7A10001C0FFEE0000000009 /* FacebookAutofillPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE000000000A /* FacebookAutofillPolicyTests.swift */; };
@@ -226,6 +227,7 @@
 		9F42B5F211D314136D6C1E34 /* DeleteAccountView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DeleteAccountView.swift; sourceTree = "<group>"; };
 		9F5B4C13E60AD7282C3F1B45 /* VisionTitlePolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VisionTitlePolicyTests.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE0000000004 /* DraftPhotoStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftPhotoStoreTests.swift; sourceTree = "<group>"; };
+		D7A10001C0FFEE0000000016 /* PickerCloseoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickerCloseoutTests.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE0000000006 /* LayoutRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutRegressionTests.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE0000000008 /* FacebookAutoPosterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FacebookAutoPosterView.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE000000000A /* FacebookAutofillPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FacebookAutofillPolicyTests.swift; sourceTree = "<group>"; };
@@ -498,6 +500,7 @@
 				7D3F2A91C4E8B5060A1D9F23 /* DraftAIProcessingPolicyTests.swift */,
 				9F5B4C13E60AD7282C3F1B45 /* VisionTitlePolicyTests.swift */,
 				D7A10001C0FFEE0000000004 /* DraftPhotoStoreTests.swift */,
+				D7A10001C0FFEE0000000016 /* PickerCloseoutTests.swift */,
 				D7A10001C0FFEE0000000006 /* LayoutRegressionTests.swift */,
 				D7A10001C0FFEE000000000A /* FacebookAutofillPolicyTests.swift */,
 				D7A10001C0FFEE0000000010 /* BulkTextDraftMappingTests.swift */,
@@ -748,6 +751,7 @@
 				8E4A3B02D5F9C6171B2E0A34 /* DraftAIProcessingPolicyTests.swift in Sources */,
 				0A6C5D24F71BE8393D402C56 /* VisionTitlePolicyTests.swift in Sources */,
 				D7A10001C0FFEE0000000003 /* DraftPhotoStoreTests.swift in Sources */,
+				D7A10001C0FFEE0000000015 /* PickerCloseoutTests.swift in Sources */,
 				D7A10001C0FFEE0000000005 /* LayoutRegressionTests.swift in Sources */,
 				D7A10001C0FFEE0000000009 /* FacebookAutofillPolicyTests.swift in Sources */,
 				D7A10001C0FFEE000000000F /* BulkTextDraftMappingTests.swift in Sources */,

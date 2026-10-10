@@ -5,12 +5,17 @@ See the License.txt file for this sample’s licensing information.
 import SwiftUI
 
 struct CameraViewController: View {
-    
+    /// The Sell tab's whole navigation state. Lives here, not in MainView, so the
+    /// stack and the only view that mutates it are declared together.
+    @State private var path: [CameraRoute] = []
+
     var body: some View {
-        CameraView()
-            .onAppear {
-                applyCustomAppearance()
-            }
+        NavigationStack(path: $path) {
+            CameraView(path: $path)
+                .onAppear {
+                    applyCustomAppearance()
+                }
+        }
     }
     
     private func applyCustomAppearance() {

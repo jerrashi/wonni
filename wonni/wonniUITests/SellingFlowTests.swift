@@ -546,3 +546,55 @@ final class SellingFlowTests: XCTestCase {
         return nil
     }
 }
+
+extension SellingFlowTests {
+    /// The 2026-10-10 crash sequence: picker → commit a draft → drafts drawer from the
+    /// carousel → "+" on that draft → Back. With the path-based stack, Back from the
+    /// draft's picker lands on the drawer, Back again on the first picker, then the camera.
+    func testAddPhotosFromDraftsDrawerThenBackReturnsToDrawer() throws {
+        let photosInterruption = addUIInterruptionMonitor(withDescription: "Photos permission") { alert in
+            let allowButtons = alert.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'Allow' OR label CONTAINS 'OK'")
+            )
+            if allowButtons.count > 0 { allowButtons.firstMatch.tap(); return true }
+            return false
+        }
+        defer { removeUIInterruptionMonitor(photosInterruption) }
+
+        app.tabBars.buttons["Sell"].tap()
+        let galleryButton = app.buttons["cameraGalleryButton"]
+        XCTAssert(galleryButton.waitForExistence(timeout: 5))
+        galleryButton.tap()
+        app.tap()
+
+        let firstPhoto = waitForPhotoGridItem(reopeningVia: galleryButton)
+        firstPhoto.tap()
+        let commitButton = app.buttons.matching(identifier: "draftsCarousel").firstMatch
+        XCTAssert(commitButton.waitForExistence(timeout: 5))
+        commitButton.tap()
+
+        let stackIcon = app.descendants(matching: .any).matching(identifier: "draftsStackIcon").firstMatch
+        XCTAssert(stackIcon.waitForExistence(timeout: 5), "Drafts stack icon should appear in the picker")
+        stackIcon.tap()
+
+        let selectButton = app.buttons["draftHistorySelectButton"]
+        XCTAssert(selectButton.waitForExistence(timeout: 10), "Drafts drawer should be pushed")
+
+        let addPhotos = app.descendants(matching: .any).matching(identifier: "draftAddPhotosButton").firstMatch
+        XCTAssert(addPhotos.waitForExistence(timeout: 5), "+ tile should appear")
+        addPhotos.tap()
+
+        let backButton = app.buttons["pickerBackButton"]
+        XCTAssert(backButton.waitForExistence(timeout: 10), "A picker for the draft should be pushed")
+        backButton.tap()
+
+        XCTAssert(selectButton.waitForExistence(timeout: 10), "Back from the draft's picker should land on the drawer")
+        XCTAssertEqual(app.state, .runningForeground)
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssert(backButton.waitForExistence(timeout: 10), "Back from the drawer should land on the first picker")
+        backButton.tap()
+        XCTAssert(galleryButton.waitForExistence(timeout: 10), "Back from the first picker should land on the camera")
+        XCTAssertEqual(app.state, .runningForeground, "App crashed on the way back")
+    }
+}
