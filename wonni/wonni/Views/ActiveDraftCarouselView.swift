@@ -5,8 +5,10 @@
 //  Shared bottom carousel used identically in CameraView and CustomPhotoPickerView.
 //  Shows the active draft's photos as a flat, drag-to-reorder row, followed by
 //  committed draft fanned-card thumbnails. Tapping a committed draft opens
-//  draft history (via the host's onOpenDraftHistory push). Tapping "+" commits the
-//  active draft and starts upload.
+//  the Drafts screen (via the host's onOpenDraftHistory push). Tapping "+" commits
+//  the active draft and starts upload. Each photo has an "X" that removes it with a
+//  short Undo window (PhotoRemovedToast); the old drag-to-trash target is gone
+//  because it was too easy to hit while reordering (user, 2026-10-10).
 //
 
 import SwiftUI
@@ -27,7 +29,6 @@ struct ActiveDraftCarouselView: View {
 
     @State private var draggedAssetId: String? = nil
     @State private var stackBouncing = false
-    @State private var isTrashTargeted = false
 
     /// 72pt thumbnails + 8pt vertical padding on each side.
     private static let rowHeight: CGFloat = 88
@@ -103,20 +104,9 @@ struct ActiveDraftCarouselView: View {
                 // chased that as a transition/safeAreaInset bug.
                 .frame(height: Self.rowHeight)
 
-                // ── "+" commit button, replaced by a trash drop target while dragging ──
+                // ── "+" commit button ──
                 let hasActive = activeDraft?.sourceAssetIdentifiers.isEmpty == false
-                if draggedAssetId != nil {
-                    Image(systemName: isTrashTargeted ? "trash.circle.fill" : "trash.circle")
-                        .font(.system(size: 30))
-                        .foregroundStyle(.red)
-                        .scaleEffect(isTrashTargeted ? 1.15 : 1.0)
-                        .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isTrashTargeted)
-                        .frame(width: 44, height: 44)
-                        .padding(.trailing, 12)
-                        .onDrop(of: [.text], isTargeted: $isTrashTargeted) { _ in
-                            deleteDraggedPhoto()
-                        }
-                } else {
+                do {
                     Button {
                         guard hasActive else { return }
                         withAnimation(.easeIn(duration: 0.18)) {
@@ -171,14 +161,76 @@ struct ActiveDraftCarouselView: View {
             draggedAssetId: $draggedAssetId,
             modelContext: modelContext
         ))
+        .overlay(alignment: .topTrailing) {
+            Button {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    uploadManager.removePhotoFromActiveDraftWithUndo(assetId: assetId, modelContext: modelContext)
+                }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 20))
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, .black.opacity(0.65))
+                    // 44pt hit area on a 72pt cell, without growing the visible mark.
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .offset(x: 8, y: -8)
+            .accessibilityLabel("Remove photo")
+            .accessibilityIdentifier("carouselRemovePhotoButton")
+        }
     }
+}
 
-    @discardableResult
-    private func deleteDraggedPhoto() -> Bool {
-        guard let assetId = draggedAssetId else { return false }
-        uploadManager.removePhotoFromActiveDraft(assetId: assetId, modelContext: modelContext)
-        draggedAssetId = nil
-        return true
+// MARK: - "Photo removed · Undo" toast
+
+/// Floats over the host (camera / picker) while `UploadManager.removedPhoto` is set.
+/// Swipe down or sideways to dismiss early; otherwise it goes away on its own.
+struct PhotoRemovedToast: View {
+    @EnvironmentObject private var uploadManager: UploadManager
+    @Environment(\.modelContext) private var modelContext
+    @State private var dragOffset: CGSize = .zero
+
+    var body: some View {
+        if uploadManager.removedPhoto != nil {
+            HStack(spacing: 14) {
+                Text("Photo removed")
+                    .font(.subheadline.weight(.medium))
+                Button("Undo") {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        uploadManager.undoRemovePhoto(modelContext: modelContext)
+                    }
+                }
+                .font(.subheadline.weight(.semibold))
+                .accessibilityIdentifier("undoRemovePhotoButton")
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .background(.regularMaterial, in: Capsule())
+            .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+            .offset(dragOffset)
+            // High priority so the swipe is ours even though a scrolling grid sits
+            // underneath the toast.
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { value in
+                        // Only follow the finger away from the content (down / sideways).
+                        dragOffset = CGSize(width: value.translation.width, height: max(0, value.translation.height))
+                    }
+                    .onEnded { value in
+                        if value.translation.height > 30 || abs(value.translation.width) > 60 {
+                            withAnimation(.easeIn(duration: 0.15)) { uploadManager.finalizeRemovedPhoto() }
+                        } else {
+                            withAnimation(.spring(response: 0.3)) { dragOffset = .zero }
+                        }
+                    }
+            )
+            .onDisappear { dragOffset = .zero }
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            // No identifier on the container: SwiftUI would push it down onto the Undo
+            // button and hide "undoRemovePhotoButton" from the UI tests.
+        }
     }
 }
 

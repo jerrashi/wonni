@@ -575,3 +575,66 @@ extension SellingFlowTests {
         XCTAssertEqual(app.state, .runningForeground, "App crashed on the way back")
     }
 }
+
+extension SellingFlowTests {
+    /// Carousel "X" removes a photo and the toast's Undo puts it back (2026-10-10,
+    /// replaces drag-to-trash). Also snapshots the camera and picker bottom bars.
+    func testCarouselRemovePhotoThenUndo() throws {
+        let photosInterruption = addUIInterruptionMonitor(withDescription: "Photos permission") { alert in
+            let allowButtons = alert.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'Allow' OR label CONTAINS 'OK'")
+            )
+            if allowButtons.count > 0 { allowButtons.firstMatch.tap(); return true }
+            return false
+        }
+        defer { removeUIInterruptionMonitor(photosInterruption) }
+
+        app.tabBars.buttons["Sell"].tap()
+        let galleryButton = app.buttons["cameraGalleryButton"]
+        XCTAssert(galleryButton.waitForExistence(timeout: 5))
+        galleryButton.tap()
+        app.tap()
+
+        let firstPhoto = waitForPhotoGridItem(reopeningVia: galleryButton)
+        firstPhoto.tap()
+
+        let removeButton = app.buttons["carouselRemovePhotoButton"].firstMatch
+        XCTAssert(removeButton.waitForExistence(timeout: 5), "Each carousel photo should have an X")
+        let proceed = app.buttons["pickerProceedButton"]
+        XCTAssert(proceed.waitForExistence(timeout: 5), "Proceed should sit in the picker's bottom bar")
+        XCTAssert(proceed.isEnabled)
+
+        let shot1 = XCTAttachment(screenshot: app.screenshot())
+        shot1.name = "picker-bottom-bar"; shot1.lifetime = .keepAlways; add(shot1)
+
+        // The active draft may hold photos left by an earlier test on this simulator,
+        // so count X buttons instead of assuming there is exactly one.
+        let removeButtons = app.buttons.matching(identifier: "carouselRemovePhotoButton")
+        let before = removeButtons.count
+        removeButton.tap()
+        let undo = app.buttons["undoRemovePhotoButton"]
+        XCTAssert(undo.waitForExistence(timeout: 3), "Toast with Undo should appear")
+        XCTAssertEqual(removeButtons.count, before - 1, "The photo is gone from the carousel")
+        undo.tap()
+        XCTAssertFalse(undo.waitForExistence(timeout: 2), "Toast goes away after Undo")
+        XCTAssertEqual(removeButtons.count, before, "Undo restores the photo")
+
+        removeButton.tap()
+        XCTAssert(undo.waitForExistence(timeout: 3))
+        // Swipe on the label, not the Undo button: a swipe that starts on the button
+        // counts as a tap on it.
+        let label = app.staticTexts["Photo removed"].firstMatch
+        let start = label.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 90)))
+        XCTAssertFalse(undo.waitForExistence(timeout: 2), "Swiping the toast dismisses it")
+        XCTAssertEqual(removeButtons.count, before - 1, "A dismissed toast makes the removal final")
+
+        // Back to the camera with a photo in the draft: Proceed is in its own bottom row.
+        if removeButtons.count == 0 { firstPhoto.tap() }
+        app.buttons["pickerBackButton"].tap()
+        let cameraProceed = app.buttons["cameraProceedButton"]
+        XCTAssert(cameraProceed.waitForExistence(timeout: 5), "Camera should show Proceed at the bottom")
+        let shot2 = XCTAttachment(screenshot: app.screenshot())
+        shot2.name = "camera-bottom-bar"; shot2.lifetime = .keepAlways; add(shot2)
+    }
+}

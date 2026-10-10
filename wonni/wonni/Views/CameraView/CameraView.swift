@@ -99,11 +99,16 @@ struct CameraView: View {
                     )
                 }
                 cameraButtonsView()
+                if hasAnyContent { proceedBar }
             }
             .padding(.bottom, 12)
             .frame(maxWidth: .infinity)
             .background(Color.black)
         }
+        .overlay(alignment: .bottom) {
+            PhotoRemovedToast().padding(.bottom, 12)
+        }
+        .animation(.easeOut(duration: 0.2), value: uploadManager.removedPhoto)
         // #34: was scoped to ViewfinderView's own overlay, so the flash only
         // covered the viewfinder rect — not the top bar or bottom controls.
         // Applied here (top-level, after safeAreaInset) it covers the whole
@@ -275,6 +280,8 @@ struct CameraView: View {
                 .clipShape(Capsule())
             }
 
+            Spacer()
+
             Button {
                 showBulkTextDrafts = true
             } label: {
@@ -290,36 +297,42 @@ struct CameraView: View {
                 .background(.black.opacity(0.45))
                 .clipShape(Capsule())
             }
-            .padding(.leading, 10)
             .accessibilityIdentifier("cameraDraftsFromListButton")
-
-            Spacer()
-
-            if hasAnyContent {
-                Button {
-                    // Commit active draft first if non-empty, then navigate
-                    if hasActiveDraft {
-                        uploadManager.commitActiveDraft(modelContext: modelContext)
-                    }
-                    path.append(.drafts)
-                } label: {
-                    HStack(spacing: 6) {
-                        Text("Proceed")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.white)
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 22))
-                            .foregroundColor(.green)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.black.opacity(0.5))
-                    .clipShape(Capsule())
-                }
-            }
         }
         .padding(.horizontal, 20)
         .padding(.top, safeTop + 8)
+    }
+
+    // MARK: - Proceed (bottom bar)
+
+    /// Primary action lives at the bottom (2026-10-10, iOS 26 convention; the user
+    /// chose to keep the flip-camera button in the shutter row and give Proceed a row
+    /// of its own). Commits the active draft, then pushes the Drafts screen.
+    private var proceedBar: some View {
+        HStack {
+            Spacer()
+            Button {
+                if hasActiveDraft {
+                    uploadManager.commitActiveDraft(modelContext: modelContext)
+                }
+                path.append(.drafts)
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Proceed")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundColor(.green)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.white.opacity(0.14))
+                .clipShape(Capsule())
+            }
+            .accessibilityIdentifier("cameraProceedButton")
+        }
+        .padding(.horizontal, 20)
     }
 
     // MARK: - Bottom camera buttons
