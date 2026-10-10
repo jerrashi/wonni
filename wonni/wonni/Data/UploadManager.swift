@@ -312,6 +312,48 @@ class UploadManager: ObservableObject {
         try? modelContext.save()
     }
 
+    /// The draft the camera is building, created empty when there is none. The picker
+    /// is pushed keyed by this id (`CameraRoute.picker`), so a brand-new listing and a
+    /// reopened draft go through the same screen. An empty draft that is never given a
+    /// photo is deleted again in `pickerDidClose`.
+    @discardableResult
+    func ensureActiveDraft(modelContext: ModelContext) -> UUID {
+        if let id = activeDraftID, !deletedDraftIDs.contains(id),
+           fetchItem(id: id, modelContext: modelContext) != nil {
+            return id
+        }
+        let draft = Item(firestoreListingId: UUID().uuidString)
+        modelContext.insert(draft)
+        try? modelContext.save()
+        activeDraftID = draft.id
+        return draft.id
+    }
+
+    /// A picker screen for `draftID` left the navigation path (Back, swipe-back, or a
+    /// pop to root). Three cases:
+    /// - no photos: the draft was only ever a placeholder — delete it;
+    /// - already committed (reopened from the drawer with "+"): the user is done
+    ///   editing, so re-upload and re-sync without a second "+" tap;
+    /// - never committed, has photos: leave it alone — it stays the active draft and the
+    ///   camera keeps adding to it; Proceed or the carousel "+" commits it.
+    func pickerDidClose(draftID: UUID, modelContext: ModelContext) {
+        guard !deletedDraftIDs.contains(draftID),
+              let draft = fetchItem(id: draftID, modelContext: modelContext) else { return }
+        if draft.sourceAssetIdentifiers.isEmpty {
+            if activeDraftID == draftID { activeDraftID = nil }
+            deleteDraftLocallyAndCloud(draft: draft, modelContext: modelContext)
+            return
+        }
+        let paths = draft.firebasePhotoPathsByAsset ?? [:]
+        let wasCommitted = sessionDraftIDs.contains(draftID) || !paths.isEmpty
+        guard wasCommitted else { return }
+        let uploadedAll = draft.sourceAssetIdentifiers.allSatisfy { paths[$0] != nil }
+        if !uploadedAll {
+            startBackgroundUpload(draft: draft, modelContext: modelContext)
+        }
+        syncProductData(draft)
+    }
+
     /// Picker tap: adds the photo to the active draft, or removes it if it's already
     /// there. Decided here against the live draft rather than by the caller, so a grid
     /// cell holding an older tap closure (cells skip re-rendering when their own
@@ -666,16 +708,18 @@ class UploadManager: ObservableObject {
                 while !success && attempts < maxAttempts && !Task.isCancelled {
                     attempts += 1
                     do {
-                        print("[UploadManager] Uploading image \(imgIdx+1)/\(images.count) for \(draft.id) (attempt \(attempts))...")
+                        print("[UploadManager] Uploading image \(imgIdx+1)/\(images.count) for \(draftID) (attempt \(attempts))...")
                         let path = try await StorageService.shared.uploadListingImage(
                             image: entry.image, index: imgIdx, userId: userId, listingId: listingId
                         )
                         photoPathsByAsset[entry.assetId] = path
-                        uploadStatuses[draft.id] = .uploading(Double(imgIdx + 1) / Double(images.count))
+                        // draftID, never draft.id: past the awaits above the draft may have
+                        // been deleted, and a detached SwiftData object faults on any read.
+                        uploadStatuses[draftID] = .uploading(Double(imgIdx + 1) / Double(images.count))
                         recalcUploadProgress()
                         success = true
                     } catch {
-                        print("[UploadManager] Upload error for \(draft.id) index \(imgIdx) (attempt \(attempts)): \(error)")
+                        print("[UploadManager] Upload error for \(draftID) index \(imgIdx) (attempt \(attempts)): \(error)")
                         if attempts < maxAttempts {
                             print("[UploadManager] Retrying in \(delaySeconds) seconds...")
                             try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))

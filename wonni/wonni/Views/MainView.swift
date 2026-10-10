@@ -83,7 +83,7 @@ struct MainView: View {
                 .tabItem { Label("Search", systemImage: "magnifyingglass") }
                 .tag(1)
 
-            NavigationStack { CameraViewController() }
+            CameraViewController()
                 .appTaskQueuePill()
                 .tabItem { Label("Sell", systemImage: "plus.circle.fill") }
                 .tag(2)

@@ -125,18 +125,18 @@ struct SelectablePhotoGridItem: View, Equatable {
 }
 
 struct CustomPhotoPickerView: View {
-        /// Called when the user taps the green checkmark. The parent navigation
-        /// controller should handle pushing the drafts overview.
-        var onProceed: (() -> Void)? = nil
+        /// The draft this picker edits — the camera's current draft for a new listing,
+        /// or a committed draft reopened from the drawer's "+". Becomes the active draft
+        /// whenever this screen is on top (see `onAppear`), so the carousel, the grid
+        /// badges and the camera all agree on which draft a tap goes to.
+        let draftID: UUID
+        /// The Sell tab's one PhotoCollection (CameraView's DataModel owns it).
+        @ObservedObject var photoCollection: PhotoCollection
+        /// Green checkmark: the host commits the draft and pushes the overview.
+        let onProceed: () -> Void
+        /// Stack icon in the carousel: the host pushes the drafts drawer.
+        let onOpenDrafts: () -> Void
 
-        @StateObject var photoCollection = PhotoCollection(smartAlbum: .smartAlbumUserLibrary)
-        /// Single pushed destination off this view (two navigationDestination(isPresented:)
-        /// modifiers at one level collide — same pattern as CameraView.CameraRoute).
-        private enum PickerRoute: Hashable {
-            case overview
-            case draftHistory
-        }
-        @State private var pickerRoute: PickerRoute?
         @State private var hidePreviouslySelected = false
         @State private var showBulkTextDrafts = false
         @State private var photoAccessLimited = false
@@ -158,19 +158,17 @@ struct CustomPhotoPickerView: View {
             GridItem(.adaptive(minimum: 100, maximum: 150), spacing: 2)
         ]
 
-        /// Active draft being built right now
+        /// The draft this screen edits.
         private var activeDraft: Item? {
-            guard let id = uploadManager.activeDraftID else { return nil }
-            return allItems.first { $0.id == id }
+            allItems.first { $0.id == draftID }
         }
 
-        /// Committed drafts (not the active one). Their asset IDs are the "used" set behind
-        /// the grey checkmark badge and the "Hide previously selected" toggle — which
-        /// deliberately excludes the active (not-yet-committed) draft's selections, since
-        /// those stay visible with their number badge until the user commits the draft.
+        /// Every other draft with photos. Their asset IDs are the "used" set behind the
+        /// grey checkmark badge and the "Hide previously selected" toggle — which
+        /// deliberately excludes this draft's own selections, since those stay visible
+        /// with their number badge.
         private var committedDrafts: [Item] {
-            let activeID = uploadManager.activeDraftID
-            return allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && $0.id != activeID }
+            allItems.filter { $0.isDraft && !$0.sourceAssetIdentifiers.isEmpty && $0.id != draftID }
         }
 
         /// One grid cell. Takes the already-computed selection lookups — see the hoisting
@@ -267,7 +265,7 @@ struct CustomPhotoPickerView: View {
                     Divider()
                     ActiveDraftCarouselView(
                         cache: photoCollection.cache,
-                        onOpenDraftHistory: { pickerRoute = .draftHistory }
+                        onOpenDraftHistory: onOpenDrafts
                     )
                     .padding(.bottom, 4)
                 }
@@ -285,12 +283,14 @@ struct CustomPhotoPickerView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
+                    // Pops this screen. Where that lands (camera or drafts drawer) is
+                    // whatever is under it on the path, so the label is just "Back".
                     Button {
                         dismiss()
                     } label: {
                         HStack(spacing: 4) {
-                            Image(systemName: "camera.fill")
-                            Text("Camera")
+                            Image(systemName: "chevron.left")
+                            Text("Back")
                         }
                     }
                     .accessibilityIdentifier("pickerBackButton")
@@ -307,18 +307,13 @@ struct CustomPhotoPickerView: View {
                     .accessibilityIdentifier("pickerDraftsFromListButton")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    let hasActiveDraft = uploadManager.activeDraftID != nil
-                        && !(activeDraft?.sourceAssetIdentifiers.isEmpty ?? true)
+                    let hasActiveDraft = !(activeDraft?.sourceAssetIdentifiers.isEmpty ?? true)
                     let canProceed = hasActiveDraft || !committedDrafts.isEmpty
                     Button {
                         if hasActiveDraft {
                             uploadManager.commitActiveDraft(modelContext: modelContext)
                         }
-                        if let proceed = onProceed {
-                            proceed()
-                        } else {
-                            pickerRoute = .overview
-                        }
+                        onProceed()
                     } label: {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.system(size: 24))
@@ -327,26 +322,21 @@ struct CustomPhotoPickerView: View {
                     .disabled(!canProceed)
                 }
             }
+            // Whenever this screen is on top — first push, or a pop back onto it from
+            // the drafts drawer — its draft is the one the carousel and grid edit.
+            .onAppear { uploadManager.activeDraftID = draftID }
             .task {
                 guard await PhotoLibrary.checkAuthorization() else {
                     print("Photo library access not authorized for picker")
                     return
                 }
                 photoAccessLimited = PHPhotoLibrary.authorizationStatus(for: .readWrite) == .limited
+                // The camera already loaded this collection; a reload here picks up
+                // anything added since (and the first load if the camera's was denied).
                 do {
                     try await photoCollection.load()
                 } catch {
                     print("Failed to load photos: \(error)")
-                }
-            }
-            .navigationDestination(item: $pickerRoute) { destination in
-                switch destination {
-                case .overview:
-                    BulkListingOverviewView()
-                case .draftHistory:
-                    // N2: "+" on a draft pops back to THIS picker with that draft
-                    // active in the carousel — no nested sheet.
-                    DraftHistoryView(photoCollection: photoCollection, onAddPhotos: { pickerRoute = nil })
                 }
             }
         }
@@ -605,10 +595,8 @@ struct CustomPhotoPickerView: View {
         @Query(filter: #Predicate<Item> { $0.isDraft == true })
         private var allItems: [Item]
         @ObservedObject var photoCollection: PhotoCollection
-        /// Host navigation for the per-draft "+": return to the picker AFTER this view
-        /// has made that draft the active one (camera swaps its route to .picker;
-        /// the picker pops back to itself).
-        let onAddPhotos: () -> Void
+        /// Per-draft "+": the host pushes a picker for this draft on top of the drawer.
+        let onAddPhotos: (UUID) -> Void
         @Environment(\.modelContext) private var modelContext
         @EnvironmentObject private var uploadManager: UploadManager
 
@@ -766,15 +754,7 @@ struct CustomPhotoPickerView: View {
                                                 // "+" tile — always the last item in the scroll
                                                 if !isSelectionMode {
                                                     Button {
-                                                        // Keep any in-progress active draft safe by
-                                                        // committing it, then reopen THIS draft as the
-                                                        // active one — the host navigates back to the
-                                                        // picker with it in the carousel (spec N2).
-                                                        if uploadManager.activeDraftID != nil {
-                                                            uploadManager.commitActiveDraft(modelContext: modelContext)
-                                                        }
-                                                        uploadManager.activeDraftID = draft.id
-                                                        onAddPhotos()
+                                                        onAddPhotos(draft.id)
                                                     } label: {
                                                         RoundedRectangle(cornerRadius: 8)
                                                             .fill(Color(.systemGray5))
@@ -786,6 +766,7 @@ struct CustomPhotoPickerView: View {
                                                             )
                                                     }
                                                     .buttonStyle(.plain)
+                                                    .accessibilityIdentifier("draftAddPhotosButton")
                                                 }
                                             }
                                             .padding(.horizontal)
