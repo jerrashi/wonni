@@ -376,9 +376,72 @@ class UploadManager: ObservableObject {
         return (try? modelContext.fetch(descriptor))?.first
     }
 
-    /// Removes a photo from the active draft (deselect in picker, or delete in carousel).
-    /// Safe to discard the removed Storage path here — the active draft hasn't started
-    /// its background upload yet, so it never has one.
+    /// A photo just removed from the carousel with its "X", kept so the toast's Undo can
+    /// put it back exactly where it was. Cleared after `removedPhotoUndoWindow`, on Undo,
+    /// or when the toast is swiped away.
+    struct RemovedPhoto: Equatable {
+        let draftID: UUID
+        let assetId: String
+        let index: Int
+        let data: Data?
+        let firebasePhotoPath: String?
+    }
+    @Published private(set) var removedPhoto: RemovedPhoto?
+    private var removedPhotoExpiry: Task<Void, Never>?
+    static let removedPhotoUndoWindow: Duration = .seconds(5)
+
+    /// Carousel "X" (2026-10-10, replaces drag-to-trash: the user kept deleting when
+    /// meaning to reorder). Removes the photo at once and offers Undo for a few seconds.
+    /// A draft left empty stays — the camera keeps adding to it, and `pickerDidClose`
+    /// deletes it if the picker is popped with nothing in it.
+    func removePhotoFromActiveDraftWithUndo(assetId: String, modelContext: ModelContext) {
+        guard let id = activeDraftID,
+              let draft = fetchItem(id: id, modelContext: modelContext),
+              let index = draft.sourceAssetIdentifiers.firstIndex(of: assetId) else { return }
+        // A previous removal still waiting for Undo is now final.
+        finalizeRemovedPhoto()
+        let removed = draft.removePhoto(assetId: assetId)
+        try? modelContext.save()
+        removedPhoto = RemovedPhoto(draftID: id, assetId: assetId, index: index, data: removed.data, firebasePhotoPath: removed.firebasePhotoPath)
+        removedPhotoExpiry?.cancel()
+        removedPhotoExpiry = Task { [weak self] in
+            try? await Task.sleep(for: Self.removedPhotoUndoWindow)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { self?.finalizeRemovedPhoto() }
+        }
+    }
+
+    func undoRemovePhoto(modelContext: ModelContext) {
+        guard let removed = removedPhoto else { return }
+        removedPhotoExpiry?.cancel()
+        removedPhoto = nil
+        guard !deletedDraftIDs.contains(removed.draftID),
+              let draft = fetchItem(id: removed.draftID, modelContext: modelContext),
+              !draft.sourceAssetIdentifiers.contains(removed.assetId) else { return }
+        let position = min(removed.index, draft.sourceAssetIdentifiers.count)
+        draft.insertPhoto(assetId: removed.assetId, data: removed.data, at: position, firebasePhotoPath: removed.firebasePhotoPath)
+        try? modelContext.save()
+    }
+
+    /// Swipe on the toast, or the window ran out: the removal is final. A reopened
+    /// committed draft's photo may already be in Storage — best-effort delete.
+    func finalizeRemovedPhoto() {
+        removedPhotoExpiry?.cancel()
+        guard let removed = removedPhoto else { return }
+        removedPhoto = nil
+        if let path = removed.firebasePhotoPath, let userId = Auth.auth().currentUser?.uid {
+            Task {
+                do {
+                    try await StorageService.shared.deletePhoto(path: path, userId: userId)
+                } catch {
+                    print("[UploadManager] Failed to delete removed photo at \(path): \(error)")
+                }
+            }
+        }
+    }
+
+    /// Removes a photo from the active draft (deselect in picker). No undo: tapping the
+    /// grid cell again re-adds it.
     func removePhotoFromActiveDraft(assetId: String, modelContext: ModelContext) {
         guard let id = activeDraftID,
               let draft = fetchItem(id: id, modelContext: modelContext) else { return }

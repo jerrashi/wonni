@@ -138,8 +138,9 @@ struct CustomPhotoPickerView: View {
         let onOpenDrafts: () -> Void
 
         @State private var hidePreviouslySelected = false
-        @State private var showBulkTextDrafts = false
         @State private var photoAccessLimited = false
+        /// Divider + 88pt carousel row + 4pt padding. Fixed so the bar can never grow.
+        private static let carouselBarHeight: CGFloat = 93
         @Environment(\.dismiss) private var dismiss
 
         @Environment(\.modelContext) private var modelContext
@@ -236,20 +237,6 @@ struct CustomPhotoPickerView: View {
                         .padding(.vertical, 8)
                         .background(.bar)
                     }
-                    if !photoCollection.photoAssets.isEmpty {
-                        Toggle(isOn: $hidePreviouslySelected) {
-                            HStack(spacing: 6) {
-                                Image(systemName: hidePreviouslySelected ? "eye.slash" : "eye")
-                                Text("Hide previously selected")
-                            }
-                            .font(.subheadline)
-                            .foregroundStyle(.primary)
-                        }
-                        .disabled(currentUsedAssetIDs.isEmpty)
-                        .padding(.horizontal)
-                        .padding(.vertical, 8)
-                        .background(.bar)
-                    }
                 }
             }
 
@@ -260,6 +247,8 @@ struct CustomPhotoPickerView: View {
             // mid-screen / overlapping the grid instead of pinned to the bottom, a real
             // constraint bug, not an animation timing one. A plain VStack sibling below the
             // ScrollView has no such reservation to get wrong — it's just laid out in flow.
+            // 2026-10-10: the row is pinned to one fixed height (user saw it take half
+            // the screen on an SE); the VStack sibling only hugs when every child does.
             if hasContent {
                 VStack(spacing: 0) {
                     Divider()
@@ -269,18 +258,20 @@ struct CustomPhotoPickerView: View {
                     )
                     .padding(.bottom, 4)
                 }
+                .frame(height: Self.carouselBarHeight)
+                .clipped()
                 .background(Color(.systemBackground))
                 .transition(.move(edge: .bottom))
             }
             }
+            .overlay(alignment: .bottom) {
+                PhotoRemovedToast().padding(.bottom, 8)
+            }
+            .animation(.easeOut(duration: 0.2), value: uploadManager.removedPhoto)
             .navigationTitle("Photos")
             .navigationBarTitleDisplayMode(.inline)
             .navigationBarBackButtonHidden(true)
             .toolbar(.hidden, for: .tabBar)
-            .sheet(isPresented: $showBulkTextDrafts) {
-                BulkTextDraftsSheet(offersOpenDrafts: true)
-                    .environmentObject(uploadManager)
-            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     // Pops this screen. Where that lands (camera or drafts drawer) is
@@ -295,31 +286,43 @@ struct CustomPhotoPickerView: View {
                     }
                     .accessibilityIdentifier("pickerBackButton")
                 }
-                // "Paste a list" — same sheet as the camera's List button. Its "Open
-                // drafts" flips uploadManager.openDraftsOverview; CameraView (which owns
-                // this stack) swaps the route from the picker to the drafts overview.
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        showBulkTextDrafts = true
-                    } label: {
-                        Image(systemName: "text.badge.plus")
-                    }
-                    .accessibilityIdentifier("pickerDraftsFromListButton")
-                }
+                // "Hide previously selected" lives up here (2026-10-10); the row it used
+                // to take above the grid is gone. The "paste a list" button left this
+                // screen — the camera and the Drafts screen both have it.
                 ToolbarItem(placement: .navigationBarTrailing) {
+                    if !photoCollection.photoAssets.isEmpty {
+                        Button {
+                            hidePreviouslySelected.toggle()
+                        } label: {
+                            Image(systemName: hidePreviouslySelected ? "eye.slash" : "eye")
+                        }
+                        .disabled(currentUsedAssetIDs.isEmpty)
+                        .accessibilityLabel(hidePreviouslySelected ? "Show previously selected" : "Hide previously selected")
+                        .accessibilityIdentifier("pickerHideUsedToggle")
+                    }
+                }
+                // Primary action at the bottom (iOS 26 convention, agreed 2026-10-10).
+                ToolbarItem(placement: .bottomBar) {
                     let hasActiveDraft = !(activeDraft?.sourceAssetIdentifiers.isEmpty ?? true)
                     let canProceed = hasActiveDraft || !committedDrafts.isEmpty
-                    Button {
-                        if hasActiveDraft {
-                            uploadManager.commitActiveDraft(modelContext: modelContext)
+                    HStack {
+                        Spacer()
+                        Button {
+                            if hasActiveDraft {
+                                uploadManager.commitActiveDraft(modelContext: modelContext)
+                            }
+                            onProceed()
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text("Proceed").fontWeight(.semibold)
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 20))
+                                    .foregroundColor(canProceed ? .green : .secondary)
+                            }
                         }
-                        onProceed()
-                    } label: {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 24))
-                            .foregroundColor(canProceed ? .green : .secondary)
+                        .disabled(!canProceed)
+                        .accessibilityIdentifier("pickerProceedButton")
                     }
-                    .disabled(!canProceed)
                 }
             }
             // Whenever this screen is on top — first push, or a pop back onto it from
