@@ -435,25 +435,20 @@ final class SellingFlowTests: XCTestCase {
         confirmDelete.tap()
     }
 
-    /// The title editor is a compact bottom sheet that must stay compact once the
-    /// keyboard is up. Regression for the 2026-10-01 report: with detents
-    /// `[.height(160), .medium]` the keyboard snapped the sheet to .medium and pushed it
-    /// up to the nav bar on a 4.7" phone, so it looked full-screen again (#150 redux).
-    func testDraftTitleEditorStaysCompactWithKeyboard() throws {
+    /// Drafts screen (2026-10-10): title and price are inline fields, and the keyboard
+    /// toolbar's down arrow steps from the title into the price. Title text typed
+    /// before the arrow must land in the title, text typed after it in the price.
+    func testInlineTitleAndPriceWithKeyboardArrows() throws {
         let photosInterruption = addUIInterruptionMonitor(withDescription: "Photos permission") { alert in
             let allowButtons = alert.buttons.matching(
                 NSPredicate(format: "label CONTAINS 'Allow' OR label CONTAINS 'OK'")
             )
-            if allowButtons.count > 0 {
-                allowButtons.firstMatch.tap()
-                return true
-            }
+            if allowButtons.count > 0 { allowButtons.firstMatch.tap(); return true }
             return false
         }
         defer { removeUIInterruptionMonitor(photosInterruption) }
 
         app.tabBars.buttons["Sell"].tap()
-
         let galleryButton = app.buttons["cameraGalleryButton"]
         XCTAssert(galleryButton.waitForExistence(timeout: 5), "Camera gallery button should appear")
         galleryButton.tap()
@@ -461,7 +456,6 @@ final class SellingFlowTests: XCTestCase {
 
         let firstPhoto = waitForPhotoGridItem(reopeningVia: galleryButton)
         firstPhoto.tap()
-
         let commitButton = app.buttons.matching(identifier: "draftsCarousel").firstMatch
         XCTAssert(commitButton.waitForExistence(timeout: 5))
         commitButton.tap()
@@ -470,44 +464,27 @@ final class SellingFlowTests: XCTestCase {
         XCTAssert(backButton.waitForExistence(timeout: 5))
         backButton.tap()
 
-        // The Drafts overview (Proceed) is where DraftRow + the title sheet live; draft
-        // history edits the title inline instead.
         let proceedButton = app.buttons["Proceed"]
         XCTAssert(proceedButton.waitForExistence(timeout: 5), "Proceed button should exist")
         proceedButton.tap()
 
-        let titleButton = app.descendants(matching: .any).matching(identifier: "draftRowTitleButton").firstMatch
-        XCTAssert(titleButton.waitForExistence(timeout: 5), "Draft row title button should appear")
-        titleButton.tap()
+        let titleField = app.descendants(matching: .any).matching(identifier: "draftRowTitleField").firstMatch
+        XCTAssert(titleField.waitForExistence(timeout: 10), "Inline title field should appear on the Drafts screen")
+        titleField.tap()
+        XCTAssert(app.keyboards.firstMatch.waitForExistence(timeout: 5), "Keyboard should come up for the title")
+        titleField.typeText("Wii Game")
 
-        let sheetTitle = app.navigationBars["Title"]
-        XCTAssert(sheetTitle.waitForExistence(timeout: 5), "Title editor sheet should open")
-        // The field auto-focuses, so the keyboard is what pushes the sheet up.
-        XCTAssert(app.keyboards.firstMatch.waitForExistence(timeout: 5), "Keyboard should be up in the title editor")
-
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = "title-editor-with-keyboard"
-        attachment.lifetime = .keepAlways
-        add(attachment)
-
-        // Sheet top = its nav bar top. Keyboard + a 180pt sheet leaves the top well
-        // below the upper third on any supported phone; at .medium it sits near the
-        // status bar instead.
-        let screenHeight = app.windows.firstMatch.frame.height
-        let keyboardTop = app.keyboards.firstMatch.frame.minY
-        XCTAssertGreaterThan(
-            sheetTitle.frame.minY, screenHeight * 0.3,
-            "Title sheet is not compact: its top is at \(sheetTitle.frame.minY)pt of a \(screenHeight)pt screen"
-        )
-        XCTAssertLessThan(
-            keyboardTop - sheetTitle.frame.minY, 260,
-            "Title sheet above the keyboard is \(keyboardTop - sheetTitle.frame.minY)pt tall; expected roughly 180"
-        )
-
+        let downArrow = app.buttons["draftsFocusDownButton"]
+        XCTAssert(downArrow.waitForExistence(timeout: 5), "Keyboard toolbar should offer a down arrow")
+        downArrow.tap()
+        app.typeText("12.50")
         app.buttons["Done"].firstMatch.tap()
+
+        let priceField = app.descendants(matching: .any).matching(identifier: "draftRowPriceField").firstMatch
+        XCTAssertEqual(priceField.value as? String, "12.50", "Text typed after the down arrow belongs to the price")
+        XCTAssertEqual(titleField.value as? String, "Wii Game", "Title keeps what was typed before the arrow")
     }
 
-    /// Test that editing fields saves correctly (deferred saves)
     func testEditingDraftFieldsSaves() throws {
         // Navigate to Sell tab
         app.tabBars.buttons["Sell"].tap()
