@@ -914,7 +914,7 @@ struct DraftFocusField: Hashable {
     let itemID: UUID
     let field: DraftFocusSubfield
 }
-enum DraftFocusSubfield: Hashable { case title, price, description }
+enum DraftFocusSubfield: Hashable { case title, price, quantity, description }
 
 // MARK: - ProcessResultsOverviewView
 
@@ -1198,6 +1198,7 @@ struct ProcessResultsOverviewView: View {
         case .title: fieldOffset = 0
         case .price: fieldOffset = 1
         case .description: fieldOffset = 2
+        case .quantity: return nil   // not an inline field on this screen
         }
         return row * 3 + fieldOffset
     }

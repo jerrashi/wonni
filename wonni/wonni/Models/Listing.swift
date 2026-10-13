@@ -60,6 +60,12 @@ class Item {
     /// lightweight migration adds the columns without a migration plan.
     var ebayCategoryId: String?
     var itemSpecifics: [String: String]?
+    /// Units for sale. nil means 1 (the canonical default everywhere else: `listings.
+    /// quantity`, `listing_shape.js`). Edited inline on the drafts screen; a pasted
+    /// list's "x3" lands here too. Mirrored to `products/{id}.quantity`, which is what
+    /// `postToWonni` and the sales cascade read. Optional so SwiftData's lightweight
+    /// migration adds the column without a migration plan.
+    var quantity: Int?
     var isDraft: Bool
     /// Local last-modified time, bumped alongside every `UploadManager.syncProductData`
     /// call. Compared against the shared `products/{id}` doc's own `updatedAt` to decide

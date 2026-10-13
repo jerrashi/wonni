@@ -1084,6 +1084,7 @@ class UploadManager: ObservableObject {
         data["title"] = draft.userEditedTitle ?? draft.aiSuggestedTitle
         data["description"] = draft.userEditedDescription ?? draft.aiSuggestedDescription
         data["listingPrice"] = draft.userEditedPrice ?? draft.aiSuggestedPrice
+        data["quantity"] = draft.quantity ?? 1
         data["condition"] = draft.condition
         data["category"] = draft.aiSuggestedCategory
         data["brand"] = draft.aiSuggestedBrand
@@ -1156,6 +1157,7 @@ class UploadManager: ObservableObject {
         if let title = data["title"] as? String { draft.userEditedTitle = title.isEmpty ? nil : title }
         if let description = data["description"] as? String { draft.userEditedDescription = description.isEmpty ? nil : description }
         if let price = data["listingPrice"] as? Double { draft.userEditedPrice = price }
+        if let quantity = data["quantity"] as? Int { draft.quantity = quantity > 1 ? quantity : nil }
         if let condition = data["condition"] as? String { draft.condition = condition }
         if let category = data["category"] as? String { draft.aiSuggestedCategory = category }
         if let brand = data["brand"] as? String { draft.aiSuggestedBrand = brand }

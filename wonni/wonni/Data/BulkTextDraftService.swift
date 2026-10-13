@@ -39,6 +39,8 @@ enum BulkTextDraftMapper {
             item.userEditedPrice = nil
         }
         item.condition = GeminiService.canonicalToItemCondition(proposal.condition.rawValue)
+        // "3x Mario Kart" → 3 units of one listing (nil = 1, like everywhere else).
+        item.quantity = proposal.quantity > 1 ? proposal.quantity : nil
         item.aiSuggestedCategory = proposal.category
         item.aiSuggestedBrand = proposal.brand
         item.tags = proposal.tags

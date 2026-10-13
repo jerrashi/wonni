@@ -16,6 +16,7 @@ struct MainView: View {
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var bulkImportManager: BulkImportManager
     @EnvironmentObject var mercariSyncManager: MercariSyncManager
+    @ObservedObject private var bulkTextRunner = BulkTextDraftRunner.shared
     @Environment(\.modelContext) private var modelContext
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
     @Environment(\.scenePhase) private var scenePhase
@@ -118,6 +119,19 @@ struct MainView: View {
         .sheet(isPresented: $mercariSyncManager.showProgressSheet) {
             NavigationStack { MercariSyncProgressSheet() }
                 .environmentObject(mercariSyncManager)
+        }
+        // "Drafts from a list" runs in the background; the pill reopens its sheet here,
+        // and the one AI-photo question is asked from here so it reaches the user
+        // whatever screen they're on once the sheet has closed.
+        .sheet(isPresented: $bulkTextRunner.showSheet) {
+            BulkTextDraftsSheet(offersOpenDrafts: true)
+                .environmentObject(uploadManager)
+        }
+        .alert("Use AI-generated photos?", isPresented: $bulkTextRunner.showAIPhotoConsent) {
+            Button("Use AI photos") { bulkTextRunner.answerConsent(true) }
+            Button("Skip", role: .cancel) { bulkTextRunner.answerConsent(false) }
+        } message: {
+            Text("No seller or web photo was found for \(bulkTextRunner.consentCount) of the listings being created from your list. AI can generate a realistic product photo for them, but it won't be a photo of your actual item. You can always replace it on the draft.")
         }
         // wonni://import?url=... deep link (see wonniApp's onOpenURL) — opens straight
         // into ImportListingSheet pre-filled with the shared URL and auto-imports.

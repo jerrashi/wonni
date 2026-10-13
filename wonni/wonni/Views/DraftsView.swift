@@ -529,25 +529,29 @@ struct DraftsView: View {
         }
     }
 
-    // MARK: - Keyboard focus (title → price → next draft's title …)
+    // MARK: - Keyboard focus (title → price → quantity → next draft's title …)
+
+    private static let fieldsPerRow = 3
+    private static let rowFields: [DraftFocusSubfield] = [.title, .price, .quantity]
 
     private var focusedIndex: Int? {
-        guard let focus = focusedField, let row = drafts.firstIndex(where: { $0.id == focus.itemID }) else { return nil }
-        return row * 2 + (focus.field == .price ? 1 : 0)
+        guard let focus = focusedField, let row = drafts.firstIndex(where: { $0.id == focus.itemID }),
+              let offset = Self.rowFields.firstIndex(of: focus.field) else { return nil }
+        return row * Self.fieldsPerRow + offset
     }
 
     private func moveFocus(by delta: Int) {
         lastFocusMoveDelta = delta
         guard let current = focusedIndex else { return }
         let next = current + delta
-        guard next >= 0, next < drafts.count * 2 else { return }
-        focusedField = DraftFocusField(itemID: drafts[next / 2].id, field: next % 2 == 0 ? .title : .price)
+        guard next >= 0, next < drafts.count * Self.fieldsPerRow else { return }
+        focusedField = DraftFocusField(itemID: drafts[next / Self.fieldsPerRow].id, field: Self.rowFields[next % Self.fieldsPerRow])
     }
 }
 
 // MARK: - DraftCard
 
-/// One draft: title, optional price, photo strip with "+", pencil. Equatable on the
+/// One draft: title, optional price and quantity, photo strip with "+", pencil. Equatable on the
 /// inputs that change its look so the List doesn't rebuild every card on each
 /// UploadManager tick while the user is typing.
 struct DraftCard: View {
@@ -563,6 +567,7 @@ struct DraftCard: View {
     @Environment(\.modelContext) private var modelContext
     @State private var localTitle = ""
     @State private var localPrice = ""
+    @State private var localQuantity = ""
     @State private var draggedAssetId: String?
 
     private var compositeIDs: [String] { draft.sourceAssetIdentifiers.map { "\(draft.id.uuidString)|\($0)" } }
@@ -601,6 +606,16 @@ struct DraftCard: View {
                             .focused(focusedField, equals: DraftFocusField(itemID: draft.id, field: .price))
                             .disabled(isSelectMode)
                             .accessibilityIdentifier("draftRowPriceField")
+                        Text("Qty").font(.subheadline).foregroundStyle(localQuantity.isEmpty ? .tertiary : .secondary)
+                            .padding(.leading, 6)
+                        TextField("1", text: $localQuantity)
+                            .font(.subheadline)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.center)
+                            .frame(width: 44)
+                            .focused(focusedField, equals: DraftFocusField(itemID: draft.id, field: .quantity))
+                            .disabled(isSelectMode)
+                            .accessibilityIdentifier("draftRowQuantityField")
                     }
                     if let vision = draft.visionTitle, !vision.isEmpty, draft.processedAt == nil, localTitle.isEmpty {
                         VisionTitleSuggestionChip(suggestion: vision) {
@@ -642,6 +657,7 @@ struct DraftCard: View {
         .onAppear {
             localTitle = draft.userEditedTitle ?? draft.aiSuggestedTitle ?? ""
             localPrice = draft.userEditedPrice.map { String(format: "%.2f", $0) } ?? ""
+            localQuantity = draft.quantity.map { String($0) } ?? ""
         }
         .onChange(of: focusedField.wrappedValue) { oldFocus, newFocus in
             if oldFocus?.itemID == draft.id && newFocus?.itemID != draft.id { save() }
@@ -651,6 +667,9 @@ struct DraftCard: View {
         }
         .onChange(of: draft.userEditedPrice) { _, newVal in
             localPrice = newVal.map { String(format: "%.2f", $0) } ?? ""
+        }
+        .onChange(of: draft.quantity) { _, newVal in
+            localQuantity = newVal.map { String($0) } ?? ""
         }
         .onDisappear { save() }
     }
@@ -735,6 +754,9 @@ struct DraftCard: View {
         let cleaned = localPrice.filter { $0.isNumber || $0 == "." }
         let price = cleaned.isEmpty ? nil : Double(cleaned)
         if draft.userEditedPrice != price { draft.userEditedPrice = price }
+        // Blank, 0 or 1 all mean the default single unit (stored as nil).
+        let quantity = Int(localQuantity.filter(\.isNumber)).flatMap { $0 > 1 ? $0 : nil }
+        if draft.quantity != quantity { draft.quantity = quantity }
     }
 }
 
