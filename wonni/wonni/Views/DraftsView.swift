@@ -568,7 +568,14 @@ struct DraftCard: View {
     @State private var localTitle = ""
     @State private var localPrice = ""
     @State private var localQuantity = ""
+    @State private var quantityRevealed = false
     @State private var draggedAssetId: String?
+
+    private var showsQuantity: Bool {
+        quantityRevealed
+            || (Int(localQuantity) ?? 1) != 1
+            || focusedField.wrappedValue == DraftFocusField(itemID: draft.id, field: .quantity)
+    }
 
     private var compositeIDs: [String] { draft.sourceAssetIdentifiers.map { "\(draft.id.uuidString)|\($0)" } }
     private var selectedCount: Int { compositeIDs.filter { selectedPhotos.contains($0) }.count }
@@ -606,16 +613,32 @@ struct DraftCard: View {
                             .focused(focusedField, equals: DraftFocusField(itemID: draft.id, field: .price))
                             .disabled(isSelectMode)
                             .accessibilityIdentifier("draftRowPriceField")
-                        Text("Qty").font(.subheadline).foregroundStyle(localQuantity.isEmpty ? .tertiary : .secondary)
-                            .padding(.leading, 6)
-                        TextField("1", text: $localQuantity)
-                            .font(.subheadline)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.center)
-                            .frame(width: 44)
-                            .focused(focusedField, equals: DraftFocusField(itemID: draft.id, field: .quantity))
-                            .disabled(isSelectMode)
-                            .accessibilityIdentifier("draftRowQuantityField")
+                        Spacer(minLength: 6)
+                        // Quantity stays out of the way for the usual single item: a small
+                        // "Qty" button reveals the field; it stays visible once set (≠ 1)
+                        // or while it has focus (user: show only when it is not 1).
+                        if showsQuantity {
+                            Text("Qty").font(.subheadline).foregroundStyle(.secondary)
+                            TextField("1", text: $localQuantity)
+                                .font(.subheadline)
+                                .keyboardType(.numberPad)
+                                .multilineTextAlignment(.center)
+                                .frame(width: 44)
+                                .focused(focusedField, equals: DraftFocusField(itemID: draft.id, field: .quantity))
+                                .disabled(isSelectMode)
+                                .accessibilityIdentifier("draftRowQuantityField")
+                        } else if !isSelectMode {
+                            Button {
+                                quantityRevealed = true
+                                focusedField.wrappedValue = DraftFocusField(itemID: draft.id, field: .quantity)
+                            } label: {
+                                Text("Qty").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                    .padding(.horizontal, 8).padding(.vertical, 3)
+                                    .background(Color(.tertiarySystemFill), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("draftRowQuantityButton")
+                        }
                     }
                     if let vision = draft.visionTitle, !vision.isEmpty, draft.processedAt == nil, localTitle.isEmpty {
                         VisionTitleSuggestionChip(suggestion: vision) {
@@ -640,19 +663,8 @@ struct DraftCard: View {
             }
 
             photoStrip
-
-            if draft.processedAt != nil {
-                HStack(spacing: 4) {
-                    Image(systemName: "sparkles").font(.caption2).foregroundStyle(.purple)
-                    Text(draft.skipAIProcessing == true ? "Skips AI" : "AI identified")
-                        .font(.caption2).foregroundStyle(.purple.opacity(0.8))
-                }
-            } else if draft.skipAIProcessing == true {
-                HStack(spacing: 4) {
-                    Image(systemName: "sparkles.slash").font(.caption2).foregroundStyle(.secondary)
-                    Text("Skips AI").font(.caption2).foregroundStyle(.secondary)
-                }
-            }
+            // The "AI identified" / "Skips AI" captions that sat here were removed
+            // 2026-10-13 (user: extraneous text).
         }
         .onAppear {
             localTitle = draft.userEditedTitle ?? draft.aiSuggestedTitle ?? ""
@@ -661,6 +673,9 @@ struct DraftCard: View {
         }
         .onChange(of: focusedField.wrappedValue) { oldFocus, newFocus in
             if oldFocus?.itemID == draft.id && newFocus?.itemID != draft.id { save() }
+            if oldFocus?.field == .quantity, oldFocus?.itemID == draft.id, newFocus != oldFocus {
+                quantityRevealed = false
+            }
         }
         .onChange(of: draft.userEditedTitle) { _, newVal in
             localTitle = newVal ?? draft.aiSuggestedTitle ?? ""
