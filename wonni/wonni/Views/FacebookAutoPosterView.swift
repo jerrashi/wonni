@@ -232,22 +232,11 @@ struct FacebookAutoPosterView: View {
 
         var issues: [String] = []
 
-        phase = .filling("Filling title, price, description…")
-        let missed = (try? await webView.callJS(Self.fillBasicsJS, args: [
-            "title": job.title,
-            "price": String(format: "%.0f", job.price.rounded()),
-            "desc": job.description
-        ])) as? String ?? ""
-        if !missed.isEmpty { issues.append("couldn't fill \(missed)") }
-
-        // Facebook default (Settings → Facebook Marketplace) wins; the job's value is the
-        // older Selling-Settings city, kept as the fallback for accounts that never set one.
-        let location = defaultLocation.isEmpty ? job.facebookLocation : defaultLocation
-        if let loc = location, !loc.isEmpty {
-            phase = .filling("Setting location…")
-            let result = (try? await webView.callJS(Self.fillLocationJS, args: ["location": loc])) as? String ?? "error"
-            if !result.hasPrefix("selected") { issues.append("location (\(result))") }
-        }
+        // ORDER MATTERS (user report 2026-10-13). Category, condition and location are
+        // "Select" controls that push a sub-page and come back to a server-rendered
+        // form; anything typed BEFORE such a round trip came back form-encoded
+        // ("Nintendo+Wii+Console"). So: every picker and toggle first, photos next, and
+        // the typed fields (title / price / description) last, verified by read-back.
 
         // Category + brand come from the shared Gemini pipeline (same products/{id} doc
         // eBay/Etsy use). Best-effort: a blank result just leaves Category manual.
@@ -279,6 +268,16 @@ struct FacebookAutoPosterView: View {
         print("[FacebookAutofill] condition=\(conditionLabel) → \(conditionR)")
         if !(conditionR.hasPrefix("selected") || conditionR.hasPrefix("already")) { issues.append("condition") }
 
+        // Facebook default (Settings → Facebook Marketplace) wins; the job's value is the
+        // older Selling-Settings city, kept as the fallback for accounts that never set one.
+        let location = defaultLocation.isEmpty ? job.facebookLocation : defaultLocation
+        if let loc = location, !loc.isEmpty {
+            phase = .filling("Setting location…")
+            let result = (try? await webView.callJS(Self.fillLocationJS, args: ["location": loc])) as? String ?? "error"
+            print("[FacebookAutofill] location=\(loc) → \(result)")
+            if !result.hasPrefix("selected") { issues.append("location (\(result))") }
+        }
+
         // Shipping + visibility toggles: per-listing override on the product doc wins,
         // otherwise the account default collected on first post.
         phase = .filling("Applying shipping and visibility…")
@@ -287,6 +286,7 @@ struct FacebookAutoPosterView: View {
         let hideFromFriends = Self.effectiveToggle(override: overrides.hideFromFriends, accountDefault: defaultHideFromFriends)
         for (label, wantOn) in [("Offer shipping", offerShipping), ("Hide from friends", hideFromFriends)] {
             let result = (try? await webView.callJS(Self.setToggleJS, args: ["label": label, "on": wantOn])) as? String ?? "error"
+            print("[FacebookAutofill] toggle \(label)=\(wantOn) → \(result)")
             if !(result.hasPrefix("set") || result == "already") { issues.append("\(label.lowercased()) (\(result))") }
         }
 
@@ -296,10 +296,20 @@ struct FacebookAutoPosterView: View {
             issues.append("no photos found")
         } else {
             let result = (try? await webView.callJS(Self.attachPhotosJS, args: ["base64Photos": photos])) as? String ?? "error"
+            print("[FacebookAutofill] photos → \(result)")
             // "attached-N/M"
             let attached = Int(result.split(separator: "-").last?.split(separator: "/").first ?? "") ?? 0
             if attached < photos.count { issues.append("photos \(attached)/\(photos.count)") }
         }
+
+        phase = .filling("Filling title, price, description…")
+        let missed = (try? await webView.callJS(Self.fillBasicsJS, args: [
+            "title": job.title,
+            "price": String(format: "%.0f", job.price.rounded()),
+            "desc": job.description
+        ])) as? String ?? ""
+        print("[FacebookAutofill] basics → \(missed.isEmpty ? "ok" : missed)")
+        if !missed.isEmpty { issues.append("couldn't fill \(missed)") }
 
         phase = .review(issues: issues)
     }
@@ -690,16 +700,21 @@ struct FacebookAutoPosterView: View {
     /// A MutationObserver catches inputs that ARE inserted, as a second path. Per photo:
     /// tap the add row, wait for a captured input, assign, wait for the preview count to
     /// grow (or 4 s), repeat. If the input advertises `multiple`, everything remaining
-    /// goes in one shot. Resolves "attached-N/M" plus the reason it stopped early.
+    /// goes in one shot. Resolves "attached-N/M" plus the reason it stopped early. The
+    /// click hook is armed only for the duration of this script and disarmed in `done`,
+    /// so a manual "Add photos" tap afterwards opens the real picker again.
     private static let attachPhotosJS = """
     return new Promise(function(resolve) {
         var total = base64Photos.length, attached = 0, index = 0;
         var W = window;
         if (!W.__wonniFileHook) {
-            W.__wonniFileHook = { pending: null };
+            // The hook swallows file-input clicks ONLY while `active`. It used to swallow
+            // them for the life of the page, which is why "Add photos" did nothing by hand
+            // after an autofill run (user report 2026-10-13). `done` always deactivates.
+            W.__wonniFileHook = { pending: null, active: false };
             var origClick = HTMLInputElement.prototype.click;
             HTMLInputElement.prototype.click = function() {
-                if (this.type === 'file') { W.__wonniFileHook.pending = this; return; }
+                if (this.type === 'file' && W.__wonniFileHook.active) { W.__wonniFileHook.pending = this; return; }
                 return origClick.apply(this, arguments);
             };
             new MutationObserver(function(muts) {
@@ -737,7 +752,12 @@ struct FacebookAutoPosterView: View {
                 setTimeout(poll, 150);
             })();
         }
-        function done(reason) { resolve('attached-' + attached + '/' + total + (reason ? ' (' + reason + ')' : '')); }
+        W.__wonniFileHook.active = true;
+        function done(reason) {
+            W.__wonniFileHook.active = false;
+            W.__wonniFileHook.pending = null;
+            resolve('attached-' + attached + '/' + total + (reason ? ' (' + reason + ')' : ''));
+        }
         function step() {
             if (index >= total) { done(''); return; }
             var before = previewCount();
