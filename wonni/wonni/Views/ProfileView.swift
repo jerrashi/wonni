@@ -1633,6 +1633,16 @@ struct EditListingSheet: View {
                     }
                 }
             }
+            if platform == "mercari", status == "posted", listing.mercariSmartPricingOn == true {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text("Smart Pricing is still on — Mercari may lower this price. Turn it off on Mercari.")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .accessibilityIdentifier("mercariSmartPricingWarning")
+            }
             // Second row: action buttons
             if isDisconnected {
                 Button { reconnectPlatform(platform) } label: {

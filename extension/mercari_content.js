@@ -120,9 +120,8 @@
     updateHUD("Category Selection", "Selecting product category…");
     await selectCategory(payload.suggestedCategory || payload.title);
 
-    // 5. Smart Pricing (Turn off)
-    updateHUD("Smart Pricing", "Disabling Smart Pricing auto-toggle…");
-    await disableSmartPricing();
+    // 5. (Smart Pricing is handled LAST, right before Submit — shipping re-renders the
+    //    pricing section and can switch it back on.)
 
     // 6. Brand Selection
     updateHUD("Brand Selection", "Selecting brand…");
@@ -138,15 +137,49 @@
     const payerResult = await selectShippingPayer(payload.buyerPaysShipping ?? false);
     console.log("[Wonni Drop] ShippingPayer:", payerResult);
 
-    // 8. Submit Listing
+    // 8. Smart Pricing — LAST. Under $10 Mercari rejects the listing with Smart Pricing on
+    //    (its auto floor must be ≥ $9), so that case holds submit; $10+ follows the seller's
+    //    `keepSmartPricing` preference (default off = switch it off, warn-only on failure).
+    updateHUD("Smart Pricing", "Checking Smart Pricing…");
+    const price = Number(payload.price) || 0;
+    const keep = payload.keepSmartPricing === true;
+    const smartRequired = price < SMART_PRICING_FORCE_OFF_BELOW || !keep;
+    let smartPricingLeftOn = false;
+    if (smartRequired) {
+      const smart = await disableSmartPricing();
+      console.log("[Wonni Drop] SmartPricing:", smart, "price", price);
+      const off = smart === "hidden" || smart === "was-off" || smart === "disabled";
+      if (!off && price < SMART_PRICING_FORCE_OFF_BELOW) {
+        updateHUD("Smart Pricing", "Smart Pricing is still on — Mercari won't list items under $10 with it on. Turn it off, then click List.", true);
+        return;
+      }
+      // $10+ and the seller wanted it off: list anyway, but say so after the post
+      // (banner on the success page; the tab stays open so it's seen).
+      smartPricingLeftOn = !off;
+    }
+
+    // 9. Submit Listing
     updateHUD("Submitting", "Waiting for Mercari List button to enable…");
     const submitResult = await submitListing();
     if (!submitResult.startsWith("submitted")) {
       updateHUD("Submit Pending", "Form completed! Please review and click List in Mercari.", false);
     }
 
-    // 9. Poll for Post-Success & Scrape Item ID
-    await pollForSuccessModal(payload);
+    // 10. Poll for Post-Success & Scrape Item ID
+    await pollForSuccessModal(payload, smartPricingLeftOn);
+  }
+
+  // Visible, page-level notice for things the listing survived but the seller should
+  // know about (updateHUD only logs). Used for the Smart Pricing warn-only case.
+  function showPageWarning(text) {
+    const el = document.createElement("div");
+    el.id = "wonni-drop-warning";
+    el.textContent = text;
+    el.style.cssText = "position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2147483647;"
+      + "max-width:min(92vw,560px);padding:12px 16px;border-radius:10px;background:#fff4e5;color:#7a3e00;"
+      + "border:1px solid #f5a623;font:14px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;"
+      + "box-shadow:0 4px 16px rgba(0,0,0,.15)";
+    (document.body || document.documentElement).appendChild(el);
   }
 
   // ── Photo Attachment Handler ────────────────────────────────────────────────
@@ -256,46 +289,61 @@
   }
 
   // ── Smart Pricing ────────────────────────────────────────────────────────────
+  // Copy of wonni/wonni/Data/MercariFormJS.swift `disableSmartPricing` (fixture-tested
+  // there against the markup captured 2026-10-12). Keep the two in step.
+  //
+  //   <button data-testid="SmartPricingAccordion" aria-expanded="true">…</button>
+  //   <button data-testid="SmartPricingButton" aria-pressed="true">ON</button>
+  //
+  // The old finder matched [data-testid*="SmartPricing"], whose first hit is the accordion
+  // header (no pressed state) — so it reported "off" and never clicked.
+  // Resolves to "hidden" | "was-off" | "disabled" | "still-on" | "no-toggle".
+
+  const SMART_PRICING_FORCE_OFF_BELOW = 10;
 
   async function disableSmartPricing() {
-    function findToggle() {
-      const t = document.querySelector('[data-testid*="SmartPricing"], [data-testid*="smartPricing"]');
+    const accordion = () => document.querySelector('[data-testid="SmartPricingAccordion"]');
+    function toggle() {
+      const t = document.querySelector('[data-testid="SmartPricingButton"]');
       if (t) return t;
-      const cands = document.querySelectorAll('input[type="checkbox"], button[role="switch"], [role="switch"]');
-      for (let i = 0; i < cands.length; i++) {
-        const anc = cands[i].closest("label") || cands[i].parentElement;
-        if (anc && anc.textContent.toLowerCase().includes("smart pricing")) return cands[i];
+      const acc = accordion();
+      const box = acc ? acc.parentElement : null;
+      const btns = box ? box.querySelectorAll("button[aria-pressed]") : [];
+      for (const b of btns) {
+        const txt = (b.textContent || "").trim().toUpperCase();
+        if (txt === "ON" || txt === "OFF") return b;
       }
       return null;
     }
-
     function isOn(t) {
-      return t.checked === true
-        || t.getAttribute("aria-checked") === "true"
-        || t.getAttribute("data-state") === "checked"
-        || (t.className && String(t.className).includes("checked"));
+      if (t.getAttribute("aria-pressed") === "true") return true;
+      if (t.getAttribute("aria-pressed") === "false") return false;
+      return (t.textContent || "").trim().toUpperCase() === "ON";
     }
-
-    const toggle = await waitFor(findToggle, 4000);
-    if (!toggle || !isOn(toggle)) return;
-
-    const target = toggle.tagName === "INPUT"
-      ? (document.querySelector(`label[for="${toggle.id}"]`) || toggle.closest("label") || toggle)
-      : toggle;
-
-    realClick(target);
-    toggle.dispatchEvent(new Event("change", { bubbles: true }));
-
-    // Dismiss confirm dialog if shown
-    const confirmBtn = await waitFor(() => {
+    function confirmButton() {
       const bs = document.querySelectorAll('[role="dialog"] button, [role="alertdialog"] button');
-      for (let i = 0; i < bs.length; i++) {
-        const t = bs[i].textContent.trim().toLowerCase();
-        if (["turn off", "confirm", "ok", "yes"].includes(t) && !bs[i].disabled) return bs[i];
+      for (const b of bs) {
+        const t = (b.textContent || "").trim().toLowerCase();
+        if (["turn off", "confirm", "ok", "yes"].includes(t) && !b.disabled) return b;
       }
       return null;
-    }, 1500);
-    if (confirmBtn) realClick(confirmBtn);
+    }
+
+    const acc = await waitFor(accordion, 3000);
+    if (!acc) return "hidden";
+    if (acc.getAttribute("aria-expanded") === "false") realClick(acc);
+    let t = await waitFor(toggle, 4000);
+    if (!t) return "no-toggle";
+    if (!isOn(t)) return "was-off";
+    for (let attempt = 0; attempt < 3; attempt++) {
+      realClick(t);
+      const confirm = await waitFor(confirmButton, 1200);
+      if (confirm) realClick(confirm);
+      const off = await waitFor(() => { const c = toggle(); return c && !isOn(c) ? "off" : null; }, 2000);
+      if (off) return "disabled";
+      t = toggle() || t;
+    }
+    return "still-on";
   }
 
   // ── Brand Selection ──────────────────────────────────────────────────────────
@@ -572,7 +620,7 @@
 
   // ── Post-Success & Item ID Scraping ─────────────────────────────────────────
 
-  async function pollForSuccessModal(payload) {
+  async function pollForSuccessModal(payload, smartPricingLeftOn = false) {
     const productId = payload.productId;
     function findItemId() {
       const re = /\/item\/(m[A-Za-z0-9]+)/;
@@ -600,6 +648,13 @@
         const mercariItemId = findItemId();
         const mercariUrl = mercariItemId ? `https://www.mercari.com/us/item/${mercariItemId}/` : location.href;
         updateHUD("Listed Successfully!", mercariItemId ? `Mercari Item ID: ${mercariItemId}` : "Listing is live on Mercari!", false, true);
+        const warning = smartPricingLeftOn
+          ? "Listed, but Smart Pricing is still on — Mercari may lower the price over time. Open the listing and turn it off."
+          : null;
+        if (warning) {
+          updateHUD("Smart Pricing", warning, true);
+          showPageWarning(warning);
+        }
 
         // Notify background script. Include the just-pushed values as the new sync
         // baseline (mercariSynced*) — the next sync-to-Mercari push diffs against this.
@@ -610,6 +665,7 @@
           variantId: payload.variantId,
           mercariItemId,
           mercariUrl,
+          warning,
           syncedTitle: payload.title,
           syncedDescription: payload.description,
           syncedPrice: payload.price,

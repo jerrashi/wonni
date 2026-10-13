@@ -162,6 +162,10 @@ struct ShippingPreferences {
     var mode: ShippingMode = .cheapestPrepaid
     /// Considered only when `mode == .cheapestAmongCarriers`.
     var selectedCarriers: Set<Carrier> = [.usps]
+    /// Leave Mercari's Smart Pricing on for listings priced at
+    /// `MercariFormJS.smartPricingForceOffBelow` and above. Below that it is always
+    /// turned off, because Mercari rejects the listing otherwise (floor must be ≥ $9).
+    var keepSmartPricing: Bool = false
 }
 
 /// One shipping label parsed out of Mercari's live carrier list. `value` is the radio
@@ -253,6 +257,10 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
     @Published var status: Status = .loading
     /// Non-fatal advisory surfaced to the user (e.g. oversized item with no prepaid dimensions step).
     @Published var warning: String?
+    /// Set when the seller wants Smart Pricing off ($10+ item) but the toggle couldn't be
+    /// switched off. The listing still posts; the flag drives the post-listing warning
+    /// (task detail, `listings/{id}.mercariSmartPricingOn`, the Mercari row highlight).
+    @Published var smartPricingLeftOn = false
     /// True once the List button is enabled (all required fields are filled).
     @Published var isListingComplete: Bool = false
     /// Mercari item ID extracted from the post-success URL (e.g. "m1234567890").
@@ -302,6 +310,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
     func prepareForResume() {
         hasDetectedSuccess = false
         hasStartedInjection = false
+        smartPricingLeftOn = false
         status = .injecting
     }
 
@@ -454,9 +463,6 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
             print("[MercariPostingState] Category resume: \(categoryResult)")
         }
 
-        // Smart pricing (idempotent toggle).
-        _ = await disableSmartPricing()
-
         // Brand (re-run: idempotent, confirms or sets the brand chip).
         let brandResult = await selectBrand(suggestedBrand: suggestedBrand)
         print("[MercariPostingState] Brand resume: \(brandResult)")
@@ -473,6 +479,10 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         }
 
         let _ = await selectShippingPayer(buyerPays: buyerPaysShipping)
+
+        // Last step before List: shipping re-renders the pricing section, so this is the
+        // only place the Smart Pricing state is trustworthy.
+        guard await ensureSmartPricingOff(price: price, preferences: preferences) else { return }
 
         injectionStep = "Submitting…"
         var photoFailed = false
@@ -777,10 +787,8 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         let categoryResult = await selectCategory(suggestedCategory: suggestedCategory)
         print("[MercariPostingState] Category: \(categoryResult)")
 
-        // 3. Smart Pricing auto-enables when the price field receives React events;
-        //    turn it back off so it doesn't override the listed price.
-        let smartResult = await disableSmartPricing()
-        print("[MercariPostingState] SmartPricing: \(smartResult)")
+        // 3. (Smart Pricing is handled LAST, right before Submit — see ensureSmartPricingOff.
+        //    Shipping re-renders the pricing section and can switch it back on.)
 
         // 4. Brand — tiered: suggested chips → AI search → no brand.
         let brandResult = await selectBrand(suggestedBrand: suggestedBrand)
@@ -817,6 +825,11 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         // carrier saves) would needlessly hold a submittable listing. The only failure the button
         // wouldn't catch is a photo-upload error, so that's the sole hold — and it's re-checked,
         // because Mercari shows a transient "Something wrong happened" that resolves on upload retry.
+        //
+        // 6. Smart Pricing — LAST, after shipping (which re-renders the pricing section). Under
+        //    $10 a still-on toggle makes Mercari reject the listing, so that case holds submit.
+        guard await ensureSmartPricingOff(price: price, preferences: preferences) else { return }
+
         injectionStep = "Submitting…"
         var photoFailed = false
         for attempt in 0..<3 {
@@ -1084,84 +1097,38 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
 
     // MARK: Smart Pricing
 
-    /// Turns Smart Pricing off (the default behavior) if it auto-enabled after price injection.
-    /// Polls for the toggle, clicks it with a real pointer sequence, and verifies it flipped off.
-    /// Returns a status string ("disabled", "was-off", "still-on", "not-found").
-    private func disableSmartPricing() async -> String {
-        let js = """
-        function waitFor(fn, timeout, interval) {
-            timeout = timeout || 5000; interval = interval || 250;
-            return new Promise(function(resolve) {
-                var start = Date.now();
-                (function loop() {
-                    var r = null; try { r = fn(); } catch (e) {}
-                    if (r) { resolve(r); return; }
-                    if (Date.now() - start >= timeout) { resolve(null); return; }
-                    setTimeout(loop, interval);
-                })();
-            });
+    /// Runs the shared `MercariFormJS.disableSmartPricing` script and decides whether the
+    /// form may be submitted. Call it LAST — after shipping, which re-renders the pricing
+    /// section and can switch Smart Pricing back on.
+    ///
+    /// Policy (`MercariFormJS.mustDisableSmartPricing`): under $10 the toggle must be off or
+    /// hidden, or Mercari rejects the listing ("smart pricing must be greater than $9"); at
+    /// $10+ the seller's `keepSmartPricing` preference decides, and a failure to turn it off
+    /// only warns. Returns false when submit must be held; the status carries the reason.
+    func ensureSmartPricingOff(price: Double, preferences: ShippingPreferences) async -> Bool {
+        let required = MercariFormJS.mustDisableSmartPricing(
+            price: price, keepSmartPricing: preferences.keepSmartPricing
+        )
+        if !required && preferences.keepSmartPricing {
+            print("[MercariPostingState] SmartPricing: kept (seller preference, price \(price))")
+            return true
         }
-        // React switches often ignore a bare .click(); dispatch the full pointer/mouse sequence.
-        function realClick(el) {
-            if (!el) return;
-            ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(type) {
-                el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
-            });
+        injectionStep = "Checking Smart Pricing…"
+        let result = (try? await webView.callJS(MercariFormJS.disableSmartPricing)) as? String ?? "error"
+        print("[MercariPostingState] SmartPricing: \(result) (price \(price), required: \(required))")
+        if MercariFormJS.smartPricingIsOff(result) {
+            smartPricingLeftOn = false
+            return true
         }
-        function findToggle() {
-            var t = document.querySelector('[data-testid*="SmartPricing"], [data-testid*="smartPricing"]');
-            if (t) return t;
-            var cands = document.querySelectorAll('input[type="checkbox"], button[role="switch"], [role="switch"]');
-            for (var i = 0; i < cands.length; i++) {
-                var anc = cands[i].closest('label') || cands[i].parentElement;
-                if (anc && anc.textContent.toLowerCase().indexOf('smart pricing') !== -1) return cands[i];
-            }
-            var els = document.querySelectorAll('span, p, div');
-            for (var j = 0; j < els.length; j++) {
-                if (els[j].childElementCount === 0 && els[j].textContent.trim() === 'Smart Pricing') {
-                    var btn = els[j].closest('[role="switch"]') || els[j].closest('button')
-                        || (els[j].parentElement && els[j].parentElement.querySelector('[role="switch"]'));
-                    if (btn) return btn;
-                }
-            }
-            return null;
+        if required {
+            status = .failed("Smart Pricing is still on and Mercari won't list items under $10 with it on — turn it off in the form, then tap List")
+            return false
         }
-        function isOn(t) {
-            return t.checked === true
-                || t.getAttribute('aria-checked') === 'true'
-                || t.getAttribute('data-state') === 'checked'
-                || (t.className && String(t.className).indexOf('checked') !== -1);
-        }
-        return (async function() {
-            var toggle = await waitFor(findToggle, 8000);
-            if (!toggle) { return 'not-found'; }
-            if (!isOn(toggle)) { return 'was-off'; }
-            var target = toggle.tagName === 'INPUT'
-                ? (document.querySelector('label[for="' + toggle.id + '"]') || toggle.closest('label') || toggle)
-                : toggle;
-            // Retry the toggle a few times — the click sometimes lands before React wires it up.
-            for (var attempt = 0; attempt < 3; attempt++) {
-                realClick(target);
-                toggle.dispatchEvent(new Event('change', { bubbles: true }));
-                // Mercari shows a "Turn off Smart Pricing?" confirmation dialog — dismiss it.
-                var confirmBtn = await waitFor(function() {
-                    var bs = document.querySelectorAll('[role="dialog"] button, [role="alertdialog"] button');
-                    for (var i = 0; i < bs.length; i++) {
-                        var t = bs[i].textContent.trim().toLowerCase();
-                        if ((t === 'turn off' || t === 'confirm' || t === 'ok' || t === 'yes') && !bs[i].disabled) {
-                            return bs[i];
-                        }
-                    }
-                    return null;
-                }, 1500);
-                if (confirmBtn) { realClick(confirmBtn); }
-                var off = await waitFor(function() { return isOn(toggle) ? null : 'off'; }, 2000);
-                if (off) { return 'disabled'; }
-            }
-            return 'still-on';
-        })();
-        """
-        return (try? await webView.callJS(js)) as? String ?? "error"
+        // Seller wants it off but Mercari wouldn't cooperate: list anyway (user decision
+        // 2026-10-13) and make sure they hear about it after the post.
+        smartPricingLeftOn = true
+        warning = MercariFormJS.smartPricingLeftOnMessage
+        return true
     }
 
     // MARK: Brand Selection
@@ -1931,6 +1898,7 @@ struct MercariShippingPreferencesView: View {
     @AppStorage("mercariShippingMode") private var shippingModeRaw = ShippingMode.cheapestPrepaid.rawValue
     @AppStorage("mercariSelectedCarriers") private var selectedCarriersRaw = Carrier.usps.rawValue
     @AppStorage("mercariPrefsConfigured") private var prefsConfigured = false
+    @AppStorage("mercariKeepSmartPricing") private var keepSmartPricingStored = false
 
     /// When true, shown as one-time setup before the first cross-post (vs. editing in Settings).
     var isFirstTimeSetup = false
@@ -1940,6 +1908,7 @@ struct MercariShippingPreferencesView: View {
     @State private var accept = true
     @State private var mode: ShippingMode = .cheapestPrepaid
     @State private var carriers: Set<Carrier> = [.usps]
+    @State private var keepSmartPricing = false
 
     var body: some View {
         Form {
@@ -1968,6 +1937,14 @@ struct MercariShippingPreferencesView: View {
                     Text("We'll pick the cheapest label among these carriers, falling back to the overall cheapest if none are offered.")
                 }
             }
+
+            Section {
+                Toggle("Keep Smart Pricing on", isOn: $keepSmartPricing)
+            } header: {
+                Text("Smart pricing")
+            } footer: {
+                Text("Mercari turns Smart Pricing on by itself when we fill in a price. Off (default): we switch it off before listing so your price stays put. On: we leave it for items $10 and up. Under $10 it is always switched off — Mercari won't list those with Smart Pricing on.")
+            }
         }
         .navigationTitle(isFirstTimeSetup ? "Shipping preferences" : "Mercari shipping")
         .navigationBarTitleDisplayMode(.inline)
@@ -1994,6 +1971,7 @@ struct MercariShippingPreferencesView: View {
         mode = ShippingMode(rawValue: shippingModeRaw) ?? .cheapestPrepaid
         let parsed = Set(selectedCarriersRaw.split(separator: ",").compactMap { Carrier(rawValue: String($0)) })
         carriers = parsed.isEmpty ? [.usps] : parsed
+        keepSmartPricing = keepSmartPricingStored
     }
 
     private func save() {
@@ -2001,10 +1979,12 @@ struct MercariShippingPreferencesView: View {
         acceptSuggestions = accept
         shippingModeRaw = mode.rawValue
         selectedCarriersRaw = carrierList.joined(separator: ",")
+        keepSmartPricingStored = keepSmartPricing
         prefsConfigured = true
         Task {
             await IntegrationRepository.shared.saveMercariShippingPreferences(
-                acceptSuggestions: accept, mode: mode.rawValue, carriers: carrierList
+                acceptSuggestions: accept, mode: mode.rawValue, carriers: carrierList,
+                keepSmartPricing: keepSmartPricing
             )
         }
         onSaved?()
@@ -2048,6 +2028,7 @@ struct MercariAutoPosterView: View {
     @AppStorage("mercariSelectedCarriers") private var selectedCarriersRaw = Carrier.usps.rawValue
     /// Set once the seller has chosen their shipping preferences (collected on first cross-post).
     @AppStorage("mercariPrefsConfigured") private var prefsConfigured = false
+    @AppStorage("mercariKeepSmartPricing") private var keepSmartPricing = false
     @State private var showPrefSetup = false
     @State private var showCloseWithoutIdConfirm = false
 
@@ -2245,6 +2226,12 @@ struct MercariAutoPosterView: View {
                 case .success:
                     Task {
                         await updateFirestore()
+                        if state.smartPricingLeftOn {
+                            // The pill dismisses right away, so the warning has to outlive it:
+                            // the Activity sheet's "Recently completed" row keeps this detail,
+                            // and the listing's Mercari row shows the orange highlight.
+                            AppTaskQueue.shared.update(id: job.id, detail: MercariFormJS.smartPricingLeftOnMessage)
+                        }
                         guard let confirmedId = state.mercariItemId, !confirmedId.isEmpty else {
                             await MainActor.run { state.status = .failed("Listing ID not confirmed — verify on Mercari") }
                             return
@@ -2468,6 +2455,7 @@ struct MercariAutoPosterView: View {
             acceptSuggestions = remote.acceptSuggestions
             shippingModeRaw = remote.mode
             selectedCarriersRaw = remote.carriers.joined(separator: ",")
+            keepSmartPricing = remote.keepSmartPricing
             prefsConfigured = true
         }
 
@@ -2517,7 +2505,8 @@ struct MercariAutoPosterView: View {
         let preferences = ShippingPreferences(
             acceptSuggestions: acceptSuggestions,
             mode: ShippingMode(rawValue: shippingModeRaw) ?? .cheapestPrepaid,
-            selectedCarriers: selectedCarriers.isEmpty ? [.usps] : selectedCarriers
+            selectedCarriers: selectedCarriers.isEmpty ? [.usps] : selectedCarriers,
+            keepSmartPricing: keepSmartPricing
         )
 
         await state.injectFields(
@@ -2577,7 +2566,8 @@ struct MercariAutoPosterView: View {
         let preferences = ShippingPreferences(
             acceptSuggestions: acceptSuggestions,
             mode: ShippingMode(rawValue: shippingModeRaw) ?? .cheapestPrepaid,
-            selectedCarriers: selectedCarriers.isEmpty ? [.usps] : selectedCarriers
+            selectedCarriers: selectedCarriers.isEmpty ? [.usps] : selectedCarriers,
+            keepSmartPricing: keepSmartPricing
         )
 
         await state.resumeInjection(
@@ -2619,6 +2609,8 @@ struct MercariAutoPosterView: View {
         let update: [String: Any] = [
             "crossPostStatus.mercari": "posted",
             "crossPostListingIds.mercari": mercariId,
+            // Highlighted on the listing's Mercari row until a later post/edit clears it.
+            "mercariSmartPricingOn": state.smartPricingLeftOn ? true : FieldValue.delete(),
             "updatedAt": Timestamp(date: Date())
         ]
         try? await Firestore.firestore().collection("listings").document(listingId).updateData(update)
@@ -3941,6 +3933,9 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
 
     @Published var phase: Phase = .navigating
     @Published var isWebViewVisible = false
+    /// Mirrors `MercariPostingState.smartPricingLeftOn` for the edit flow: the seller wanted
+    /// Smart Pricing off, the toggle wouldn't switch, the save went ahead anyway.
+    @Published var smartPricingLeftOn = false
 
     let webView: WKWebView
     private var hasStarted = false
@@ -4153,9 +4148,22 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
             }
         }
 
-        // Disable smart pricing if it auto-enabled
+        // Smart Pricing — last step before Save (shipping/price edits re-render the section).
+        // Same policy as posting: under $10 it must be off or Mercari rejects the save.
         try? await Task.sleep(nanoseconds: 1_000_000_000)
-        let _ = await disableSmartPricing()
+        let keep = UserDefaults.standard.bool(forKey: "mercariKeepSmartPricing")
+        let required = MercariFormJS.mustDisableSmartPricing(price: price, keepSmartPricing: keep)
+        if required || !keep {
+            let smart = (try? await webView.callJS(MercariFormJS.disableSmartPricing)) as? String ?? "error"
+            print("[MercariAutoEditState] SmartPricing: \(smart) (price \(price), required: \(required))")
+            let off = MercariFormJS.smartPricingIsOff(smart)
+            if required && !off {
+                phase = .manualFallback("Smart Pricing is still on — Mercari won't save items under $10 with it on. Turn it off, then tap Update")
+                isWebViewVisible = true
+                return
+            }
+            smartPricingLeftOn = !off
+        }
 
         // Click save/update button
         let saveJS = """
@@ -4227,54 +4235,6 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
         }
     }
 
-    private func disableSmartPricing() async -> String {
-        let js = """
-        function waitFor(fn, t, i) {
-            t = t||3000; i = i||250;
-            return new Promise(function(resolve) {
-                var s = Date.now();
-                (function loop() {
-                    var r=null; try{r=fn();}catch(e){}
-                    if(r){resolve(r);return;}
-                    if(Date.now()-s>=t){resolve(null);return;}
-                    setTimeout(loop,i);
-                })();
-            });
-        }
-        function realClick(el) {
-            ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(type) {
-                el.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window}));
-            });
-        }
-        function findToggle() {
-            var t = document.querySelector('[data-testid*="SmartPricing"],[data-testid*="smartPricing"]');
-            if(t) return t;
-            var cands = document.querySelectorAll('input[type="checkbox"],button[role="switch"],[role="switch"]');
-            for(var i=0;i<cands.length;i++){
-                var a=cands[i].closest('label')||cands[i].parentElement;
-                if(a&&a.textContent.toLowerCase().indexOf('smart pricing')!==-1) return cands[i];
-            }
-            return null;
-        }
-        function isOn(t) {
-            return t.checked===true||t.getAttribute('aria-checked')==='true'||t.getAttribute('data-state')==='checked';
-        }
-        return (async function() {
-            var toggle = await waitFor(findToggle, 3000);
-            if(!toggle||!isOn(toggle)) return 'not-found-or-off';
-            var target = toggle.tagName==='INPUT'?(document.querySelector('label[for="'+toggle.id+'"]')||toggle.closest('label')||toggle):toggle;
-            realClick(target);
-            var confirmBtn = await waitFor(function(){
-                var bs=document.querySelectorAll('[role="dialog"] button,[role="alertdialog"] button');
-                for(var i=0;i<bs.length;i++){var t=bs[i].textContent.trim().toLowerCase();if((t==='turn off'||t==='confirm'||t==='ok')&&!bs[i].disabled)return bs[i];}
-                return null;
-            }, 1500);
-            if(confirmBtn) realClick(confirmBtn);
-            return 'disabled';
-        })();
-        """
-        return (try? await webView.callJS(js)) as? String ?? "error"
-    }
 }
 
 // MARK: - MercariListingStateAutomator
@@ -4537,6 +4497,13 @@ struct MercariAutoEditSheet: View {
         .onChange(of: state.phase) { _, newPhase in
             switch newPhase {
             case .success:
+                // Keep the listing's Smart Pricing highlight in step with what the edit
+                // actually achieved (set when the toggle stayed on, cleared when it went off).
+                if let listingId = listing.id {
+                    let flag: Any = state.smartPricingLeftOn ? true : FieldValue.delete()
+                    Firestore.firestore().collection("listings").document(listingId)
+                        .updateData(["mercariSmartPricingOn": flag])
+                }
                 onDone()
                 dismiss()
             case .manualFallback:

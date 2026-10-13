@@ -192,8 +192,9 @@ async function handleMercariCrossPostResult(message, tabId) {
 
   // Close the tab once the listing is confirmed live — speeds up bulk listing by
   // not leaving a trail of "done" tabs open. Only on success; leave failed/timed-out
-  // tabs open so the form is there to finish or debug by hand.
-  if (message.success && tabId != null) {
+  // tabs open so the form is there to finish or debug by hand. A success that carries
+  // a warning (Smart Pricing left on) also stays open so the banner is seen.
+  if (message.success && !message.warning && tabId != null) {
     chrome.tabs.remove(tabId).catch(() => {});
   }
 

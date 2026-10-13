@@ -214,6 +214,9 @@ struct UserListing: Identifiable, Codable {
     // iOS clears these after the user completes the headless action.
     var pendingMercariDeactivation: Bool?  // qty hit 0; Mercari listing needs deactivating
     var pendingMercariRelist: Bool?        // Mercari sold while qty>0; needs re-listing
+    /// Posted to Mercari with Smart Pricing still on although the seller wanted it off
+    /// (toggle couldn't be switched; $10+ items post anyway). Highlighted on the Mercari row.
+    var mercariSmartPricingOn: Bool?
 
     // MARK: - Convenience
 
@@ -273,7 +276,8 @@ struct UserListing: Identifiable, Codable {
         crossPostListingIds: [String: String]? = nil,
         ebayCategory: Int? = nil,
         pendingMercariDeactivation: Bool? = nil,
-        pendingMercariRelist: Bool? = nil
+        pendingMercariRelist: Bool? = nil,
+        mercariSmartPricingOn: Bool? = nil
     ) {
         self.id = id
         self.userId = userId
@@ -305,5 +309,6 @@ struct UserListing: Identifiable, Codable {
         self.ebayCategory = ebayCategory
         self.pendingMercariDeactivation = pendingMercariDeactivation
         self.pendingMercariRelist = pendingMercariRelist
+        self.mercariSmartPricingOn = mercariSmartPricingOn
     }
 }
