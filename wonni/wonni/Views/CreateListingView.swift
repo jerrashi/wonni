@@ -1108,13 +1108,12 @@ struct ProcessResultsOverviewView: View {
             // post-publish continuation that mutates other sheet state.
             uploadManager.publishConfirmationSheetVisible = false
             uploadManager.runPublishContinuationIfReady(modelContext: modelContext)
-            // If beginPublish was called (i.e. user didn't cancel), swap to CrossPostStatusView —
-            // the single post-publish status screen (Wonni + eBay + Mercari, live per row).
-            // Delay matches the existing AI→results transition to avoid overlapping covers.
+            // If beginPublish was called (i.e. user didn't cancel), close the results
+            // overview; the publish pill shows progress and the continuation returns the
+            // user to their listings. (CrossPostStatusView no longer opens by itself.)
             if uploadManager.isPublishing || !uploadManager.publishStatuses.isEmpty {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     uploadManager.showResultsOverview = false
-                    uploadManager.showCrossPostStatus = true
                 }
             }
         }) {
@@ -2101,7 +2100,7 @@ struct PublishConfirmationSheet: View {
                 // Platforms only. The per-listing title/price rows that used to sit here
                 // pushed the actual decision off-screen on a bulk publish, and repeated
                 // what Review & Publish (one screen back) already shows.
-                Section(header: Text("Cross-Post Options"), footer: Text(publishSummary)) {
+                Section(header: Text("Cross-Post Options"), footer: Text("Every listing is also published to Wonni. Your choice here is remembered as the default for next time; change it any time in Profile › Settings › Cross-posting.")) {
                     if integrationRepo.integrations.isEmpty {
                         Text("No integrations available. Set them up in Profile Settings.")
                             .font(.caption)
@@ -2175,6 +2174,7 @@ struct PublishConfirmationSheet: View {
                             if selectedPlatforms.isEmpty {
                                 showEmptyPlatformsConfirm = true
                             } else {
+                                CrossPostDefaults.remember(selectedPlatforms)
                                 onConfirm(selectedPlatforms)
                                 dismiss()
                             }
@@ -2186,11 +2186,15 @@ struct PublishConfirmationSheet: View {
             .task {
                 await integrationRepo.loadIntegrations()
                 await SellingSettingsRepository.shared.loadSettings()
-                // Default-select connected API platforms, but only those the user hasn't
-                // explicitly toggled while the async load was in flight (issue #8) — a
-                // blanket reassignment here used to wipe the user's in-flight choices.
-                for platform in integrationRepo.integrations.filter({ $0.isConnected }).map({ $0.platform })
-                where !touchedPlatforms.contains(platform) {
+                // Preselect the remembered default set (last Publish, or what the user set
+                // in Settings); first time ever, every connected API platform. Only
+                // platforms the user hasn't explicitly toggled while the async load was in
+                // flight (issue #8) — a blanket reassignment used to wipe in-flight choices.
+                let available = integrationRepo.integrations
+                    .filter { $0.isConnected || !($0.platform == "ebay" || $0.platform == "etsy") }
+                    .map(\.platform)
+                let defaults = CrossPostDefaults.platforms(available: available)
+                for platform in defaults where !touchedPlatforms.contains(platform) {
                     selectedPlatforms.insert(platform)
                 }
                 isLoadingIntegrations = false
@@ -2209,6 +2213,7 @@ struct PublishConfirmationSheet: View {
                 titleVisibility: .visible
             ) {
                 Button("Publish to Wonni Only") {
+                    CrossPostDefaults.remember(selectedPlatforms)
                     onConfirm(selectedPlatforms)
                     dismiss()
                 }
@@ -2217,14 +2222,6 @@ struct PublishConfirmationSheet: View {
         }
     }
     
-    /// One line standing in for the old per-listing rows: how many, and the total ask.
-    private var publishSummary: String {
-        let count = itemsToPublish.count
-        let total = itemsToPublish.reduce(0.0) { $0 + ($1.userEditedPrice ?? $1.aiSuggestedPrice ?? 0) }
-        let amount = total.formatted(.currency(code: "USD").precision(.fractionLength(0...2)))
-        return "\(count) listing\(count == 1 ? "" : "s") · \(amount) total. Every listing is also published to Wonni."
-    }
-
     private func platformDisplayName(_ platform: String) -> String {
         switch platform {
         case "ebay": return "eBay"

@@ -1599,16 +1599,16 @@ class UploadManager: ObservableObject {
         // Write the whole run to disk before any of it starts, so leaving the app
         // mid-run can be reported and resumed (see CrossPostRunStore).
         trackCrossPostJobs(web: jobs, api: apiTriggers)
-        // Start web autofill jobs (Mercari, Facebook) after publish completes. If there are
-        // none (e.g. eBay-only), transition to the global CrossPostStatusView sheet.
+        // Start web autofill jobs (Mercari, Facebook) after publish completes. Either way
+        // the user goes straight back to their listings: the pill tracks the cross-posts
+        // and opens CrossPostStatusView only when tapped. It used to pop up by itself here
+        // and on queue drain, which just put a screen between the user and the next thing
+        // (removed 2026-10-13 at the user's request).
         if !webAutofillQueue.isEmpty {
             checkAndStartNextWebJob(modelContext: modelContext)
-        } else {
-            showResultsOverview = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                self?.showCrossPostStatus = true
-            }
         }
+        showResultsOverview = false
+        shouldReturnToRoot = true
     }
 
     /// Maps raw cross-post trigger errors to actionable user-facing messages.
@@ -1697,15 +1697,10 @@ class UploadManager: ObservableObject {
                 try? modelContext.save()
                 publishedPendingDeletionIDs.removeAll()
             }
-            // Close the results sheet (if still open) and open CrossPostStatusView globally.
-            // Publish-flow only: profile-initiated cross-posts don't set
-            // crossPostStatusPending and get their own drain callback instead.
-            if crossPostStatusPending {
-                showResultsOverview = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                    self?.showCrossPostStatus = true
-                }
-            }
+            // Publish-flow runs used to pop CrossPostStatusView here once the web queue
+            // drained; now the pill's completion is the signal and the status list stays
+            // reachable from the Activity sheet / pill tap (crossPostStatusPending keeps
+            // the session items alive until the user taps Done there).
             let drained = onWebQueueDrained
             onWebQueueDrained = nil
             drained?()

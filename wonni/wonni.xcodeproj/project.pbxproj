@@ -17,6 +17,7 @@
 		D7A10001C0FFEE0000000009 /* FacebookAutofillPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE000000000A /* FacebookAutofillPolicyTests.swift */; };
 		D7A10001C0FFEE000000000F /* BulkTextDraftMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE0000000010 /* BulkTextDraftMappingTests.swift */; };
 		D7A10001C0FFEE000000000D /* BulkTextDraftsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE000000000E /* BulkTextDraftsSheet.swift */; };
+		7C1F0A2B9D3E4F50617283A0 /* CrossPostDefaultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1F0A2B9D3E4F50617283A1 /* CrossPostDefaultsView.swift */; };
 		D7A10001C0FFEE000000000B /* BulkTextDraftService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE000000000C /* BulkTextDraftService.swift */; };
 		7C1F0A2B9D3E4F5061728398 /* BulkTextDraftRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1F0A2B9D3E4F5061728399 /* BulkTextDraftRunner.swift */; };
 		D7A10001C0FFEE0000000011 /* CrossPostRunStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE0000000012 /* CrossPostRunStore.swift */; };
@@ -238,6 +239,7 @@
 		D7A10001C0FFEE000000000A /* FacebookAutofillPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FacebookAutofillPolicyTests.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE0000000010 /* BulkTextDraftMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkTextDraftMappingTests.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE000000000E /* BulkTextDraftsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkTextDraftsSheet.swift; sourceTree = "<group>"; };
+		7C1F0A2B9D3E4F50617283A1 /* CrossPostDefaultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossPostDefaultsView.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE000000000C /* BulkTextDraftService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkTextDraftService.swift; sourceTree = "<group>"; };
 		7C1F0A2B9D3E4F5061728399 /* BulkTextDraftRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkTextDraftRunner.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE0000000012 /* CrossPostRunStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossPostRunStore.swift; sourceTree = "<group>"; };
@@ -406,6 +408,7 @@
 				61F0F0032FB022A0001C28CE /* CrossPostWebView.swift */,
 				D7A10001C0FFEE0000000008 /* FacebookAutoPosterView.swift */,
 				D7A10001C0FFEE000000000E /* BulkTextDraftsSheet.swift */,
+				7C1F0A2B9D3E4F50617283A1 /* CrossPostDefaultsView.swift */,
 				6134E1562FDCB206007C3979 /* DraftPhotoEditModal.swift */,
 				61E75A002FC100A000D4B3F1 /* EtsyConnectView.swift */,
 				6192AA592D7F575F00EC2EFA /* HomeView.swift */,
@@ -715,6 +718,7 @@
 				61F0F0042FB022A0001C28CE /* CrossPostWebView.swift in Sources */,
 				D7A10001C0FFEE0000000007 /* FacebookAutoPosterView.swift in Sources */,
 				D7A10001C0FFEE000000000D /* BulkTextDraftsSheet.swift in Sources */,
+				7C1F0A2B9D3E4F50617283A0 /* CrossPostDefaultsView.swift in Sources */,
 				61E75A012FC100A000D4B3F1 /* EtsyConnectView.swift in Sources */,
 				AA0011223344556677AABBFF /* MercariObservedDataRepository.swift in Sources */,
 				4DE0F3AA27864C66A4EC49AB /* Sale.swift in Sources */,

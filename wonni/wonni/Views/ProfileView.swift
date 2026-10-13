@@ -2477,6 +2477,19 @@ struct SettingsSheet: View {
                     }
                 }
 
+                Section(header: Text("Cross-posting")) {
+                    NavigationLink {
+                        CrossPostDefaultsView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Default platforms")
+                            Text("Preselected when you publish. Updated to whatever you last chose on the Publish screen.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
                 Section(header: Text("Listing Templates")) {
                     NavigationLink {
                         ListingTemplatesView()
