@@ -469,7 +469,7 @@ struct DraftEditSheet: View {
     @State private var cache = CachedImageManager()
     @State private var title: String = ""
     @State private var priceText: String = ""
-    @State private var quantity: Int = 1
+    @State private var quantityText: String = "1"
     @State private var description: String = ""
     @State private var personalNote: String = ""
     @State private var buyerPaysShipping: Bool = true
@@ -567,8 +567,20 @@ struct DraftEditSheet: View {
                         TextField("0.00", text: $priceText)
                             .keyboardType(.decimalPad)
                     }
-                    Stepper("Quantity: \(quantity)", value: $quantity, in: 1...999)
+                    // Typed AND stepped: 100 units is a number to type, not 99 taps.
+                    HStack {
+                        Text("Quantity")
+                        TextField("1", text: $quantityText)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .accessibilityIdentifier("draftEditQuantityField")
+                        Stepper("", value: Binding(
+                            get: { max(1, Int(quantityText.filter(\.isNumber)) ?? 1) },
+                            set: { quantityText = String($0) }
+                        ), in: 1...9999)
+                        .labelsHidden()
                         .accessibilityIdentifier("draftEditQuantityStepper")
+                    }
                 }
 
                 Section("Description") {
@@ -781,7 +793,7 @@ struct DraftEditSheet: View {
         if let p = item.userEditedPrice {
             priceText = String(format: "%.2f", p)
         }
-        quantity = max(1, item.quantity ?? 1)
+        quantityText = String(max(1, item.quantity ?? 1))
         description = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
         personalNote = item.personalNote ?? ""
         if let c = item.condition, let parsed = ItemCondition(rawValue: c) {
@@ -818,6 +830,7 @@ struct DraftEditSheet: View {
         }
         item.userEditedTitle = title.isEmpty ? nil : title
         item.userEditedPrice = Double(priceText.filter { $0.isNumber || $0 == "." })
+        let quantity = Int(quantityText.filter(\.isNumber)) ?? 1
         item.quantity = quantity > 1 ? quantity : nil   // nil = 1 everywhere else
         item.userEditedDescription = description.isEmpty ? nil : description
         item.personalNote = personalNote.isEmpty ? nil : personalNote
