@@ -50,7 +50,7 @@ jobs:
     # needed to fetch/create provisioning profiles, which have no such cap).
     # Without them the job behaves as before and warns.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Import signing certificates
         env:
