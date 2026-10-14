@@ -529,10 +529,10 @@ struct DraftsView: View {
         }
     }
 
-    // MARK: - Keyboard focus (title → price → quantity → next draft's title …)
+    // MARK: - Keyboard focus (title → price → next draft's title …)
 
-    private static let fieldsPerRow = 3
-    private static let rowFields: [DraftFocusSubfield] = [.title, .price, .quantity]
+    private static let fieldsPerRow = 2
+    private static let rowFields: [DraftFocusSubfield] = [.title, .price]
 
     private var focusedIndex: Int? {
         guard let focus = focusedField, let row = drafts.firstIndex(where: { $0.id == focus.itemID }),
@@ -551,7 +551,8 @@ struct DraftsView: View {
 
 // MARK: - DraftCard
 
-/// One draft: title, optional price and quantity, photo strip with "+", pencil. Equatable on the
+/// One draft: title, optional price (and a Qty label when more than 1), photo strip
+/// with "+", pencil. Equatable on the
 /// inputs that change its look so the List doesn't rebuild every card on each
 /// UploadManager tick while the user is typing.
 struct DraftCard: View {
@@ -567,15 +568,7 @@ struct DraftCard: View {
     @Environment(\.modelContext) private var modelContext
     @State private var localTitle = ""
     @State private var localPrice = ""
-    @State private var localQuantity = ""
-    @State private var quantityRevealed = false
     @State private var draggedAssetId: String?
-
-    private var showsQuantity: Bool {
-        quantityRevealed
-            || (Int(localQuantity) ?? 1) != 1
-            || focusedField.wrappedValue == DraftFocusField(itemID: draft.id, field: .quantity)
-    }
 
     private var compositeIDs: [String] { draft.sourceAssetIdentifiers.map { "\(draft.id.uuidString)|\($0)" } }
     private var selectedCount: Int { compositeIDs.filter { selectedPhotos.contains($0) }.count }
@@ -613,31 +606,9 @@ struct DraftCard: View {
                             .focused(focusedField, equals: DraftFocusField(itemID: draft.id, field: .price))
                             .disabled(isSelectMode)
                             .accessibilityIdentifier("draftRowPriceField")
-                        Spacer(minLength: 6)
-                        // Quantity stays out of the way for the usual single item: a small
-                        // "Qty" button reveals the field; it stays visible once set (≠ 1)
-                        // or while it has focus (user: show only when it is not 1).
-                        if showsQuantity {
-                            Text("Qty").font(.subheadline).foregroundStyle(.secondary)
-                            TextField("1", text: $localQuantity)
-                                .font(.subheadline)
-                                .keyboardType(.numberPad)
-                                .multilineTextAlignment(.center)
-                                .frame(width: 44)
-                                .focused(focusedField, equals: DraftFocusField(itemID: draft.id, field: .quantity))
-                                .disabled(isSelectMode)
-                                .accessibilityIdentifier("draftRowQuantityField")
-                        } else if !isSelectMode {
-                            Button {
-                                quantityRevealed = true
-                                focusedField.wrappedValue = DraftFocusField(itemID: draft.id, field: .quantity)
-                            } label: {
-                                Text("Qty").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                                    .padding(.horizontal, 8).padding(.vertical, 3)
-                                    .background(Color(.tertiarySystemFill), in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("draftRowQuantityButton")
+                        if let quantity = draft.quantity, quantity > 1 {
+                            Spacer(minLength: 6)
+                            DraftQuantityLabel(quantity: quantity)
                         }
                     }
                     if let vision = draft.visionTitle, !vision.isEmpty, draft.processedAt == nil, localTitle.isEmpty {
@@ -669,22 +640,15 @@ struct DraftCard: View {
         .onAppear {
             localTitle = draft.userEditedTitle ?? draft.aiSuggestedTitle ?? ""
             localPrice = draft.userEditedPrice.map { String(format: "%.2f", $0) } ?? ""
-            localQuantity = draft.quantity.map { String($0) } ?? ""
         }
         .onChange(of: focusedField.wrappedValue) { oldFocus, newFocus in
             if oldFocus?.itemID == draft.id && newFocus?.itemID != draft.id { save() }
-            if oldFocus?.field == .quantity, oldFocus?.itemID == draft.id, newFocus != oldFocus {
-                quantityRevealed = false
-            }
         }
         .onChange(of: draft.userEditedTitle) { _, newVal in
             localTitle = newVal ?? draft.aiSuggestedTitle ?? ""
         }
         .onChange(of: draft.userEditedPrice) { _, newVal in
             localPrice = newVal.map { String(format: "%.2f", $0) } ?? ""
-        }
-        .onChange(of: draft.quantity) { _, newVal in
-            localQuantity = newVal.map { String($0) } ?? ""
         }
         .onDisappear { save() }
     }
@@ -769,9 +733,6 @@ struct DraftCard: View {
         let cleaned = localPrice.filter { $0.isNumber || $0 == "." }
         let price = cleaned.isEmpty ? nil : Double(cleaned)
         if draft.userEditedPrice != price { draft.userEditedPrice = price }
-        // Blank, 0 or 1 all mean the default single unit (stored as nil).
-        let quantity = Int(localQuantity.filter(\.isNumber)).flatMap { $0 > 1 ? $0 : nil }
-        if draft.quantity != quantity { draft.quantity = quantity }
     }
 }
 
@@ -831,5 +792,22 @@ struct MoveToDraftSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+    }
+}
+
+// MARK: - DraftQuantityLabel
+
+/// Read-only "Qty N" chip shown on a draft tile only when the quantity is more than 1
+/// (user decision 2026-10-14: not a top-level field like title/price; edited in the
+/// pencil sheet). Shared by the drafts screen and the Review & Publish rows.
+struct DraftQuantityLabel: View {
+    let quantity: Int
+    var body: some View {
+        Text("Qty \(quantity)")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(Color(.tertiarySystemFill), in: Capsule())
+            .accessibilityIdentifier("draftRowQuantityLabel")
     }
 }

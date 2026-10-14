@@ -469,6 +469,7 @@ struct DraftEditSheet: View {
     @State private var cache = CachedImageManager()
     @State private var title: String = ""
     @State private var priceText: String = ""
+    @State private var quantity: Int = 1
     @State private var description: String = ""
     @State private var personalNote: String = ""
     @State private var buyerPaysShipping: Bool = true
@@ -566,6 +567,8 @@ struct DraftEditSheet: View {
                         TextField("0.00", text: $priceText)
                             .keyboardType(.decimalPad)
                     }
+                    Stepper("Quantity: \(quantity)", value: $quantity, in: 1...999)
+                        .accessibilityIdentifier("draftEditQuantityStepper")
                 }
 
                 Section("Description") {
@@ -778,6 +781,7 @@ struct DraftEditSheet: View {
         if let p = item.userEditedPrice {
             priceText = String(format: "%.2f", p)
         }
+        quantity = max(1, item.quantity ?? 1)
         description = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
         personalNote = item.personalNote ?? ""
         if let c = item.condition, let parsed = ItemCondition(rawValue: c) {
@@ -814,6 +818,7 @@ struct DraftEditSheet: View {
         }
         item.userEditedTitle = title.isEmpty ? nil : title
         item.userEditedPrice = Double(priceText.filter { $0.isNumber || $0 == "." })
+        item.quantity = quantity > 1 ? quantity : nil   // nil = 1 everywhere else
         item.userEditedDescription = description.isEmpty ? nil : description
         item.personalNote = personalNote.isEmpty ? nil : personalNote
         item.condition = selectedCondition.rawValue
@@ -914,7 +919,7 @@ struct DraftFocusField: Hashable {
     let itemID: UUID
     let field: DraftFocusSubfield
 }
-enum DraftFocusSubfield: Hashable { case title, price, quantity, description }
+enum DraftFocusSubfield: Hashable { case title, price, description }
 
 // MARK: - ProcessResultsOverviewView
 
@@ -1197,7 +1202,6 @@ struct ProcessResultsOverviewView: View {
         case .title: fieldOffset = 0
         case .price: fieldOffset = 1
         case .description: fieldOffset = 2
-        case .quantity: return nil   // not an inline field on this screen
         }
         return row * 3 + fieldOffset
     }
@@ -1700,6 +1704,10 @@ struct ResultDraftRow: View, Equatable {
                             .font(.subheadline)
                             .keyboardType(.decimalPad)
                             .focused(focusedField, equals: DraftFocusField(itemID: item.id, field: .price))
+                        if let quantity = item.quantity, quantity > 1 {
+                            Spacer(minLength: 6)
+                            DraftQuantityLabel(quantity: quantity)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
