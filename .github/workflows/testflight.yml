@@ -116,14 +116,18 @@ jobs:
             > ~/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8
 
       - name: Bump build number
-        # Uses the GitHub Actions run number as the build number — simple,
-        # monotonically increasing across runs on this workflow, and needs
-        # no commit back to the repo (the bump only exists in this ephemeral
-        # checkout, matching how `wonni/scripts/testflight.sh`'s local
-        # `agvtool new-version` bump is also never committed).
+        # Build number = UTC minute stamp (YYYYMMDDHHMM, e.g. 202610141945).
+        # Monotonic across EVERY uploader — this workflow, Xcode Cloud
+        # (ci_scripts/ci_post_clone.sh does the same), and the local
+        # scripts/testflight.sh — so none of them can collide with a number
+        # another one already sent to App Store Connect. The run number used
+        # here before (48) and Xcode Cloud's own counter (180) were unrelated
+        # sequences, which is how Xcode Cloud hit "bundle version must be
+        # higher than the previously uploaded version" on 2026-10-14. The
+        # bump is never committed; it exists only in this checkout.
         run: |
           cd wonni
-          agvtool new-version -all "$GITHUB_RUN_NUMBER"
+          agvtool new-version -all "$(date -u +%Y%m%d%H%M)"
 
       - name: Archive
         env:

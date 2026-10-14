@@ -22,9 +22,10 @@ fi
 # ── Increment build number ────────────────────────────────────────────────────
 echo "Incrementing build number…"
 cd "$PROJECT_DIR"
-CURRENT=$(agvtool what-version -terse 2>/dev/null | head -1 | tr -d '[:space:]')
-NEW_BUILD=$((CURRENT + 1))
-echo "  $CURRENT → $NEW_BUILD"
+# UTC minute stamp — the same sequence CI uses (see .github/workflows/testflight.yml),
+# so a local upload never lands below one CI already sent.
+NEW_BUILD="$(date -u +%Y%m%d%H%M)"
+echo "  → $NEW_BUILD"
 agvtool new-version -all "$NEW_BUILD"
 
 # ── Archive ───────────────────────────────────────────────────────────────────
