@@ -99,6 +99,7 @@ module.exports = {
   WeverseOrderTaskDocSchema: weverseOrderTasks.WeverseOrderTaskDocSchema,
   WeverseOrderTaskWithIdSchema: weverseOrderTasks.WeverseOrderTaskWithIdSchema,
   DraftProposalSchema: bulkDrafts.DraftProposalSchema,
+  PhotoCandidateSchema: bulkDrafts.PhotoCandidateSchema,
   ALL,
   RequestSchemas,
   ResponseSchemas,

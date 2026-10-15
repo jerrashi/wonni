@@ -622,3 +622,98 @@ test("parseListWithGemini: invalid JSON is retried once; a second failure keeps 
 
   await assert.rejects(parseListWithGemini("k", "x", 400, "", { generate: async () => ({ raw: "sorry, I cannot", truncated: false }) }));
 });
+
+// ── photo chooser (2026-10-14) ──────────────────────────────────────────────
+
+const { titleMatches, candidateIsStrong, photoCandidates, candidateDetail } = _internal;
+
+test("photoCandidates: every photo'd result is kept, strong (same item, same state) first, chips describe each", () => {
+  const out = photoCandidates(POKEMON_COMPS, POKEMON_Q, "loose");
+  // Nothing dropped — even the empty box and the repro — but they sort last.
+  // Strong first; then the unverified silent title; then the ruled-out ones by shared title words.
+  assert.deepEqual(out.map((c) => c.itemId), ["loose1", "loose2", "silent", "cib", "box", "cib2", "repro"]);
+  assert.deepEqual(out.map((c) => c.strong), [true, true, false, false, false, false, false]);
+  assert.equal(out[0].included, "loose");
+  assert.equal(out[3].included, "complete");
+  assert.equal(out[4].included, "packaging");
+  assert.deepEqual(out[6].markers, ["newly made"]);
+  assert.deepEqual(out[0].markers, []);
+  assert.equal(out[0].imageUrl, "https://i.ebayimg.com/loose1/s-l1600.jpg", "cover photo at full size");
+  assert.equal(out[0].price, 57);
+  // A comp with no photo is useless to a photo chooser.
+  assert.deepEqual(photoCandidates(SSBB_COMPS, "Super Smash Bros Brawl Wii").map((c) => c.itemId), ["v1|2|0", "v1|3|0"]);
+  for (const c of out) assert.equal(ResponseSchemas.draftPhotoCandidates.safeParse({ candidates: [c] }).success, true);
+});
+
+test("candidateIsStrong: a same-state comp is only strong when the title names the same item", () => {
+  const sameState = { itemId: "x", title: "Pokemon Red Version Game Boy Cartridge Only", imageUrl: "https://i/x.jpg" };
+  // Explicit loose match, but it is Pokemon RED — the state matches, the item does not.
+  assert.equal(candidateIsStrong(sameState, "Pokemon Blue Version Game Boy", "loose"), false);
+  assert.equal(candidateIsStrong(POKEMON_COMPS[4], POKEMON_Q, "loose"), true);
+  // Our state unknown: a close title that is not contradicted / not packaging.
+  assert.equal(candidateIsStrong(POKEMON_COMPS[1], POKEMON_Q, "unknown"), true);
+  assert.equal(candidateIsStrong(POKEMON_COMPS[2], POKEMON_Q, "unknown"), false, "box only");
+  // Our state known, the comp silent: unverified → not strong.
+  assert.equal(candidateIsStrong(POKEMON_COMPS[1], POKEMON_Q, "loose"), false);
+  assert.equal(titleMatches("LEGO 75192 Millennium Falcon", "LEGO Star Wars 75105 Millennium Falcon"), false);
+});
+
+test("enrichProposal: photoMatch grades the automatic pick and the candidates ride along with the query", async () => {
+  const detail = async (id) => ({ itemId: id, categoryId: "139973", images: [`https://i.ebayimg.com/${id}/full.jpg`], aspects: {} });
+  const strong = await enrichProposal(core({ _searchQuery: POKEMON_Q, included: "loose" }), { comps: async () => POKEMON_COMPS, detail });
+  assert.equal(strong.photoMatch, "strong");
+  assert.equal(strong.searchQuery, POKEMON_Q);
+  assert.equal(strong.photoCandidates.length, 7);
+  assert.equal(strong.photoCandidates[0].itemId, "loose1");
+
+  // Only a silent title confirms by description → used, but not a strong match.
+  const silentOnly = POKEMON_COMPS.filter((c) => c.itemId === "silent");
+  const weak = await enrichProposal(core({ _searchQuery: POKEMON_Q, included: "loose" }), {
+    comps: async () => silentOnly,
+    detail: async (id) => ({ itemId: id, images: [`https://i.ebayimg.com/${id}/full.jpg`], aspects: {}, description: "Cartridge only, tested." }),
+  });
+  assert.equal(weak.imageSource, "ebay");
+  assert.equal(weak.photoMatch, "weak");
+
+  const google = await enrichProposal(core(), { comps: async () => [], detail: async () => null, google: async () => ["https://g/1.jpg"] });
+  assert.equal(google.photoMatch, "weak");
+  const none = await enrichProposal(core(), { comps: async () => [], detail: async () => null, google: async () => [] });
+  assert.equal(none.photoMatch, "none");
+  assert.deepEqual(none.photoCandidates, []);
+  // (The fixture comps carry no itemWebUrl, so the pre-existing `comps` summary is dropped for the schema check.)
+  const schemaReady = (p) => ({ ...p, comps: [] });
+  assert.equal(ResponseSchemas.bulkDraftsFromText.safeParse({ context: "", drafts: [strong, weak, google, none].map(schemaReady), remaining: [], unparsedText: "", aiModel: "m", aiPromptVersion: "v" }).success, true);
+});
+
+test("enrichProposal: a bundle collage is strong only when every component matched strongly", async () => {
+  const comps = {
+    "Just Dance 4 Wii": [{ itemId: "jd4", title: "Just Dance 4 Nintendo Wii", price: 8, imageUrl: "https://i.ebayimg.com/jd4/s-l225.jpg" }],
+    "Just Dance 2015 Wii": [{ itemId: "jd15", title: "Just Dance 2015 Nintendo Wii", price: 9, imageUrl: "https://i.ebayimg.com/jd15/s-l225.jpg" }],
+  };
+  const bundle = (queries) => core({ isBundle: true, bundleItems: ["Just Dance 4", "Just Dance 2015"], _searchQuery: "Just Dance Wii bundle", _componentQueries: queries });
+  const deps = { comps: async ({ title }) => comps[title] || [], detail: async () => null };
+  const both = await enrichProposal(bundle(["Just Dance 4 Wii", "Just Dance 2015 Wii"]), deps);
+  assert.equal(both.imageUrls.length, 2);
+  assert.equal(both.photoMatch, "strong");
+  // One component found nothing: the cover shows half the lot.
+  const half = await enrichProposal(bundle(["Just Dance 4 Wii", "Just Dance 2014 Wii"]), deps);
+  assert.equal(half.imageUrls.length, 1);
+  assert.equal(half.photoMatch, "weak");
+});
+
+test("candidateDetail: the chosen listing's photos (up to 12) and sell-similar fields; bundle drops identity specifics", () => {
+  const images = Array.from({ length: 15 }, (_, i) => `https://i.ebayimg.com/${i}/s-l1600.jpg`);
+  const out = candidateDetail({ ...SSBB_DETAIL, images });
+  assert.equal(out.imageUrls.length, 12);
+  assert.equal(out.title, SSBB_DETAIL.title);
+  assert.equal(out.ebayCategoryId, "139973");
+  assert.equal(out.ebayConditionId, "4000");
+  assert.equal(out.epid, "24070872136");
+  assert.deepEqual(out.itemSpecifics, { Platform: "Nintendo Wii", "Game Name": "Super Smash Bros. Brawl" });
+  assert.deepEqual(candidateDetail(SSBB_DETAIL, { isBundle: true }).itemSpecifics, { Platform: "Nintendo Wii" });
+  assert.equal(ResponseSchemas.draftPhotoCandidateDetail.safeParse(out).success, true);
+  // Bare detail (lookup gave nothing useful): still a valid, empty response.
+  assert.deepEqual(candidateDetail({}), { title: "", imageUrls: [] });
+  assert.equal(RequestSchemas.draftPhotoCandidates.parse({ query: "x" }).included, "unknown");
+  assert.equal(RequestSchemas.draftPhotoCandidateDetail.parse({ itemId: "v1|1|0" }).isBundle, false);
+});

@@ -47,6 +47,7 @@ struct DraftsView: View {
     @State private var showDeleteConfirm = false
     @State private var skipAIMessage: String?
     @State private var editingDraft: Item?
+    @State private var choosingPhotosFor: Item?
 
     /// Every unpublished draft with photos. `deletedDraftIDs` drops a row the instant a
     /// delete starts (the SwiftData delete is deferred a tick); `publishedAt == nil`
@@ -149,6 +150,10 @@ struct DraftsView: View {
             DraftEditSheet(item: draft)
                 .environmentObject(uploadManager)
         }
+        .sheet(item: $choosingPhotosFor) { draft in
+            DraftPhotoChooserSheet(item: draft)
+                .environmentObject(uploadManager)
+        }
         .alert("Delete Selected?", isPresented: $showDeleteConfirm) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) { deleteSelectedPhotos() }
@@ -185,7 +190,8 @@ struct DraftsView: View {
                         onToggleDraft: { toggleDraft(draft) },
                         onTogglePhoto: { assetId in togglePhoto(draft, assetId: assetId) },
                         onAddPhotos: { onAddPhotos(draft.id) },
-                        onEdit: { editingDraft = draft }
+                        onEdit: { editingDraft = draft },
+                        onChoosePhotos: { choosingPhotosFor = draft }
                     )
                     .id(draft.id)
                     .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
@@ -552,7 +558,8 @@ struct DraftsView: View {
 // MARK: - DraftCard
 
 /// One draft: title, optional price (and a Qty label when more than 1), photo strip
-/// with "+", pencil. Equatable on the
+/// with "+", pencil, and a "Choose photos" badge when the list importer's photo match
+/// was weak or empty. Equatable on the
 /// inputs that change its look so the List doesn't rebuild every card on each
 /// UploadManager tick while the user is typing.
 struct DraftCard: View {
@@ -564,6 +571,8 @@ struct DraftCard: View {
     let onTogglePhoto: (String) -> Void
     let onAddPhotos: () -> Void
     let onEdit: () -> Void
+    /// The "Choose photos" badge (list-made drafts with a weak or empty photo match).
+    var onChoosePhotos: () -> Void = {}
 
     @Environment(\.modelContext) private var modelContext
     @State private var localTitle = ""
@@ -635,7 +644,11 @@ struct DraftCard: View {
 
             photoStrip
             // The "AI identified" / "Skips AI" captions that sat here were removed
-            // 2026-10-13 (user: extraneous text).
+            // 2026-10-13 (user: extraneous text). The only caption is the photo badge,
+            // and only when the list importer's photo match was weak or empty.
+            if !isSelectMode, let badge = BulkTextDraftMapper.photoBadgeText(photoMatch: draft.photoMatch) {
+                DraftPhotoBadge(text: badge, action: onChoosePhotos)
+            }
         }
         .onAppear {
             localTitle = draft.userEditedTitle ?? draft.aiSuggestedTitle ?? ""

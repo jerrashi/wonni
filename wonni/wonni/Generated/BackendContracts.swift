@@ -22,6 +22,10 @@ struct BackendContracts: Codable, Sendable {
     let decrementAndCascadeResponse: DecrementAndCascadeResponse?
     let detectMercariPullSyncDiffRequest: DetectMercariPullSyncDiffRequest?
     let detectMercariPullSyncDiffResponse: DetectMercariPullSyncDiffResponse?
+    let draftPhotoCandidateDetailRequest: DraftPhotoCandidateDetailRequest?
+    let draftPhotoCandidateDetailResponse: DraftPhotoCandidateDetailResponse?
+    let draftPhotoCandidatesRequest: DraftPhotoCandidatesRequest?
+    let draftPhotoCandidatesResponse: DraftPhotoCandidatesResponse?
     let ebayApplyDriftRequest: EbayApplyDriftRequest?
     let ebayApplyDriftResponse: EbayApplyDriftResponse?
     let ebayCheckDriftRequest: EbayCheckDriftRequest?
@@ -72,6 +76,7 @@ struct BackendContracts: Codable, Sendable {
     let mercariBatchRow: MercariBatchRow?
     let mercariScrapeItem: MercariScrapeItem?
     let option: Option?
+    let photoCandidate: PhotoCandidate?
     let postToWonniRequest: PostToWonniRequest?
     let postToWonniResponse: PostToWonniResponse?
     let productDoc: ProductDoc?
@@ -112,6 +117,10 @@ struct BackendContracts: Codable, Sendable {
         case decrementAndCascadeResponse = "DecrementAndCascadeResponse"
         case detectMercariPullSyncDiffRequest = "DetectMercariPullSyncDiffRequest"
         case detectMercariPullSyncDiffResponse = "DetectMercariPullSyncDiffResponse"
+        case draftPhotoCandidateDetailRequest = "DraftPhotoCandidateDetailRequest"
+        case draftPhotoCandidateDetailResponse = "DraftPhotoCandidateDetailResponse"
+        case draftPhotoCandidatesRequest = "DraftPhotoCandidatesRequest"
+        case draftPhotoCandidatesResponse = "DraftPhotoCandidatesResponse"
         case ebayApplyDriftRequest = "EbayApplyDriftRequest"
         case ebayApplyDriftResponse = "EbayApplyDriftResponse"
         case ebayCheckDriftRequest = "EbayCheckDriftRequest"
@@ -162,6 +171,7 @@ struct BackendContracts: Codable, Sendable {
         case mercariBatchRow = "MercariBatchRow"
         case mercariScrapeItem = "MercariScrapeItem"
         case option = "Option"
+        case photoCandidate = "PhotoCandidate"
         case postToWonniRequest = "PostToWonniRequest"
         case postToWonniResponse = "PostToWonniResponse"
         case productDoc = "ProductDoc"
@@ -222,6 +232,10 @@ extension BackendContracts {
         decrementAndCascadeResponse: DecrementAndCascadeResponse?? = nil,
         detectMercariPullSyncDiffRequest: DetectMercariPullSyncDiffRequest?? = nil,
         detectMercariPullSyncDiffResponse: DetectMercariPullSyncDiffResponse?? = nil,
+        draftPhotoCandidateDetailRequest: DraftPhotoCandidateDetailRequest?? = nil,
+        draftPhotoCandidateDetailResponse: DraftPhotoCandidateDetailResponse?? = nil,
+        draftPhotoCandidatesRequest: DraftPhotoCandidatesRequest?? = nil,
+        draftPhotoCandidatesResponse: DraftPhotoCandidatesResponse?? = nil,
         ebayApplyDriftRequest: EbayApplyDriftRequest?? = nil,
         ebayApplyDriftResponse: EbayApplyDriftResponse?? = nil,
         ebayCheckDriftRequest: EbayCheckDriftRequest?? = nil,
@@ -272,6 +286,7 @@ extension BackendContracts {
         mercariBatchRow: MercariBatchRow?? = nil,
         mercariScrapeItem: MercariScrapeItem?? = nil,
         option: Option?? = nil,
+        photoCandidate: PhotoCandidate?? = nil,
         postToWonniRequest: PostToWonniRequest?? = nil,
         postToWonniResponse: PostToWonniResponse?? = nil,
         productDoc: ProductDoc?? = nil,
@@ -312,6 +327,10 @@ extension BackendContracts {
             decrementAndCascadeResponse: decrementAndCascadeResponse ?? self.decrementAndCascadeResponse,
             detectMercariPullSyncDiffRequest: detectMercariPullSyncDiffRequest ?? self.detectMercariPullSyncDiffRequest,
             detectMercariPullSyncDiffResponse: detectMercariPullSyncDiffResponse ?? self.detectMercariPullSyncDiffResponse,
+            draftPhotoCandidateDetailRequest: draftPhotoCandidateDetailRequest ?? self.draftPhotoCandidateDetailRequest,
+            draftPhotoCandidateDetailResponse: draftPhotoCandidateDetailResponse ?? self.draftPhotoCandidateDetailResponse,
+            draftPhotoCandidatesRequest: draftPhotoCandidatesRequest ?? self.draftPhotoCandidatesRequest,
+            draftPhotoCandidatesResponse: draftPhotoCandidatesResponse ?? self.draftPhotoCandidatesResponse,
             ebayApplyDriftRequest: ebayApplyDriftRequest ?? self.ebayApplyDriftRequest,
             ebayApplyDriftResponse: ebayApplyDriftResponse ?? self.ebayApplyDriftResponse,
             ebayCheckDriftRequest: ebayCheckDriftRequest ?? self.ebayCheckDriftRequest,
@@ -362,6 +381,7 @@ extension BackendContracts {
             mercariBatchRow: mercariBatchRow ?? self.mercariBatchRow,
             mercariScrapeItem: mercariScrapeItem ?? self.mercariScrapeItem,
             option: option ?? self.option,
+            photoCandidate: photoCandidate ?? self.photoCandidate,
             postToWonniRequest: postToWonniRequest ?? self.postToWonniRequest,
             postToWonniResponse: postToWonniResponse ?? self.postToWonniResponse,
             productDoc: productDoc ?? self.productDoc,
@@ -828,8 +848,11 @@ struct Draft: Codable, Equatable, Sendable {
     let marketPrice: Double?
     let marketPriceSource: MarketPriceSource?
     let media: Media?
+    let photoCandidates: [PhotoCandidate]?
+    let photoMatch: PhotoMatch?
     let priceSource: PriceSource
     let quantity: Int
+    let searchQuery: String?
     let shortTitle: String
     let similarItemId: String?
     let sourceText: String
@@ -859,8 +882,11 @@ struct Draft: Codable, Equatable, Sendable {
         case marketPrice = "marketPrice"
         case marketPriceSource = "marketPriceSource"
         case media = "media"
+        case photoCandidates = "photoCandidates"
+        case photoMatch = "photoMatch"
         case priceSource = "priceSource"
         case quantity = "quantity"
+        case searchQuery = "searchQuery"
         case shortTitle = "shortTitle"
         case similarItemId = "similarItemId"
         case sourceText = "sourceText"
@@ -910,8 +936,11 @@ extension Draft {
         marketPrice: Double?? = nil,
         marketPriceSource: MarketPriceSource?? = nil,
         media: Media?? = nil,
+        photoCandidates: [PhotoCandidate]?? = nil,
+        photoMatch: PhotoMatch?? = nil,
         priceSource: PriceSource? = nil,
         quantity: Int? = nil,
+        searchQuery: String?? = nil,
         shortTitle: String? = nil,
         similarItemId: String?? = nil,
         sourceText: String? = nil,
@@ -941,8 +970,11 @@ extension Draft {
             marketPrice: marketPrice ?? self.marketPrice,
             marketPriceSource: marketPriceSource ?? self.marketPriceSource,
             media: media ?? self.media,
+            photoCandidates: photoCandidates ?? self.photoCandidates,
+            photoMatch: photoMatch ?? self.photoMatch,
             priceSource: priceSource ?? self.priceSource,
             quantity: quantity ?? self.quantity,
+            searchQuery: searchQuery ?? self.searchQuery,
             shortTitle: shortTitle ?? self.shortTitle,
             similarItemId: similarItemId ?? self.similarItemId,
             sourceText: sourceText ?? self.sourceText,
@@ -1031,6 +1063,90 @@ enum ImageSource: String, Codable, Equatable, Sendable {
 enum MarketPriceSource: String, Codable, Equatable, Sendable {
     case ai = "ai"
     case comps = "comps"
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - PhotoCandidate
+struct PhotoCandidate: Codable, Equatable, Sendable {
+    let imageUrl: String
+    let included: Included
+    let itemId: String
+    let itemWebUrl: String?
+    let markers: [String]
+    let price: Double?
+    let strong: Bool
+    let title: String
+
+    enum CodingKeys: String, CodingKey {
+        case imageUrl = "imageUrl"
+        case included = "included"
+        case itemId = "itemId"
+        case itemWebUrl = "itemWebUrl"
+        case markers = "markers"
+        case price = "price"
+        case strong = "strong"
+        case title = "title"
+    }
+}
+
+// MARK: PhotoCandidate convenience initializers and mutators
+
+extension PhotoCandidate {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(PhotoCandidate.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        imageUrl: String? = nil,
+        included: Included? = nil,
+        itemId: String? = nil,
+        itemWebUrl: String?? = nil,
+        markers: [String]? = nil,
+        price: Double?? = nil,
+        strong: Bool? = nil,
+        title: String? = nil
+    ) -> PhotoCandidate {
+        return PhotoCandidate(
+            imageUrl: imageUrl ?? self.imageUrl,
+            included: included ?? self.included,
+            itemId: itemId ?? self.itemId,
+            itemWebUrl: itemWebUrl ?? self.itemWebUrl,
+            markers: markers ?? self.markers,
+            price: price ?? self.price,
+            strong: strong ?? self.strong,
+            title: title ?? self.title
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+enum PhotoMatch: String, Codable, Equatable, Sendable {
+    case none = "none"
+    case photoMatchWeak = "weak"
+    case strong = "strong"
 }
 
 enum PriceSource: String, Codable, Equatable, Sendable {
@@ -1606,6 +1722,234 @@ enum Field: String, Codable, Equatable, Sendable {
     case price = "price"
     case status = "status"
     case title = "title"
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - DraftPhotoCandidateDetailRequest
+struct DraftPhotoCandidateDetailRequest: Codable, Equatable, Sendable {
+    let isBundle: Bool?
+    let itemId: String
+
+    enum CodingKeys: String, CodingKey {
+        case isBundle = "isBundle"
+        case itemId = "itemId"
+    }
+}
+
+// MARK: DraftPhotoCandidateDetailRequest convenience initializers and mutators
+
+extension DraftPhotoCandidateDetailRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(DraftPhotoCandidateDetailRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        isBundle: Bool?? = nil,
+        itemId: String? = nil
+    ) -> DraftPhotoCandidateDetailRequest {
+        return DraftPhotoCandidateDetailRequest(
+            isBundle: isBundle ?? self.isBundle,
+            itemId: itemId ?? self.itemId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - DraftPhotoCandidateDetailResponse
+struct DraftPhotoCandidateDetailResponse: Codable, Equatable, Sendable {
+    let ebayCategoryId: String?
+    let ebayConditionId: String?
+    let epid: String?
+    let imageUrls: [String]
+    let itemSpecifics: [String: String]?
+    let title: String
+
+    enum CodingKeys: String, CodingKey {
+        case ebayCategoryId = "ebayCategoryId"
+        case ebayConditionId = "ebayConditionId"
+        case epid = "epid"
+        case imageUrls = "imageUrls"
+        case itemSpecifics = "itemSpecifics"
+        case title = "title"
+    }
+}
+
+// MARK: DraftPhotoCandidateDetailResponse convenience initializers and mutators
+
+extension DraftPhotoCandidateDetailResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(DraftPhotoCandidateDetailResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        ebayCategoryId: String?? = nil,
+        ebayConditionId: String?? = nil,
+        epid: String?? = nil,
+        imageUrls: [String]? = nil,
+        itemSpecifics: [String: String]?? = nil,
+        title: String? = nil
+    ) -> DraftPhotoCandidateDetailResponse {
+        return DraftPhotoCandidateDetailResponse(
+            ebayCategoryId: ebayCategoryId ?? self.ebayCategoryId,
+            ebayConditionId: ebayConditionId ?? self.ebayConditionId,
+            epid: epid ?? self.epid,
+            imageUrls: imageUrls ?? self.imageUrls,
+            itemSpecifics: itemSpecifics ?? self.itemSpecifics,
+            title: title ?? self.title
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - DraftPhotoCandidatesRequest
+struct DraftPhotoCandidatesRequest: Codable, Equatable, Sendable {
+    let included: Included?
+    let query: String
+
+    enum CodingKeys: String, CodingKey {
+        case included = "included"
+        case query = "query"
+    }
+}
+
+// MARK: DraftPhotoCandidatesRequest convenience initializers and mutators
+
+extension DraftPhotoCandidatesRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(DraftPhotoCandidatesRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        included: Included?? = nil,
+        query: String? = nil
+    ) -> DraftPhotoCandidatesRequest {
+        return DraftPhotoCandidatesRequest(
+            included: included ?? self.included,
+            query: query ?? self.query
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - DraftPhotoCandidatesResponse
+struct DraftPhotoCandidatesResponse: Codable, Equatable, Sendable {
+    let candidates: [PhotoCandidate]
+
+    enum CodingKeys: String, CodingKey {
+        case candidates = "candidates"
+    }
+}
+
+// MARK: DraftPhotoCandidatesResponse convenience initializers and mutators
+
+extension DraftPhotoCandidatesResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(DraftPhotoCandidatesResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        candidates: [PhotoCandidate]? = nil
+    ) -> DraftPhotoCandidatesResponse {
+        return DraftPhotoCandidatesResponse(
+            candidates: candidates ?? self.candidates
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
 }
 
 //

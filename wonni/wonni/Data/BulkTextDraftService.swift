@@ -12,6 +12,7 @@
 //
 
 import Foundation
+import FirebaseAuth
 import FirebaseFunctions
 import SwiftData
 import UIKit
@@ -57,6 +58,49 @@ enum BulkTextDraftMapper {
         item.heightIn = proposal.heightIn
         // The source snippet is the user's own words — keep it where they can see it.
         item.personalNote = "From list: \(proposal.sourceText)"
+        // Photo chooser: how sure the automatic pick was, and everything the chooser
+        // needs to open instantly and search again.
+        item.photoMatch = proposal.photoMatch?.rawValue
+        item.photoSearchQuery = proposal.searchQuery
+        item.includedState = proposal.included?.rawValue
+        item.photoCandidatesData = proposal.photoCandidates.flatMap { try? JSONEncoder().encode($0) }
+    }
+
+    /// The badge a draft tile shows under its photos, or nil for none. Only a weak or
+    /// empty automatic match gets one (user decision 2026-10-13): a draft whose photo
+    /// came from an explicit same-item, same-state eBay listing is left alone.
+    static func photoBadgeText(photoMatch: String?) -> String? {
+        switch photoMatch {
+        case PhotoMatch.none.rawValue: return "No photo found · Choose photos"
+        case PhotoMatch.photoMatchWeak.rawValue: return "Photo may not match · Choose photos"
+        default: return nil
+        }
+    }
+
+    /// Readable form of an `included` state, for the chooser's header and chips.
+    static func includedLabel(_ state: Included) -> String? {
+        switch state {
+        case .complete: return "Complete in box"
+        case .partial: return "Missing parts"
+        case .loose: return "Loose"
+        case .sealed: return "Sealed"
+        case .packaging: return "Box or case only"
+        case .unknown: return nil
+        }
+    }
+
+    /// Whether a draft is a bundle, read off its title — the proposal's `isBundle` is
+    /// not stored on the Item. Decides whether an imported listing's single-item
+    /// specifics (Game Name, UPC…) are dropped, as the server does for the proposal.
+    static func looksLikeBundle(title: String) -> Bool {
+        let words = Set(title.lowercased().split { !$0.isLetter }.map(String.init))
+        return !words.isDisjoint(with: ["bundle", "lot", "set"])
+    }
+
+    /// The stored candidate list, decoded; empty when the draft has none.
+    static func storedCandidates(_ data: Data?) -> [PhotoCandidate] {
+        guard let data, let list = try? JSONDecoder().decode([PhotoCandidate].self, from: data) else { return [] }
+        return list
     }
 
     /// Short badge text for the review list.
@@ -284,6 +328,92 @@ final class BulkTextDraftService {
             "condition": proposal.condition.rawValue
         ])
         return try decode(GenerateListingPhotoResponse.self, from: result).url
+    }
+
+    // MARK: Photo chooser
+
+    /// A fresh eBay search for the chooser (the user edited the query, or the draft
+    /// has no stored candidates). Same shape and order as the list a proposal carries.
+    func photoCandidates(query: String, included: String?) async throws -> [PhotoCandidate] {
+        let callable = functions.httpsCallable("draftPhotoCandidates")
+        callable.timeoutInterval = 30
+        var parameters: [String: Any] = ["query": String(query.prefix(200))]
+        if let included { parameters["included"] = included }
+        let result = try await call(callable, parameters)
+        return try decode(DraftPhotoCandidatesResponse.self, from: result).candidates
+    }
+
+    /// The chosen listing's full photo set and sell-similar details — one `getItem`,
+    /// made only on Import (user decision 2026-10-14: the search result's cover photo
+    /// is free, the per-listing detail is the only extra call).
+    func candidateDetail(itemId: String, isBundle: Bool) async throws -> DraftPhotoCandidateDetailResponse {
+        let callable = functions.httpsCallable("draftPhotoCandidateDetail")
+        callable.timeoutInterval = 30
+        let result = try await call(callable, ["itemId": itemId, "isBundle": isBundle])
+        return try decode(DraftPhotoCandidateDetailResponse.self, from: result)
+    }
+
+    struct ImportOptions {
+        /// Copy the listing's eBay category, condition and item specifics onto the draft.
+        var includeDetails = true
+        /// Delete the draft's current (placeholder or auto-picked) photos first; off
+        /// appends the chosen photos after them.
+        var replacePhotos = true
+    }
+
+    enum ImportError: LocalizedError {
+        case noPhotos
+        var errorDescription: String? { "That listing has no photos to import." }
+    }
+
+    /// Puts a chosen eBay listing's photos (and, optionally, details) on the draft and
+    /// sends it back through the normal upload + products sync. Returns how many photos
+    /// landed. Replaced photos are removed from Storage BEFORE the new upload starts:
+    /// uploads are named by index, so a late delete would otherwise remove a new photo.
+    @discardableResult
+    func importCandidate(
+        _ candidate: PhotoCandidate,
+        onto item: Item,
+        options: ImportOptions,
+        modelContext: ModelContext,
+        uploadManager: UploadManager
+    ) async throws -> Int {
+        let detail = try await candidateDetail(itemId: candidate.itemId, isBundle: BulkTextDraftMapper.looksLikeBundle(title: item.userEditedTitle ?? item.aiSuggestedTitle ?? ""))
+        let urls = detail.imageUrls.isEmpty ? [candidate.imageUrl] : detail.imageUrls
+        let photos = await downloadPhotos(urls)
+        guard !photos.isEmpty else { throw ImportError.noPhotos }
+        guard !Item.deletedIDs.contains(item.id) else { return 0 }
+
+        if options.replacePhotos {
+            let userId = Auth.auth().currentUser?.uid
+            for assetId in item.sourceAssetIdentifiers {
+                let removed = item.removePhoto(assetId: assetId)
+                if let path = removed.firebasePhotoPath, let userId {
+                    do { try await StorageService.shared.deletePhoto(path: path, userId: userId) } catch {
+                        print("[BulkTextDraftService] couldn't delete replaced photo \(path): \(error)")
+                    }
+                }
+            }
+            guard !Item.deletedIDs.contains(item.id) else { return 0 }
+        }
+        for data in photos {
+            let assetId = UUID().uuidString
+            Item.prewarmThumbnail(itemID: item.id, assetId: assetId, data: data)
+            item.sourceAssetIdentifiers.append(assetId)
+            item.setLocalPhoto(data, for: assetId)
+        }
+        if options.includeDetails {
+            if let category = detail.ebayCategoryId { item.ebayCategoryId = category }
+            if let specifics = detail.itemSpecifics, !specifics.isEmpty { item.itemSpecifics = specifics }
+        }
+        // The user chose this by eye: the badge goes away, and the AI pass stays skipped
+        // (the photos were never what described this draft).
+        item.photoMatch = PhotoMatch.strong.rawValue
+        item.processedPhotoIDs = item.sourceAssetIdentifiers
+        try? modelContext.save()
+        uploadManager.startBackgroundUpload(draft: item, modelContext: modelContext)
+        uploadManager.syncProductData(item)
+        return photos.count
     }
 
     private func call(_ callable: HTTPSCallable, _ parameters: [String: Any]) async throws -> Any {

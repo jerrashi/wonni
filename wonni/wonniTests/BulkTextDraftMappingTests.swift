@@ -21,7 +21,10 @@ final class BulkTextDraftMappingTests: XCTestCase {
         sourceText: String = "Super smash bros brawl",
         weightOz: Double? = nil,
         included: Included? = nil,
-        media: Media? = nil
+        media: Media? = nil,
+        photoMatch: PhotoMatch? = nil,
+        photoCandidates: [PhotoCandidate]? = nil,
+        searchQuery: String? = nil
     ) -> Draft {
         Draft(
             brand: "Nintendo",
@@ -43,8 +46,11 @@ final class BulkTextDraftMappingTests: XCTestCase {
             marketPrice: marketPrice,
             marketPriceSource: marketPriceSource,
             media: media,
+            photoCandidates: photoCandidates,
+            photoMatch: photoMatch,
             priceSource: priceSource,
             quantity: 1,
+            searchQuery: searchQuery,
             shortTitle: shortTitle,
             similarItemId: "v1|398452119919|0",
             sourceText: sourceText,
@@ -270,5 +276,49 @@ final class BulkTextDraftMappingTests: XCTestCase {
         // A comps price is ours, not the user's: it must not be written into their text.
         let compsPriced = BulkTextDraftMapper.LeftoverLine(proposal(price: 32, priceSource: .comps, sourceText: "smash"))
         XCTAssertNil(compsPriced.userPrice)
+    }
+
+    // MARK: Photo chooser (2026-10-14)
+
+    private func candidate(_ id: String, strong: Bool, included: Included = .complete) -> PhotoCandidate {
+        PhotoCandidate(imageUrl: "https://i.ebayimg.com/\(id)/s-l1600.jpg", included: included, itemId: id, itemWebUrl: nil, markers: [], price: 20, strong: strong, title: "Listing \(id)")
+    }
+
+    func testApplyStoresTheChooserStateAndCandidatesRoundTrip() {
+        let item = Item(firestoreListingId: "p-chooser")
+        let list = [candidate("a", strong: true), candidate("b", strong: false, included: .loose)]
+        BulkTextDraftMapper.apply(proposal(included: .complete, photoMatch: .photoMatchWeak, photoCandidates: list, searchQuery: "Mario Strikers Charged Wii"), to: item, aiModel: "m", aiPromptVersion: "v")
+        XCTAssertEqual(item.photoMatch, "weak")
+        XCTAssertEqual(item.photoSearchQuery, "Mario Strikers Charged Wii")
+        XCTAssertEqual(item.includedState, "complete")
+        XCTAssertEqual(BulkTextDraftMapper.storedCandidates(item.photoCandidatesData), list)
+
+        // An older server sends none of it: nothing stored, no badge.
+        let plain = Item(firestoreListingId: "p-old")
+        BulkTextDraftMapper.apply(proposal(), to: plain, aiModel: "m", aiPromptVersion: "v")
+        XCTAssertNil(plain.photoMatch)
+        XCTAssertNil(plain.photoCandidatesData)
+        XCTAssertEqual(BulkTextDraftMapper.storedCandidates(plain.photoCandidatesData), [])
+        XCTAssertNil(BulkTextDraftMapper.photoBadgeText(photoMatch: plain.photoMatch))
+    }
+
+    func testBadgeOnlyOnWeakOrEmptyMatches() {
+        XCTAssertNil(BulkTextDraftMapper.photoBadgeText(photoMatch: "strong"))
+        XCTAssertNil(BulkTextDraftMapper.photoBadgeText(photoMatch: nil))
+        XCTAssertNil(BulkTextDraftMapper.photoBadgeText(photoMatch: "garbage"))
+        XCTAssertEqual(BulkTextDraftMapper.photoBadgeText(photoMatch: "weak"), "Photo may not match · Choose photos")
+        XCTAssertEqual(BulkTextDraftMapper.photoBadgeText(photoMatch: "none"), "No photo found · Choose photos")
+    }
+
+    func testIncludedLabelsAndBundleHeuristic() {
+        XCTAssertEqual(BulkTextDraftMapper.includedLabel(.complete), "Complete in box")
+        XCTAssertEqual(BulkTextDraftMapper.includedLabel(.loose), "Loose")
+        XCTAssertEqual(BulkTextDraftMapper.includedLabel(.sealed), "Sealed")
+        XCTAssertEqual(BulkTextDraftMapper.includedLabel(.packaging), "Box or case only")
+        XCTAssertNil(BulkTextDraftMapper.includedLabel(.unknown))
+        XCTAssertTrue(BulkTextDraftMapper.looksLikeBundle(title: "Just Dance 4, 2015 & 2014 Wii Bundle (3 Games, CIB)"))
+        XCTAssertTrue(BulkTextDraftMapper.looksLikeBundle(title: "Lot of 5 PS2 games"))
+        XCTAssertFalse(BulkTextDraftMapper.looksLikeBundle(title: "Camelot Wii CIB"))
+        XCTAssertFalse(BulkTextDraftMapper.looksLikeBundle(title: "Super Smash Bros Brawl Wii CIB"))
     }
 }

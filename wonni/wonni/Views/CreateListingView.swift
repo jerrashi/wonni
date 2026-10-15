@@ -1640,7 +1640,9 @@ struct ResultDraftRow: View, Equatable {
         lhs.item.userEditedDescription == rhs.item.userEditedDescription &&
         lhs.item.aiSuggestedDescription == rhs.item.aiSuggestedDescription &&
         lhs.item.originalUserTitleBeforeAI == rhs.item.originalUserTitleBeforeAI &&
-        lhs.item.originalUserDescriptionBeforeAI == rhs.item.originalUserDescriptionBeforeAI
+        lhs.item.originalUserDescriptionBeforeAI == rhs.item.originalUserDescriptionBeforeAI &&
+        lhs.item.quantity == rhs.item.quantity &&
+        lhs.item.photoMatch == rhs.item.photoMatch
     }
 
     @Environment(\.modelContext) private var modelContext
@@ -1649,6 +1651,7 @@ struct ResultDraftRow: View, Equatable {
     @State private var priceText: String = ""
     @State private var descriptionText: String = ""
     @State private var showEditSheet = false
+    @State private var showPhotoChooser = false
     @State private var showDescriptionEditor = false
     @State private var descriptionEditorOpenedViaFocus = false
     @State private var undoneAITitle: String? = nil
@@ -1773,6 +1776,11 @@ struct ResultDraftRow: View, Equatable {
                 .buttonStyle(.plain)
             }
 
+            // ── Photo badge (list-made drafts with a weak or empty photo match) ──
+            if let badge = BulkTextDraftMapper.photoBadgeText(photoMatch: item.photoMatch) {
+                DraftPhotoBadge(text: badge) { showPhotoChooser = true }
+            }
+
             // ── AI badge row ────────────────────────────────────────────────
             let hasAIEdits = item.originalUserTitleBeforeAI != nil || item.originalUserDescriptionBeforeAI != nil
             HStack(spacing: 0) {
@@ -1801,6 +1809,10 @@ struct ResultDraftRow: View, Equatable {
         }
         .padding(.vertical, 8)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: toastMessage != nil)
+        .sheet(isPresented: $showPhotoChooser) {
+            DraftPhotoChooserSheet(item: item)
+                .environmentObject(uploadManager)
+        }
         .sheet(isPresented: $showDescriptionEditor) {
             DescriptionEditorSheet(
                 initialText: descriptionText,

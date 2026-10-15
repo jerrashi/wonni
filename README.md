@@ -112,6 +112,7 @@ How a draft is built, in order:
 4. **Price.** The lowest asking price among comps in the same state. If our state is known and no comp shares it, the model's own estimate is used.
 5. **Photo.** The best-ranked comp that is explicitly in the same state. A comp with a silent title is used only if its full description confirms the state. At most three comps are looked up.
 6. **Placeholder.** If no comp qualifies, the draft gets no borrowed photo. The app draws a card: a disc or cartridge with the title for a loose disc or cartridge, a plain title card otherwise (`BulkTextDraftMapper.placeholderImage`). A wrong photo is never used as a stand-in.
+7. **Choose photos.** The automatic pick is graded (`photoMatch`: strong when the comp is the same item in the same state, otherwise weak or none). A draft with a weak or empty match shows a "Choose photos" badge in the app; it opens a list of every searched listing that has a photo, strong matches first and the rest after them with chips saying what each one includes. The seller can edit the search, pick a listing, and import its photos (and, optionally, its eBay category and item specifics) onto the draft. The listing's full photo set is fetched only when it is imported.
 
 When the seller's text does not say what is included, the best title match is used, minus empty boxes, reproductions, graded copies and broken items.
 

@@ -145,10 +145,16 @@ const DIFFERENT_ITEM = [
   "graded", "wata", "vga", "psa", "cgc",
 ];
 
-function isDifferentItem(compText, query) {
+/** The DIFFERENT_ITEM phrases a comp carries that our own query does not —
+ *  what the photo chooser shows as warning chips ("reproduction", "graded"). */
+function differentItemMarkers(compText, query) {
   const text = normalize(compText);
   const ours = normalize(query);
-  return DIFFERENT_ITEM.some((phrase) => text.includes(` ${phrase} `) && !ours.includes(` ${phrase} `));
+  return DIFFERENT_ITEM.filter((phrase) => text.includes(` ${phrase} `) && !ours.includes(` ${phrase} `));
+}
+
+function isDifferentItem(compText, query) {
+  return differentItemMarkers(compText, query).length > 0;
 }
 
 /** A comp's state: the title wins; the short description fills in a silent title. */
@@ -187,6 +193,7 @@ module.exports = {
   normalizeIncluded,
   compIncluded,
   isDifferentItem,
+  differentItemMarkers,
   matchLevel,
   descriptionConfirms,
 };

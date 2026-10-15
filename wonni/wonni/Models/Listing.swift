@@ -60,6 +60,18 @@ class Item {
     /// lightweight migration adds the columns without a migration plan.
     var ebayCategoryId: String?
     var itemSpecifics: [String: String]?
+    /// Photo chooser state for a list-made draft (2026-10-14). `photoMatch` is the
+    /// server's grade of the automatic photo pick — "strong", "weak" or "none"; the
+    /// tiles show a "Choose photos" badge on anything but "strong" (nil = a draft that
+    /// never went through the list importer, or one made before this field: no badge).
+    /// `photoSearchQuery` / `includedState` seed the chooser's eBay search, and
+    /// `photoCandidatesData` is the JSON-encoded `[PhotoCandidate]` list the server
+    /// returned with the proposal, so the sheet opens without a network call. All
+    /// optional so SwiftData's lightweight migration adds the columns.
+    var photoMatch: String?
+    var photoSearchQuery: String?
+    var includedState: String?
+    var photoCandidatesData: Data?
     /// Units for sale. nil means 1 (the canonical default everywhere else: `listings.
     /// quantity`, `listing_shape.js`). Edited inline on the drafts screen; a pasted
     /// list's "x3" lands here too. Mirrored to `products/{id}.quantity`, which is what

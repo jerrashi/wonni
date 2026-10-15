@@ -78,6 +78,37 @@ const CompSummarySchema = z.object({
   itemWebUrl: z.string().nullable(),
 });
 
+/**
+ * One live eBay listing the user may take photos (and sell-similar details)
+ * from in the photo chooser. Every comp the search returned that has a photo
+ * is a candidate — the automatic pick is just the first strong one — so a
+ * listing that sits at position 30 on eBay is still reachable.
+ */
+const PhotoCandidateSchema = z.object({
+  itemId: z.string(),
+  title: z.string(),
+  price: z.number().nullable(),
+  /** The listing's cover photo (full size). More photos come from
+   *  `draftPhotoCandidateDetail` once one is chosen. */
+  imageUrl: z.string(),
+  itemWebUrl: z.string().nullable(),
+  /** What that listing says is included (comp_match.js); "unknown" when its
+   *  title and short description are silent. */
+  included: IncludedSchema,
+  /** Phrases that make it a different thing to buy ("reproduction", "for
+   *  parts", "graded"…). Shown as warning chips. */
+  markers: z.array(z.string()),
+  /** Same item, same state: an explicit same-state match, or — when our
+   *  listing does not say what is included — a title that matches closely.
+   *  Strong candidates are listed first; the rest follow (user decision
+   *  2026-10-14: never hide the long tail, the right listing is often there). */
+  strong: z.boolean(),
+});
+
+/** How sure the automatic photo pick is. The client shows a "choose photos"
+ *  badge on anything but "strong". */
+const PhotoMatchSchema = z.enum(["strong", "weak", "none"]);
+
 const DraftProposalSchema = z.object({
   title: z.string().max(140),
   /** eBay-safe title, <= 80 chars. */
@@ -131,6 +162,42 @@ const DraftProposalSchema = z.object({
   media: MediaSchema.optional(),
   /** The snippet of the input this proposal was parsed from, for review. */
   sourceText: z.string(),
+  /** The eBay search the comps came from; the photo chooser starts from it. */
+  searchQuery: z.string().optional(),
+  /** How sure the automatic photo pick is (see PhotoMatchSchema). Absent from
+   *  older servers → the client shows no badge. */
+  photoMatch: PhotoMatchSchema.optional(),
+  /** Every searched listing with a photo, strong matches first, for the
+   *  chooser — stored on the draft so the sheet opens with no network call. */
+  photoCandidates: z.array(PhotoCandidateSchema).optional(),
+});
+
+const DraftPhotoCandidatesRequestSchema = z.object({
+  /** The (possibly edited) eBay search. */
+  query: z.string().min(1).max(200),
+  /** What our listing says is included — decides which candidates are strong. */
+  included: IncludedSchema.default("unknown"),
+});
+
+const DraftPhotoCandidatesResponseSchema = z.object({
+  candidates: z.array(PhotoCandidateSchema),
+});
+
+const DraftPhotoCandidateDetailRequestSchema = z.object({
+  itemId: z.string().min(1),
+  /** Drops single-item identity specifics (Game Name, UPC…) for a bundle. */
+  isBundle: z.boolean().default(false),
+});
+
+/** The chosen listing's photos and sell-similar details — the same fields a
+ *  proposal carries, so the client applies them the same way. */
+const DraftPhotoCandidateDetailResponseSchema = z.object({
+  title: z.string(),
+  imageUrls: z.array(z.string()),
+  ebayCategoryId: z.string().optional(),
+  ebayConditionId: z.string().optional(),
+  epid: z.string().optional(),
+  itemSpecifics: z.record(z.string(), z.string()).optional(),
 });
 
 const BulkDraftsFromTextResponseSchema = z.object({
@@ -162,7 +229,20 @@ const GenerateListingPhotoResponseSchema = z.object({
 module.exports = {
   DraftProposalSchema,
   PendingItemSchema,
+  PhotoCandidateSchema,
   contracts: [
+    {
+      name: "draftPhotoCandidates",
+      summary: "Search live eBay listings for a draft's photo chooser: every result with a photo, strong (same item, same state) matches first.",
+      request: DraftPhotoCandidatesRequestSchema,
+      response: DraftPhotoCandidatesResponseSchema,
+    },
+    {
+      name: "draftPhotoCandidateDetail",
+      summary: "One chosen eBay listing's full photo set and sell-similar details (category, condition, ePID, item specifics) for import onto a draft.",
+      request: DraftPhotoCandidateDetailRequestSchema,
+      response: DraftPhotoCandidateDetailResponseSchema,
+    },
     {
       name: "bulkDraftsFromText",
       summary: "Parse a pasted list of items/bundles into fully-filled draft proposals with comp pricing, sell-similar details and stock photos. Persists nothing.",

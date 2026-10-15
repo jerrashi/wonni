@@ -29,6 +29,7 @@ const {
   CarrierSchema,
   SyncSalesPlatformErrorSchema,
   EbayListingVariantGroupSchema,
+  PhotoCandidateSchema,
 } = require("../contracts");
 
 const OUT_DIR = path.join(__dirname, "..", "contracts", "generated");
@@ -131,6 +132,9 @@ const RESPONSE_REFS = {
   listWeverseOrderTasks: { WeverseOrderTaskWithId: WeverseOrderTaskWithIdSchema },
   syncSales: { SyncSalesPlatformError: SyncSalesPlatformErrorSchema },
   ebayGetListing: { EbayVariantGroup: EbayListingVariantGroupSchema },
+  // The same candidate type rides on a proposal and on a chooser re-search.
+  bulkDraftsFromText: { PhotoCandidate: PhotoCandidateSchema },
+  draftPhotoCandidates: { PhotoCandidate: PhotoCandidateSchema },
 };
 
 for (const c of ALL) {

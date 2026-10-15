@@ -58,7 +58,7 @@ const { retrieveComps, retrieveCompDetail, fullSizeEbayImage } = require("./ebay
 const { EBAY_CLIENT_ID, EBAY_CLIENT_SECRET } = require("./ebay_auth");
 const { savePublicBuffer } = require("./product_media");
 const { normalizeCondition, toListingFields } = require("./enrichment")._internal;
-const { classifyIncluded, normalizeIncluded, matchLevel, descriptionConfirms } = require("./comp_match");
+const { classifyIncluded, normalizeIncluded, compIncluded, differentItemMarkers, matchLevel, descriptionConfirms } = require("./comp_match");
 
 const GEMINI_API_KEY = "GEMINI_API_KEY";
 const GOOGLE_CSE_KEY = "GOOGLE_CSE_KEY";
@@ -77,6 +77,9 @@ const COMPS_PER_QUERY = 50;
 // description confirms the same state (see comp_match.js).
 const MAX_DETAIL_CHECKS = 3;
 const MAX_PHOTOS = 4;
+// A listing the user chose by hand in the photo chooser brings its whole
+// photo set (eBay allows 24; Mercari takes 12).
+const MAX_IMPORT_PHOTOS = 12;
 const MAX_SPECIFICS = 20;
 const CONCURRENCY = 6;
 // The parse is one call over the whole text. Measured 2026-10-03: 150 items →
@@ -420,24 +423,31 @@ const OUTLIER_FLOOR = 0.5;      // a "lowest" under half the comparable median i
  * are returned: a boxed copy is priced against boxed copies, not against
  * silent titles that are mostly loose cartridges.
  */
-function comparableComps(comps, query, included = "unknown") {
+/**
+ * Does a comp's title name the same item as the query? Enough shared words
+ * (COMPARABLE_MATCH of the query's), and every model / set / edition number
+ * in the query — LEGO 75192 is not 75105, Just Dance 2015 is not 2014.
+ */
+function titleMatches(query, title) {
   const want = tokens(query);
   const need = Math.max(1, Math.ceil(want.size * COMPARABLE_MATCH));
-  const ours = normalizeIncluded(included);
-  // Model / set / edition numbers identify the item outright: LEGO 75192 is not
-  // 75105, Just Dance 2015 is not 2014. Every one in the query must be present.
   const mustHave = [...want].filter((t) => t.length >= 3 && /\d/.test(t));
+  const have = tokens(title);
+  if (mustHave.some((t) => !have.has(t))) return false;
+  let shared = 0;
+  for (const t of want) if (have.has(t)) shared++;
+  return shared >= need;
+}
+
+function comparableComps(comps, query, included = "unknown") {
+  const ours = normalizeIncluded(included);
   const kept = [];
   for (const comp of comps) {
     if (!(Number.isFinite(comp.price) && comp.price > 0)) continue;
     const level = matchLevel(ours, comp, query);
     if (level === 0) continue;
     if (ours === "unknown" && ["loose", "partial"].includes(classifyIncluded(comp.title))) continue;
-    const have = tokens(comp.title);
-    if (mustHave.some((t) => !have.has(t))) continue;
-    let shared = 0;
-    for (const t of want) if (have.has(t)) shared++;
-    if (shared >= need) kept.push({ comp, level });
+    if (titleMatches(query, comp.title)) kept.push({ comp, level });
   }
   // We know our state: only comps that explicitly share it set the price. A
   // silent title is usually the cheapest form of the item, which would price
@@ -523,6 +533,71 @@ function rankPhotoComps(comps, query, included = "unknown") {
     .filter(Boolean)
     .sort((a, b) => b.level - a.level || b.score - a.score || a.index - b.index)
     .map(({ comp, level }) => ({ comp, level }));
+}
+
+/**
+ * Would this comp's photo be a safe automatic pick? The same item (close
+ * title) in the same state — explicitly (level 2), or, when our listing does
+ * not say what is included, at least not contradicted (level 1).
+ */
+function candidateIsStrong(comp, query, included = "unknown") {
+  const ours = normalizeIncluded(included);
+  const level = matchLevel(ours, comp, query);
+  const sameState = ours === "unknown" ? level >= 1 : level === 2;
+  return sameState && titleMatches(query, comp.title);
+}
+
+/**
+ * Every searched listing with a photo, for the photo chooser (contract
+ * `PhotoCandidateSchema`): strong matches first, then the rest by state
+ * match, shared title words and eBay's own order. Nothing is dropped — not
+ * even contradictions or reproductions — because the user picks by eye and
+ * the chips say what each one is; the long tail is where the right listing
+ * often hides when the automatic pick is wrong (user decision 2026-10-14).
+ */
+function photoCandidates(comps, query, included = "unknown") {
+  const ours = normalizeIncluded(included);
+  const want = tokens(query);
+  return comps
+    .map((comp, index) => {
+      if (!comp.imageUrl || !comp.itemId) return null;
+      const have = tokens(comp.title);
+      let score = 0;
+      for (const t of want) if (have.has(t)) score++;
+      return {
+        candidate: {
+          itemId: String(comp.itemId),
+          title: comp.title || "",
+          price: Number.isFinite(comp.price) ? comp.price : null,
+          imageUrl: fullSizeEbayImage(comp.imageUrl),
+          itemWebUrl: comp.itemWebUrl ?? null,
+          included: compIncluded(comp),
+          markers: differentItemMarkers(`${comp.title || ""} ${comp.shortDescription || ""}`, query),
+          strong: candidateIsStrong(comp, query, ours),
+        },
+        level: matchLevel(ours, comp, query),
+        score,
+        index,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (b.candidate.strong - a.candidate.strong) || (b.level - a.level) || (b.score - a.score) || (a.index - b.index))
+    .map((entry) => entry.candidate);
+}
+
+/** A chosen listing's detail → what the client imports onto the draft
+ *  (contract `DraftPhotoCandidateDetailResponseSchema`). */
+function candidateDetail(detail, { isBundle = false } = {}) {
+  const out = {
+    title: detail.title || "",
+    imageUrls: (detail.images || []).slice(0, MAX_IMPORT_PHOTOS),
+  };
+  if (detail.categoryId) out.ebayCategoryId = String(detail.categoryId);
+  if (detail.conditionId) out.ebayConditionId = String(detail.conditionId);
+  if (detail.epid) out.epid = String(detail.epid);
+  const specifics = usefulSpecifics(detail.aspects, { isBundle });
+  if (Object.keys(specifics).length) out.itemSpecifics = specifics;
+  return out;
 }
 
 /**
@@ -707,6 +782,11 @@ async function enrichProposal(core, deps) {
     proposal.priceSource = "none";
   }
   proposal.comps = comps.slice(0, 5).map((c) => ({ title: c.title, price: c.price, itemWebUrl: c.itemWebUrl }));
+  // For the photo chooser: the query to start from and every result with a
+  // photo. Returned even when the automatic pick is strong — the user may
+  // still disagree with it.
+  proposal.searchQuery = _searchQuery;
+  proposal.photoCandidates = photoCandidates(comps, _searchQuery, included);
 
   // 3. sell similar — category / condition / specifics from a comp. The same
   // lookup decides whose photos may be used (state must match: comp_match.js).
@@ -725,40 +805,49 @@ async function enrichProposal(core, deps) {
     if (Object.keys(specifics).length) proposal.itemSpecifics = specifics;
   }
 
-  // 4. photos — (a) comp photos, only from comps in the same state as ours
+  // 4. photos — (a) comp photos, only from comps in the same state as ours.
+  // `strong` says whether the pick is also the same ITEM by title (a same-state
+  // comp can still be the wrong game); the client badges anything weaker.
   const urls = [];
+  let strong = false;
   if (proposal.isBundle && _componentQueries.length) {
     // One photo per component so the cover shows what's in the lot. No detail
     // lookups here: when our state is known a component needs an explicit
     // (level 2) match, otherwise the best-ranked candidate.
     const perComponent = await mapWithConcurrency(_componentQueries, 2, async (q) => {
       const top = rankPhotoComps(await safeComps(q, deps), q, included)[0];
-      return top && (included === "unknown" || top.level === 2) ? top.comp : null;
+      const hit = top && (included === "unknown" || top.level === 2) ? top.comp : null;
+      return hit ? { hit, strong: candidateIsStrong(hit, q, included) } : null;
     });
-    for (const hit of perComponent) {
-      const url = hit && fullSizeEbayImage(hit.imageUrl);
+    for (const entry of perComponent) {
+      const url = entry && fullSizeEbayImage(entry.hit.imageUrl);
       if (url && !urls.includes(url)) urls.push(url);
     }
+    // The collage is only as sure as its weakest component, and every component
+    // has to be there — a 3-game lot shown by 1 photo is not a strong match.
+    strong = urls.length > 0 && perComponent.length === _componentQueries.length && perComponent.every((e) => e && e.strong);
   }
-  if (!urls.length && photoDetail?.images?.length) {
-    urls.push(...photoDetail.images.slice(0, MAX_PHOTOS));
-  }
-  if (!urls.length && photoComp?.imageUrl) {
-    urls.push(fullSizeEbayImage(photoComp.imageUrl));
+  if (!urls.length) {
+    if (photoDetail?.images?.length) urls.push(...photoDetail.images.slice(0, MAX_PHOTOS));
+    else if (photoComp?.imageUrl) urls.push(fullSizeEbayImage(photoComp.imageUrl));
+    strong = urls.length > 0 && photoComp != null && candidateIsStrong(photoComp, _searchQuery, included);
   }
   if (urls.length) {
     proposal.imageUrls = urls.slice(0, MAX_PHOTOS);
     proposal.imageSource = "ebay";
+    proposal.photoMatch = strong ? "strong" : "weak";
   } else {
     // (b) Google
     const fromGoogle = deps.google ? await deps.google(_searchQuery) : [];
     if (fromGoogle.length) {
       proposal.imageUrls = fromGoogle.slice(0, MAX_PHOTOS);
       proposal.imageSource = "google";
+      proposal.photoMatch = "weak";
     } else {
       // (c) nothing — the client asks before generating.
       proposal.imageUrls = [];
       proposal.imageSource = "none";
+      proposal.photoMatch = "none";
     }
   }
 
@@ -829,6 +918,25 @@ exports.bulkDraftsFromText = onCall(
   })
 );
 
+// The photo chooser's two calls. Public marketplace data, app token, no
+// Firestore: the client decides what lands on the draft.
+exports.draftPhotoCandidates = onCall(
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 30 },
+  validated("draftPhotoCandidates", async (data, request) => {
+    if (!request.auth?.uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+    const comps = await retrieveComps({ title: data.query, limit: COMPS_PER_QUERY });
+    return { candidates: photoCandidates(comps, data.query, data.included) };
+  })
+);
+
+exports.draftPhotoCandidateDetail = onCall(
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 30 },
+  validated("draftPhotoCandidateDetail", async (data, request) => {
+    if (!request.auth?.uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+    return candidateDetail(await retrieveCompDetail(data.itemId), { isBundle: data.isBundle });
+  })
+);
+
 // Consent-gated: the client only calls this after the user has said, once,
 // that AI-generated photos are acceptable for listings nothing else covered.
 exports.generateListingPhoto = onCall(
@@ -866,6 +974,10 @@ exports._internal = {
   pickBestComp,
   rankPhotoComps,
   choosePhotoComp,
+  titleMatches,
+  candidateIsStrong,
+  photoCandidates,
+  candidateDetail,
   usefulSpecifics,
   googleImages,
   enrichProposal,

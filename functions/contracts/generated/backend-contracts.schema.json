@@ -238,6 +238,21 @@
     "WeverseOrderTaskWithId": {
       "$ref": "#/definitions/WeverseOrderTaskWithId"
     },
+    "DraftPhotoCandidatesRequest": {
+      "$ref": "#/definitions/DraftPhotoCandidatesRequest"
+    },
+    "DraftPhotoCandidatesResponse": {
+      "$ref": "#/definitions/DraftPhotoCandidatesResponse"
+    },
+    "PhotoCandidate": {
+      "$ref": "#/definitions/PhotoCandidate"
+    },
+    "DraftPhotoCandidateDetailRequest": {
+      "$ref": "#/definitions/DraftPhotoCandidateDetailRequest"
+    },
+    "DraftPhotoCandidateDetailResponse": {
+      "$ref": "#/definitions/DraftPhotoCandidateDetailResponse"
+    },
     "BulkDraftsFromTextRequest": {
       "$ref": "#/definitions/BulkDraftsFromTextRequest"
     },
@@ -3017,6 +3032,155 @@
       ],
       "additionalProperties": false
     },
+    "DraftPhotoCandidatesRequest": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "included": {
+          "type": "string",
+          "enum": [
+            "complete",
+            "partial",
+            "loose",
+            "sealed",
+            "packaging",
+            "unknown"
+          ],
+          "default": "unknown"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    },
+    "DraftPhotoCandidatesResponse": {
+      "type": "object",
+      "properties": {
+        "candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PhotoCandidate"
+          }
+        }
+      },
+      "required": [
+        "candidates"
+      ],
+      "additionalProperties": false
+    },
+    "PhotoCandidate": {
+      "type": "object",
+      "properties": {
+        "itemId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "price": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "imageUrl": {
+          "type": "string"
+        },
+        "itemWebUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "included": {
+          "type": "string",
+          "enum": [
+            "complete",
+            "partial",
+            "loose",
+            "sealed",
+            "packaging",
+            "unknown"
+          ]
+        },
+        "markers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "strong": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "itemId",
+        "title",
+        "price",
+        "imageUrl",
+        "itemWebUrl",
+        "included",
+        "markers",
+        "strong"
+      ],
+      "additionalProperties": false
+    },
+    "DraftPhotoCandidateDetailRequest": {
+      "type": "object",
+      "properties": {
+        "itemId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "isBundle": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "itemId"
+      ],
+      "additionalProperties": false
+    },
+    "DraftPhotoCandidateDetailResponse": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "imageUrls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ebayCategoryId": {
+          "type": "string"
+        },
+        "ebayConditionId": {
+          "type": "string"
+        },
+        "epid": {
+          "type": "string"
+        },
+        "itemSpecifics": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "title",
+        "imageUrls"
+      ],
+      "additionalProperties": false
+    },
     "BulkDraftsFromTextRequest": {
       "type": "object",
       "properties": {
@@ -3242,8 +3406,7 @@
                 ]
               },
               "marketPrice": {
-                "type": "number",
-                "exclusiveMinimum": 0
+                "$ref": "#/definitions/BulkDraftsFromTextResponse/properties/drafts/items/properties/suggestedPrice"
               },
               "marketPriceSource": {
                 "type": "string",
@@ -3331,15 +3494,7 @@
                 "exclusiveMinimum": 0
               },
               "included": {
-                "type": "string",
-                "enum": [
-                  "complete",
-                  "partial",
-                  "loose",
-                  "sealed",
-                  "packaging",
-                  "unknown"
-                ]
+                "$ref": "#/definitions/PhotoCandidate/properties/included"
               },
               "media": {
                 "type": "string",
@@ -3351,6 +3506,23 @@
               },
               "sourceText": {
                 "type": "string"
+              },
+              "searchQuery": {
+                "type": "string"
+              },
+              "photoMatch": {
+                "type": "string",
+                "enum": [
+                  "strong",
+                  "weak",
+                  "none"
+                ]
+              },
+              "photoCandidates": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/PhotoCandidate"
+                }
               }
             },
             "required": [
@@ -3397,14 +3569,7 @@
                 "maxLength": 200
               },
               "condition": {
-                "type": "string",
-                "enum": [
-                  "new",
-                  "likenew",
-                  "good",
-                  "fair",
-                  "poor"
-                ]
+                "$ref": "#/definitions/BulkDraftsFromTextResponse/properties/drafts/items/properties/condition"
               },
               "tags": {
                 "type": "array",
@@ -3430,23 +3595,10 @@
                 "type": "string"
               },
               "included": {
-                "type": "string",
-                "enum": [
-                  "complete",
-                  "partial",
-                  "loose",
-                  "sealed",
-                  "packaging",
-                  "unknown"
-                ]
+                "$ref": "#/definitions/PhotoCandidate/properties/included"
               },
               "media": {
-                "type": "string",
-                "enum": [
-                  "disc",
-                  "cartridge",
-                  "other"
-                ]
+                "$ref": "#/definitions/BulkDraftsFromTextResponse/properties/drafts/items/properties/media"
               },
               "searchQuery": {
                 "type": "string",
@@ -3459,12 +3611,10 @@
                 }
               },
               "suggestedPrice": {
-                "type": "number",
-                "exclusiveMinimum": 0
+                "$ref": "#/definitions/BulkDraftsFromTextResponse/properties/drafts/items/properties/suggestedPrice"
               },
               "userPrice": {
-                "type": "number",
-                "exclusiveMinimum": 0
+                "$ref": "#/definitions/BulkDraftsFromTextResponse/properties/drafts/items/properties/suggestedPrice"
               },
               "weightOz": {
                 "type": "number",
