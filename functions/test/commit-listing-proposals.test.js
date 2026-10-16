@@ -46,6 +46,21 @@ const proposal = (extra = {}) => ({
   ...extra,
 });
 
+const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(16, 1)]);
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16, 1)]);
+
+test("sniffImage: only raster magic numbers pass; SVG and HTML never do, whatever the server said", () => {
+  const { sniffImage } = _internal;
+  assert.equal(sniffImage(JPEG).contentType, "image/jpeg");
+  assert.equal(sniffImage(PNG).ext, "png");
+  assert.equal(sniffImage(Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBP"), Buffer.alloc(8)])).ext, "webp");
+  assert.equal(sniffImage(Buffer.concat([Buffer.from("GIF89a"), Buffer.alloc(8)])).ext, "gif");
+  assert.equal(sniffImage(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')), null);
+  assert.equal(sniffImage(Buffer.from("<html><body>x</body></html>")), null);
+  assert.equal(sniffImage(Buffer.alloc(4)), null);
+  assert.equal(sniffImage(null), null);
+});
+
 function fakes() {
   const docs = {};
   let n = 0;
@@ -100,9 +115,10 @@ test("commitProposals: re-hosts photos (skipping failures and non-images), write
     db, storage, now: "NOW",
     fetchBytesImpl: async (url) => {
       if (url.endsWith("2.jpg")) throw new Error("404");
-      if (url.endsWith(".html")) return { buffer: Buffer.from("<html>"), contentType: "text/html" };
-      if (url.endsWith(".png")) return { buffer: Buffer.from("png"), contentType: "image/png" };
-      return { buffer: Buffer.from("jpg"), contentType: "image/jpeg" };
+      // Labelled as an image, but the bytes are HTML: must be refused.
+      if (url.endsWith(".html")) return { buffer: Buffer.from("<html><script>alert(1)</script></html>"), contentType: "image/jpeg" };
+      if (url.endsWith(".png")) return { buffer: PNG, contentType: "image/png" };
+      return { buffer: JPEG, contentType: "application/octet-stream" };
     },
     applyRules: async (_db, uid, id) => { if (docs[id].title === "Explodes") throw new Error("rules blew up"); rules.push(id); },
   });
@@ -114,7 +130,7 @@ test("commitProposals: re-hosts photos (skipping failures and non-images), write
     "https://storage.googleapis.com/bucket/dropship/u1/text-p1/0.jpg",
     "https://storage.googleapis.com/bucket/dropship/u1/text-p1/1.png",
   ]);
-  assert.deepEqual(docs.p2.images, ["https://storage.googleapis.com/bucket/dropship/u1/text-p2/0.jpg"], "the 404 and the html are skipped");
+  assert.deepEqual(docs.p2.images, ["https://storage.googleapis.com/bucket/dropship/u1/text-p2/0.jpg"], "the 404 and the html-labelled-as-image are skipped");
   assert.deepEqual(saved, ["dropship/u1/text-p1/0.jpg", "dropship/u1/text-p1/1.png", "dropship/u1/text-p2/0.jpg", "dropship/u1/text-p3/0.jpg", "dropship/u1/text-p3/1.png"]);
   assert.deepEqual(rules, ["p1", "p2"]);
   assert.equal(ResponseSchemas.commitListingProposals.safeParse(result).success, true);

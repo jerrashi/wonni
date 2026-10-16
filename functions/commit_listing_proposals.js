@@ -29,18 +29,33 @@ const { fetchBytes } = require("./source_links");
 const { maybeApplyCrossPostRulesAfterImport } = require("./cross_post");
 
 const MAX_PHOTOS = 12;
-const IMAGE_TYPES = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" };
+
+/**
+ * What kind of raster image these bytes are, by magic number — the server's
+ * Content-Type is NOT trusted: the stored file is served publicly from our
+ * bucket, so an SVG (scriptable) or an HTML page labelled "image/*" must never
+ * land there. Only JPEG, PNG, WebP and GIF are accepted.
+ */
+function sniffImage(buffer) {
+  if (!buffer || buffer.length < 12) return null;
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return { ext: "jpg", contentType: "image/jpeg" };
+  if (buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return { ext: "png", contentType: "image/png" };
+  if (buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP") return { ext: "webp", contentType: "image/webp" };
+  const gif = buffer.subarray(0, 6).toString("ascii");
+  if (gif === "GIF87a" || gif === "GIF89a") return { ext: "gif", contentType: "image/gif" };
+  return null;
+}
 
 /** Download + store one proposal's photos; returns the stored public URLs. */
 async function rehostImages(urls, { uid, docId, storage, fetchBytesImpl }) {
   const out = [];
   for (let i = 0; i < Math.min(urls.length, MAX_PHOTOS); i++) {
     try {
-      const { buffer, contentType } = await fetchBytesImpl(urls[i]);
-      const ext = IMAGE_TYPES[contentType] || (contentType.startsWith("image/") ? "jpg" : null);
-      if (!ext) throw new Error(`Not an image (${contentType || "unknown type"})`);
-      const file = storage.file(`dropship/${uid}/text-${docId}/${i}.${ext}`);
-      out.push(await savePublicBuffer(storage.name, file, buffer, contentType || "image/jpeg"));
+      const { buffer } = await fetchBytesImpl(urls[i]);
+      const kind = sniffImage(buffer);
+      if (!kind) throw new Error("Not a JPEG, PNG, WebP or GIF image");
+      const file = storage.file(`dropship/${uid}/text-${docId}/${i}.${kind.ext}`);
+      out.push(await savePublicBuffer(storage.name, file, buffer, kind.contentType));
     } catch (e) {
       console.warn(`[commitListingProposals] photo ${i} of ${docId} skipped: ${e.message}`);
     }
@@ -134,4 +149,4 @@ exports.commitListingProposals = onCall(
   })
 );
 
-exports._internal = { productDocFor, commitProposals, rehostImages };
+exports._internal = { productDocFor, commitProposals, rehostImages, sniffImage };
