@@ -34,14 +34,17 @@
  * Security: a pasted URL is user input fetched from inside a Cloud Function.
  * `fetchHtml` only fetches https on the default port, resolves the host first
  * and refuses anything that is not a public address (loopback, private,
- * link-local incl. the GCE metadata server 169.254.169.254, *.internal), and
- * follows redirects by hand so every hop is checked the same way.
+ * link-local incl. the GCE metadata server 169.254.169.254, *.internal), then
+ * CONNECTS TO THE VALIDATED ADDRESSES (`pinnedFetch`, a custom `lookup` on
+ * https.request) so the name cannot be re-resolved to something else in
+ * between, and follows redirects by hand so every hop is checked the same way.
  */
 
 "use strict";
 
 const dns = require("dns").promises;
 const net = require("net");
+const https = require("https");
 
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
@@ -161,7 +164,9 @@ function isPublicAddress(ip) {
     if (a === 172 && b >= 16 && b <= 31) return false;
     if (a === 192 && b === 168) return false;
     if (a === 100 && b >= 64 && b <= 127) return false;   // carrier NAT
-    if (a >= 224) return false;                            // multicast / reserved
+    if (a === 192 && b === 0) return false;                // 192.0.0.0/24 + 192.0.2.0/24 (IETF, TEST-NET)
+    if (a === 198 && (b === 18 || b === 19)) return false; // benchmarking
+    if (a >= 224) return false;                            // multicast / reserved / broadcast
     return true;
   }
   if (v === 6) {
@@ -169,7 +174,17 @@ function isPublicAddress(ip) {
     if (lower === "::" || lower === "::1") return false;
     if (lower.startsWith("fe8") || lower.startsWith("fe9") || lower.startsWith("fea") || lower.startsWith("feb")) return false; // link-local
     if (lower.startsWith("fc") || lower.startsWith("fd")) return false;  // unique local
-    if (lower.startsWith("::ffff:")) return isPublicAddress(lower.slice(7)); // mapped v4
+    if (lower.startsWith("::ffff:")) {
+      // IPv4-mapped, dotted ("::ffff:10.0.0.1") or hex ("::ffff:a00:1") form.
+      const rest = lower.slice(7);
+      if (net.isIP(rest) === 4) return isPublicAddress(rest);
+      const [hi, lo] = rest.split(":").map((h) => parseInt(h || "0", 16));
+      if (!Number.isFinite(hi) || !Number.isFinite(lo)) return false;
+      return isPublicAddress(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+    }
+    if (lower.startsWith("64:ff9b:")) return false;   // NAT64 — the embedded v4 is not checked, refuse
+    if (lower.startsWith("2001:db8:")) return false;  // documentation
+    if (lower.startsWith("2002:")) return false;      // 6to4 — embeds an arbitrary v4
     return true;
   }
   return false;
@@ -189,11 +204,57 @@ async function assertPublicUrl(rawUrl, lookup = (host) => dns.lookup(host, { all
     throw new Error("That address is not a public website.");
   }
   const literal = host.startsWith("[") ? host.slice(1, -1) : host;
-  const addresses = net.isIP(literal) ? [{ address: literal }] : await lookup(literal);
+  const addresses = net.isIP(literal) ? [{ address: literal, family: net.isIP(literal) }] : await lookup(literal);
   if (!addresses.length || addresses.some((a) => !isPublicAddress(a.address))) {
     throw new Error("That address is not a public website.");
   }
-  return url;
+  // The caller connects to THESE addresses (pinnedFetch), so a name cannot be
+  // re-resolved to something else between the check and the connection.
+  return { url, addresses: addresses.map((a) => ({ address: a.address, family: a.family || net.isIP(a.address) })) };
+}
+
+/**
+ * A fetch-shaped GET over Node https that connects to `pinnedAddresses` (the
+ * ones `assertPublicUrl` just validated) instead of resolving the host again
+ * — closes the DNS-rebinding window between check and connect. Returns
+ * { ok, status, headers.get, body (web stream), text() } like fetch, with
+ * redirects left to the caller (status 3xx + location). `request` is
+ * injectable for tests.
+ */
+function pinnedFetch(url, { signal, headers = {}, pinnedAddresses = [] } = {}, request = https.request) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    let next = 0;
+    const lookup = (hostname, options, cb) => {
+      if (!pinnedAddresses.length) return cb(new Error("No validated address to connect to."));
+      if (options && options.all) return cb(null, pinnedAddresses);
+      const pick = pinnedAddresses[next++ % pinnedAddresses.length];
+      cb(null, pick.address, pick.family);
+    };
+    const req = request({
+      protocol: "https:",
+      hostname: target.hostname,
+      port: 443,
+      path: `${target.pathname}${target.search}`,
+      method: "GET",
+      headers,
+      lookup,
+      servername: target.hostname,
+      signal,
+    }, (res) => {
+      const { Readable } = require("stream");
+      resolve({
+        ok: res.statusCode >= 200 && res.statusCode < 300,
+        status: res.statusCode,
+        url,
+        headers: { get: (name) => { const v = res.headers[String(name).toLowerCase()]; return Array.isArray(v) ? v[0] : (v ?? null); } },
+        body: Readable.toWeb(res),
+        text: () => new Promise((ok, bad) => { const parts = []; res.on("data", (c) => parts.push(c)); res.on("end", () => ok(Buffer.concat(parts).toString("utf8"))); res.on("error", bad); }),
+      });
+    });
+    req.on("error", reject);
+    req.end();
+  });
 }
 
 /** The first MAX_HTML_BYTES of a response body. Streams and stops at the
@@ -222,15 +283,16 @@ async function readCapped(res) {
  * is checked by `assertPublicUrl` (a public URL must not bounce us to the
  * metadata server). `fetchImpl` / `lookup` are injectable for tests.
  */
-async function fetchHtml(url, fetchImpl = fetch, lookup = undefined) {
+async function fetchHtml(url, fetchImpl = pinnedFetch, lookup = undefined) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     let current = url;
     for (let hop = 0; ; hop++) {
-      await assertPublicUrl(current, lookup);
+      const { addresses } = await assertPublicUrl(current, lookup);
       const res = await fetchImpl(current, {
         redirect: "manual",
+        pinnedAddresses: addresses,
         signal: controller.signal,
         headers: {
           "User-Agent": USER_AGENT,
@@ -366,7 +428,7 @@ function parseOpenGraph(html) {
  *   ebayDetail(itemId) — ebay_comps retrieveCompDetail
  */
 async function resolveLink(link, deps = {}) {
-  const fetchImpl = deps.fetchImpl || fetch;
+  const fetchImpl = deps.fetchImpl || pinnedFetch;
   const detected = detectSource(link.url);
   const base = {
     index: link.index,
@@ -486,5 +548,5 @@ module.exports = {
   resolveLinks,
   isPublicAddress,
   assertPublicUrl,
-  _internal: { fetchHtml, metaContent, decodeEntities, parsePriceText },
+  _internal: { fetchHtml, pinnedFetch, metaContent, decodeEntities, parsePriceText },
 };

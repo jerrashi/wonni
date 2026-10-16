@@ -233,7 +233,11 @@ test("assertPublicUrl: https only, default port, no credentials, blocked hosts, 
   // A public-looking name that resolves (even partly) to a private address.
   await assert.rejects(assertPublicUrl("https://evil.example/", async () => [{ address: "93.184.216.34" }, { address: "10.0.0.5" }]), /not a public website/);
   await assert.rejects(assertPublicUrl("https://nx.example/", async () => []), /not a public website/);
-  assert.equal((await assertPublicUrl("https://example.com/ok", publicLookup)).hostname, "example.com");
+  const ok = await assertPublicUrl("https://example.com/ok", publicLookup);
+  assert.equal(ok.url.hostname, "example.com");
+  assert.deepEqual(ok.addresses, [{ address: "93.184.216.34", family: 4 }]);
+  for (const ip of ["::ffff:a00:1", "::ffff:7f00:1", "64:ff9b::a00:1", "2002:0a00:0001::", "192.0.2.1", "198.18.0.1"]) assert.equal(isPublicAddress(ip), false, ip);
+  assert.equal(isPublicAddress("::ffff:5db8:d822"), true);
 });
 
 test("resolveLink: a redirect to a private address is refused mid-chain; a plain http link is refused before any fetch", async () => {
@@ -281,4 +285,32 @@ test("fetchHtml: a huge body is read only up to the cap and the stream is cancel
   await assert.rejects(fetchHtml("https://big.example/huge", async () => ({
     ok: true, status: 200, headers: { get: (h) => (h === "content-length" ? String(100 * 1024 * 1024) : null) }, text: async () => "",
   }), publicLookup), /too large/);
+});
+
+test("pinnedFetch: connects through a lookup that returns only the validated addresses, never re-resolving the host", async () => {
+  const { pinnedFetch } = require("../source_links")._internal;
+  const { PassThrough } = require("stream");
+  let seen;
+  const request = (options, onResponse) => {
+    seen = options;
+    const res = new PassThrough();
+    res.statusCode = 200;
+    res.headers = { "content-type": "text/html", location: undefined };
+    process.nextTick(() => { onResponse(res); res.end("<title>hi</title>"); });
+    return { on() {}, end() {} };
+  };
+  const res = await pinnedFetch("https://example.com/a?b=1", { headers: { "User-Agent": "t" }, pinnedAddresses: [{ address: "93.184.216.34", family: 4 }] }, request);
+  assert.equal(seen.hostname, "example.com");
+  assert.equal(seen.servername, "example.com");
+  assert.equal(seen.port, 443);
+  assert.equal(seen.path, "/a?b=1");
+  await new Promise((done) => seen.lookup("example.com", {}, (err, address, family) => { assert.equal(err, null); assert.equal(address, "93.184.216.34"); assert.equal(family, 4); done(); }));
+  await new Promise((done) => seen.lookup("example.com", { all: true }, (err, list) => { assert.deepEqual(list, [{ address: "93.184.216.34", family: 4 }]); done(); }));
+  assert.equal(res.ok, true);
+  assert.equal(res.headers.get("Content-Type"), "text/html");
+  assert.equal(await res.text(), "<title>hi</title>");
+
+  const none = await pinnedFetch("https://example.com/", { pinnedAddresses: [] }, request);
+  await new Promise((done) => seen.lookup("example.com", {}, (err) => { assert.match(err.message, /No validated address/); done(); }));
+  assert.equal(none.ok, true);
 });
