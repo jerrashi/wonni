@@ -22,6 +22,12 @@ import UIKit
 /// that and are kept as aliases.
 typealias Draft = DraftProposal
 typealias Remaining = PendingItem
+/// The parse/enrich response (`textToListings`).
+typealias ProposeResponse = TextToListingsResponse
+/// One multi-item entry waiting for the user's individual-or-bundle answer.
+typealias ListingDecision = TextToListingsResponseNeedsDecision
+/// What became of one pasted link.
+typealias LinkOutcome = TextToListingsResponseLink
 
 /// Pure mapping from a `bulkDraftsFromText` proposal onto an `Item`, factored out so
 /// it is unit-testable without Firebase or the network (BulkTextDraftMappingTests).
@@ -70,6 +76,69 @@ enum BulkTextDraftMapper {
         item.photoSearchQuery = proposal.searchQuery
         item.includedState = proposal.included?.rawValue
         item.photoCandidatesData = proposal.photoCandidates.flatMap { try? JSONEncoder().encode($0) }
+        // A pasted product link: provenance and what the seller paid (cost, not price).
+        item.sourceUrl = proposal.sourceUrl
+        item.sourceName = proposal.source?.rawValue
+        item.sourcePrice = proposal.sourcePrice
+    }
+
+    // MARK: Decisions (several items in one entry)
+
+    /// The user's answer for one `needsDecision` entry. Individual is the default
+    /// (user decision 2026-10-15): "issues 211-215" is five comics unless they say lot.
+    enum DecisionChoice: Equatable { case individual, bundle }
+
+    /// The pending items to send back for a set of decisions and answers (missing
+    /// answers default to individual), in the entries' own order.
+    static func pendingItems(for decisions: [ListingDecision], choices: [Int: DecisionChoice]) -> [Remaining] {
+        decisions.enumerated().flatMap { index, decision -> [Remaining] in
+            switch choices[index] ?? .individual {
+            case .individual: return decision.asIndividual
+            case .bundle: return [decision.asBundle]
+            }
+        }
+    }
+
+    /// The finish screen's lines about the links in the paste: how many were read, by
+    /// store, and which could not be (with why). Empty when the text had no links.
+    static func linkSummaryLines(_ links: [LinkOutcome]) -> [String] {
+        guard !links.isEmpty else { return [] }
+        let read = links.filter { $0.status == .ok }
+        let partial = links.filter { $0.status == .partial }
+        let failed = links.filter { $0.status == .failed }
+        var lines: [String] = []
+        if !read.isEmpty {
+            var byStore: [String: Int] = [:]
+            for link in read { byStore[storeName(link.source), default: 0] += 1 }
+            let parts = byStore.sorted { $0.value > $1.value || ($0.value == $1.value && $0.key < $1.key) }
+                .map { "\($0.value) from \($0.key)" }
+            lines.append("\(read.count) link\(read.count == 1 ? "" : "s") read (\(parts.joined(separator: ", "))). Their photos and prices paid are on the drafts.")
+        }
+        for link in partial {
+            lines.append("\(shortHost(link.url)) could not be fully read (\(storeName(link.source)) showed a bot check), so its draft was built from the link's own words and has a Choose photos badge.")
+        }
+        for link in failed {
+            let reason = link.error.map { ": " + $0.trimmingCharacters(in: CharacterSet(charactersIn: ". ")) } ?? ""
+            lines.append("\(shortHost(link.url)) could not be read\(reason).")
+        }
+        return lines
+    }
+
+    static func storeName(_ source: SourceProductSource) -> String {
+        switch source {
+        case .amazon: return "Amazon"
+        case .ebay: return "eBay"
+        case .aliexpress: return "AliExpress"
+        case .weverse: return "Weverse"
+        case .web: return "the web"
+        }
+    }
+
+    /// "a.co/d/3xYz12Q" — the host and a short path, enough to recognise the link.
+    static func shortHost(_ urlString: String) -> String {
+        guard let url = URL(string: urlString), let host = url.host else { return urlString }
+        let path = url.path.count > 24 ? String(url.path.prefix(24)) + "…" : url.path
+        return host.replacingOccurrences(of: "www.", with: "") + (path == "/" ? "" : path)
     }
 
     /// The badge a draft tile shows under its photos, or nil for none. Only a weak or
@@ -298,14 +367,14 @@ final class BulkTextDraftService {
     /// first batch, and returns the rest as `remaining`. Follow-up calls send those
     /// back with `propose(pending:)`, so a long list is never cut off at the batch size.
     /// `context` carries the shared context when continuing after `unparsedText`.
-    func propose(text: String, context: String = "") async throws -> BulkDraftsFromTextResponse {
+    func propose(text: String, context: String = "") async throws -> ProposeResponse {
         var parameters: [String: Any] = ["text": text, "maxItems": BulkTextDraftMapper.batchSize]
         if !context.isEmpty { parameters["context"] = String(context.prefix(500)) }
         return try await proposeCall(parameters)
     }
 
     /// Prices and photographs listings a previous response returned in `remaining`.
-    func propose(pending: [Remaining], context: String) async throws -> BulkDraftsFromTextResponse {
+    func propose(pending: [Remaining], context: String) async throws -> ProposeResponse {
         let data = try JSONEncoder().encode(pending)
         let items = try JSONSerialization.jsonObject(with: data)
         var parameters: [String: Any] = ["pendingItems": items, "maxItems": BulkTextDraftMapper.batchSize]
@@ -313,14 +382,16 @@ final class BulkTextDraftService {
         return try await proposeCall(parameters)
     }
 
-    private func proposeCall(_ parameters: [String: Any]) async throws -> BulkDraftsFromTextResponse {
+    private func proposeCall(_ parameters: [String: Any]) async throws -> ProposeResponse {
         // Server-side work is one Gemini call over the whole text (about half a second
         // per listing) plus comps / item-detail / photo lookups for the batch; the
         // default 70 s callable timeout is far too short. Matches the function's 540 s.
-        let callable = functions.httpsCallable("bulkDraftsFromText")
+        // `textToListings` is the same function `bulkDraftsFromText` was (2026-10-15):
+        // text AND product links in, listings out.
+        let callable = functions.httpsCallable("textToListings")
         callable.timeoutInterval = 540
         let result = try await call(callable, parameters)
-        return try decode(BulkDraftsFromTextResponse.self, from: result)
+        return try decode(ProposeResponse.self, from: result)
     }
 
     /// Consent-gated: only called after the user has agreed to AI-generated photos for
@@ -449,7 +520,7 @@ final class BulkTextDraftService {
     /// every draft made so far intact.
     func createDrafts(
         from proposals: [Draft],
-        response: BulkDraftsFromTextResponse,
+        response: ProposeResponse,
         modelContext: ModelContext,
         uploadManager: UploadManager,
         shouldStop: () -> Bool = { false },

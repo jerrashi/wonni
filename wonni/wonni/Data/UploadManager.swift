@@ -1116,6 +1116,10 @@ class UploadManager: ObservableObject {
         // is preferred over the taxonomy suggestion (resolveCategoryId).
         data["ebayCategoryId"] = draft.ebayCategoryId
         data["geminiItemSpecifics"] = draft.itemSpecifics
+        // A pasted product link (textToListings): the page and what the seller paid.
+        // `sourcePrice` is the ONE cost field on products/{id} (never a price fallback).
+        if let sourceUrl = draft.sourceUrl { data["sourceUrl"] = sourceUrl }
+        if let sourcePrice = draft.sourcePrice { data["sourcePrice"] = sourcePrice }
         data["images"] = draft.orderedFirebasePhotoPaths.map { StorageService.shared.publicURL(forPath: $0) }
         data["updatedAt"] = Timestamp(date: now)
 

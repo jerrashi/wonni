@@ -127,6 +127,14 @@ struct MainView: View {
             BulkTextDraftsSheet(offersOpenDrafts: true)
                 .environmentObject(uploadManager)
         }
+        .sheet(isPresented: $bulkTextRunner.showDecisionSheet, onDismiss: {
+            // Swiped away: the defaults (separate listings) stand.
+            bulkTextRunner.answerDecisions([:])
+        }) {
+            BulkTextDecisionSheet(decisions: bulkTextRunner.pendingDecisions) { choices in
+                bulkTextRunner.answerDecisions(choices)
+            }
+        }
         .alert("Use AI-generated photos?", isPresented: $bulkTextRunner.showAIPhotoConsent) {
             Button("Use AI photos") { bulkTextRunner.answerConsent(true) }
             Button("Skip", role: .cancel) { bulkTextRunner.answerConsent(false) }

@@ -469,6 +469,7 @@ struct DraftEditSheet: View {
     @State private var cache = CachedImageManager()
     @State private var title: String = ""
     @State private var priceText: String = ""
+    @State private var paidText: String = ""
     @State private var quantityText: String = "1"
     @State private var description: String = ""
     @State private var personalNote: String = ""
@@ -566,6 +567,18 @@ struct DraftEditSheet: View {
                         Text("$")
                         TextField("0.00", text: $priceText)
                             .keyboardType(.decimalPad)
+                    }
+                    // What the seller paid (cost). Filled by a pasted product link; shown
+                    // for every draft so it can be typed too. Never part of the asking price.
+                    HStack {
+                        Text("Paid")
+                        Spacer()
+                        Text("$").foregroundStyle(.secondary)
+                        TextField("0.00", text: $paidText)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(maxWidth: 110)
+                            .accessibilityIdentifier("draftEditPaidField")
                     }
                     // Typed AND stepped: 100 units is a number to type, not 99 taps.
                     HStack {
@@ -793,6 +806,9 @@ struct DraftEditSheet: View {
         if let p = item.userEditedPrice {
             priceText = String(format: "%.2f", p)
         }
+        if let paid = item.sourcePrice {
+            paidText = String(format: "%.2f", paid)
+        }
         quantityText = String(max(1, item.quantity ?? 1))
         description = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
         personalNote = item.personalNote ?? ""
@@ -830,6 +846,7 @@ struct DraftEditSheet: View {
         }
         item.userEditedTitle = title.isEmpty ? nil : title
         item.userEditedPrice = Double(priceText.filter { $0.isNumber || $0 == "." })
+        item.sourcePrice = Double(paidText.filter { $0.isNumber || $0 == "." })
         let quantity = Int(quantityText.filter(\.isNumber)) ?? 1
         item.quantity = quantity > 1 ? quantity : nil   // nil = 1 everywhere else
         item.userEditedDescription = description.isEmpty ? nil : description

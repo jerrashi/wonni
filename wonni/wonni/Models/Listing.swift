@@ -72,6 +72,15 @@ class Item {
     var photoSearchQuery: String?
     var includedState: String?
     var photoCandidatesData: Data?
+    /// Where a list-made draft came from when its entry carried a product link
+    /// (2026-10-15, `textToListings`): the page URL, its store ("amazon", "ebay",
+    /// "aliexpress", "weverse", "web") and the price the page sells it for — the
+    /// seller's COST, mirrored to `products/{id}.sourcePrice` / `.sourceUrl`, never a
+    /// fallback for the asking price. Edited as "Paid" in the pencil sheet. Optional
+    /// so SwiftData's lightweight migration adds the columns.
+    var sourcePrice: Double?
+    var sourceUrl: String?
+    var sourceName: String?
     /// Units for sale. nil means 1 (the canonical default everywhere else: `listings.
     /// quantity`, `listing_shape.js`). Edited inline on the drafts screen; a pasted
     /// list's "x3" lands here too. Mirrored to `products/{id}.quantity`, which is what

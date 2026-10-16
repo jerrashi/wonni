@@ -39,6 +39,8 @@ final class BulkTextDraftRunner: ObservableObject {
         var leftover = 0
         /// Why the run ended early, if it did.
         var note: String?
+        /// What became of each product link in the text (finish screen lines).
+        var links: [LinkOutcome] = []
     }
 
     enum Phase: Equatable {
@@ -63,6 +65,12 @@ final class BulkTextDraftRunner: ObservableObject {
     @Published var showAIPhotoConsent = false
     @Published private(set) var consentCount = 0
     private var consentContinuation: CheckedContinuation<Bool, Never>?
+
+    // ── "Several items in one entry" (presented from MainView, once per run) ──
+    /// Entries waiting for an individual-or-bundle answer; the sheet shows them all.
+    @Published private(set) var pendingDecisions: [ListingDecision] = []
+    @Published var showDecisionSheet = false
+    private var decisionContinuation: CheckedContinuation<[Int: BulkTextDraftMapper.DecisionChoice], Never>?
     /// A "no" applies to the whole current run (not just one batch), and only to it.
     private var aiPhotosDeclinedThisRun = false
 
@@ -111,7 +119,11 @@ final class BulkTextDraftRunner: ObservableObject {
         return true
     }
 
-    func stop() { stopRequested = true }
+    func stop() {
+        stopRequested = true
+        // A run waiting on the decision sheet should end too, not hang on it.
+        if decisionContinuation != nil { answerDecisions([:]) }
+    }
 
     /// Back to the editor; the finish screen is gone and the drafts stay.
     func acknowledge() {
@@ -121,6 +133,14 @@ final class BulkTextDraftRunner: ObservableObject {
     func answerConsent(_ allowed: Bool) {
         consentContinuation?.resume(returning: allowed)
         consentContinuation = nil
+    }
+
+    /// The decision sheet's Continue (or its dismissal: missing answers default to
+    /// individual). The chosen listings join the run's queue.
+    func answerDecisions(_ choices: [Int: BulkTextDraftMapper.DecisionChoice]) {
+        decisionContinuation?.resume(returning: choices)
+        decisionContinuation = nil
+        showDecisionSheet = false
     }
 
     /// Deletes every draft the latest run created and puts the text back.
@@ -160,6 +180,11 @@ final class BulkTextDraftRunner: ObservableObject {
         var unparsed: String? = text.trimmingCharacters(in: .whitespacesAndNewlines)
         /// Prepared listings that were never saved because the run was stopped.
         var unsaved: [Draft] = []
+        /// Multi-item entries the user has not answered yet. Asked once per run, as a
+        /// side task, so the other entries keep turning into drafts meanwhile; the
+        /// answer is collected when the queue runs dry.
+        var decisions: [ListingDecision] = []
+        var decisionTask: Task<[Remaining], Never>?
 
         func report(_ s: RunStatus) {
             status = s
@@ -173,7 +198,7 @@ final class BulkTextDraftRunner: ObservableObject {
         }
 
         while !stopRequested {
-            let response: BulkDraftsFromTextResponse
+            let response: ProposeResponse
             do {
                 if !queue.isEmpty {
                     let batch = Array(queue.prefix(BulkTextDraftMapper.batchSize))
@@ -192,6 +217,17 @@ final class BulkTextDraftRunner: ObservableObject {
                     queue = response.remaining
                     if !response.context.isEmpty { context = response.context }
                     status.total += response.drafts.count + response.remaining.count
+                    summary.links += response.links ?? []
+                    if let asked = response.needsDecision, !asked.isEmpty {
+                        decisions += asked
+                        status.total += asked.count
+                        decisionTask = decisionTask ?? Task { [weak self] in
+                            // Resolved when the user answers; `decisions` is read then,
+                            // so entries from a later parse of the same text are included.
+                            guard let self else { return [] }
+                            return await self.askDecisions(decisions)
+                        }
+                    }
                     // Anything the parse didn't reach comes back as text, to parse next.
                     let tail = response.unparsedText.trimmingCharacters(in: .whitespacesAndNewlines)
                     if tail.isEmpty {
@@ -205,6 +241,17 @@ final class BulkTextDraftRunner: ObservableObject {
                     } else {
                         unparsed = tail
                     }
+                } else if let waiting = decisionTask {
+                    // Everything else is done; now the user's answer decides the rest.
+                    status.step = "Waiting for your answer…"
+                    status.detail = decisions.count == 1 ? "1 entry names several items" : "\(decisions.count) entries name several items"
+                    report(status)
+                    let chosen = await waiting.value
+                    decisionTask = nil
+                    status.total += chosen.count - decisions.count
+                    decisions = []
+                    queue = chosen
+                    continue
                 } else {
                     break
                 }
@@ -250,8 +297,12 @@ final class BulkTextDraftRunner: ObservableObject {
             }
         }
 
+        // A stopped run never asked: those entries go back in the editor as written.
+        if decisionTask != nil { answerDecisions([:]); decisionTask?.cancel(); decisionTask = nil }
         // Whatever did not become a draft goes back in the editor.
-        let leftoverLines = unsaved.map(BulkTextDraftMapper.LeftoverLine.init) + queue.map(BulkTextDraftMapper.LeftoverLine.init)
+        let leftoverLines = unsaved.map(BulkTextDraftMapper.LeftoverLine.init)
+            + queue.map(BulkTextDraftMapper.LeftoverLine.init)
+            + decisions.map { BulkTextDraftMapper.LeftoverLine(sourceText: $0.sourceText, userPrice: $0.asBundle.userPrice) }
         let leftover = BulkTextDraftMapper.leftoverText(context: context, lines: leftoverLines, unparsedText: unparsed ?? "")
         summary.created = createdItems.count
         summary.leftover = leftoverLines.count
@@ -314,6 +365,18 @@ final class BulkTextDraftRunner: ObservableObject {
                 print("[BulkTextDraftRunner] photo generation failed for \(entry.element.shortTitle): \(error)")
             }
         }
+        return out
+    }
+
+    /// One sheet per run listing every multi-item entry; resolved by `answerDecisions`.
+    private func askDecisions(_ asked: [ListingDecision]) async -> [Remaining] {
+        pendingDecisions = asked
+        let choices = await withCheckedContinuation { continuation in
+            decisionContinuation = continuation
+            showDecisionSheet = true
+        }
+        let out = BulkTextDraftMapper.pendingItems(for: pendingDecisions, choices: choices)
+        pendingDecisions = []
         return out
     }
 

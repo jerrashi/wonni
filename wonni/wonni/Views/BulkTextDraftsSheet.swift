@@ -46,7 +46,8 @@ struct BulkTextDraftsSheet: View {
     private static let placeholder = """
     Clearing out my Wii stuff, all complete in box. Super Smash Bros Brawl for $30, \
     Mario Strikers Charged, and Just Dance 4 + Just Dance 2015 together as a bundle. \
-    Also Link's Crossbow Training (in cardboard sleeve), 8 bucks.
+    Also Link's Crossbow Training (in cardboard sleeve), 8 bucks. \
+    iPhone case I never opened https://www.amazon.com/dp/B0CHX1W1XY
     """
 
     var body: some View {
@@ -119,7 +120,7 @@ struct BulkTextDraftsSheet: View {
             } header: {
                 Text("What are you selling?")
             } footer: {
-                Text("Write it however you like: a list, a paragraph, a pasted message or table. Each item becomes one draft, in the order you wrote them. Items you say are sold together become one bundle listing. Prices you include are kept; the rest are priced from eBay comps.")
+                Text("Write it however you like, and paste product links where you have them: Amazon, eBay, AliExpress, Weverse or any store page. Each item becomes one draft, in order. A link gives its draft the page's photos and what you paid; the asking price still comes from eBay comps. Items you say are sold together become one bundle listing.")
             }
 
             Section {
@@ -196,6 +197,10 @@ struct BulkTextDraftsSheet: View {
                 if summary.unpriced > 0 {
                     Label("\(summary.unpriced) \(summary.unpriced == 1 ? "has" : "have") no price yet", systemImage: "dollarsign.circle")
                         .foregroundStyle(.orange)
+                }
+                ForEach(Array(BulkTextDraftMapper.linkSummaryLines(summary.links).enumerated()), id: \.offset) { entry in
+                    Label(entry.element, systemImage: entry.element.contains("could not") ? "exclamationmark.triangle" : "link")
+                        .foregroundStyle(entry.element.contains("could not") ? .orange : .secondary)
                 }
                 if !text.isEmpty {
                     Label(summary.leftover > 0

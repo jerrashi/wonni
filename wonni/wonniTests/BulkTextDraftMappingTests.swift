@@ -24,7 +24,9 @@ final class BulkTextDraftMappingTests: XCTestCase {
         media: Media? = nil,
         photoMatch: PhotoMatch? = nil,
         photoCandidates: [PhotoCandidate]? = nil,
-        searchQuery: String? = nil
+        searchQuery: String? = nil,
+        sourceUrl: String? = nil,
+        sourcePrice: Double? = nil
     ) -> Draft {
         Draft(
             brand: "Nintendo",
@@ -53,11 +55,11 @@ final class BulkTextDraftMappingTests: XCTestCase {
             searchQuery: searchQuery,
             shortTitle: shortTitle,
             similarItemId: "v1|398452119919|0",
-            source: nil,
-            sourceId: nil,
-            sourcePrice: nil,
+            source: sourceUrl == nil ? nil : .amazon,
+            sourceId: sourceUrl == nil ? nil : "B0CHX1W1XY",
+            sourcePrice: sourcePrice,
             sourceText: sourceText,
-            sourceUrl: nil,
+            sourceUrl: sourceUrl,
             suggestedPrice: price,
             tags: ["wii", "nintendo"],
             title: title,
@@ -208,10 +210,27 @@ final class BulkTextDraftMappingTests: XCTestCase {
                 "componentQueries": [],
                 "userPrice": 10
             ]],
+            "needsDecision": [[
+                "sourceText": "amazing spider man issues 211-212",
+                "title": "Amazing Spider-Man #211-212",
+                "memberTitles": ["Amazing Spider-Man #211", "Amazing Spider-Man #212"],
+                "asBundle": ["title": "Amazing Spider-Man #211-212 Lot", "shortTitle": "ASM 211-212 Lot", "description": "d", "condition": "good", "tags": [], "isBundle": true, "bundleItems": ["Amazing Spider-Man #211", "Amazing Spider-Man #212"], "quantity": 1, "sourceText": "amazing spider man issues 211-212", "searchQuery": "amazing spider-man 211 212", "componentQueries": ["amazing spider-man 211", "amazing spider-man 212"]],
+                "asIndividual": [
+                    ["title": "Amazing Spider-Man #211", "shortTitle": "ASM #211", "description": "d", "condition": "good", "tags": [], "isBundle": false, "bundleItems": [], "quantity": 1, "sourceText": "amazing spider man issues 211-212", "searchQuery": "amazing spider-man 211", "componentQueries": []],
+                    ["title": "Amazing Spider-Man #212", "shortTitle": "ASM #212", "description": "d", "condition": "good", "tags": [], "isBundle": false, "bundleItems": [], "quantity": 1, "sourceText": "amazing spider man issues 211-212", "searchQuery": "amazing spider-man 212", "componentQueries": []]
+                ]
+            ]],
+            "links": [
+                ["url": "https://www.amazon.com/Spigen/dp/B0CHX1W1XY", "source": "amazon", "status": "ok", "title": "Spigen Case"],
+                ["url": "https://a.co/d/3xYz12Q", "source": "amazon", "status": "partial", "title": "Sony WH 1000XM5", "error": "Amazon returned a bot check; using the link's own words."]
+            ],
             "unparsedText": ""
         ]
         let data = try JSONSerialization.data(withJSONObject: payload)
-        let response = try JSONDecoder().decode(BulkDraftsFromTextResponse.self, from: data)
+        let response = try JSONDecoder().decode(ProposeResponse.self, from: data)
+        XCTAssertEqual(response.needsDecision?.count, 1)
+        XCTAssertEqual(response.needsDecision?[0].asIndividual.count, 2)
+        XCTAssertEqual(response.links?[1].status, .partial)
         XCTAssertEqual(response.drafts.count, 1)
         XCTAssertTrue(response.drafts[0].isBundle)
         XCTAssertEqual(response.drafts[0].bundleItems.count, 3)
@@ -324,5 +343,61 @@ final class BulkTextDraftMappingTests: XCTestCase {
         XCTAssertTrue(BulkTextDraftMapper.looksLikeBundle(title: "Lot of 5 PS2 games"))
         XCTAssertFalse(BulkTextDraftMapper.looksLikeBundle(title: "Camelot Wii CIB"))
         XCTAssertFalse(BulkTextDraftMapper.looksLikeBundle(title: "Super Smash Bros Brawl Wii CIB"))
+    }
+
+    // MARK: textToListings — links and multi-item entries
+
+    func testApplyStoresTheLinkProvenanceAndCost() {
+        let item = Item(firestoreListingId: "p9")
+        BulkTextDraftMapper.apply(proposal(price: 12, priceSource: .ai, sourceUrl: "https://www.amazon.com/Spigen/dp/B0CHX1W1XY", sourcePrice: 15.99), to: item, aiModel: "m", aiPromptVersion: "v")
+        XCTAssertEqual(item.sourceUrl, "https://www.amazon.com/Spigen/dp/B0CHX1W1XY")
+        XCTAssertEqual(item.sourceName, "amazon")
+        XCTAssertEqual(item.sourcePrice, 15.99)
+        XCTAssertEqual(item.aiSuggestedPrice, 12, "the cost never becomes the asking price")
+        XCTAssertNil(item.userEditedPrice)
+
+        let plain = Item(firestoreListingId: "p10")
+        BulkTextDraftMapper.apply(proposal(), to: plain, aiModel: "m", aiPromptVersion: "v")
+        XCTAssertNil(plain.sourceUrl)
+        XCTAssertNil(plain.sourcePrice)
+        XCTAssertNil(plain.sourceName)
+    }
+
+    private func pending(_ title: String, isBundle: Bool = false, userPrice: Double? = nil) -> Remaining {
+        Remaining(brand: nil, bundleItems: isBundle ? ["a", "b"] : [], category: nil, componentQueries: [], condition: .good, description: "d", heightIn: nil, included: nil, isBundle: isBundle, lengthIn: nil, links: nil, media: nil, members: nil, quantity: 1, searchQuery: title, shortTitle: title, source: nil, sourceText: "src", suggestedPrice: nil, tags: [], title: title, userPrice: userPrice, weightOz: nil, widthIn: nil)
+    }
+
+    func testDecisionAnswersBecomePendingItemsWithIndividualAsTheDefault() {
+        let comics = ListingDecision(asBundle: pending("ASM 211-213 Lot", isBundle: true, userPrice: 30), asIndividual: [pending("ASM #211"), pending("ASM #212"), pending("ASM #213")], memberTitles: ["ASM #211", "ASM #212", "ASM #213"], sourceText: "asm 211-213", title: "ASM 211-213")
+        let pokemon = ListingDecision(asBundle: pending("Pokemon Red Blue Yellow Lot", isBundle: true), asIndividual: [pending("Pokemon Red"), pending("Pokemon Blue"), pending("Pokemon Yellow")], memberTitles: ["Red", "Blue", "Yellow"], sourceText: "red blue yellow", title: "Pokemon RBY")
+
+        let defaults = BulkTextDraftMapper.pendingItems(for: [comics, pokemon], choices: [:])
+        XCTAssertEqual(defaults.map(\.title), ["ASM #211", "ASM #212", "ASM #213", "Pokemon Red", "Pokemon Blue", "Pokemon Yellow"])
+
+        let mixed = BulkTextDraftMapper.pendingItems(for: [comics, pokemon], choices: [1: .bundle])
+        XCTAssertEqual(mixed.map(\.title), ["ASM #211", "ASM #212", "ASM #213", "Pokemon Red Blue Yellow Lot"])
+        XCTAssertTrue(mixed[3].isBundle)
+
+        let bundles = BulkTextDraftMapper.pendingItems(for: [comics], choices: [0: .bundle])
+        XCTAssertEqual(bundles.count, 1)
+        XCTAssertEqual(bundles[0].userPrice, 30, "the price the user wrote for the whole entry stays on the bundle")
+
+        XCTAssertEqual(BulkTextDecisionSheet.shortMember("Amazing Spider-Man #211"), "#211")
+        XCTAssertEqual(BulkTextDecisionSheet.shortMember("Pokemon Blue"), "Pokemon Blue")
+    }
+
+    func testLinkSummaryLinesGroupReadLinksAndNameTheFailedOnes() {
+        XCTAssertEqual(BulkTextDraftMapper.linkSummaryLines([]), [])
+        let lines = BulkTextDraftMapper.linkSummaryLines([
+            LinkOutcome(error: nil, source: .amazon, status: .ok, title: "Spigen", url: "https://www.amazon.com/Spigen/dp/B0CHX1W1XY"),
+            LinkOutcome(error: nil, source: .ebay, status: .ok, title: "Pokemon Blue", url: "https://www.ebay.com/itm/137561869182"),
+            LinkOutcome(error: nil, source: .amazon, status: .ok, title: "Sony", url: "https://www.amazon.com/dp/B09XS7JWHH"),
+            LinkOutcome(error: "Amazon returned a bot check; using the link's own words.", source: .amazon, status: .partial, title: "Sony WH 1000XM5", url: "https://a.co/d/3xYz12Q"),
+            LinkOutcome(error: "The page returned 404.", source: .web, status: .failed, title: nil, url: "https://example.com/gone"),
+        ])
+        XCTAssertEqual(lines.count, 3)
+        XCTAssertEqual(lines[0], "3 links read (2 from Amazon, 1 from eBay). Their photos and prices paid are on the drafts.")
+        XCTAssertTrue(lines[1].hasPrefix("a.co/d/3xYz12Q could not be fully read (Amazon showed a bot check)"), lines[1])
+        XCTAssertEqual(lines[2], "example.com/gone could not be read: The page returned 404.")
     }
 }
