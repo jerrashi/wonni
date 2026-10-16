@@ -18,6 +18,9 @@ struct BackendContracts: Codable, Sendable {
     let applyCrossPostRulesResponse: ApplyCrossPostRulesResponse?
     let bulkDraftsFromTextRequest: BulkDraftsFromTextRequest?
     let bulkDraftsFromTextResponse: BulkDraftsFromTextResponse?
+    let commitError: CommitError?
+    let commitListingProposalsRequest: CommitListingProposalsRequest?
+    let commitListingProposalsResponse: CommitListingProposalsResponse?
     let decrementAndCascadeRequest: DecrementAndCascadeRequest?
     let decrementAndCascadeResponse: DecrementAndCascadeResponse?
     let detectMercariPullSyncDiffRequest: DetectMercariPullSyncDiffRequest?
@@ -118,6 +121,9 @@ struct BackendContracts: Codable, Sendable {
         case applyCrossPostRulesResponse = "ApplyCrossPostRulesResponse"
         case bulkDraftsFromTextRequest = "BulkDraftsFromTextRequest"
         case bulkDraftsFromTextResponse = "BulkDraftsFromTextResponse"
+        case commitError = "CommitError"
+        case commitListingProposalsRequest = "CommitListingProposalsRequest"
+        case commitListingProposalsResponse = "CommitListingProposalsResponse"
         case decrementAndCascadeRequest = "DecrementAndCascadeRequest"
         case decrementAndCascadeResponse = "DecrementAndCascadeResponse"
         case detectMercariPullSyncDiffRequest = "DetectMercariPullSyncDiffRequest"
@@ -238,6 +244,9 @@ extension BackendContracts {
         applyCrossPostRulesResponse: ApplyCrossPostRulesResponse?? = nil,
         bulkDraftsFromTextRequest: BulkDraftsFromTextRequest?? = nil,
         bulkDraftsFromTextResponse: BulkDraftsFromTextResponse?? = nil,
+        commitError: CommitError?? = nil,
+        commitListingProposalsRequest: CommitListingProposalsRequest?? = nil,
+        commitListingProposalsResponse: CommitListingProposalsResponse?? = nil,
         decrementAndCascadeRequest: DecrementAndCascadeRequest?? = nil,
         decrementAndCascadeResponse: DecrementAndCascadeResponse?? = nil,
         detectMercariPullSyncDiffRequest: DetectMercariPullSyncDiffRequest?? = nil,
@@ -338,6 +347,9 @@ extension BackendContracts {
             applyCrossPostRulesResponse: applyCrossPostRulesResponse ?? self.applyCrossPostRulesResponse,
             bulkDraftsFromTextRequest: bulkDraftsFromTextRequest ?? self.bulkDraftsFromTextRequest,
             bulkDraftsFromTextResponse: bulkDraftsFromTextResponse ?? self.bulkDraftsFromTextResponse,
+            commitError: commitError ?? self.commitError,
+            commitListingProposalsRequest: commitListingProposalsRequest ?? self.commitListingProposalsRequest,
+            commitListingProposalsResponse: commitListingProposalsResponse ?? self.commitListingProposalsResponse,
             decrementAndCascadeRequest: decrementAndCascadeRequest ?? self.decrementAndCascadeRequest,
             decrementAndCascadeResponse: decrementAndCascadeResponse ?? self.decrementAndCascadeResponse,
             detectMercariPullSyncDiffRequest: detectMercariPullSyncDiffRequest ?? self.detectMercariPullSyncDiffRequest,
@@ -1495,6 +1507,164 @@ extension BulkDraftsFromTextResponseNeedsDecision {
             memberTitles: memberTitles ?? self.memberTitles,
             sourceText: sourceText ?? self.sourceText,
             title: title ?? self.title
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - CommitError
+struct CommitError: Codable, Equatable, Sendable {
+    let error: String
+    let title: String
+
+    enum CodingKeys: String, CodingKey {
+        case error = "error"
+        case title = "title"
+    }
+}
+
+// MARK: CommitError convenience initializers and mutators
+
+extension CommitError {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(CommitError.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        error: String? = nil,
+        title: String? = nil
+    ) -> CommitError {
+        return CommitError(
+            error: error ?? self.error,
+            title: title ?? self.title
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - CommitListingProposalsRequest
+struct CommitListingProposalsRequest: Codable, Equatable, Sendable {
+    let proposals: [DraftProposal]
+
+    enum CodingKeys: String, CodingKey {
+        case proposals = "proposals"
+    }
+}
+
+// MARK: CommitListingProposalsRequest convenience initializers and mutators
+
+extension CommitListingProposalsRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(CommitListingProposalsRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        proposals: [DraftProposal]? = nil
+    ) -> CommitListingProposalsRequest {
+        return CommitListingProposalsRequest(
+            proposals: proposals ?? self.proposals
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - CommitListingProposalsResponse
+struct CommitListingProposalsResponse: Codable, Equatable, Sendable {
+    let errors: [CommitError]
+    let productIds: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case errors = "errors"
+        case productIds = "productIds"
+    }
+}
+
+// MARK: CommitListingProposalsResponse convenience initializers and mutators
+
+extension CommitListingProposalsResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(CommitListingProposalsResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        errors: [CommitError]? = nil,
+        productIds: [String]? = nil
+    ) -> CommitListingProposalsResponse {
+        return CommitListingProposalsResponse(
+            errors: errors ?? self.errors,
+            productIds: productIds ?? self.productIds
         )
     }
 

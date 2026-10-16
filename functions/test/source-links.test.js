@@ -314,3 +314,27 @@ test("pinnedFetch: connects through a lookup that returns only the validated add
   await new Promise((done) => seen.lookup("example.com", {}, (err) => { assert.match(err.message, /No validated address/); done(); }));
   assert.equal(none.ok, true);
 });
+
+test("fetchBytes: follows a checked redirect, refuses oversize and non-public hosts, returns buffer + type", async () => {
+  const { fetchBytes } = require("../source_links");
+  const bytes = new TextEncoder().encode("JPEGDATA");
+  const routes = {
+    "https://i.ebayimg.com/a.jpg": { status: 302, location: "https://i.ebayimg.com/b.jpg" },
+    "https://i.ebayimg.com/b.jpg": { status: 200, type: "image/jpeg", body: bytes },
+    "https://i.ebayimg.com/huge.jpg": { status: 200, type: "image/jpeg", length: String(50 * 1024 * 1024), body: bytes },
+  };
+  const fetchImpl = async (url) => {
+    const r = routes[url] || { status: 404 };
+    return {
+      ok: r.status === 200, status: r.status, url,
+      headers: { get: (h) => ({ location: r.location, "content-type": r.type, "content-length": r.length })[h] ?? null },
+      body: r.body ? { getReader: () => { let done = false; return { read: async () => done ? { done: true } : (done = true, { value: r.body, done: false }), cancel: async () => {} }; } } : undefined,
+    };
+  };
+  const got = await fetchBytes("https://i.ebayimg.com/a.jpg", { fetchImpl, lookup: publicLookup });
+  assert.equal(got.contentType, "image/jpeg");
+  assert.equal(got.buffer.toString(), "JPEGDATA");
+  await assert.rejects(fetchBytes("https://i.ebayimg.com/huge.jpg", { fetchImpl, lookup: publicLookup }), /too large/);
+  await assert.rejects(fetchBytes("https://i.ebayimg.com/missing.jpg", { fetchImpl, lookup: publicLookup }), /404/);
+  await assert.rejects(fetchBytes("https://169.254.169.254/x.jpg", { fetchImpl, lookup: publicLookup }), /not a public website/);
+});

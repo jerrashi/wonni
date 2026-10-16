@@ -43,7 +43,9 @@ if (import.meta.env.VITE_USE_EMULATORS === "1") {
   connectStorageEmulator(storage, "127.0.0.1", 9199);
 }
 
-export const callFunction = (name) => httpsCallable(functions, name);
+// `options` passes through to httpsCallable (e.g. { timeout: 540000 } for the
+// long text-to-listings calls; the default is 70 s).
+export const callFunction = (name, options) => httpsCallable(functions, name, options);
 
 // Upload a canvas Blob to Firebase Storage and return its public
 // storage.googleapis.com URL — the same host every server-side (AliExpress/

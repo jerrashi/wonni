@@ -279,6 +279,62 @@ async function readCapped(res) {
 }
 
 /**
+ * GET a binary resource (an image to re-host) from a public https URL, with the
+ * same host checks and manual redirects as `fetchHtml`, reading at most
+ * `maxBytes`. Returns { buffer, contentType }. Used by commit_listing_proposals.
+ */
+async function fetchBytes(url, { maxBytes = 10 * 1024 * 1024, fetchImpl = pinnedFetch, lookup = undefined } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    let current = url;
+    for (let hop = 0; ; hop++) {
+      const { addresses } = await assertPublicUrl(current, lookup);
+      const res = await fetchImpl(current, {
+        redirect: "manual",
+        pinnedAddresses: addresses,
+        signal: controller.signal,
+        headers: { "User-Agent": USER_AGENT, "Accept": "image/*,*/*;q=0.8" },
+      });
+      const location = res.status >= 300 && res.status < 400 ? res.headers?.get?.("location") : null;
+      if (location) {
+        if (hop >= MAX_REDIRECTS) throw new Error("Too many redirects.");
+        current = new URL(location, current).href;
+        continue;
+      }
+      if (!res.ok) throw new Error(`Failed to download image (${res.status})`);
+      const declared = Number(res.headers?.get?.("content-length"));
+      if (Number.isFinite(declared) && declared > maxBytes) throw new Error("Image too large");
+      const contentType = String(res.headers?.get?.("content-type") || "").split(";")[0].trim().toLowerCase();
+      const chunks = [];
+      let size = 0;
+      if (res.body && typeof res.body.getReader === "function") {
+        const reader = res.body.getReader();
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            size += value.byteLength;
+            if (size > maxBytes) throw new Error("Image too large");
+            chunks.push(Buffer.from(value));
+          }
+        } finally {
+          reader.cancel().catch(() => {});
+        }
+      } else {
+        const text = await res.arrayBuffer?.();
+        if (!text) throw new Error("No body");
+        if (text.byteLength > maxBytes) throw new Error("Image too large");
+        chunks.push(Buffer.from(text));
+      }
+      return { buffer: Buffer.concat(chunks), contentType };
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * GET a page as a browser would. Redirects are followed by hand so every hop
  * is checked by `assertPublicUrl` (a public URL must not bounce us to the
  * metadata server). `fetchImpl` / `lookup` are injectable for tests.
@@ -548,5 +604,6 @@ module.exports = {
   resolveLinks,
   isPublicAddress,
   assertPublicUrl,
+  fetchBytes,
   _internal: { fetchHtml, pinnedFetch, metaContent, decodeEntities, parsePriceText },
 };

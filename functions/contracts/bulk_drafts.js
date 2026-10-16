@@ -305,8 +305,23 @@ const GenerateListingPhotoResponseSchema = z.object({
   url: z.string().nullable(),
 });
 
+/** The web's commit step: reviewed proposals → products/{id} docs, photos
+ *  re-hosted. iOS never calls this (it creates drafts on the device). */
+const CommitListingProposalsRequestSchema = z.object({
+  proposals: z.array(DraftProposalSchema).min(1).max(60),
+});
+
+const CommitErrorSchema = z.object({ title: z.string(), error: z.string() });
+
+const CommitListingProposalsResponseSchema = z.object({
+  /** In the proposals' order, minus the ones in `errors`. */
+  productIds: z.array(z.string()),
+  errors: z.array(CommitErrorSchema),
+});
+
 module.exports = {
   DraftProposalSchema,
+  CommitErrorSchema,
   PendingItemSchema,
   PhotoCandidateSchema,
   SourceProductSchema,
@@ -335,6 +350,12 @@ module.exports = {
       summary: "Same function as textToListings under its original name (kept for iOS builds in the field).",
       request: BulkDraftsFromTextRequestSchema,
       response: BulkDraftsFromTextResponseSchema,
+    },
+    {
+      name: "commitListingProposals",
+      summary: "Web commit step for textToListings: reviewed proposals become products/{id} draft docs with their photos re-hosted into our bucket.",
+      request: CommitListingProposalsRequestSchema,
+      response: CommitListingProposalsResponseSchema,
     },
     {
       name: "generateListingPhoto",

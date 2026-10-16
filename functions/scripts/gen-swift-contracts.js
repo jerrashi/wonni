@@ -33,6 +33,7 @@ const {
   PendingItemSchema,
   SourceProductSchema,
   DraftProposalSchema,
+  CommitErrorSchema,
 } = require("../contracts");
 
 const OUT_DIR = path.join(__dirname, "..", "contracts", "generated");
@@ -130,6 +131,7 @@ const REQUEST_REFS = {
   recordSale: { SaleCarrier: CarrierSchema },
   textToListings: { PendingItem: PendingItemSchema, SourceProduct: SourceProductSchema },
   bulkDraftsFromText: { PendingItem: PendingItemSchema, SourceProduct: SourceProductSchema },
+  commitListingProposals: { DraftProposal: DraftProposalSchema, PhotoCandidate: PhotoCandidateSchema },
   recordMercariSalesBatch: { MercariBatchRow: MercariRowLooseSchema },
 };
 const RESPONSE_REFS = {
@@ -142,6 +144,8 @@ const RESPONSE_REFS = {
   textToListings: { DraftProposal: DraftProposalSchema, PhotoCandidate: PhotoCandidateSchema, PendingItem: PendingItemSchema, SourceProduct: SourceProductSchema },
   bulkDraftsFromText: { DraftProposal: DraftProposalSchema, PhotoCandidate: PhotoCandidateSchema, PendingItem: PendingItemSchema, SourceProduct: SourceProductSchema },
   draftPhotoCandidates: { PhotoCandidate: PhotoCandidateSchema },
+  // "errors" would otherwise synthesize a Swift struct named `Error`.
+  commitListingProposals: { CommitError: CommitErrorSchema },
 };
 
 for (const c of ALL) {

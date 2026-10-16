@@ -102,6 +102,7 @@ module.exports = {
   PhotoCandidateSchema: bulkDrafts.PhotoCandidateSchema,
   PendingItemSchema: bulkDrafts.PendingItemSchema,
   SourceProductSchema: bulkDrafts.SourceProductSchema,
+  CommitErrorSchema: bulkDrafts.CommitErrorSchema,
   ALL,
   RequestSchemas,
   ResponseSchemas,

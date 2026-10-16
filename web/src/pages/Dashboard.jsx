@@ -9,6 +9,7 @@ import PostModal from "../components/PostModal";
 import BulkPostModal from "../components/BulkPostModal";
 import BulkTagModal from "../components/BulkTagModal";
 import WeverseShopImportModal from "../components/WeverseShopImportModal";
+import TextToListingsModal from "../components/TextToListingsModal";
 import OverflowMenu from "../components/OverflowMenu";
 import { getPlatformListingUrl } from "../lib/platformLinks";
 import { productCost, suggestedListingPrice } from "../lib/pricing";
@@ -172,43 +173,53 @@ function ListModal({ product, onClose, onListed }) {
 // ── Import bar ────────────────────────────────────────────────────────────────
 
 function ImportBar({ onImported }) {
-  const [urlText, setUrlText] = useState("");
-  const [isBulk, setIsBulk] = useState(false);
+  const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [shopModalUrl, setShopModalUrl] = useState(null);
+  const [textModal, setTextModal] = useState(null);
 
-  const isShopSectionUrl = urlText.includes("shop.weverse.io") && !/\/sales\/\d+/.test(urlText);
+  // One box for everything (2026-10-15): Weverse / AliExpress product links keep
+  // their importers (variants, duplicate checks); a Weverse shop or artist
+  // section link opens its preview; anything else — plain text, Amazon / eBay /
+  // other links, or a mix — goes to textToListings (TextToListingsModal).
+  const lines = text.split(/\n+/).map((s) => s.trim()).filter(Boolean);
+  const urls = text.match(/https?:\/\/[^\s<>"'`\])}]+/gi) || [];
+  const isUrlLine = (line) => /^https?:\/\/\S+$/i.test(line);
+  const isWeverseSale = (u) => u.includes("shop.weverse.io") && /\/sales\/\d+/.test(u);
+  const isAliexpress = (u) => /aliexpress\.(com|us|ru)\//i.test(u) && (/\/item\/\d+/.test(u) || /[?&]id=\d+/.test(u));
+  const isShopSectionUrl = lines.length === 1 && isUrlLine(lines[0]) && lines[0].includes("shop.weverse.io") && !/\/sales\/\d+/.test(lines[0]);
+  const onlyImporterLinks = lines.length > 0 && lines.every((l) => isUrlLine(l) && (isWeverseSale(l) || isAliexpress(l)));
 
-  function handlePreviewShopSection() {
-    const url = urlText.trim();
-    if (!url) return;
-    setShopModalUrl(url);
-  }
+  const hint = isShopSectionUrl
+    ? "That's a shop/artist section — preview its items before importing"
+    : onlyImporterLinks
+      ? `${lines.length} ${lines.length === 1 ? "product link" : "product links"} · imports with variants`
+      : lines.length
+        ? `${lines.length} line${lines.length === 1 ? "" : "s"}${urls.length ? ` · ${urls.length} link${urls.length === 1 ? "" : "s"}` : ""}`
+        : "Paste product links or describe what you're selling. Weverse and AliExpress links import as before; Amazon, eBay and other links, and plain text, become drafts.";
 
   async function handleImport() {
-    const rawLines = urlText.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
-    if (!rawLines.length) return;
+    if (!lines.length) return;
+    if (isShopSectionUrl) { setShopModalUrl(lines[0]); return; }
+    if (!onlyImporterLinks) { setTextModal(text); return; }
 
     setLoading(true);
     setError("");
     setStatus("Importing…");
-
     try {
-      if (rawLines.length === 1) {
-        const url = rawLines[0];
+      if (lines.length === 1) {
+        const url = lines[0];
         const fn = url.includes("shop.weverse.io") ? "weverseImportProduct" : "aliexpressImportProduct";
         const result = await callFunction(fn)({ productUrl: url });
-        setUrlText("");
+        setText("");
         setStatus("");
         onImported?.(result.data.productId);
-      } else {
-        // Multi-URL batch import via weverseBulkImportProducts (Weverse URLs only)
-        const items = rawLines.map((url) => ({ productUrl: url }));
-        const response = await callFunction("weverseBulkImportProducts")({ items });
+      } else if (lines.every(isWeverseSale)) {
+        const response = await callFunction("weverseBulkImportProducts")({ items: lines.map((url) => ({ productUrl: url })) });
         const res = response?.data;
-        setUrlText("");
+        setText("");
         const errors = res?.errors ?? [];
         setStatus(`Bulk import complete! ${res?.importedCount ?? 0} imported, ${res?.existingCount ?? 0} already existing.`);
         if (errors.length) {
@@ -216,6 +227,23 @@ function ImportBar({ onImported }) {
           setError(`${errors.length} item${errors.length === 1 ? "" : "s"} failed — ${preview}${errors.length > 3 ? "…" : ""}`);
         }
         onImported?.(res?.productIds?.[0]);
+      } else {
+        // Several AliExpress links (or a mix): one importer call each, in order.
+        let imported = 0;
+        const failures = [];
+        for (const url of lines) {
+          try {
+            const fn = url.includes("shop.weverse.io") ? "weverseImportProduct" : "aliexpressImportProduct";
+            await callFunction(fn)({ productUrl: url });
+            imported++;
+          } catch (e) {
+            failures.push(`${url}: ${e.message ?? "failed"}`);
+          }
+        }
+        setText("");
+        setStatus(`${imported} imported.`);
+        if (failures.length) setError(failures.slice(0, 3).join("; "));
+        onImported?.();
       }
     } catch (e) {
       setError(e.message ?? "Import failed");
@@ -227,48 +255,24 @@ function ImportBar({ onImported }) {
 
   return (
     <div className="card" style={{ marginBottom: 24 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <div style={{ fontSize: 13, color: "var(--muted)" }}>
-          {isBulk
-            ? "Paste multiple Weverse Shop URLs (one per line)"
-            : isShopSectionUrl
-              ? "That's a shop/artist section — preview its items before importing"
-              : "Paste a Weverse Shop or AliExpress product URL, or a Weverse shop/artist section URL"}
-        </div>
-        <button
-          className="btn btn-ghost"
-          style={{ fontSize: 12, padding: "2px 8px" }}
-          onClick={() => { setIsBulk(!isBulk); setError(""); setStatus(""); }}
-        >
-          {isBulk ? "Switch to single URL" : "Paste multiple URLs"}
-        </button>
-      </div>
+      <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 8 }}>{hint}</div>
 
-      <div className="input-group" style={{ flexDirection: isBulk ? "column" : "row", gap: 8 }}>
-        {isBulk ? (
-          <textarea
-            className="input"
-            rows={4}
-            placeholder="https://shop.weverse.io/en/shop/USD/artists/1/sales/101&#10;https://shop.weverse.io/en/shop/USD/artists/1/sales/102"
-            value={urlText}
-            onChange={(e) => setUrlText(e.target.value)}
-          />
-        ) : (
-          <input
-            className="input"
-            placeholder="https://shop.weverse.io/en/shop/USD/artists/.../sales/... or /artists/.../category/..."
-            value={urlText}
-            onChange={(e) => setUrlText(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && (isShopSectionUrl ? handlePreviewShopSection() : handleImport())}
-          />
-        )}
+      <div className="input-group" style={{ flexDirection: "column", gap: 8 }}>
+        <textarea
+          className="input"
+          rows={lines.length > 1 || urls.length ? 4 : 2}
+          placeholder={"iphone 18 pro case https://www.amazon.com/dp/B0CHX1W1XY\namazing spider man issues 211-215, bagged and boarded\nhttps://shop.weverse.io/en/shop/USD/artists/.../sales/..."}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleImport(); }}
+        />
         <button
           className="btn btn-primary"
-          style={{ alignSelf: isBulk ? "flex-end" : "auto" }}
-          onClick={isBulk ? handleImport : isShopSectionUrl ? handlePreviewShopSection : handleImport}
-          disabled={loading || !urlText.trim()}
+          style={{ alignSelf: "flex-end" }}
+          onClick={handleImport}
+          disabled={loading || !text.trim()}
         >
-          {loading ? "Importing…" : isBulk ? "Import All URLs" : isShopSectionUrl ? "Preview Items" : "Import"}
+          {loading ? "Importing…" : isShopSectionUrl ? "Preview Items" : "Import"}
         </button>
       </div>
 
@@ -280,9 +284,16 @@ function ImportBar({ onImported }) {
           shopUrl={shopModalUrl}
           onClose={() => setShopModalUrl(null)}
           onImported={(productIds) => {
-            setUrlText("");
+            setText("");
             productIds.forEach((id) => onImported?.(id));
           }}
+        />
+      )}
+      {textModal != null && (
+        <TextToListingsModal
+          text={textModal}
+          onClose={() => setTextModal(null)}
+          onCreated={(ids) => { setText(""); ids.forEach((id) => onImported?.(id)); }}
         />
       )}
     </div>

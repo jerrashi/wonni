@@ -274,6 +274,15 @@
     "BulkDraftsFromTextResponse": {
       "$ref": "#/definitions/BulkDraftsFromTextResponse"
     },
+    "CommitListingProposalsRequest": {
+      "$ref": "#/definitions/CommitListingProposalsRequest"
+    },
+    "CommitListingProposalsResponse": {
+      "$ref": "#/definitions/CommitListingProposalsResponse"
+    },
+    "CommitError": {
+      "$ref": "#/definitions/CommitError"
+    },
     "GenerateListingPhotoRequest": {
       "$ref": "#/definitions/GenerateListingPhotoRequest"
     },
@@ -3883,6 +3892,61 @@
         "unparsedText",
         "aiModel",
         "aiPromptVersion"
+      ],
+      "additionalProperties": false
+    },
+    "CommitListingProposalsRequest": {
+      "type": "object",
+      "properties": {
+        "proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DraftProposal"
+          },
+          "minItems": 1,
+          "maxItems": 60
+        }
+      },
+      "required": [
+        "proposals"
+      ],
+      "additionalProperties": false
+    },
+    "CommitListingProposalsResponse": {
+      "type": "object",
+      "properties": {
+        "productIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CommitError"
+          }
+        }
+      },
+      "required": [
+        "productIds",
+        "errors"
+      ],
+      "additionalProperties": false
+    },
+    "CommitError": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "error"
       ],
       "additionalProperties": false
     },
