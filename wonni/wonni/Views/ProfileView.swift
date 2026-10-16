@@ -158,7 +158,7 @@ struct ProfileView: View {
             }
             .sheet(isPresented: $showBulkPost) {
                 let selectedListingsArray = listings.filter { selectedListings.contains($0.id ?? "") }
-                BulkCrossPostSheet(listingsToPost: selectedListingsArray) { platforms in
+                CrossPostSheet(candidates: selectedListingsArray.map(CrossPostCandidate.init(listing:)), mode: .crossPost) { platforms in
                     bulkPostListings(platforms: platforms)
                 }
                 .presentationDetents([.fraction(0.75), .large])
@@ -821,6 +821,9 @@ struct ProfileView: View {
             guard let id = listing.id else { continue }
             
             for platform in platforms {
+                // The sheet already told the user these are skipped; never post a
+                // listing to a platform it is on (or heading to) already.
+                if CrossPostPlan.countsAsPosted(listing.crossPostStatus?[platform]) { continue }
                 if platform == "mercari" || platform == "facebook" {
                     webJobs.append(CrossPostJob(
                         platform: platform,
@@ -3071,155 +3074,6 @@ struct PlatformStatusBadge: View {
     }
 }
 
-struct BulkCrossPostSheet: View {
-    let listingsToPost: [UserListing]
-    let onConfirm: (Set<String>) -> Void
-    
-    @Environment(\.dismiss) private var dismiss
-    @StateObject private var integrationRepo = IntegrationRepository.shared
-    @State private var selectedPlatforms: Set<String> = []
-    @State private var showAddressSetupSheet = false
-    @State private var platformToEnableAfterAddressSetup = ""
-    /// Platforms whose toggle the user has explicitly touched. The async `.task`
-    /// default-selection must never overwrite an explicit user choice made while
-    /// integrations were still loading (github issue #46 — same race as
-    /// PublishConfirmationSheet, this sheet never got the fix from #8).
-    @State private var touchedPlatforms: Set<String> = []
-    @State private var isLoadingIntegrations = true
-    @State private var showEmptyPlatformsConfirm = false
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section(header: Text("Cross-Posting \(listingsToPost.count) Listing(s)")) {
-                    ForEach(listingsToPost) { listing in
-                        HStack {
-                            Text(listing.customTitle ?? "Untitled")
-                                .font(.subheadline)
-                                .lineLimit(1)
-                            Spacer()
-                            if let price = listing.price {
-                                Text(String(format: "$%.2f", price))
-                                    .font(.subheadline.weight(.semibold))
-                            }
-                        }
-                    }
-                }
-                
-                Section(header: Text("Cross-Post Platforms")) {
-                    if integrationRepo.integrations.isEmpty {
-                        Text("No integrations available. Set them up in Profile Settings.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(integrationRepo.integrations) { integration in
-                            let isAPI = integration.platform == "ebay" || integration.platform == "etsy"
-                            Toggle(isOn: Binding(
-                                get: { selectedPlatforms.contains(integration.platform) },
-                                set: { isSelected in
-                                    touchedPlatforms.insert(integration.platform)
-                                    if isSelected {
-                                        if isAPI && SellingSettingsRepository.shared.settings?.defaultLocation.postalCode.isEmpty != false {
-                                            platformToEnableAfterAddressSetup = integration.platform
-                                            showAddressSetupSheet = true
-                                        } else {
-                                            selectedPlatforms.insert(integration.platform)
-                                        }
-                                    } else {
-                                        selectedPlatforms.remove(integration.platform)
-                                    }
-                                }
-                            )) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack {
-                                        Text(platformDisplayName(integration.platform))
-                                        if !isAPI {
-                                            Text("Autofill")
-                                                .font(.system(size: 10, weight: .bold))
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 2)
-                                                .background(Color.purple.opacity(0.12))
-                                                .foregroundStyle(.purple)
-                                                .clipShape(Capsule())
-                                        }
-                                    }
-                                    if isAPI {
-                                        Text(integration.isConnected ? "Connected as: \(integration.connectedUsername ?? "Unknown")" : "Not connected (Link in settings)")
-                                            .font(.caption)
-                                            .foregroundStyle(integration.isConnected ? .green : .secondary)
-                                    } else {
-                                        Text("Launches browser autofill")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                            .disabled(isAPI && !integration.isConnected)
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Cross-Post")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    if isLoadingIntegrations {
-                        ProgressView()
-                    } else {
-                        Button("Post") {
-                            if selectedPlatforms.isEmpty {
-                                showEmptyPlatformsConfirm = true
-                            } else {
-                                onConfirm(selectedPlatforms)
-                                dismiss()
-                            }
-                        }
-                        .fontWeight(.bold)
-                    }
-                }
-            }
-            .task {
-                await integrationRepo.loadIntegrations()
-                await SellingSettingsRepository.shared.loadSettings()
-                // Default-select connected API platforms, but only those the user hasn't
-                // explicitly toggled while the async load was in flight — a blanket
-                // reassignment here used to wipe the user's in-flight choices.
-                for platform in integrationRepo.integrations.filter({ $0.isConnected }).map({ $0.platform })
-                where !touchedPlatforms.contains(platform) {
-                    selectedPlatforms.insert(platform)
-                }
-                isLoadingIntegrations = false
-            }
-            .sheet(isPresented: $showAddressSetupSheet) {
-                AddressSetupSheet {
-                    if !platformToEnableAfterAddressSetup.isEmpty {
-                        selectedPlatforms.insert(platformToEnableAfterAddressSetup)
-                        platformToEnableAfterAddressSetup = ""
-                    }
-                }
-            }
-            // These listings are already live on Wonni, so an empty selection here isn't a
-            // meaningful "Wonni only" action like in PublishConfirmationSheet — it's just a
-            // no-op. Tell the user instead of silently dismissing.
-            .alert("Select at least one platform to cross-post to.", isPresented: $showEmptyPlatformsConfirm) {
-                Button("OK", role: .cancel) {}
-            }
-        }
-    }
-    
-    private func platformDisplayName(_ platform: String) -> String {
-        switch platform {
-        case "ebay": return "eBay"
-        case "etsy": return "Etsy"
-        case "mercari": return "Mercari"
-        case "facebook": return "Facebook Marketplace"
-        default: return platform.capitalized
-        }
-    }
-}
 
 struct SellingSettings: Codable {
     struct DefaultLocation: Codable {

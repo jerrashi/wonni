@@ -20,6 +20,7 @@
 		7C1F0A2B9D3E4F50617283A0 /* CrossPostDefaultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1F0A2B9D3E4F50617283A1 /* CrossPostDefaultsView.swift */; };
 		7C1F0A2B9D3E4F50617283B0 /* DraftPhotoChooserSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1F0A2B9D3E4F50617283B1 /* DraftPhotoChooserSheet.swift */; };
 		7C1F0A2B9D3E4F50617283C0 /* BulkTextDecisionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1F0A2B9D3E4F50617283C1 /* BulkTextDecisionSheet.swift */; };
+		7C1F0A2B9D3E4F50617283D0 /* CrossPostSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1F0A2B9D3E4F50617283D1 /* CrossPostSheet.swift */; };
 		D7A10001C0FFEE000000000B /* BulkTextDraftService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE000000000C /* BulkTextDraftService.swift */; };
 		7C1F0A2B9D3E4F5061728398 /* BulkTextDraftRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1F0A2B9D3E4F5061728399 /* BulkTextDraftRunner.swift */; };
 		D7A10001C0FFEE0000000011 /* CrossPostRunStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE0000000012 /* CrossPostRunStore.swift */; };
@@ -104,6 +105,7 @@
 		769E7567D40DDE338B1D38BD /* ProductRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0390FC2D4AC60A1E828D9ADE /* ProductRepository.swift */; };
 		7B6ADB7B0457F8278D2780CF /* WeverseAddressSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED9650D738F4AD52EEDDC8BF /* WeverseAddressSheet.swift */; };
 		8E4A3B02D5F9C6171B2E0A34 /* DraftAIProcessingPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D3F2A91C4E8B5060A1D9F23 /* DraftAIProcessingPolicyTests.swift */; };
+		8E4A3B02D5F9C6171B2E0B34 /* CrossPostPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D3F2A91C4E8B5060A1D9F33 /* CrossPostPlanTests.swift */; };
 		8F58F429D31BD8040DE57F5C /* SalesInsightsViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F58C9187109B0A023CF5811 /* SalesInsightsViews.swift */; };
 		9564C276DF5F092402E15D59 /* VariantsEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FE9929091CAFA925F82B309 /* VariantsEditorView.swift */; };
 		9944CB339CA5802F7C51CEEB /* URLExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D58F95FAA23371A58634E74E /* URLExtractor.swift */; };
@@ -226,6 +228,7 @@
 		76BC65B5E09E487A41EA3CCE /* PendingMercariSale.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PendingMercariSale.swift; sourceTree = "<group>"; };
 		7762ADBFA03A7B250644DDDF /* VariantMercariBatchPostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VariantMercariBatchPostView.swift; sourceTree = "<group>"; };
 		7D3F2A91C4E8B5060A1D9F23 /* DraftAIProcessingPolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DraftAIProcessingPolicyTests.swift; sourceTree = "<group>"; };
+		7D3F2A91C4E8B5060A1D9F33 /* CrossPostPlanTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CrossPostPlanTests.swift; sourceTree = "<group>"; };
 		8F58C9187109B0A023CF5811 /* SalesInsightsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalesInsightsViews.swift; sourceTree = "<group>"; };
 		93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalesDashboardView.swift; sourceTree = "<group>"; };
 		946CBD23F95846D07C59FD39 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
@@ -244,6 +247,7 @@
 		7C1F0A2B9D3E4F50617283A1 /* CrossPostDefaultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossPostDefaultsView.swift; sourceTree = "<group>"; };
 		7C1F0A2B9D3E4F50617283B1 /* DraftPhotoChooserSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftPhotoChooserSheet.swift; sourceTree = "<group>"; };
 		7C1F0A2B9D3E4F50617283C1 /* BulkTextDecisionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkTextDecisionSheet.swift; sourceTree = "<group>"; };
+		7C1F0A2B9D3E4F50617283D1 /* CrossPostSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossPostSheet.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE000000000C /* BulkTextDraftService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkTextDraftService.swift; sourceTree = "<group>"; };
 		7C1F0A2B9D3E4F5061728399 /* BulkTextDraftRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkTextDraftRunner.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE0000000012 /* CrossPostRunStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossPostRunStore.swift; sourceTree = "<group>"; };
@@ -415,6 +419,7 @@
 				7C1F0A2B9D3E4F50617283A1 /* CrossPostDefaultsView.swift */,
 				7C1F0A2B9D3E4F50617283B1 /* DraftPhotoChooserSheet.swift */,
 				7C1F0A2B9D3E4F50617283C1 /* BulkTextDecisionSheet.swift */,
+				7C1F0A2B9D3E4F50617283D1 /* CrossPostSheet.swift */,
 				6134E1562FDCB206007C3979 /* DraftPhotoEditModal.swift */,
 				61E75A002FC100A000D4B3F1 /* EtsyConnectView.swift */,
 				6192AA592D7F575F00EC2EFA /* HomeView.swift */,
@@ -519,6 +524,7 @@
 				A9D1D2B4BED80AB257DFE4C7 /* MercariScanJSTests.swift */,
 				7C1F0A2B9D3E4F5061728396 /* MercariFormJSTests.swift */,
 				7D3F2A91C4E8B5060A1D9F23 /* DraftAIProcessingPolicyTests.swift */,
+				7D3F2A91C4E8B5060A1D9F33 /* CrossPostPlanTests.swift */,
 				9F5B4C13E60AD7282C3F1B45 /* VisionTitlePolicyTests.swift */,
 				D7A10001C0FFEE0000000004 /* DraftPhotoStoreTests.swift */,
 				D7A10001C0FFEE0000000016 /* PickerCloseoutTests.swift */,
@@ -727,6 +733,7 @@
 				7C1F0A2B9D3E4F50617283A0 /* CrossPostDefaultsView.swift in Sources */,
 				7C1F0A2B9D3E4F50617283B0 /* DraftPhotoChooserSheet.swift in Sources */,
 				7C1F0A2B9D3E4F50617283C0 /* BulkTextDecisionSheet.swift in Sources */,
+				7C1F0A2B9D3E4F50617283D0 /* CrossPostSheet.swift in Sources */,
 				61E75A012FC100A000D4B3F1 /* EtsyConnectView.swift in Sources */,
 				AA0011223344556677AABBFF /* MercariObservedDataRepository.swift in Sources */,
 				4DE0F3AA27864C66A4EC49AB /* Sale.swift in Sources */,
@@ -777,6 +784,7 @@
 				73B4F7E5CEADC2C6BFC2CDE3 /* MercariScanJSTests.swift in Sources */,
 				7C1F0A2B9D3E4F5061728397 /* MercariFormJSTests.swift in Sources */,
 				8E4A3B02D5F9C6171B2E0A34 /* DraftAIProcessingPolicyTests.swift in Sources */,
+				8E4A3B02D5F9C6171B2E0B34 /* CrossPostPlanTests.swift in Sources */,
 				0A6C5D24F71BE8393D402C56 /* VisionTitlePolicyTests.swift in Sources */,
 				D7A10001C0FFEE0000000003 /* DraftPhotoStoreTests.swift in Sources */,
 				D7A10001C0FFEE0000000015 /* PickerCloseoutTests.swift in Sources */,
