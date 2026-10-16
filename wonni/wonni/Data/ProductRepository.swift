@@ -376,23 +376,60 @@ class ProductRepository: ObservableObject {
     struct APIPlatformStatus {
         var status: [String: String] = [:]
         var listingIds: [String: String] = [:]
+        /// Mercari state the product doc carries (the extension / web post there) —
+        /// used only when the listing doc says nothing about Mercari itself (2026-10-16:
+        /// albums re-posted from the extension showed no badge in the app).
+        var fallbackStatus: [String: String] = [:]
+        var fallbackListingIds: [String: String] = [:]
+
+        var isEmpty: Bool { status.isEmpty && listingIds.isEmpty && fallbackStatus.isEmpty && fallbackListingIds.isEmpty }
+    }
+
+    /// Product-doc "active" (and the web's older "posted") both mean live here.
+    private static func appStatus(_ value: String) -> String {
+        value == "active" ? "posted" : value
     }
 
     static func apiPlatformStatus(fromProductData raw: [String: Any]) -> APIPlatformStatus {
         var out = APIPlatformStatus()
         let platforms = ["ebay", "etsy"]
-        if let status = raw["crossPostStatus"] as? [String: Any] {
-            for platform in platforms {
-                guard let value = status[platform] as? String, !value.isEmpty else { continue }
-                out.status[platform] = value == "active" ? "posted" : value
-            }
+        let status = raw["crossPostStatus"] as? [String: Any] ?? [:]
+        let ids = raw["crossPostListingIds"] as? [String: Any] ?? [:]
+        for platform in platforms {
+            if let value = status[platform] as? String, !value.isEmpty { out.status[platform] = appStatus(value) }
+            if let id = ids[platform] as? String, !id.isEmpty { out.listingIds[platform] = id }
         }
-        if let ids = raw["crossPostListingIds"] as? [String: Any] {
-            for platform in platforms {
-                if let id = ids[platform] as? String, !id.isEmpty { out.listingIds[platform] = id }
-            }
-        }
+        // Mercari: a post made from the extension / web lands only here.
+        if let value = status["mercari"] as? String, !value.isEmpty { out.fallbackStatus["mercari"] = appStatus(value) }
+        if let id = ids["mercari"] as? String, !id.isEmpty { out.fallbackListingIds["mercari"] = id }
         return out
+    }
+
+    // MARK: Mercari state → products/{id}
+
+    /// Mirrors a Mercari post made from the app onto the shared product doc, in the
+    /// product vocabulary ("active"), so the web dashboard's badge, `isLiveOnMercari`
+    /// and the sales cascade's Mercari flags see it. Before 2026-10-16 the app wrote
+    /// only `listings/{id}`, so every iOS Mercari post was invisible to the web.
+    /// Merge-set: the product may not exist yet, and other platforms' keys must stay.
+    func mirrorMercariPosted(productId: String, mercariId: String) async throws {
+        try await db.collection(productsCollection).document(productId).setData([
+            "crossPostStatus": ["mercari": "active"],
+            "crossPostListingIds": ["mercari": mercariId],
+            "crossPostUrls": ["mercari": "https://www.mercari.com/us/item/\(mercariId)/"],
+            "updatedAt": FieldValue.serverTimestamp()
+        ], merge: true)
+    }
+
+    /// The app unlinked a Mercari listing: drop it from the product doc too. No-op when
+    /// the product doc does not exist.
+    func clearMercariPosted(productId: String) async {
+        try? await db.collection(productsCollection).document(productId).updateData([
+            "crossPostStatus.mercari": FieldValue.delete(),
+            "crossPostListingIds.mercari": FieldValue.delete(),
+            "crossPostUrls.mercari": FieldValue.delete(),
+            "updatedAt": FieldValue.serverTimestamp()
+        ])
     }
 
     func fetchAPIPlatformStatuses(userId: String) async throws -> [String: APIPlatformStatus] {
@@ -402,7 +439,7 @@ class ProductRepository: ObservableObject {
         var out: [String: APIPlatformStatus] = [:]
         for doc in snap.documents {
             let status = Self.apiPlatformStatus(fromProductData: doc.data())
-            if !status.status.isEmpty || !status.listingIds.isEmpty { out[doc.documentID] = status }
+            if !status.isEmpty { out[doc.documentID] = status }
         }
         return out
     }

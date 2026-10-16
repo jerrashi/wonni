@@ -90,9 +90,26 @@ async function tokenRequest(bodyParams) {
   });
   const json = await response.json().catch(() => ({}));
   if (!response.ok || !json.access_token) {
+    throwIfCredentialsRejected(response.status, json);
     throw new Error(`eBay token error (${response.status}): ${json.error_description ?? JSON.stringify(json)}`);
   }
   return json;
+}
+
+/**
+ * eBay answered `invalid_client` to a token request: our keyset itself is being
+ * refused (secret regenerated, keyset disabled by eBay — e.g. for a missing
+ * marketplace-account-deletion endpoint — or wrong environment). No user action
+ * fixes this; surface it as a readable failed-precondition instead of the bare
+ * "INTERNAL" the clients show for an unhandled Error (seen live 2026-10-16).
+ */
+function throwIfCredentialsRejected(status, json) {
+  if (status === 401 && (json?.error === "invalid_client" || /client authentication failed/i.test(json?.error_description ?? ""))) {
+    throw new HttpsError(
+      "failed-precondition",
+      "eBay rejected Wonni's app credentials (invalid_client). The eBay keyset needs attention: check its status at developer.ebay.com, regenerate the client secret if needed, update the EBAY_CLIENT_SECRET secret and redeploy the eBay functions."
+    );
+  }
 }
 
 // Exchange authorization code for access + refresh tokens
@@ -262,4 +279,5 @@ module.exports = {
   EBAY_CLIENT_SECRET,
   EBAY_RU_NAME,
   EBAY_ENV,
+  throwIfCredentialsRejected,
 };

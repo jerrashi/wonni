@@ -270,6 +270,30 @@ final class APIPlatformStatusOverlayTests: XCTestCase {
         XCTAssertEqual(merged.crossPostListingIds, ["mercari": "m123", "ebay": "147612911453"])
     }
 
+    func testProductMercariStateFillsOnlyWhatTheListingLacks() {
+        // A Mercari post made from the extension lands on products/{id} only.
+        let api = ProductRepository.apiPlatformStatus(fromProductData: [
+            "crossPostStatus": ["mercari": "active", "ebay": "active"],
+            "crossPostListingIds": ["mercari": "m555", "ebay": "147"],
+        ])
+        XCTAssertEqual(api.status, ["ebay": "posted"])
+        XCTAssertEqual(api.fallbackStatus, ["mercari": "posted"])
+        XCTAssertEqual(api.fallbackListingIds, ["mercari": "m555"])
+
+        var silent = UserListing(userId: "u", catalogItemId: "")
+        let filled = ListingRepository.applyingAPIPlatformStatus(api, to: silent)
+        XCTAssertEqual(filled.crossPostStatus, ["mercari": "posted", "ebay": "posted"])
+        XCTAssertEqual(filled.crossPostListingIds, ["mercari": "m555", "ebay": "147"])
+
+        // The listing's own word about Mercari wins over the product doc's.
+        silent.crossPostStatus = ["mercari": "pending"]
+        let kept = ListingRepository.applyingAPIPlatformStatus(api, to: silent)
+        XCTAssertEqual(kept.crossPostStatus?["mercari"], "pending")
+        XCTAssertEqual(kept.crossPostListingIds?["mercari"], "m555", "an id is still useful when the listing has none")
+        XCTAssertFalse(api.isEmpty)
+        XCTAssertTrue(ProductRepository.apiPlatformStatus(fromProductData: ["crossPostStatus": ["wonni": "active"]]).isEmpty)
+    }
+
     func testNoProductDataLeavesListingUntouched() {
         var listing = UserListing(userId: "u", catalogItemId: "")
         listing.crossPostStatus = ["mercari": "pending"]

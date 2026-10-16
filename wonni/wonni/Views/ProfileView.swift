@@ -1851,6 +1851,7 @@ struct EditListingSheet: View {
                     "crossPostStatus.mercari": "posted",
                     "updatedAt": Timestamp(date: Date())
                 ])
+                try? await ProductRepository.shared.mirrorMercariPosted(productId: listingId, mercariId: itemId)
                 linkedMercariId = itemId
                 mercariLinkInput = ""
             } catch {
@@ -1922,6 +1923,7 @@ struct EditListingSheet: View {
                     "crossPostStatus.mercari": FieldValue.delete(),
                     "updatedAt": Timestamp(date: Date())
                 ])
+                await ProductRepository.shared.clearMercariPosted(productId: listingId)
                 linkedMercariId = nil
             } else if let parsedId = parseMercariItemId(trimmed) {
                 try await Firestore.firestore().collection("listings").document(listingId).updateData([
@@ -1929,6 +1931,7 @@ struct EditListingSheet: View {
                     "crossPostStatus.mercari": "posted",
                     "updatedAt": Timestamp(date: Date())
                 ])
+                try? await ProductRepository.shared.mirrorMercariPosted(productId: listingId, mercariId: parsedId)
                 linkedMercariId = parsedId
             } else {
                 return
@@ -2116,6 +2119,7 @@ struct EditListingSheet: View {
                     "crossPostListingIds.mercari": FieldValue.delete(),
                     "crossPostStatus.mercari": FieldValue.delete()
                 ])
+                await ProductRepository.shared.clearMercariPosted(productId: id)
             }
 
             // Persist a new Mercari link pasted in the "no ID" input field.
@@ -2126,6 +2130,7 @@ struct EditListingSheet: View {
                     "crossPostStatus.mercari": "posted",
                     "updatedAt": Timestamp(date: Date())
                 ])
+                try? await ProductRepository.shared.mirrorMercariPosted(productId: id, mercariId: parsedId)
                 linkedMercariId = parsedId
                 mercariLinkInput = ""
             }
@@ -2139,6 +2144,7 @@ struct EditListingSheet: View {
                         "crossPostStatus.mercari": "posted",
                         "updatedAt": Timestamp(date: Date())
                     ])
+                    try? await ProductRepository.shared.mirrorMercariPosted(productId: id, mercariId: parsedId)
                     linkedMercariId = parsedId
                 }
                 isEditingMercariId = false

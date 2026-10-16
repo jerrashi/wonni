@@ -1,6 +1,6 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
-const { ebayRequest, ebayApiHost, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_ENV } = require("./ebay_auth");
+const { ebayRequest, ebayApiHost, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_ENV, throwIfCredentialsRejected } = require("./ebay_auth");
 const {
   toEbayInventoryProduct, canonicalDescription, listingImagesFor, buildEbayVariations,
   resolveListingPrice, variantPriceOr,
@@ -791,6 +791,7 @@ async function getEbayAppToken() {
   });
   const json = await response.json().catch(() => ({}));
   if (!response.ok || !json.access_token) {
+    throwIfCredentialsRejected(response.status, json);
     throw new Error(`eBay app token error (${response.status}): ${json.error_description ?? JSON.stringify(json)}`);
   }
   return json.access_token;

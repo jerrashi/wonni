@@ -2614,6 +2614,8 @@ struct MercariAutoPosterView: View {
             "updatedAt": Timestamp(date: Date())
         ]
         try? await Firestore.firestore().collection("listings").document(listingId).updateData(update)
+        // The shared product doc (web dashboard, sales cascade) learns about it too.
+        try? await ProductRepository.shared.mirrorMercariPosted(productId: listingId, mercariId: mercariId)
         print("[MercariAutoPosterView] Firestore updated for listing \(listingId) with Mercari ID \(mercariId)")
     }
 

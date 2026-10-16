@@ -105,7 +105,9 @@ class ListingRepository: ObservableObject {
     }
 
     /// Product-doc state wins for the API platforms; everything the listing doc already
-    /// says about the web platforms (Mercari/Facebook, written by iOS) is kept.
+    /// says about the web platforms (Mercari/Facebook, written by iOS) is kept. The
+    /// product doc's Mercari state (extension / web posts) fills in only where the
+    /// listing doc is silent — a listing's own "posted" / "pending" is never overridden.
     static func applyingAPIPlatformStatus(_ api: ProductRepository.APIPlatformStatus?, to listing: UserListing) -> UserListing {
         guard let api else { return listing }
         var merged = listing
@@ -113,6 +115,8 @@ class ListingRepository: ObservableObject {
         var ids = merged.crossPostListingIds ?? [:]
         for (platform, value) in api.status { status[platform] = value }
         for (platform, id) in api.listingIds { ids[platform] = id }
+        for (platform, value) in api.fallbackStatus where status[platform] == nil { status[platform] = value }
+        for (platform, id) in api.fallbackListingIds where ids[platform] == nil { ids[platform] = id }
         merged.crossPostStatus = status
         merged.crossPostListingIds = ids
         return merged
