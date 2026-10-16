@@ -1069,6 +1069,46 @@ function conditionPreferenceIds(enumName) {
 }
 
 // app/iOS condition value → eBay Inventory API condition enum.
+// ── eBay listing text policy ────────────────────────────────────────────────
+
+const NEW_CONDITIONS = new Set(["NEW", "NEW_OTHER", "NEW_WITH_DEFECTS"]);
+
+/**
+ * eBay refuses "like new" in the title or description of anything not listed as
+ * new (error 25019: it would surface in searches for new items). Sellers and the
+ * AI both write it ("Like New" in a title, "in like-new condition" in a
+ * description — live failure 2026-10-16 on a used phone case). For the eBay copy
+ * only, the phrase becomes "excellent" ("a like new copy" → "an excellent
+ * copy"); the product doc keeps the seller's wording.
+ */
+function sanitizeEbayText(text, conditionEnum) {
+  if (!text || NEW_CONDITIONS.has(conditionEnum)) return text || "";
+  return String(text)
+    .replace(/\b(a)(\s+)like[\s-]+new\b/gi, (m, a, sp) => `${a}n${sp}excellent`)
+    .replace(/\blike[\s-]+new\b/gi, (m) => (m === m.toUpperCase() ? "EXCELLENT" : m[0] === "L" ? "Excellent" : "excellent"));
+}
+
+/** The title (≤ 80 chars) and description eBay gets for a product. */
+function ebayListingText(product) {
+  const conditionEnum = productConditionToEbayEnum(product);
+  return {
+    title: sanitizeEbayText(product.title ?? "", conditionEnum).slice(0, 80),
+    description: sanitizeEbayText(canonicalDescription(product), conditionEnum),
+  };
+}
+
+/** eBay's policy refusal (25019) as a readable error: its own explanation, with
+ *  the HTML stripped, instead of the bare INTERNAL the clients show otherwise. */
+function ebayPolicyError(e) {
+  const err = e?.ebayErrors?.find((x) => x.errorId === 25019);
+  if (!err) return null;
+  const reason = (err.parameters?.[0]?.value ?? err.message ?? "")
+    .replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, " ")
+    .replace(/&rsquo;|&#39;|&apos;/g, "'").replace(/&ldquo;|&rdquo;|&quot;/g, '"').replace(/&amp;/g, "&").replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ").replace(/\s+([.,;:!?])/g, "$1").trim();
+  return new HttpsError("failed-precondition", `eBay refused this listing: ${reason}`);
+}
+
 function productConditionToEbayEnum(product) {
   const raw = String(product.condition ?? product.mercariCondition ?? "new")
     .toLowerCase().replace(/[^a-z]/g, "");
@@ -1189,7 +1229,7 @@ async function publishWithRecovery({ doPublish, refresh, categoryAspects, brand,
         continue;
       }
       const missing = extractMissingAspects(errs).filter((n) => !addedAspects[n]);
-      if (!missing.length || attempt === 3) throw e;
+      if (!missing.length || attempt === 3) throw ebayPolicyError(e) || e;
       for (const n of missing) addedAspects[n] = fillValueForAspect(n, categoryAspects, brand, title, {});
       console.warn(`[ebay publish] filling missing aspects: ${missing.join(", ")}`);
       await refresh({ addedAspects, condition: conditionOverride });
@@ -1495,8 +1535,7 @@ async function ebayCreateListingCore(uid, productId) {
   // hint) with one Gemini call, persisted for later cross-posts. Best-effort.
   await fillBlankFieldsInline(product, productId);
 
-  const title = (product.title ?? "").slice(0, 80); // eBay title limit
-  const description = canonicalDescription(product);
+  const { title, description } = ebayListingText(product);
   const basePrice = resolveListingPrice(product);
 
   const [merchantLocationKey, listingPolicies, categoryId] = await Promise.all([
@@ -1790,8 +1829,7 @@ async function currentSingleOffer(uid, product, productId) {
 async function pushSingleVariantEdit(uid, product, productId) {
   const { offer, offerId, sku } = await currentSingleOffer(uid, product, productId);
 
-  const title = (product.title ?? "").slice(0, 80);
-  const description = canonicalDescription(product);
+  const { title, description } = ebayListingText(product);
   const basePrice = resolveListingPrice(product);
   const categoryId = offer?.categoryId || await resolveCategoryId(uid, title, product);
 
@@ -1938,8 +1976,7 @@ exports.ebaySyncListing = onCall(
 // those inventory items/offers and republishes in place rather than minting
 // new SKUs or offers.
 async function syncMultiVariantToEbay(uid, product, productId, docRef) {
-  const title = (product.title ?? "").slice(0, 80);
-  const description = canonicalDescription(product);
+  const { title, description } = ebayListingText(product);
   const basePrice = resolveListingPrice(product);
 
   const [merchantLocationKey, listingPolicies, categoryId] = await Promise.all([
@@ -2383,6 +2420,9 @@ module.exports = {
   getEbayAppTokenCached,
   // testable core (used by functions/test/ebay_import_listing.test.js)
   _internal: {
+    sanitizeEbayText,
+    ebayListingText,
+    ebayPolicyError,
     toAspectArrays, resolveItemCondition, conditionFields,
     resolveCategoryId,
     ebayImportListingCore, ebayCreateListingCore,
