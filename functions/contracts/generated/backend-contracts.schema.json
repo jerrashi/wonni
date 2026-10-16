@@ -238,14 +238,29 @@
     "WeverseOrderTaskWithId": {
       "$ref": "#/definitions/WeverseOrderTaskWithId"
     },
+    "TextToListingsRequest": {
+      "$ref": "#/definitions/TextToListingsRequest"
+    },
+    "PendingItem": {
+      "$ref": "#/definitions/PendingItem"
+    },
+    "SourceProduct": {
+      "$ref": "#/definitions/SourceProduct"
+    },
+    "TextToListingsResponse": {
+      "$ref": "#/definitions/TextToListingsResponse"
+    },
+    "DraftProposal": {
+      "$ref": "#/definitions/DraftProposal"
+    },
+    "PhotoCandidate": {
+      "$ref": "#/definitions/PhotoCandidate"
+    },
     "DraftPhotoCandidatesRequest": {
       "$ref": "#/definitions/DraftPhotoCandidatesRequest"
     },
     "DraftPhotoCandidatesResponse": {
       "$ref": "#/definitions/DraftPhotoCandidatesResponse"
-    },
-    "PhotoCandidate": {
-      "$ref": "#/definitions/PhotoCandidate"
     },
     "DraftPhotoCandidateDetailRequest": {
       "$ref": "#/definitions/DraftPhotoCandidateDetailRequest"
@@ -3032,6 +3047,616 @@
       ],
       "additionalProperties": false
     },
+    "TextToListingsRequest": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20000
+        },
+        "pendingItems": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PendingItem"
+          },
+          "maxItems": 60
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "maxItems": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60,
+          "default": 40
+        }
+      },
+      "additionalProperties": false
+    },
+    "PendingItem": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 140
+        },
+        "shortTitle": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "brand": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "condition": {
+          "$ref": "#/definitions/DraftProposal/properties/condition"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8
+        },
+        "isBundle": {
+          "type": "boolean"
+        },
+        "bundleItems": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "quantity": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sourceText": {
+          "type": "string"
+        },
+        "included": {
+          "$ref": "#/definitions/DraftProposal/properties/included"
+        },
+        "media": {
+          "$ref": "#/definitions/DraftProposal/properties/media"
+        },
+        "searchQuery": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "componentQueries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "suggestedPrice": {
+          "$ref": "#/definitions/DraftProposal/properties/suggestedPrice"
+        },
+        "userPrice": {
+          "$ref": "#/definitions/DraftProposal/properties/suggestedPrice"
+        },
+        "weightOz": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "lengthIn": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "widthIn": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "heightIn": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          }
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "maxLength": 140
+              },
+              "searchQuery": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "title",
+              "searchQuery"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "source": {
+          "$ref": "#/definitions/SourceProduct"
+        }
+      },
+      "required": [
+        "title",
+        "shortTitle",
+        "description",
+        "condition",
+        "tags",
+        "isBundle",
+        "bundleItems",
+        "quantity",
+        "sourceText",
+        "searchQuery",
+        "componentQueries"
+      ],
+      "additionalProperties": false
+    },
+    "SourceProduct": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/definitions/DraftProposal/properties/source"
+        },
+        "sourceId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "partial",
+            "failed"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "imageUrls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "price": {
+          "$ref": "#/definitions/DraftProposal/properties/suggestedPrice"
+        },
+        "ebayCategoryId": {
+          "type": "string"
+        },
+        "ebayConditionId": {
+          "type": "string"
+        },
+        "epid": {
+          "type": "string"
+        },
+        "aspects": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "url",
+        "source",
+        "status",
+        "imageUrls"
+      ],
+      "additionalProperties": false
+    },
+    "TextToListingsResponse": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "type": "string"
+        },
+        "drafts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DraftProposal"
+          }
+        },
+        "remaining": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PendingItem"
+          }
+        },
+        "needsDecision": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "sourceText": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "memberTitles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "asBundle": {
+                "$ref": "#/definitions/PendingItem"
+              },
+              "asIndividual": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/PendingItem"
+                }
+              }
+            },
+            "required": [
+              "sourceText",
+              "title",
+              "memberTitles",
+              "asBundle",
+              "asIndividual"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/definitions/DraftProposal/properties/source"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "partial",
+                  "failed"
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "url",
+              "source",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "unparsedText": {
+          "type": "string"
+        },
+        "aiModel": {
+          "type": "string"
+        },
+        "aiPromptVersion": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "context",
+        "drafts",
+        "remaining",
+        "unparsedText",
+        "aiModel",
+        "aiPromptVersion"
+      ],
+      "additionalProperties": false
+    },
+    "DraftProposal": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 140
+        },
+        "shortTitle": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "brand": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "condition": {
+          "type": "string",
+          "enum": [
+            "new",
+            "likenew",
+            "good",
+            "fair",
+            "poor"
+          ]
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8
+        },
+        "isBundle": {
+          "type": "boolean"
+        },
+        "bundleItems": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "quantity": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "suggestedPrice": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "priceSource": {
+          "type": "string",
+          "enum": [
+            "user",
+            "comps",
+            "ai",
+            "none"
+          ]
+        },
+        "marketPrice": {
+          "$ref": "#/definitions/DraftProposal/properties/suggestedPrice"
+        },
+        "marketPriceSource": {
+          "type": "string",
+          "enum": [
+            "comps",
+            "ai"
+          ]
+        },
+        "imageUrls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "imageSource": {
+          "type": "string",
+          "enum": [
+            "source",
+            "ebay",
+            "google",
+            "generated",
+            "none"
+          ]
+        },
+        "comps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "price": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "itemWebUrl": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "title",
+              "price",
+              "itemWebUrl"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "similarItemId": {
+          "type": "string"
+        },
+        "ebayCategoryId": {
+          "type": "string"
+        },
+        "ebayConditionId": {
+          "type": "string"
+        },
+        "epid": {
+          "type": "string"
+        },
+        "itemSpecifics": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "weightOz": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "lengthIn": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "widthIn": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "heightIn": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "included": {
+          "type": "string",
+          "enum": [
+            "complete",
+            "partial",
+            "loose",
+            "sealed",
+            "packaging",
+            "unknown"
+          ]
+        },
+        "media": {
+          "type": "string",
+          "enum": [
+            "disc",
+            "cartridge",
+            "other"
+          ]
+        },
+        "sourceText": {
+          "type": "string"
+        },
+        "searchQuery": {
+          "type": "string"
+        },
+        "photoMatch": {
+          "type": "string",
+          "enum": [
+            "strong",
+            "weak",
+            "none"
+          ]
+        },
+        "photoCandidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PhotoCandidate"
+          }
+        },
+        "sourceUrl": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "weverse",
+            "aliexpress",
+            "amazon",
+            "ebay",
+            "web"
+          ]
+        },
+        "sourceId": {
+          "type": "string"
+        },
+        "sourcePrice": {
+          "$ref": "#/definitions/DraftProposal/properties/suggestedPrice"
+        }
+      },
+      "required": [
+        "title",
+        "shortTitle",
+        "description",
+        "condition",
+        "tags",
+        "isBundle",
+        "bundleItems",
+        "quantity",
+        "priceSource",
+        "imageUrls",
+        "imageSource",
+        "comps",
+        "sourceText"
+      ],
+      "additionalProperties": false
+    },
+    "PhotoCandidate": {
+      "type": "object",
+      "properties": {
+        "itemId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "price": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "imageUrl": {
+          "type": "string"
+        },
+        "itemWebUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "included": {
+          "$ref": "#/definitions/DraftProposal/properties/included"
+        },
+        "markers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "strong": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "itemId",
+        "title",
+        "price",
+        "imageUrl",
+        "itemWebUrl",
+        "included",
+        "markers",
+        "strong"
+      ],
+      "additionalProperties": false
+    },
     "DraftPhotoCandidatesRequest": {
       "type": "object",
       "properties": {
@@ -3070,63 +3695,6 @@
       },
       "required": [
         "candidates"
-      ],
-      "additionalProperties": false
-    },
-    "PhotoCandidate": {
-      "type": "object",
-      "properties": {
-        "itemId": {
-          "type": "string"
-        },
-        "title": {
-          "type": "string"
-        },
-        "price": {
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "imageUrl": {
-          "type": "string"
-        },
-        "itemWebUrl": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "included": {
-          "type": "string",
-          "enum": [
-            "complete",
-            "partial",
-            "loose",
-            "sealed",
-            "packaging",
-            "unknown"
-          ]
-        },
-        "markers": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "strong": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "itemId",
-        "title",
-        "price",
-        "imageUrl",
-        "itemWebUrl",
-        "included",
-        "markers",
-        "strong"
       ],
       "additionalProperties": false
     },
@@ -3192,129 +3760,7 @@
         "pendingItems": {
           "type": "array",
           "items": {
-            "type": "object",
-            "properties": {
-              "title": {
-                "type": "string",
-                "maxLength": 140
-              },
-              "shortTitle": {
-                "type": "string",
-                "maxLength": 80
-              },
-              "description": {
-                "type": "string",
-                "maxLength": 2000
-              },
-              "brand": {
-                "type": "string",
-                "maxLength": 60
-              },
-              "category": {
-                "type": "string",
-                "maxLength": 200
-              },
-              "condition": {
-                "type": "string",
-                "enum": [
-                  "new",
-                  "likenew",
-                  "good",
-                  "fair",
-                  "poor"
-                ]
-              },
-              "tags": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "maxItems": 8
-              },
-              "isBundle": {
-                "type": "boolean"
-              },
-              "bundleItems": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "quantity": {
-                "type": "integer",
-                "minimum": 1
-              },
-              "sourceText": {
-                "type": "string"
-              },
-              "included": {
-                "type": "string",
-                "enum": [
-                  "complete",
-                  "partial",
-                  "loose",
-                  "sealed",
-                  "packaging",
-                  "unknown"
-                ]
-              },
-              "media": {
-                "type": "string",
-                "enum": [
-                  "disc",
-                  "cartridge",
-                  "other"
-                ]
-              },
-              "searchQuery": {
-                "type": "string",
-                "maxLength": 200
-              },
-              "componentQueries": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "suggestedPrice": {
-                "type": "number",
-                "exclusiveMinimum": 0
-              },
-              "userPrice": {
-                "type": "number",
-                "exclusiveMinimum": 0
-              },
-              "weightOz": {
-                "type": "number",
-                "exclusiveMinimum": 0
-              },
-              "lengthIn": {
-                "type": "number",
-                "exclusiveMinimum": 0
-              },
-              "widthIn": {
-                "type": "number",
-                "exclusiveMinimum": 0
-              },
-              "heightIn": {
-                "type": "number",
-                "exclusiveMinimum": 0
-              }
-            },
-            "required": [
-              "title",
-              "shortTitle",
-              "description",
-              "condition",
-              "tags",
-              "isBundle",
-              "bundleItems",
-              "quantity",
-              "sourceText",
-              "searchQuery",
-              "componentQueries"
-            ],
-            "additionalProperties": false
+            "$ref": "#/definitions/PendingItem"
           },
           "maxItems": 60
         },
@@ -3340,311 +3786,82 @@
         "drafts": {
           "type": "array",
           "items": {
-            "type": "object",
-            "properties": {
-              "title": {
-                "type": "string",
-                "maxLength": 140
-              },
-              "shortTitle": {
-                "type": "string",
-                "maxLength": 80
-              },
-              "description": {
-                "type": "string",
-                "maxLength": 2000
-              },
-              "brand": {
-                "type": "string",
-                "maxLength": 60
-              },
-              "category": {
-                "type": "string",
-                "maxLength": 200
-              },
-              "condition": {
-                "type": "string",
-                "enum": [
-                  "new",
-                  "likenew",
-                  "good",
-                  "fair",
-                  "poor"
-                ]
-              },
-              "tags": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "maxItems": 8
-              },
-              "isBundle": {
-                "type": "boolean"
-              },
-              "bundleItems": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "quantity": {
-                "type": "integer",
-                "minimum": 1
-              },
-              "suggestedPrice": {
-                "type": "number",
-                "exclusiveMinimum": 0
-              },
-              "priceSource": {
-                "type": "string",
-                "enum": [
-                  "user",
-                  "comps",
-                  "ai",
-                  "none"
-                ]
-              },
-              "marketPrice": {
-                "$ref": "#/definitions/BulkDraftsFromTextResponse/properties/drafts/items/properties/suggestedPrice"
-              },
-              "marketPriceSource": {
-                "type": "string",
-                "enum": [
-                  "comps",
-                  "ai"
-                ]
-              },
-              "imageUrls": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "imageSource": {
-                "type": "string",
-                "enum": [
-                  "ebay",
-                  "google",
-                  "generated",
-                  "none"
-                ]
-              },
-              "comps": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "title": {
-                      "type": "string"
-                    },
-                    "price": {
-                      "type": [
-                        "number",
-                        "null"
-                      ]
-                    },
-                    "itemWebUrl": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    }
-                  },
-                  "required": [
-                    "title",
-                    "price",
-                    "itemWebUrl"
-                  ],
-                  "additionalProperties": false
-                }
-              },
-              "similarItemId": {
-                "type": "string"
-              },
-              "ebayCategoryId": {
-                "type": "string"
-              },
-              "ebayConditionId": {
-                "type": "string"
-              },
-              "epid": {
-                "type": "string"
-              },
-              "itemSpecifics": {
-                "type": "object",
-                "additionalProperties": {
-                  "type": "string"
-                }
-              },
-              "weightOz": {
-                "type": "number",
-                "exclusiveMinimum": 0
-              },
-              "lengthIn": {
-                "type": "number",
-                "exclusiveMinimum": 0
-              },
-              "widthIn": {
-                "type": "number",
-                "exclusiveMinimum": 0
-              },
-              "heightIn": {
-                "type": "number",
-                "exclusiveMinimum": 0
-              },
-              "included": {
-                "$ref": "#/definitions/PhotoCandidate/properties/included"
-              },
-              "media": {
-                "type": "string",
-                "enum": [
-                  "disc",
-                  "cartridge",
-                  "other"
-                ]
-              },
-              "sourceText": {
-                "type": "string"
-              },
-              "searchQuery": {
-                "type": "string"
-              },
-              "photoMatch": {
-                "type": "string",
-                "enum": [
-                  "strong",
-                  "weak",
-                  "none"
-                ]
-              },
-              "photoCandidates": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/definitions/PhotoCandidate"
-                }
-              }
-            },
-            "required": [
-              "title",
-              "shortTitle",
-              "description",
-              "condition",
-              "tags",
-              "isBundle",
-              "bundleItems",
-              "quantity",
-              "priceSource",
-              "imageUrls",
-              "imageSource",
-              "comps",
-              "sourceText"
-            ],
-            "additionalProperties": false
+            "$ref": "#/definitions/DraftProposal"
           }
         },
         "remaining": {
           "type": "array",
           "items": {
+            "$ref": "#/definitions/PendingItem"
+          }
+        },
+        "needsDecision": {
+          "type": "array",
+          "items": {
             "type": "object",
             "properties": {
-              "title": {
-                "type": "string",
-                "maxLength": 140
-              },
-              "shortTitle": {
-                "type": "string",
-                "maxLength": 80
-              },
-              "description": {
-                "type": "string",
-                "maxLength": 2000
-              },
-              "brand": {
-                "type": "string",
-                "maxLength": 60
-              },
-              "category": {
-                "type": "string",
-                "maxLength": 200
-              },
-              "condition": {
-                "$ref": "#/definitions/BulkDraftsFromTextResponse/properties/drafts/items/properties/condition"
-              },
-              "tags": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "maxItems": 8
-              },
-              "isBundle": {
-                "type": "boolean"
-              },
-              "bundleItems": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "quantity": {
-                "type": "integer",
-                "minimum": 1
-              },
               "sourceText": {
                 "type": "string"
               },
-              "included": {
-                "$ref": "#/definitions/PhotoCandidate/properties/included"
+              "title": {
+                "type": "string"
               },
-              "media": {
-                "$ref": "#/definitions/BulkDraftsFromTextResponse/properties/drafts/items/properties/media"
-              },
-              "searchQuery": {
-                "type": "string",
-                "maxLength": 200
-              },
-              "componentQueries": {
+              "memberTitles": {
                 "type": "array",
                 "items": {
                   "type": "string"
                 }
               },
-              "suggestedPrice": {
-                "$ref": "#/definitions/BulkDraftsFromTextResponse/properties/drafts/items/properties/suggestedPrice"
+              "asBundle": {
+                "$ref": "#/definitions/PendingItem"
               },
-              "userPrice": {
-                "$ref": "#/definitions/BulkDraftsFromTextResponse/properties/drafts/items/properties/suggestedPrice"
-              },
-              "weightOz": {
-                "type": "number",
-                "exclusiveMinimum": 0
-              },
-              "lengthIn": {
-                "type": "number",
-                "exclusiveMinimum": 0
-              },
-              "widthIn": {
-                "type": "number",
-                "exclusiveMinimum": 0
-              },
-              "heightIn": {
-                "type": "number",
-                "exclusiveMinimum": 0
+              "asIndividual": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/PendingItem"
+                }
               }
             },
             "required": [
-              "title",
-              "shortTitle",
-              "description",
-              "condition",
-              "tags",
-              "isBundle",
-              "bundleItems",
-              "quantity",
               "sourceText",
-              "searchQuery",
-              "componentQueries"
+              "title",
+              "memberTitles",
+              "asBundle",
+              "asIndividual"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/definitions/DraftProposal/properties/source"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "partial",
+                  "failed"
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "url",
+              "source",
+              "status"
             ],
             "additionalProperties": false
           }

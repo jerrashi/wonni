@@ -1,8 +1,9 @@
 /**
- * contracts/bulk_drafts.js — "paste a list, get N ready-to-list drafts".
+ * contracts/bulk_drafts.js — "paste text or links, get N ready-to-list drafts".
  *
- * `bulkDraftsFromText` takes ANY unstructured text (list, paragraph, message,
- * pasted table) such as
+ * `textToListings` (2026-10-15; `bulkDraftsFromText` is the same function under
+ * its first name, kept for iOS builds in the field) takes ANY unstructured
+ * text (list, paragraph, message, pasted table, product links) such as
  *
  *     wii games (CIB):
  *     bundle 1: just dance 4, just dance 2015, just dance 2014.
@@ -34,6 +35,41 @@ const IncludedSchema = z.enum(["complete", "partial", "loose", "sealed", "packag
 /** Shapes the client's placeholder card: a disc, a cartridge or a plain card. */
 const MediaSchema = z.enum(["disc", "cartridge", "other"]);
 
+/** Where a pasted link pointed. "web" = any other page, read via Open Graph. */
+const LinkSourceSchema = z.enum(["weverse", "aliexpress", "amazon", "ebay", "web"]);
+
+/**
+ * The product page behind a pasted link, as source_links.js read it. Rides on
+ * a pending item so the decision / batching round trips keep it, and the
+ * enriched proposal carries its URL, id, cost and photos.
+ */
+const SourceProductSchema = z.object({
+  url: z.string(),
+  source: LinkSourceSchema,
+  /** ASIN, eBay item number, AliExpress item id, Weverse sale id. */
+  sourceId: z.string().optional(),
+  /** "ok" = the page was read; "partial" = only what the URL itself said
+   *  (an Amazon bot check); "failed" = nothing usable. */
+  status: z.enum(["ok", "partial", "failed"]),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  imageUrls: z.array(z.string()),
+  /** What the item sells for on that page — the seller's COST, never the
+   *  resale price. */
+  price: PositiveMoneySchema.optional(),
+  /** eBay links only: sell-similar details straight off the listing. */
+  ebayCategoryId: z.string().optional(),
+  ebayConditionId: z.string().optional(),
+  epid: z.string().optional(),
+  aspects: z.record(z.string(), z.string()).optional(),
+});
+
+/** One distinct thing inside a multi-item entry ("issues 211-215"). */
+const MemberSchema = z.object({
+  title: z.string().max(140),
+  searchQuery: z.string().max(200),
+});
+
 const PendingItemSchema = z.object({
   title: z.string().max(140),
   shortTitle: z.string().max(80),
@@ -58,10 +94,17 @@ const PendingItemSchema = z.object({
   lengthIn: z.number().positive().optional(),
   widthIn: z.number().positive().optional(),
   heightIn: z.number().positive().optional(),
+  /** `[link N]` tokens this listing carries (numbers). */
+  links: z.array(z.number().int().positive()).optional(),
+  /** Set only on an entry that covers several distinct things; the server
+   *  returns such an entry in `needsDecision` instead of enriching it. */
+  members: z.array(MemberSchema).optional(),
+  source: SourceProductSchema.optional(),
 });
 
 const BulkDraftsFromTextRequestSchema = z.object({
-  /** The text to parse. Omit when sending `pendingItems`. */
+  /** The text to parse — any notes, with or without product links. Omit when
+   *  sending `pendingItems`. */
   text: z.string().min(1).max(20000).optional(),
   /** Listings from a previous response's `remaining`, to enrich next. */
   pendingItems: z.array(PendingItemSchema).max(60).optional(),
@@ -133,11 +176,12 @@ const DraftProposalSchema = z.object({
   marketPriceSource: z.enum(["comps", "ai"]).optional(),
   /** https photo URLs, first = cover. */
   imageUrls: z.array(z.string()),
-  /** "ebay" = the best comp's own photos; "google" = image search. The
-   *  server never emits "generated" — the client sets it after the user has
-   *  consented and `generateListingPhoto` returned a URL, so the review list
-   *  and the draft can label the photo honestly. */
-  imageSource: z.enum(["ebay", "google", "generated", "none"]),
+  /** "source" = the pasted link's own product page; "ebay" = the best comp's
+   *  own photos; "google" = image search. The server never emits "generated"
+   *  — the client sets it after the user has consented and
+   *  `generateListingPhoto` returned a URL, so the review list and the draft
+   *  can label the photo honestly. */
+  imageSource: z.enum(["source", "ebay", "google", "generated", "none"]),
   /** The comps the price came from (top few, for the review UI). */
   comps: z.array(CompSummarySchema),
   /** "Sell similar": the eBay item whose details were copied, and what came
@@ -170,6 +214,36 @@ const DraftProposalSchema = z.object({
   /** Every searched listing with a photo, strong matches first, for the
    *  chooser — stored on the draft so the sheet opens with no network call. */
   photoCandidates: z.array(PhotoCandidateSchema).optional(),
+  /** Provenance when the listing came from a pasted link. */
+  sourceUrl: z.string().optional(),
+  source: LinkSourceSchema.optional(),
+  sourceId: z.string().optional(),
+  /** What the seller paid / what the linked page sells it for (cost). */
+  sourcePrice: PositiveMoneySchema.optional(),
+});
+
+/**
+ * An entry that names several distinct things ("Amazing Spider-Man issues
+ * 211-215") without saying they sell together. Nothing is priced or
+ * photographed until the user picks: send `asIndividual` (one pending item
+ * per thing) or `asBundle` (one lot) back as `pendingItems`. One sheet per
+ * run, Individual the default (user decision 2026-10-15).
+ */
+const DecisionSchema = z.object({
+  sourceText: z.string(),
+  title: z.string(),
+  memberTitles: z.array(z.string()),
+  asBundle: PendingItemSchema,
+  asIndividual: z.array(PendingItemSchema),
+});
+
+/** What became of each pasted link, in order, for the review UI. */
+const LinkResultSchema = z.object({
+  url: z.string(),
+  source: LinkSourceSchema,
+  status: z.enum(["ok", "partial", "failed"]),
+  title: z.string().optional(),
+  error: z.string().optional(),
 });
 
 const DraftPhotoCandidatesRequestSchema = z.object({
@@ -207,6 +281,11 @@ const BulkDraftsFromTextResponseSchema = z.object({
   /** Parsed listings beyond this batch, in source order. Send them back as
    *  `pendingItems` (up to 60 at a time) until this is empty. */
   remaining: z.array(PendingItemSchema),
+  /** Entries waiting for an individual-or-bundle answer (see DecisionSchema).
+   *  Absent from older servers. */
+  needsDecision: z.array(DecisionSchema).optional(),
+  /** Every link found in `text`, resolved or not. Empty for `pendingItems`. */
+  links: z.array(LinkResultSchema).optional(),
   /** Tail of the input the parser never reached (only when a very long text
    *  hit the model's output ceiling). Send it back as `text` to continue. */
   unparsedText: z.string(),
@@ -230,7 +309,15 @@ module.exports = {
   DraftProposalSchema,
   PendingItemSchema,
   PhotoCandidateSchema,
+  SourceProductSchema,
+  DecisionSchema,
   contracts: [
+    {
+      name: "textToListings",
+      summary: "ONE text-or-links → listings call: product URLs are resolved (Amazon / eBay / AliExpress / Weverse / any page), the text is parsed into listings, multi-item entries wait in needsDecision, the rest are priced and photographed. Persists nothing.",
+      request: BulkDraftsFromTextRequestSchema,
+      response: BulkDraftsFromTextResponseSchema,
+    },
     {
       name: "draftPhotoCandidates",
       summary: "Search live eBay listings for a draft's photo chooser: every result with a photo, strong (same item, same state) matches first.",
@@ -245,7 +332,7 @@ module.exports = {
     },
     {
       name: "bulkDraftsFromText",
-      summary: "Parse a pasted list of items/bundles into fully-filled draft proposals with comp pricing, sell-similar details and stock photos. Persists nothing.",
+      summary: "Same function as textToListings under its original name (kept for iOS builds in the field).",
       request: BulkDraftsFromTextRequestSchema,
       response: BulkDraftsFromTextResponseSchema,
     },

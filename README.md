@@ -93,7 +93,7 @@ All data lives in Firebase:
 
 ### Drafts from a List: how prices and photos are matched
 
-"Drafts from a List" turns pasted text into ready-to-post drafts. It borrows a price and a photo from live eBay listings ("comps"). A search for one game returns loose cartridges, boxed copies, sealed copies and empty boxes, so every listing carries an **included** state and a comp is only used when it is in the same state.
+"Drafts from a List" turns pasted text into ready-to-post drafts. The text can be notes, a list, a table, or product links (Amazon, eBay, AliExpress, Weverse, any web page), on their own or mixed with words ("iphone case https://amazon.com/..."). The backend function is `textToListings` (`bulkDraftsFromText` is the same function under its first name). It borrows a price and a photo from live eBay listings ("comps"). A search for one game returns loose cartridges, boxed copies, sealed copies and empty boxes, so every listing carries an **included** state and a comp is only used when it is in the same state.
 
 | State | Meaning | Example wording |
 |---|---|---|
@@ -106,6 +106,7 @@ All data lives in Firebase:
 
 How a draft is built, in order:
 
+0. **Links.** Every URL is pulled out of the text by plain code and replaced with a token (`[link 1]`). Each link is read by its host's adapter (`functions/source_links.js`): Weverse and AliExpress through the existing importers, eBay through Browse `getItem`, Amazon from the page (title, photos, price) with the ASIN and the URL's own words as the fallback when Amazon answers a bot check, and any other page through its Open Graph tags. The token becomes `[link 1: <page title>]` so the model reads a real product name. After the parse, the link's photos become the listing's photos, its price the seller's cost (`sourcePrice`), and its URL the provenance. The resale price still comes from comps.
 1. **Parse.** One Gemini call reads the whole text and returns each listing with its `included` state and `media` type (`functions/bulk_text_drafts.js`). Invalid JSON from the model is retried once, then salvaged item by item.
 2. **Search.** One eBay Browse search per listing, 50 results, with each result's short description.
 3. **Classify.** `functions/comp_match.js` reads each comp's title, then its short description, and gives it a state. This is plain phrase matching with no AI call.
@@ -113,6 +114,8 @@ How a draft is built, in order:
 5. **Photo.** The best-ranked comp that is explicitly in the same state. A comp with a silent title is used only if its full description confirms the state. At most three comps are looked up.
 6. **Placeholder.** If no comp qualifies, the draft gets no borrowed photo. The app draws a card: a disc or cartridge with the title for a loose disc or cartridge, a plain title card otherwise (`BulkTextDraftMapper.placeholderImage`). A wrong photo is never used as a stand-in.
 7. **Choose photos.** The automatic pick is graded (`photoMatch`: strong when the comp is the same item in the same state, otherwise weak or none). A draft with a weak or empty match shows a "Choose photos" badge in the app; it opens a list of every searched listing that has a photo, strong matches first and the rest after them with chips saying what each one includes. The seller can edit the search, pick a listing, and import its photos (and, optionally, its eBay category and item specifics) onto the draft. The listing's full photo set is fetched only when it is imported.
+
+**Several things in one entry.** "Amazing Spider-Man issues 211-215" is five comics, not one, and not a bundle unless the text says so. The parse lists each thing as a member, and the server returns the entry in `needsDecision` without pricing it. The app asks once per run, Individual or Bundle for each such entry, and sends the answer back as pending items.
 
 When the seller's text does not say what is included, the best title match is used, minus empty boxes, reproductions, graded copies and broken items.
 

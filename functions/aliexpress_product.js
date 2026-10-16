@@ -105,6 +105,39 @@ function mapAliexpressVariants(skus, productId) {
 }
 
 // Import a product from AliExpress — called by Chrome extension (scrapedData) or web URL paste
+/**
+ * One DS API call → the same `scrapedData` shape the extension sends
+ * ({ productId, productUrl, title, price, images, variants }). Shared with
+ * source_links.js (a pasted AliExpress link inside "textToListings").
+ * Needs the user's AliExpress connection (`callAliexpressApi` reads their token).
+ */
+async function fetchAliexpressDsProduct(itemId, productUrl, uid) {
+  const response = await callAliexpressApi("aliexpress.ds.product.get", {
+    product_id: itemId,
+    ship_to_country: "US",
+    local_currency: "USD",
+  }, uid);
+
+  const result = response?.aliexpress_ds_product_get_response?.result;
+  if (!result) throw new HttpsError("not-found", "Product not found on AliExpress.");
+
+  const priceRange = result.ae_item_sku_info_dtos?.ae_item_sku_info_d_t_o ?? [];
+  const minPrice = Math.min(...priceRange.map((s) => parseFloat(s.sku_price ?? "0"))) || 0;
+
+  return {
+    productId: String(itemId),
+    productUrl,
+    title: result.ae_item_base_info_dto?.subject ?? "",
+    price: minPrice,
+    images: (result.ae_multimedia_info_dto?.image_urls?.string ?? []).slice(0, 8),
+    variants: (result.ae_item_sku_info_dtos?.ae_item_sku_info_d_t_o ?? []).map((s) => ({
+      skuId: s.sku_id,
+      skuAttr: s.sku_attr,
+      price: parseFloat(s.sku_price ?? "0"),
+    })),
+  };
+}
+
 exports.aliexpressImportProduct = onCall(
   // No automatic Gemini call at import (opt-in only, see comment below) — no
   // geminiApiKey secret needed here.
@@ -120,31 +153,7 @@ exports.aliexpressImportProduct = onCall(
     if (!product && productUrl) {
       const itemId = extractItemId(productUrl);
       if (!itemId) throw new HttpsError("invalid-argument", "Could not extract product ID from URL.");
-
-      const response = await callAliexpressApi("aliexpress.ds.product.get", {
-        product_id: itemId,
-        ship_to_country: "US",
-        local_currency: "USD",
-      }, uid);
-
-      const result = response?.aliexpress_ds_product_get_response?.result;
-      if (!result) throw new HttpsError("not-found", "Product not found on AliExpress.");
-
-      const priceRange = result.ae_item_sku_info_dtos?.ae_item_sku_info_d_t_o ?? [];
-      const minPrice = Math.min(...priceRange.map((s) => parseFloat(s.sku_price ?? "0"))) || 0;
-
-      product = {
-        productId: String(itemId),
-        productUrl: productUrl,
-        title: result.ae_item_base_info_dto?.subject ?? "",
-        price: minPrice,
-        images: (result.ae_multimedia_info_dto?.image_urls?.string ?? []).slice(0, 8),
-        variants: (result.ae_item_sku_info_dtos?.ae_item_sku_info_d_t_o ?? []).map((s) => ({
-          skuId: s.sku_id,
-          skuAttr: s.sku_attr,
-          price: parseFloat(s.sku_price ?? "0"),
-        })),
-      };
+      product = await fetchAliexpressDsProduct(itemId, productUrl, uid);
     }
 
     if (!product) throw new HttpsError("invalid-argument", "No product data provided.");
@@ -207,3 +216,6 @@ exports.aliexpressImportProduct = onCall(
     return { productId: docRef.id };
   }
 );
+
+exports.extractItemId = extractItemId;
+exports.fetchAliexpressDsProduct = fetchAliexpressDsProduct;

@@ -717,3 +717,178 @@ test("candidateDetail: the chosen listing's photos (up to 12) and sell-similar f
   assert.equal(RequestSchemas.draftPhotoCandidates.parse({ query: "x" }).included, "unknown");
   assert.equal(RequestSchemas.draftPhotoCandidateDetail.parse({ itemId: "v1|1|0" }).isBundle, false);
 });
+
+// ── textToListings: links, multi-item entries, source products ─────────────
+
+const { attachSources, decisionFor, normalizeSource } = _internal;
+
+test("toProposalCore: [link N] tokens come from the model's links AND the sourceText; members only when not a bundle", () => {
+  const core = toProposalCore(RAW_ITEM(1, { sourceText: "iphone case [link 2: Spigen Case]", links: [2, "3"] }));
+  assert.deepEqual(core._links, [2, 3]);
+  assert.deepEqual(toProposalCore(RAW_ITEM(2, { sourceText: "case [link 4]" }))._links, [4]);
+  const multi = toProposalCore(RAW_ITEM(3, {
+    sourceText: "amazing spider man issues 211-213",
+    members: [{ title: "Amazing Spider-Man #211", searchQuery: "amazing spider-man 211" }, "Amazing Spider-Man #212", { title: "  " }],
+  }));
+  assert.deepEqual(multi._members, [
+    { title: "Amazing Spider-Man #211", searchQuery: "amazing spider-man 211" },
+    { title: "Amazing Spider-Man #212", searchQuery: "Amazing Spider-Man #212" },
+  ]);
+  const bundle = toProposalCore(RAW_ITEM(4, { isBundle: true, bundleItems: ["a", "b"], members: [{ title: "a" }, { title: "b" }] }));
+  assert.deepEqual(bundle._members, []);
+});
+
+test("attachSources: the first readable link wins; a bare-link stub takes the page title; failed links still attach for provenance", () => {
+  const sources = [
+    { index: 1, url: "https://amazon.com/dp/B000000001", source: "amazon", sourceId: "B000000001", status: "failed", error: "404", imageUrls: [], title: "" },
+    { index: 2, url: "https://amazon.com/X-Y/dp/B000000002", source: "amazon", sourceId: "B000000002", status: "ok", title: "Spigen Ultra Hybrid Case", imageUrls: ["https://m.media-amazon.com/a.jpg"], price: 15.99, description: "Clear" },
+  ];
+  const cores = attachSources([
+    toProposalCore(RAW_ITEM(1, { sourceText: "iphone case [link 1] or [link 2: Spigen Ultra Hybrid Case]" })),
+    toProposalCore({ sourceText: "[link 2: Spigen Ultra Hybrid Case]", title: "link 2", searchQuery: "link 2", condition: "new" }),
+    toProposalCore(RAW_ITEM(3, { sourceText: "[link 1]", title: "[link 1]", searchQuery: "[link 1]" })),
+    toProposalCore(RAW_ITEM(4)),
+  ], sources);
+  assert.equal(cores[0]._source.sourceId, "B000000002");
+  assert.equal(cores[0]._source.price, 15.99);
+  assert.equal(cores[0].title, "Game 1 (Wii) CIB");
+  assert.equal(cores[1].title, "Spigen Ultra Hybrid Case");
+  assert.equal(cores[1]._searchQuery, "Spigen Ultra Hybrid Case");
+  assert.equal(cores[2]._source.status, "failed");
+  assert.equal(cores[2].title, "[link 1]");
+  assert.equal(cores[3]._source, undefined);
+  assert.equal(normalizeSource({ url: "https://x", source: "nope", status: "weird", imageUrls: ["http://insecure", "https://ok"], price: "$3.50" }).source, "web");
+  assert.deepEqual(normalizeSource({ url: "https://x", source: "web", status: "ok", imageUrls: ["http://insecure", "https://ok"], price: "$3.50" }).imageUrls, ["https://ok"]);
+  assert.equal(normalizeSource({ url: "https://x", status: "ok", price: "$3.50" }).price, 3.5);
+  assert.equal(normalizeSource(null), undefined);
+});
+
+test("decisionFor: both answers are valid pendingItems; individuals inherit the parent but not its price or quantity", () => {
+  const core = toProposalCore(RAW_ITEM(1, {
+    sourceText: "amazing spider man issues 211-213, $30 for the run, bagged and boarded",
+    title: "Amazing Spider-Man #211-213 (Marvel 1980)",
+    userPrice: 30, quantity: 3, included: "unknown", weightOz: 12,
+    members: [211, 212, 213].map((n) => ({ title: `Amazing Spider-Man #${n}`, searchQuery: `amazing spider-man ${n}` })),
+  }));
+  const d = decisionFor(core);
+  assert.equal(d.title, "Amazing Spider-Man #211-213 (Marvel 1980)");
+  assert.deepEqual(d.memberTitles, ["Amazing Spider-Man #211", "Amazing Spider-Man #212", "Amazing Spider-Man #213"]);
+  assert.equal(d.asBundle.isBundle, true);
+  assert.deepEqual(d.asBundle.bundleItems, d.memberTitles);
+  assert.deepEqual(d.asBundle.componentQueries, ["amazing spider-man 211", "amazing spider-man 212", "amazing spider-man 213"]);
+  assert.equal(d.asBundle.userPrice, 30);
+  assert.equal(d.asBundle.members, undefined);
+  assert.equal(d.asIndividual.length, 3);
+  assert.equal(d.asIndividual[1].title, "Amazing Spider-Man #212");
+  assert.equal(d.asIndividual[1].searchQuery, "amazing spider-man 212");
+  assert.equal(d.asIndividual[1].quantity, 1);
+  assert.equal(d.asIndividual[1].userPrice, undefined);
+  assert.equal(d.asIndividual[1].weightOz, 12);
+  assert.equal(d.asIndividual[1].isBundle, false);
+  const req = RequestSchemas.textToListings.safeParse({ pendingItems: [d.asBundle, ...d.asIndividual] });
+  assert.equal(req.success, true, JSON.stringify(req.error?.errors));
+  // Sent back, individuals enrich as ordinary listings (no further decision).
+  for (const item of d.asIndividual) assert.deepEqual(toProposalCore(item)._members, []);
+});
+
+test("buildDrafts: links are resolved before the parse, attached after it, and a link entry gets the page's photos, cost and provenance", async () => {
+  const text = "iphone 18 pro case https://www.amazon.com/Spigen-Case/dp/B0CHX1W1XY\nsuper smash bros brawl\nhttps://www.ebay.com/itm/137561869182";
+  let parsedText = "";
+  const result = await buildDrafts(RequestSchemas.textToListings.parse({ text }), {
+    resolveLinks: async (links, linkDeps) => {
+      assert.equal(linkDeps.uid, "u1");
+      assert.deepEqual(links.map((l) => l.url), ["https://www.amazon.com/Spigen-Case/dp/B0CHX1W1XY", "https://www.ebay.com/itm/137561869182"]);
+      return [
+        { index: 1, url: links[0].url, source: "amazon", sourceId: "B0CHX1W1XY", status: "ok", title: "Spigen Ultra Hybrid iPhone 18 Pro Case", imageUrls: ["https://m.media-amazon.com/a.jpg", "https://m.media-amazon.com/b.jpg"], price: 15.99 },
+        { index: 2, url: links[1].url, source: "ebay", sourceId: "137561869182", status: "ok", title: "Pokemon Blue Game Boy Color", imageUrls: ["https://i.ebayimg.com/s-l1600.jpg"], price: 42.5, ebayCategoryId: "139973", epid: "77", aspects: { Platform: "Nintendo Game Boy", UPC: "0450" } },
+      ];
+    },
+    linkDeps: { uid: "u1" },
+    parse: async (tokenized) => {
+      parsedText = tokenized;
+      return parseModelOutput(JSON.stringify({ context: "", items: [
+        { sourceText: "iphone 18 pro case [link 1: Spigen Ultra Hybrid iPhone 18 Pro Case]", title: "Spigen Ultra Hybrid Case for iPhone 18 Pro, Clear", condition: "new", searchQuery: "spigen ultra hybrid iphone 18 pro case", links: [1], suggestedPrice: 12 },
+        RAW_ITEM(2, { sourceText: "super smash bros brawl" }),
+        { sourceText: "[link 2: Pokemon Blue Game Boy Color]", title: "Pokemon Blue Version (Game Boy Color)", condition: "good", searchQuery: "pokemon blue game boy", links: [2] },
+      ] }), 40, tokenized);
+    },
+    comps: async ({ title }) => (title.startsWith("pokemon") ? [{ itemId: "v1|1|0", title: "Pokemon Blue Game Boy Color", price: 39.99, imageUrl: "https://i.ebayimg.com/images/g/x/s-l225.jpg", itemWebUrl: "https://ebay.com/itm/1" }] : []),
+    detail: async () => null,
+    google: async () => [],
+  });
+  assert.equal(parsedText, "iphone 18 pro case [link 1: Spigen Ultra Hybrid iPhone 18 Pro Case]\nsuper smash bros brawl\n[link 2: Pokemon Blue Game Boy Color]");
+  assert.equal(result.drafts.length, 3);
+  assert.deepEqual(result.needsDecision, []);
+  assert.deepEqual(result.links.map((l) => [l.source, l.status]), [["amazon", "ok"], ["ebay", "ok"]]);
+
+  const [phoneCase, smash, pokemon] = result.drafts;
+  assert.equal(phoneCase.sourceUrl, "https://www.amazon.com/Spigen-Case/dp/B0CHX1W1XY");
+  assert.equal(phoneCase.source, "amazon");
+  assert.equal(phoneCase.sourceId, "B0CHX1W1XY");
+  assert.equal(phoneCase.sourcePrice, 15.99);
+  assert.deepEqual(phoneCase.imageUrls, ["https://m.media-amazon.com/a.jpg", "https://m.media-amazon.com/b.jpg"]);
+  assert.equal(phoneCase.imageSource, "source");
+  assert.equal(phoneCase.photoMatch, "strong");
+  // The resale price is still the model's / comps' figure, never the cost.
+  assert.equal(phoneCase.suggestedPrice, 12);
+  assert.equal(phoneCase.priceSource, "ai");
+  assert.equal(smash.sourceUrl, undefined);
+  assert.equal(smash.imageSource, "none");
+  assert.equal(pokemon.source, "ebay");
+  assert.equal(pokemon.ebayCategoryId, "139973");
+  assert.equal(pokemon.epid, "77");
+  assert.equal(pokemon.similarItemId, "v1|137561869182|0");
+  assert.deepEqual(pokemon.itemSpecifics, { Platform: "Nintendo Game Boy", UPC: "0450" });
+  assert.equal(pokemon.suggestedPrice, 39.99);
+  assert.equal(pokemon.priceSource, "comps");
+  assert.equal(pokemon.photoCandidates.length, 1);
+
+  const check = ResponseSchemas.textToListings.safeParse(result);
+  assert.equal(check.success, true, JSON.stringify(check.error?.errors));
+});
+
+test("buildDrafts: a multi-item entry waits in needsDecision (not enriched); sending an answer back enriches normally", async () => {
+  const text = "amazing spider man issues 211-213\nsuper smash bros brawl";
+  let compCalls = 0;
+  const deps = {
+    parse: async (t) => parseModelOutput(JSON.stringify({ context: "", items: [
+      { sourceText: "amazing spider man issues 211-213", title: "Amazing Spider-Man #211-213 Lot", condition: "good", searchQuery: "amazing spider-man 211 212 213",
+        members: [211, 212, 213].map((n) => ({ title: `Amazing Spider-Man #${n}`, searchQuery: `amazing spider-man ${n}` })) },
+      RAW_ITEM(2, { sourceText: "super smash bros brawl" }),
+    ] }), 40, t),
+    comps: async () => { compCalls++; return []; },
+    detail: async () => null,
+    google: async () => [],
+  };
+  const first = await buildDrafts(RequestSchemas.textToListings.parse({ text }), deps);
+  assert.equal(first.drafts.length, 1);
+  assert.equal(first.drafts[0].title, "Game 2 (Wii) CIB");
+  assert.equal(first.needsDecision.length, 1);
+  assert.equal(first.needsDecision[0].memberTitles.length, 3);
+  assert.equal(compCalls, 1, "the undecided entry costs no eBay calls");
+  assert.deepEqual(first.links, []);
+  assert.equal(ResponseSchemas.textToListings.safeParse(first).success, true);
+
+  const individual = await buildDrafts(RequestSchemas.textToListings.parse({ pendingItems: first.needsDecision[0].asIndividual }), deps);
+  assert.deepEqual(individual.drafts.map((d) => d.title), ["Amazing Spider-Man #211", "Amazing Spider-Man #212", "Amazing Spider-Man #213"]);
+  assert.deepEqual(individual.needsDecision, []);
+
+  const bundle = await buildDrafts(RequestSchemas.textToListings.parse({ pendingItems: [first.needsDecision[0].asBundle] }), deps);
+  assert.equal(bundle.drafts.length, 1);
+  assert.equal(bundle.drafts[0].isBundle, true);
+  assert.deepEqual(bundle.drafts[0].bundleItems, ["Amazing Spider-Man #211", "Amazing Spider-Man #212", "Amazing Spider-Man #213"]);
+});
+
+test("toPendingItem: a source product round-trips through pendingItems", () => {
+  const core = toProposalCore(RAW_ITEM(1, { source: { url: "https://www.amazon.com/dp/B0CHX1W1XY", source: "amazon", sourceId: "B0CHX1W1XY", status: "ok", imageUrls: ["https://m.media-amazon.com/a.jpg"], price: 15.99 } }));
+  const pending = toPendingItem(core);
+  assert.equal(pending.source.sourceId, "B0CHX1W1XY");
+  assert.deepEqual(toProposalCore(pending), core);
+  assert.equal(RequestSchemas.bulkDraftsFromText.safeParse({ pendingItems: [pending] }).success, true);
+});
+
+test("PARSE_SYSTEM_PROMPT: tells the model about link tokens and multi-item members", () => {
+  assert.match(_internal.PARSE_SYSTEM_PROMPT, /\[link 3: /);
+  assert.match(_internal.PARSE_SYSTEM_PROMPT, /"members"/);
+  assert.match(_internal.PARSE_SYSTEM_PROMPT, /211-215/);
+});

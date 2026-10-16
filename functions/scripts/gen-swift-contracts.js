@@ -30,6 +30,9 @@ const {
   SyncSalesPlatformErrorSchema,
   EbayListingVariantGroupSchema,
   PhotoCandidateSchema,
+  PendingItemSchema,
+  SourceProductSchema,
+  DraftProposalSchema,
 } = require("../contracts");
 
 const OUT_DIR = path.join(__dirname, "..", "contracts", "generated");
@@ -125,6 +128,8 @@ function add(name, schema, refs) {
 // (`Result`, `Task`) or an app type (`Carrier` in CrossPostWebView.swift).
 const REQUEST_REFS = {
   recordSale: { SaleCarrier: CarrierSchema },
+  textToListings: { PendingItem: PendingItemSchema, SourceProduct: SourceProductSchema },
+  bulkDraftsFromText: { PendingItem: PendingItemSchema, SourceProduct: SourceProductSchema },
   recordMercariSalesBatch: { MercariBatchRow: MercariRowLooseSchema },
 };
 const RESPONSE_REFS = {
@@ -132,8 +137,10 @@ const RESPONSE_REFS = {
   listWeverseOrderTasks: { WeverseOrderTaskWithId: WeverseOrderTaskWithIdSchema },
   syncSales: { SyncSalesPlatformError: SyncSalesPlatformErrorSchema },
   ebayGetListing: { EbayVariantGroup: EbayListingVariantGroupSchema },
-  // The same candidate type rides on a proposal and on a chooser re-search.
-  bulkDraftsFromText: { PhotoCandidate: PhotoCandidateSchema },
+  // The same candidate type rides on a proposal and on a chooser re-search;
+  // a pending item appears in `remaining` and twice inside each decision.
+  textToListings: { DraftProposal: DraftProposalSchema, PhotoCandidate: PhotoCandidateSchema, PendingItem: PendingItemSchema, SourceProduct: SourceProductSchema },
+  bulkDraftsFromText: { DraftProposal: DraftProposalSchema, PhotoCandidate: PhotoCandidateSchema, PendingItem: PendingItemSchema, SourceProduct: SourceProductSchema },
   draftPhotoCandidates: { PhotoCandidate: PhotoCandidateSchema },
 };
 

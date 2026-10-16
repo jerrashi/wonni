@@ -55,32 +55,26 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const { validated } = require("./contracts");
 const { retrieveComps, retrieveCompDetail, fullSizeEbayImage } = require("./ebay_comps")._internal;
+const {
+  COMPS_PER_QUERY, tokens, titleMatches, pickBestComp, rankPhotoComps, candidateIsStrong, photoCandidates, usefulSpecifics, candidateDetail,
+} = require("./ebay_photos");
+const { extractLinks, linkIndexes, tokenizeText, resolveLinks, MAX_SOURCE_PHOTOS } = require("./source_links");
 const { EBAY_CLIENT_ID, EBAY_CLIENT_SECRET } = require("./ebay_auth");
 const { savePublicBuffer } = require("./product_media");
 const { normalizeCondition, toListingFields } = require("./enrichment")._internal;
-const { classifyIncluded, normalizeIncluded, compIncluded, differentItemMarkers, matchLevel, descriptionConfirms } = require("./comp_match");
+const { classifyIncluded, normalizeIncluded, matchLevel, descriptionConfirms } = require("./comp_match");
 
 const GEMINI_API_KEY = "GEMINI_API_KEY";
 const GOOGLE_CSE_KEY = "GOOGLE_CSE_KEY";
 const GOOGLE_CSE_CX = "GOOGLE_CSE_CX";
 const PARSE_MODEL = "gemini-flash-lite-latest";
 const IMAGE_MODEL = "gemini-2.5-flash-image";
-const PROMPT_VERSION = "2026-10-04.1";
+const PROMPT_VERSION = "2026-10-15.1";
 
-// 25, not 12: the price is the LOWEST comparable listing, so a wider sample of
-// eBay's best matches matters more than it did for a median.
-// 50 is the most one Browse search returns that we read. A plain search mixes
-// loose, boxed and sealed copies, so the wider net is what gives comp_match.js
-// enough listings in the SAME state as ours to price and photograph from.
-const COMPS_PER_QUERY = 50;
 // Full-detail lookups allowed per listing while looking for a photo whose
 // description confirms the same state (see comp_match.js).
 const MAX_DETAIL_CHECKS = 3;
 const MAX_PHOTOS = 4;
-// A listing the user chose by hand in the photo chooser brings its whole
-// photo set (eBay allows 24; Mercari takes 12).
-const MAX_IMPORT_PHOTOS = 12;
-const MAX_SPECIFICS = 20;
 const CONCURRENCY = 6;
 // The parse is one call over the whole text. Measured 2026-10-03: 150 items →
 // ~32k output tokens in ~75 s, so the model's 65k output ceiling is ~300 items.
@@ -99,6 +93,8 @@ How to read it:
 - Items the text says are sold together ("bundle 1: a, b, c", "lot: a + b", "selling x and y together", "a with b and c included") are ONE listing: isBundle=true, bundleItems = each item. The title should name all the items ("Just Dance 4, 2015 & 2014 Wii Bundle (3 Games, CIB)"). Items merely mentioned in the same sentence are NOT a bundle unless the text says they sell together.
 - Notes attached to one item (parentheses, "- missing manual", "the blue one has a scratch") affect only that item's condition/description.
 - A count ("3x", "two copies of", "qty 4") is the quantity of one listing, not several listings.
+- A token like "[link 3: Spigen Ultra Hybrid Case for iPhone 15 Pro]" stands for a product link the seller pasted; the words after the colon are that product page's own title (a bare "[link 3]" is a link whose page could not be read). The link belongs to the listing whose words surround it ("iphone case [link 3]" is ONE listing, a phone case). A token on its own is one listing described by its page title. Use the page title to write the listing's title, searchQuery, brand and category. Put every token a listing carries in that listing's "links" (the numbers) and keep the tokens in its sourceText.
+- ONE entry can describe SEVERAL distinct sellable things without saying they sell together: a numeric range ("Amazing Spider-Man issues 211-215", "seasons 1-3 on DVD", "sizes S, M and L"), an enumerated set ("the whole Harry Potter trilogy", "Pokemon Red, Blue and Yellow"), "all 5 of the ...". Those are NOT a bundle unless the text says so ("as a lot", "together", "bundle"). Return them as ONE listing and list each thing in "members" (title for each, in order; expand ranges fully, up to 50). The listing's own title describes the set as a whole. "members" is empty for a single item and for an explicit bundle.
 - Ignore chatter that is not about an item for sale (greetings, questions, shipping remarks, signatures).
 - Fix obvious typos and expand abbreviations in titles. Never invent items that are not in the text.
 - ORDER: output listings in the order they first appear in the text, top to bottom. Never regroup, sort, or move bundles to the front.
@@ -136,6 +132,8 @@ For each listing produce:
 - "quantity": 1 unless the text says otherwise.
 - "weightOz": estimated shipping weight of the packed listing in ounces (number). For a bundle or quantity > 1 listing, ONE unit of the listing as it ships (the whole bundle).
 - "lengthIn", "widthIn", "heightIn": estimated shipping box or mailer dimensions in inches (numbers).
+- "links": array of the numbers of the [link N] tokens this listing carries (empty when none).
+- "members": array of {"title", "searchQuery"} for each distinct thing when ONE entry covers several that are not sold together (see above); otherwise empty.
 
 Return ONLY JSON: {"context": "<one-line summary of the shared context, or empty>", "items": [ ... ]}.`;
 
@@ -171,13 +169,16 @@ function shippingFields(item) {
  * reads it back with no second code path.
  */
 function toPendingItem(core) {
-  const { _searchQuery, _componentQueries, _aiPrice, _userPrice, ...rest } = core;
+  const { _searchQuery, _componentQueries, _aiPrice, _userPrice, _links, _members, _source, ...rest } = core;
   return {
     ...rest,
     searchQuery: _searchQuery,
     componentQueries: _componentQueries,
     ...(_aiPrice ? { suggestedPrice: _aiPrice } : {}),
     ...(_userPrice ? { userPrice: _userPrice } : {}),
+    ...(_links && _links.length ? { links: _links } : {}),
+    ...(_members && _members.length ? { members: _members } : {}),
+    ...(_source ? { source: _source } : {}),
   };
 }
 
@@ -226,6 +227,108 @@ function toProposalCore(item = {}) {
     _aiPrice: parsePrice(item.suggestedPrice),
     // A price the user wrote in the text. Always wins over comps / the estimate.
     _userPrice: parsePrice(item.userPrice),
+    // [link N] tokens this listing carries (the model's "links", else scanned
+    // off sourceText), resolved to a source product by `attachSources`.
+    _links: [...new Set([
+      ...(Array.isArray(item.links) ? item.links.map(Number).filter((n) => Number.isInteger(n) && n > 0) : []),
+      ...linkIndexes(item.sourceText),
+    ])],
+    // Several distinct things in one entry ("issues 211-215"): the client asks
+    // whether to list them one by one or as a bundle (`needsDecision`).
+    _members: isBundle ? [] : (Array.isArray(item.members) ? item.members : [])
+      .map((m) => (typeof m === "string" ? { title: m } : m))
+      .filter((m) => m && typeof m.title === "string" && m.title.trim())
+      .map((m) => ({ title: m.title.trim().slice(0, 140), searchQuery: str(m.searchQuery, 200) || m.title.trim().slice(0, 140) }))
+      .slice(0, MAX_MEMBERS),
+    // The product page behind a link, once resolved (round-trips in pendingItems).
+    _source: normalizeSource(item.source),
+  };
+}
+
+const MAX_MEMBERS = 50;
+
+/** A SourceProduct (source_links.js) as the contract carries it, or undefined. */
+function normalizeSource(src) {
+  if (!src || typeof src !== "object" || typeof src.url !== "string" || !src.url) return undefined;
+  const https = (u) => typeof u === "string" && /^https:\/\//i.test(u);
+  const out = {
+    url: src.url,
+    source: ["weverse", "aliexpress", "amazon", "ebay", "web"].includes(src.source) ? src.source : "web",
+    status: ["ok", "partial", "failed"].includes(src.status) ? src.status : "failed",
+    imageUrls: Array.isArray(src.imageUrls) ? src.imageUrls.filter(https).slice(0, MAX_SOURCE_PHOTOS) : [],
+  };
+  if (typeof src.sourceId === "string" && src.sourceId) out.sourceId = src.sourceId;
+  if (typeof src.title === "string" && src.title.trim()) out.title = src.title.trim().slice(0, 300);
+  if (typeof src.description === "string" && src.description.trim()) out.description = src.description.trim().slice(0, 2000);
+  const price = parsePrice(src.price);
+  if (price) out.price = price;
+  if (typeof src.ebayCategoryId === "string" && src.ebayCategoryId) out.ebayCategoryId = src.ebayCategoryId;
+  if (typeof src.ebayConditionId === "string" && src.ebayConditionId) out.ebayConditionId = src.ebayConditionId;
+  if (typeof src.epid === "string" && src.epid) out.epid = src.epid;
+  if (src.aspects && typeof src.aspects === "object") {
+    const aspects = Object.fromEntries(Object.entries(src.aspects).filter(([k, v]) => typeof k === "string" && typeof v === "string"));
+    if (Object.keys(aspects).length) out.aspects = aspects;
+  }
+  return out;
+}
+
+/**
+ * Give each parsed listing the source product behind its [link N] token(s).
+ * One listing, several links ("the red one [link 1] and the blue one [link 2]"
+ * that the model kept together): the first readable one wins; the rest are
+ * still reported in the response's `links`. A listing whose only words were
+ * the link gets the page title as its title when the model left a stub.
+ */
+function attachSources(cores, sources) {
+  const byIndex = new Map(sources.map((src) => [src.index, src]));
+  for (const core of cores) {
+    if (core._source || !core._links.length) continue;
+    const hits = core._links.map((n) => byIndex.get(n)).filter(Boolean);
+    const best = hits.find((h) => h.status === "ok") || hits.find((h) => h.status === "partial") || hits[0];
+    if (!best) continue;
+    const { index, error, ...rest } = best;
+    core._source = normalizeSource(rest);
+    if (/^\[?link \d+\]?$/i.test(core.title) && best.title) {
+      core.title = best.title.slice(0, 140);
+      core.shortTitle = best.title.slice(0, 80);
+      if (core._searchQuery === core.title || /^\[?link/i.test(core._searchQuery)) core._searchQuery = best.title.slice(0, 200);
+    }
+  }
+  return cores;
+}
+
+/**
+ * One multi-item entry → the two ways to list it, both ready to send back as
+ * `pendingItems`. Individual listings inherit everything from the parent
+ * (condition, included state, shipping estimate, source link) except title,
+ * search query, quantity and bundle fields.
+ */
+function decisionFor(core) {
+  const parent = toPendingItem({ ...core, _members: [] });
+  const asBundle = {
+    ...parent,
+    isBundle: true,
+    bundleItems: core._members.map((m) => m.title),
+    componentQueries: core._members.map((m) => m.searchQuery),
+  };
+  const asIndividual = core._members.map((m) => ({
+    ...parent,
+    title: m.title,
+    shortTitle: m.title.slice(0, 80),
+    searchQuery: m.searchQuery,
+    componentQueries: [],
+    isBundle: false,
+    bundleItems: [],
+    quantity: 1,
+    // A price the user wrote was for the whole entry, not each member.
+    ...(parent.userPrice ? { userPrice: undefined } : {}),
+  })).map((item) => Object.fromEntries(Object.entries(item).filter(([, v]) => v !== undefined)));
+  return {
+    sourceText: core.sourceText,
+    title: core.title,
+    memberTitles: core._members.map((m) => m.title),
+    asBundle,
+    asIndividual,
   };
 }
 
@@ -408,7 +511,6 @@ function median(values) {
   return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
 }
 
-const COMPARABLE_MATCH = 0.8;   // share of the query's words a comp title must contain
 const OUTLIER_FLOOR = 0.5;      // a "lowest" under half the comparable median is noise
 
 /**
@@ -423,22 +525,6 @@ const OUTLIER_FLOOR = 0.5;      // a "lowest" under half the comparable median i
  * are returned: a boxed copy is priced against boxed copies, not against
  * silent titles that are mostly loose cartridges.
  */
-/**
- * Does a comp's title name the same item as the query? Enough shared words
- * (COMPARABLE_MATCH of the query's), and every model / set / edition number
- * in the query — LEGO 75192 is not 75105, Just Dance 2015 is not 2014.
- */
-function titleMatches(query, title) {
-  const want = tokens(query);
-  const need = Math.max(1, Math.ceil(want.size * COMPARABLE_MATCH));
-  const mustHave = [...want].filter((t) => t.length >= 3 && /\d/.test(t));
-  const have = tokens(title);
-  if (mustHave.some((t) => !have.has(t))) return false;
-  let shared = 0;
-  for (const t of want) if (have.has(t)) shared++;
-  return shared >= need;
-}
-
 function comparableComps(comps, query, included = "unknown") {
   const ours = normalizeIncluded(included);
   const kept = [];
@@ -483,123 +569,6 @@ function priceFromComps(comps, query = "", included = "unknown") {
 
 // ── stage 3: "sell similar" ───────────────────────────────────────────────
 
-const STOP_WORDS = new Set(["the", "a", "an", "and", "of", "for", "with", "cib", "complete", "in", "box", "tested", "game", "games"]);
-
-function tokens(text) {
-  return new Set(
-    String(text || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9 ]+/g, " ")
-      .split(/\s+/)
-      .filter((t) => t && !STOP_WORDS.has(t))
-  );
-}
-
-/** The comp whose title best matches the query — most shared words, ties to
- *  the earlier (eBay-ranked) result — so a bundle search doesn't latch onto a
- *  single-game listing or a different platform. Must have a photo. */
-function pickBestComp(comps, query) {
-  const want = tokens(query);
-  let best = null;
-  let bestScore = -1;
-  for (const comp of comps) {
-    if (!comp.imageUrl) continue;
-    const have = tokens(comp.title);
-    let score = 0;
-    for (const t of want) if (have.has(t)) score++;
-    if (score > bestScore) { best = comp; bestScore = score; }
-  }
-  return best;
-}
-
-/**
- * Photo candidates for a listing, best first: comps with a photo that
- * comp_match.js does not rule out, explicit same-state matches (level 2)
- * ahead of unverified ones (level 1), then by shared title words, then eBay's
- * own order. Each entry is `{ comp, level }`.
- */
-function rankPhotoComps(comps, query, included = "unknown") {
-  const want = tokens(query);
-  return comps
-    .map((comp, index) => {
-      if (!comp.imageUrl) return null;
-      const level = matchLevel(included, comp, query);
-      if (level === 0) return null;
-      const have = tokens(comp.title);
-      let score = 0;
-      for (const t of want) if (have.has(t)) score++;
-      return { comp, level, score, index };
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.level - a.level || b.score - a.score || a.index - b.index)
-    .map(({ comp, level }) => ({ comp, level }));
-}
-
-/**
- * Would this comp's photo be a safe automatic pick? The same item (close
- * title) in the same state — explicitly (level 2), or, when our listing does
- * not say what is included, at least not contradicted (level 1).
- */
-function candidateIsStrong(comp, query, included = "unknown") {
-  const ours = normalizeIncluded(included);
-  const level = matchLevel(ours, comp, query);
-  const sameState = ours === "unknown" ? level >= 1 : level === 2;
-  return sameState && titleMatches(query, comp.title);
-}
-
-/**
- * Every searched listing with a photo, for the photo chooser (contract
- * `PhotoCandidateSchema`): strong matches first, then the rest by state
- * match, shared title words and eBay's own order. Nothing is dropped — not
- * even contradictions or reproductions — because the user picks by eye and
- * the chips say what each one is; the long tail is where the right listing
- * often hides when the automatic pick is wrong (user decision 2026-10-14).
- */
-function photoCandidates(comps, query, included = "unknown") {
-  const ours = normalizeIncluded(included);
-  const want = tokens(query);
-  return comps
-    .map((comp, index) => {
-      if (!comp.imageUrl || !comp.itemId) return null;
-      const have = tokens(comp.title);
-      let score = 0;
-      for (const t of want) if (have.has(t)) score++;
-      return {
-        candidate: {
-          itemId: String(comp.itemId),
-          title: comp.title || "",
-          price: Number.isFinite(comp.price) ? comp.price : null,
-          imageUrl: fullSizeEbayImage(comp.imageUrl),
-          itemWebUrl: comp.itemWebUrl ?? null,
-          included: compIncluded(comp),
-          markers: differentItemMarkers(`${comp.title || ""} ${comp.shortDescription || ""}`, query),
-          strong: candidateIsStrong(comp, query, ours),
-        },
-        level: matchLevel(ours, comp, query),
-        score,
-        index,
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => (b.candidate.strong - a.candidate.strong) || (b.level - a.level) || (b.score - a.score) || (a.index - b.index))
-    .map((entry) => entry.candidate);
-}
-
-/** A chosen listing's detail → what the client imports onto the draft
- *  (contract `DraftPhotoCandidateDetailResponseSchema`). */
-function candidateDetail(detail, { isBundle = false } = {}) {
-  const out = {
-    title: detail.title || "",
-    imageUrls: (detail.images || []).slice(0, MAX_IMPORT_PHOTOS),
-  };
-  if (detail.categoryId) out.ebayCategoryId = String(detail.categoryId);
-  if (detail.conditionId) out.ebayConditionId = String(detail.conditionId);
-  if (detail.epid) out.epid = String(detail.epid);
-  const specifics = usefulSpecifics(detail.aspects, { isBundle });
-  if (Object.keys(specifics).length) out.itemSpecifics = specifics;
-  return out;
-}
-
 /**
  * The comp whose photos the draft may use, plus the details fetched on the
  * way. See comp_match.js for the rule; in short:
@@ -625,24 +594,6 @@ async function choosePhotoComp(comps, query, included, deps) {
     if (descriptionConfirms(ours, text) === true) return { photoComp: comp, detail, photoDetail: detail };
   }
   return { photoComp: null, detail: firstDetail, photoDetail: null };
-}
-
-/** Seller-supplied aspects worth carrying onto the draft. Drops the ones that
- *  are either per-seller noise or re-derived at post time. */
-const SKIPPED_ASPECTS = new Set(["country of origin", "country/region of manufacture", "mpn", "custom bundle", "modified item", "item height", "item length", "item width", "item weight", "unit quantity", "unit type"]);
-/** Identity of ONE item — wrong on a bundle, whose best comp is some other
- *  lot (live run 2026-10-01: a 3-game Just Dance bundle inherited
- *  "Game Name: Just Dance 1, 2, 3, 2015"). Platform/publisher/genre still hold. */
-const SINGLE_ITEM_ASPECTS = new Set(["game name", "upc", "ean", "isbn", "gtin", "release year", "release date", "model", "model number", "edition", "sku"]);
-function usefulSpecifics(aspects = {}, { isBundle = false } = {}) {
-  const out = {};
-  for (const [name, value] of Object.entries(aspects)) {
-    if (SKIPPED_ASPECTS.has(name.toLowerCase())) continue;
-    if (isBundle && SINGLE_ITEM_ASPECTS.has(name.toLowerCase())) continue;
-    if (Object.keys(out).length >= MAX_SPECIFICS) break;
-    out[name] = value;
-  }
-  return out;
 }
 
 // ── stage 4: photos ───────────────────────────────────────────────────────
@@ -754,10 +705,18 @@ async function safeDetail(itemId, deps) {
  *   google(query)         → [https url]
  */
 async function enrichProposal(core, deps) {
-  const { _searchQuery, _componentQueries, _aiPrice, _userPrice, ...proposal } = core;
+  const { _searchQuery, _componentQueries, _aiPrice, _userPrice, _links, _members, _source, ...proposal } = core;
   // What comes with the listing; "unknown" when an older client's pending
   // item carries none. Every comp decision below goes through it.
   const included = normalizeIncluded(proposal.included);
+  // The product page behind a pasted link: provenance, cost and photos. The
+  // resale price still comes from comps / the user — not from what they paid.
+  if (_source) {
+    proposal.sourceUrl = _source.url;
+    proposal.source = _source.source;
+    if (_source.sourceId) proposal.sourceId = _source.sourceId;
+    if (_source.price) proposal.sourcePrice = _source.price;
+  }
 
   // 2. price — the user's own price always wins; comps still run because the
   // sell-similar details and photos come from them, and the market figure is
@@ -805,7 +764,25 @@ async function enrichProposal(core, deps) {
     if (Object.keys(specifics).length) proposal.itemSpecifics = specifics;
   }
 
-  // 4. photos — (a) comp photos, only from comps in the same state as ours.
+  // Sell-similar details straight off a pasted eBay listing beat a comp's.
+  if (_source?.source === "ebay") {
+    if (_source.ebayCategoryId) proposal.ebayCategoryId = _source.ebayCategoryId;
+    if (_source.ebayConditionId) proposal.ebayConditionId = _source.ebayConditionId;
+    if (_source.epid) proposal.epid = _source.epid;
+    if (_source.sourceId) proposal.similarItemId = `v1|${_source.sourceId}|0`;
+    const specifics = usefulSpecifics(_source.aspects || {}, { isBundle: proposal.isBundle });
+    if (Object.keys(specifics).length) proposal.itemSpecifics = specifics;
+  }
+
+  // 4. photos — (0) the linked product page's own photos: the exact item the
+  // seller has, so the pick is strong and the chooser is only a fallback.
+  if (_source?.imageUrls?.length) {
+    proposal.imageUrls = _source.imageUrls.slice(0, MAX_SOURCE_PHOTOS);
+    proposal.imageSource = "source";
+    proposal.photoMatch = "strong";
+    return proposal;
+  }
+  // (a) comp photos, only from comps in the same state as ours.
   // `strong` says whether the pick is also the same ITEM by title (a same-state
   // comp can still be the wrong game); the client badges anything weaker.
   const urls = [];
@@ -868,40 +845,63 @@ async function buildDrafts({ text, pendingItems: items, context: carriedContext 
   let context = carriedContext;
   let cores;
   let unparsedText = "";
+  let links = [];
   if (Array.isArray(items) && items.length) {
     cores = items.map(toProposalCore).filter(Boolean);
   } else {
-    const parsed = await deps.parse(text, MAX_PARSED_ITEMS, carriedContext);
+    // Links first, in plain code: pulled out, resolved to product pages, and
+    // put back as "[link N: <page title>]" so the model reads a real product
+    // name (source_links.js). The parse then sees the same text either way.
+    const extracted = extractLinks(text);
+    const sources = extracted.links.length ? await (deps.resolveLinks || resolveLinks)(extracted.links, deps.linkDeps || {}) : [];
+    const parsed = await deps.parse(tokenizeText(extracted.text, sources), MAX_PARSED_ITEMS, carriedContext);
     context = parsed.context;
-    cores = parsed.proposals;
+    cores = attachSources(parsed.proposals, sources);
     unparsedText = parsed.unparsedText || "";
+    links = sources.map((src) => ({
+      url: src.url, source: src.source, status: src.status,
+      ...(src.title ? { title: src.title.slice(0, 300) } : {}),
+      ...(src.error ? { error: src.error } : {}),
+    }));
   }
-  const batch = cores.slice(0, maxItems);
+  // Entries that describe several things ("issues 211-215") wait for the
+  // user: nothing is priced or photographed until they say individual or
+  // bundle, and the answer comes back through `pendingItems`.
+  const needsDecision = cores.filter((core) => core._members.length > 1).map(decisionFor);
+  const ready = cores.filter((core) => core._members.length <= 1);
+  const batch = ready.slice(0, maxItems);
   const drafts = await mapWithConcurrency(batch, CONCURRENCY, (core) => enrichProposal(core, deps));
   return {
     context,
     drafts,
-    remaining: cores.slice(maxItems).map(toPendingItem),
+    remaining: ready.slice(maxItems).map(toPendingItem),
+    needsDecision,
+    links,
     unparsedText,
     aiModel: PARSE_MODEL,
     aiPromptVersion: PROMPT_VERSION,
   };
 }
 
-exports.bulkDraftsFromText = onCall(
-  { secrets: [GEMINI_API_KEY, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, GOOGLE_CSE_KEY, GOOGLE_CSE_CX], timeoutSeconds: 540, memory: "1GiB" },
-  validated("bulkDraftsFromText", async (data, request) => {
+/**
+ * `textToListings` — the ONE text-or-links → listings callable (2026-10-15).
+ * `bulkDraftsFromText` is the same handler under its first name, kept for iOS
+ * builds already in the field; new clients call `textToListings`.
+ */
+function textToListingsHandler(name) {
+  return validated(name, async (data, request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new HttpsError("failed-precondition", "AI is not configured.");
 
     const deps = {
+      linkDeps: { uid },
       parse: async (text, maxItems, context) => {
         try {
           return await parseListWithGemini(apiKey, text, maxItems, context);
         } catch (e) {
-          console.error(`[bulkDraftsFromText] parse failed: ${e.message}`);
+          console.error(`[${name}] parse failed: ${e.message}`);
           // "unavailable", not "internal": the client shows an internal
           // error's message as the bare word "INTERNAL".
           throw new HttpsError("unavailable", "The AI could not read that list. Please try again.");
@@ -915,8 +915,12 @@ exports.bulkDraftsFromText = onCall(
       throw new HttpsError("invalid-argument", "Provide text or pendingItems.");
     }
     return buildDrafts(data, deps);
-  })
-);
+  });
+}
+
+const TEXT_TO_LISTINGS_OPTS = { secrets: [GEMINI_API_KEY, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, GOOGLE_CSE_KEY, GOOGLE_CSE_CX], timeoutSeconds: 540, memory: "1GiB" };
+exports.textToListings = onCall(TEXT_TO_LISTINGS_OPTS, textToListingsHandler("textToListings"));
+exports.bulkDraftsFromText = onCall(TEXT_TO_LISTINGS_OPTS, textToListingsHandler("bulkDraftsFromText"));
 
 // The photo chooser's two calls. Public marketplace data, app token, no
 // Firestore: the client decides what lands on the draft.
@@ -967,6 +971,9 @@ exports._internal = {
   salvageItems,
   unparsedTail,
   toPendingItem,
+  normalizeSource,
+  attachSources,
+  decisionFor,
   parseListWithGemini,
   priceFromComps,
   comparableComps,

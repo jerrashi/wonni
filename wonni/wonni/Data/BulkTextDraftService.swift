@@ -17,6 +17,12 @@ import FirebaseFunctions
 import SwiftData
 import UIKit
 
+/// The generated contract names (`textToListings` / `bulkDraftsFromText` share one
+/// proposal and one pending-item type since 2026-10-15); the app's own names predate
+/// that and are kept as aliases.
+typealias Draft = DraftProposal
+typealias Remaining = PendingItem
+
 /// Pure mapping from a `bulkDraftsFromText` proposal onto an `Item`, factored out so
 /// it is unit-testable without Firebase or the network (BulkTextDraftMappingTests).
 enum BulkTextDraftMapper {
@@ -119,6 +125,7 @@ enum BulkTextDraftMapper {
     static func photoLabel(_ proposal: Draft) -> String {
         let count = proposal.imageUrls.count
         switch proposal.imageSource {
+        case .source: return count > 1 ? "\(count) photos from the link" : "Photo from the link"
         case .ebay: return count > 1 ? "\(count) eBay seller photos" : "eBay seller photo"
         case .google: return count > 1 ? "\(count) web photos" : "Web photo"
         case .generated: return "AI-generated photo"

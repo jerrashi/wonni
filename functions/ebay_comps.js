@@ -116,6 +116,7 @@ async function retrieveCompDetail(itemId, { fetchImpl = fetch } = {}) {
     conditionId: json.conditionId ?? null,
     condition: json.condition ?? null,
     epid: json.epid ?? null,
+    price: Number(json.price?.value) || null,
     images: [...new Set(images)],
     aspects,
     shortDescription: json.shortDescription ?? null,
