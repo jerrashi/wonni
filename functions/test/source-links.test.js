@@ -122,14 +122,22 @@ test("parseOpenGraph: og tags in either attribute order, several images, product
 
 // ── 4. resolveLink with an injected fetch ──────────────────────────────────
 
+// Public DNS stand-in: every host resolves to a public address.
+const publicLookup = async () => [{ address: "93.184.216.34" }];
 const fakeFetch = (routes) => async (url) => {
   const hit = routes[url] || { status: 404, body: "" };
-  return { ok: (hit.status || 200) < 300, status: hit.status || 200, url: hit.finalUrl || url, text: async () => hit.body || "" };
+  if (hit.finalUrl && hit.finalUrl !== url) {
+    // A redirect hop, as a real server would answer with redirect: "manual".
+    routes[hit.finalUrl] = routes[hit.finalUrl] || { body: hit.body, status: hit.status };
+    return { ok: false, status: 302, url, headers: { get: (h) => (h === "location" ? hit.finalUrl : null) }, text: async () => "" };
+  }
+  return { ok: (hit.status || 200) < 300, status: hit.status || 200, url, headers: { get: () => null }, text: async () => hit.body || "" };
 };
+const { isPublicAddress, assertPublicUrl } = require("../source_links");
 
 test("resolveLink: amazon page read → ok with ASIN, photos and cost", async () => {
   const url = "https://www.amazon.com/Spigen-Ultra-Hybrid/dp/B0CHX1W1XY";
-  const src = await resolveLink({ index: 1, url }, { fetchImpl: fakeFetch({ [url]: { body: AMAZON_HTML } }) });
+  const src = await resolveLink({ index: 1, url }, { lookup: publicLookup, fetchImpl: fakeFetch({ [url]: { body: AMAZON_HTML } }) });
   assert.equal(src.status, "ok");
   assert.equal(src.source, "amazon");
   assert.equal(src.sourceId, "B0CHX1W1XY");
@@ -141,20 +149,20 @@ test("resolveLink: amazon page read → ok with ASIN, photos and cost", async ()
 test("resolveLink: amazon bot check → partial with the slug as the title; a short link reads the ASIN off the redirect", async () => {
   const bot = `<html><head><title>Robot Check</title></head><body>To discuss automated access to Amazon data please contact api-services-support@amazon.com.</body></html>`;
   const slugged = "https://www.amazon.com/Apple-iPhone-15-Pro-Case/dp/B0CHX1W1XY";
-  const a = await resolveLink({ index: 1, url: slugged }, { fetchImpl: fakeFetch({ [slugged]: { body: bot } }) });
+  const a = await resolveLink({ index: 1, url: slugged }, { lookup: publicLookup, fetchImpl: fakeFetch({ [slugged]: { body: bot } }) });
   assert.equal(a.status, "partial");
   assert.equal(a.title, "Apple iPhone 15 Pro Case");
   assert.equal(a.sourceId, "B0CHX1W1XY");
   assert.match(a.error, /bot check/);
 
   const short = "https://a.co/d/3xYz12Q";
-  const b = await resolveLink({ index: 2, url: short }, { fetchImpl: fakeFetch({ [short]: { body: bot, finalUrl: "https://www.amazon.com/Sony-WH-1000XM5-Headphones/dp/B09XS7JWHH?ref=x" } }) });
+  const b = await resolveLink({ index: 2, url: short }, { lookup: publicLookup, fetchImpl: fakeFetch({ [short]: { body: bot, finalUrl: "https://www.amazon.com/Sony-WH-1000XM5-Headphones/dp/B09XS7JWHH?ref=x" } }) });
   assert.equal(b.status, "partial");
   assert.equal(b.sourceId, "B09XS7JWHH");
   assert.equal(b.title, "Sony WH 1000XM5 Headphones");
 
   const bare = "https://a.co/d/nothing";
-  const c = await resolveLink({ index: 3, url: bare }, { fetchImpl: fakeFetch({ [bare]: { body: bot } }) });
+  const c = await resolveLink({ index: 3, url: bare }, { lookup: publicLookup, fetchImpl: fakeFetch({ [bare]: { body: bot } }) });
   assert.equal(c.status, "failed");
   assert.equal(c.imageUrls.length, 0);
 });
@@ -175,17 +183,17 @@ test("resolveLink: ebay item → Browse getItem detail with sell-similar fields;
   assert.deepEqual(ebay.aspects, { Platform: "Nintendo Game Boy" });
 
   const page = "https://www.etsy.com/listing/1/watch";
-  const web = await resolveLink({ index: 2, url: page }, { fetchImpl: fakeFetch({ [page]: { body: `<meta property="og:title" content="Casio Watch"><meta property="og:image" content="https://cdn/x.jpg">` } }) });
+  const web = await resolveLink({ index: 2, url: page }, { lookup: publicLookup, fetchImpl: fakeFetch({ [page]: { body: `<meta property="og:title" content="Casio Watch"><meta property="og:image" content="https://cdn/x.jpg">` } }) });
   assert.equal(web.status, "ok");
   assert.equal(web.source, "web");
   assert.equal(web.title, "Casio Watch");
   assert.deepEqual(web.imageUrls, ["https://cdn/x.jpg"]);
 
-  const gone = await resolveLink({ index: 3, url: "https://example.com/gone" }, { fetchImpl: fakeFetch({}) });
+  const gone = await resolveLink({ index: 3, url: "https://example.com/gone" }, { lookup: publicLookup, fetchImpl: fakeFetch({}) });
   assert.equal(gone.status, "failed");
   assert.match(gone.error, /404/);
 
-  const boom = await resolveLink({ index: 4, url: "https://example.com/boom" }, { fetchImpl: async () => { throw new Error("socket hang up"); } });
+  const boom = await resolveLink({ index: 4, url: "https://example.com/boom" }, { lookup: publicLookup, fetchImpl: async () => { throw new Error("socket hang up"); } });
   assert.equal(boom.status, "failed");
   assert.equal(boom.error, "socket hang up");
 });
@@ -193,6 +201,7 @@ test("resolveLink: ebay item → Browse getItem detail with sell-similar fields;
 test("resolveLinks: keeps order under concurrency and never throws for one bad link", async () => {
   const urls = ["https://example.com/a", "https://example.com/b", "https://example.com/c"];
   const out = await resolveLinks(urls.map((url, i) => ({ index: i + 1, url })), {
+    lookup: publicLookup,
     fetchImpl: fakeFetch({
       [urls[0]]: { body: `<meta property="og:title" content="A">` },
       [urls[2]]: { body: `<meta property="og:title" content="C">` },
@@ -200,4 +209,76 @@ test("resolveLinks: keeps order under concurrency and never throws for one bad l
   }, 2);
   assert.deepEqual(out.map((s) => s.status), ["ok", "failed", "ok"]);
   assert.deepEqual(out.map((s) => s.index), [1, 2, 3]);
+});
+
+// ── 5. SSRF guard ──────────────────────────────────────────────────────────
+
+test("isPublicAddress: loopback, private, link-local (GCE metadata), CGNAT, multicast and v6 locals are refused", () => {
+  for (const ip of ["127.0.0.1", "10.1.2.3", "172.16.0.1", "172.31.255.254", "192.168.1.1", "169.254.169.254", "0.0.0.0", "100.64.0.1", "224.0.0.1", "::1", "::", "fe80::1", "fd12::1", "::ffff:127.0.0.1", "not-an-ip"]) {
+    assert.equal(isPublicAddress(ip), false, ip);
+  }
+  for (const ip of ["8.8.8.8", "93.184.216.34", "172.32.0.1", "2606:4700::1111", "::ffff:8.8.8.8"]) {
+    assert.equal(isPublicAddress(ip), true, ip);
+  }
+});
+
+test("assertPublicUrl: https only, default port, no credentials, blocked hosts, and every resolved address must be public", async () => {
+  await assert.rejects(assertPublicUrl("http://example.com/x", publicLookup), /https/);
+  await assert.rejects(assertPublicUrl("https://example.com:8443/x", publicLookup), /port/);
+  await assert.rejects(assertPublicUrl("https://user:pw@example.com/x", publicLookup), /credentials/);
+  await assert.rejects(assertPublicUrl("https://metadata.google.internal/computeMetadata/v1/", publicLookup), /not a public website/);
+  await assert.rejects(assertPublicUrl("https://localhost/", publicLookup), /not a public website/);
+  await assert.rejects(assertPublicUrl("https://169.254.169.254/latest/meta-data/", publicLookup), /not a public website/);
+  await assert.rejects(assertPublicUrl("https://[::1]/", publicLookup), /not a public website/);
+  // A public-looking name that resolves (even partly) to a private address.
+  await assert.rejects(assertPublicUrl("https://evil.example/", async () => [{ address: "93.184.216.34" }, { address: "10.0.0.5" }]), /not a public website/);
+  await assert.rejects(assertPublicUrl("https://nx.example/", async () => []), /not a public website/);
+  assert.equal((await assertPublicUrl("https://example.com/ok", publicLookup)).hostname, "example.com");
+});
+
+test("resolveLink: a redirect to a private address is refused mid-chain; a plain http link is refused before any fetch", async () => {
+  let fetched = [];
+  const src = await resolveLink({ index: 1, url: "https://short.example/abc" }, {
+    lookup: async (host) => [{ address: host === "short.example" ? "93.184.216.34" : "169.254.169.254" }],
+    fetchImpl: async (url) => {
+      fetched.push(url);
+      return { ok: false, status: 302, url, headers: { get: (h) => (h === "location" ? "https://metadata.google.internal/computeMetadata/v1/" : null) }, text: async () => "" };
+    },
+  });
+  assert.equal(src.status, "failed");
+  assert.match(src.error, /not a public website/);
+  assert.deepEqual(fetched, ["https://short.example/abc"], "the metadata hop was never requested");
+
+  fetched = [];
+  const http = await resolveLink({ index: 2, url: "http://example.com/page" }, { lookup: publicLookup, fetchImpl: async (url) => { fetched.push(url); throw new Error("should not fetch"); } });
+  assert.equal(http.status, "failed");
+  assert.match(http.error, /https/);
+  assert.deepEqual(fetched, []);
+
+  const hops = await resolveLink({ index: 3, url: "https://a.example/1" }, {
+    lookup: publicLookup,
+    fetchImpl: async (url) => ({ ok: false, status: 301, url, headers: { get: (h) => (h === "location" ? url + "x" : null) }, text: async () => "" }),
+  });
+  assert.equal(hops.status, "failed");
+  assert.match(hops.error, /Too many redirects/);
+});
+
+test("fetchHtml: a huge body is read only up to the cap and the stream is cancelled", async () => {
+  const { fetchHtml } = require("../source_links")._internal;
+  let reads = 0;
+  let cancelled = false;
+  const chunk = new TextEncoder().encode("x".repeat(256 * 1024));
+  const res = await fetchHtml("https://big.example/page", async () => ({
+    ok: true, status: 200,
+    headers: { get: () => null },
+    body: { getReader: () => ({ read: async () => { reads++; return { value: chunk, done: false }; }, cancel: async () => { cancelled = true; } }) },
+    text: async () => { throw new Error("should stream"); },
+  }), publicLookup);
+  assert.equal(res.html.length, 2 * 1024 * 1024);
+  assert.equal(reads, 8);
+  assert.equal(cancelled, true);
+
+  await assert.rejects(fetchHtml("https://big.example/huge", async () => ({
+    ok: true, status: 200, headers: { get: (h) => (h === "content-length" ? String(100 * 1024 * 1024) : null) }, text: async () => "",
+  }), publicLookup), /too large/);
 });

@@ -30,9 +30,18 @@
  *
  * Nothing here persists. Every adapter returns `status: "failed"` with a
  * reason instead of throwing, so one dead link never fails the whole paste.
+ *
+ * Security: a pasted URL is user input fetched from inside a Cloud Function.
+ * `fetchHtml` only fetches https on the default port, resolves the host first
+ * and refuses anything that is not a public address (loopback, private,
+ * link-local incl. the GCE metadata server 169.254.169.254, *.internal), and
+ * follows redirects by hand so every hop is checked the same way.
  */
 
 "use strict";
+
+const dns = require("dns").promises;
+const net = require("net");
 
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
@@ -134,21 +143,109 @@ function detectSource(rawUrl) {
 
 // ── page fetch + HTML helpers ──────────────────────────────────────────────
 
-async function fetchHtml(url, fetchImpl = fetch) {
+const MAX_REDIRECTS = 5;
+
+/**
+ * Is this a public internet address? The pasted URL is user input fetched
+ * from inside a Cloud Function, so anything that resolves to loopback,
+ * private, link-local (the GCE metadata server lives at 169.254.169.254) or
+ * unspecified space is refused — before the first request and again on every
+ * redirect hop (`fetchHtml` follows them by hand).
+ */
+function isPublicAddress(ip) {
+  const v = net.isIP(ip);
+  if (v === 4) {
+    const [a, b] = ip.split(".").map(Number);
+    if (a === 0 || a === 10 || a === 127) return false;
+    if (a === 169 && b === 254) return false;
+    if (a === 172 && b >= 16 && b <= 31) return false;
+    if (a === 192 && b === 168) return false;
+    if (a === 100 && b >= 64 && b <= 127) return false;   // carrier NAT
+    if (a >= 224) return false;                            // multicast / reserved
+    return true;
+  }
+  if (v === 6) {
+    const lower = ip.toLowerCase();
+    if (lower === "::" || lower === "::1") return false;
+    if (lower.startsWith("fe8") || lower.startsWith("fe9") || lower.startsWith("fea") || lower.startsWith("feb")) return false; // link-local
+    if (lower.startsWith("fc") || lower.startsWith("fd")) return false;  // unique local
+    if (lower.startsWith("::ffff:")) return isPublicAddress(lower.slice(7)); // mapped v4
+    return true;
+  }
+  return false;
+}
+
+const BLOCKED_HOSTS = new Set(["localhost", "metadata.google.internal", "metadata", "instance-data"]);
+
+/** Throws unless `rawUrl` is https on the default port and its host resolves
+ *  only to public addresses. `lookup` is injectable for tests. */
+async function assertPublicUrl(rawUrl, lookup = (host) => dns.lookup(host, { all: true })) {
+  const url = new URL(rawUrl);
+  if (url.protocol !== "https:") throw new Error("Only https links are fetched.");
+  if (url.port && url.port !== "443") throw new Error("Only the default https port is fetched.");
+  if (url.username || url.password) throw new Error("Links with credentials are not fetched.");
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (BLOCKED_HOSTS.has(host) || host.endsWith(".internal") || host.endsWith(".local") || host.endsWith(".localhost")) {
+    throw new Error("That address is not a public website.");
+  }
+  const literal = host.startsWith("[") ? host.slice(1, -1) : host;
+  const addresses = net.isIP(literal) ? [{ address: literal }] : await lookup(literal);
+  if (!addresses.length || addresses.some((a) => !isPublicAddress(a.address))) {
+    throw new Error("That address is not a public website.");
+  }
+  return url;
+}
+
+/** The first MAX_HTML_BYTES of a response body. Streams and stops at the
+ *  cap, so a giant (or endless) body never lands in memory whole. */
+async function readCapped(res) {
+  const declared = Number(res.headers?.get?.("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_HTML_BYTES * 4) throw new Error("The page is too large to read.");
+  if (!res.body || typeof res.body.getReader !== "function") return String(await res.text()).slice(0, MAX_HTML_BYTES);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  let out = "";
+  try {
+    while (out.length < MAX_HTML_BYTES) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      out += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  return out.slice(0, MAX_HTML_BYTES);
+}
+
+/**
+ * GET a page as a browser would. Redirects are followed by hand so every hop
+ * is checked by `assertPublicUrl` (a public URL must not bounce us to the
+ * metadata server). `fetchImpl` / `lookup` are injectable for tests.
+ */
+async function fetchHtml(url, fetchImpl = fetch, lookup = undefined) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetchImpl(url, {
-      redirect: "follow",
-      signal: controller.signal,
-      headers: {
-        "User-Agent": USER_AGENT,
-        "Accept": "text/html,application/xhtml+xml",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    });
-    const text = (await res.text()).slice(0, MAX_HTML_BYTES);
-    return { ok: res.ok, status: res.status, url: res.url || url, html: text };
+    let current = url;
+    for (let hop = 0; ; hop++) {
+      await assertPublicUrl(current, lookup);
+      const res = await fetchImpl(current, {
+        redirect: "manual",
+        signal: controller.signal,
+        headers: {
+          "User-Agent": USER_AGENT,
+          "Accept": "text/html,application/xhtml+xml",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+      });
+      const location = res.status >= 300 && res.status < 400 ? res.headers?.get?.("location") : null;
+      if (location) {
+        if (hop >= MAX_REDIRECTS) throw new Error("Too many redirects.");
+        current = new URL(location, current).href;
+        continue;
+      }
+      return { ok: res.ok, status: res.status, url: current, html: await readCapped(res) };
+    }
   } finally {
     clearTimeout(timer);
   }
@@ -262,6 +359,7 @@ function parseOpenGraph(html) {
 /**
  * Resolve one link. `deps` (injectable):
  *   fetchImpl         — global fetch
+ *   lookup(host)      — dns.lookup({all:true}); every fetched host must resolve to public addresses
  *   uid               — for the AliExpress DS API (user's connection)
  *   weverse           — { parseWeverseUrl, fetchWeverseSale, mapSaleToProduct }
  *   aliexpress        — { fetchAliexpressDsProduct }
@@ -334,7 +432,7 @@ async function resolveLink(link, deps = {}) {
         });
       }
       case "amazon": {
-        const page = await fetchHtml(link.url, fetchImpl);
+        const page = await fetchHtml(link.url, fetchImpl, deps.lookup);
         // A short link resolves to the real product URL — read the ASIN off it.
         const resolved = detectSource(page.url);
         const sourceId = detected.sourceId || resolved?.sourceId || null;
@@ -349,7 +447,7 @@ async function resolveLink(link, deps = {}) {
         return done({ sourceId, ...parsed });
       }
       default: {
-        const page = await fetchHtml(link.url, fetchImpl);
+        const page = await fetchHtml(link.url, fetchImpl, deps.lookup);
         if (!page.ok) return failed(`The page returned ${page.status}.`);
         const parsed = parseOpenGraph(page.html);
         return parsed ? done(parsed) : failed("The page has no product information we can read.");
@@ -386,5 +484,7 @@ module.exports = {
   isAmazonBotCheck,
   resolveLink,
   resolveLinks,
+  isPublicAddress,
+  assertPublicUrl,
   _internal: { fetchHtml, metaContent, decodeEntities, parsePriceText },
 };
