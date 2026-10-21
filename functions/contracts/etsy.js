@@ -20,6 +20,12 @@ const EtsyCreateListingRequestSchema = z.object({
   taxonomyId: z.union([z.string(), z.number()]).nullish(),
   shippingProfileId: z.union([z.string(), z.number()]).nullish(),
   returnPolicyId: z.union([z.string(), z.number()]).nullish(),
+  /** Etsy's handmade / vintage / supply attestation. Defaults for a resold item:
+   *  someone_else + the current `2020_<year>` bucket + is_supply true (the only
+   *  combination Etsy accepts for a recent item made by someone else). */
+  whoMade: z.enum(["i_did", "someone_else", "collective"]).nullish(),
+  whenMade: z.string().regex(/^(made_to_order|\d{4}_\d{4}|before_\d{4}|\d{4}s)$/).nullish(),
+  isSupply: z.boolean().nullish(),
   credentialSet: z.string().nullish(), // legacy, ignored
 });
 

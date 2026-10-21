@@ -4089,17 +4089,23 @@ extension EtsyCheckShopSetupResponse {
 // MARK: - EtsyCreateListingRequest
 struct EtsyCreateListingRequest: Codable, Equatable, Sendable {
     let credentialSet: String?
+    let isSupply: Bool?
     let productId: String
     let returnPolicyId: ReturnPolicyId?
     let shippingProfileId: ReturnPolicyId?
     let taxonomyId: ReturnPolicyId?
+    let whenMade: String?
+    let whoMade: WhoMade?
 
     enum CodingKeys: String, CodingKey {
         case credentialSet = "credentialSet"
+        case isSupply = "isSupply"
         case productId = "productId"
         case returnPolicyId = "returnPolicyId"
         case shippingProfileId = "shippingProfileId"
         case taxonomyId = "taxonomyId"
+        case whenMade = "whenMade"
+        case whoMade = "whoMade"
     }
 }
 
@@ -4123,17 +4129,23 @@ extension EtsyCreateListingRequest {
 
     func with(
         credentialSet: String?? = nil,
+        isSupply: Bool?? = nil,
         productId: String? = nil,
         returnPolicyId: ReturnPolicyId?? = nil,
         shippingProfileId: ReturnPolicyId?? = nil,
-        taxonomyId: ReturnPolicyId?? = nil
+        taxonomyId: ReturnPolicyId?? = nil,
+        whenMade: String?? = nil,
+        whoMade: WhoMade?? = nil
     ) -> EtsyCreateListingRequest {
         return EtsyCreateListingRequest(
             credentialSet: credentialSet ?? self.credentialSet,
+            isSupply: isSupply ?? self.isSupply,
             productId: productId ?? self.productId,
             returnPolicyId: returnPolicyId ?? self.returnPolicyId,
             shippingProfileId: shippingProfileId ?? self.shippingProfileId,
-            taxonomyId: taxonomyId ?? self.taxonomyId
+            taxonomyId: taxonomyId ?? self.taxonomyId,
+            whenMade: whenMade ?? self.whenMade,
+            whoMade: whoMade ?? self.whoMade
         )
     }
 
@@ -4179,6 +4191,12 @@ enum ReturnPolicyId: Codable, Equatable, Sendable {
             try container.encodeNil()
         }
     }
+}
+
+enum WhoMade: String, Codable, Equatable, Sendable {
+    case collective = "collective"
+    case iDid = "i_did"
+    case someoneElse = "someone_else"
 }
 
 //

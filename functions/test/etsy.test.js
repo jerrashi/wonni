@@ -145,3 +145,87 @@ test("etsy contracts: productId required; legacy credentialSet accepted & ignore
   const parsed = create.parse({ productId: "p1", credentialSet: "web", taxonomyId: 42 });
   assert.equal(parsed.taxonomyId, 42);
 });
+
+// ── 2026-10-21 live-verified rules (see CLAUDE.md "Etsy posting") ─────────────
+
+const {
+  recentWhenMade, whenMadeFromEnumError, flattenTaxonomyLeaves, pickShippingProfile,
+  pickReadinessState, etsyItemDimensions, singleOfferingInventory, etsyErrorText,
+} = _internal;
+
+test("when_made: the recent bucket follows the current year and can be read off Etsy's enum error", () => {
+  assert.equal(recentWhenMade(new Date("2026-03-01T00:00:00Z")), "2020_2026");
+  assert.equal(recentWhenMade(new Date("2027-01-02T00:00:00Z")), "2020_2027");
+  assert.equal(
+    whenMadeFromEnumError("Invalid value (2020_2024) for enum(made_to_order, 2020_2026, 2010_2019, 2007_2009)"),
+    "2020_2026",
+  );
+  assert.equal(whenMadeFromEnumError("Oh dear, you cannot sell this item on Etsy."), null);
+  assert.equal(whenMadeFromEnumError(undefined), null);
+});
+
+test("buildEtsyCreateBody: resale defaults, dimensions, optional return policy", () => {
+  const body = buildEtsyCreateBody(
+    { title: "Card", description: "d", weightLbs: 0.0625, lengthIn: 3.4, widthIn: 2.1, heightIn: 0.01 },
+    { taxonomyId: 103, price: 30, quantity: 1, shippingProfileId: 5, returnPolicyId: null, readinessStateId: 9 },
+  );
+  assert.equal(body.who_made, "someone_else");
+  assert.equal(body.when_made, recentWhenMade());
+  assert.equal(body.is_supply, true, "a recent item by someone else is only accepted as a supply");
+  assert.equal("return_policy_id" in body, false, "no policy → field omitted, not null");
+  assert.equal(body.readiness_state_id, 9);
+  assert.deepEqual(
+    [body.item_weight, body.item_weight_unit, body.item_length, body.item_width, body.item_height, body.item_dimensions_unit],
+    [1, "oz", 3.4, 2.1, 0.01, "in"],
+  );
+  const overridden = buildEtsyCreateBody({ title: "Vase" }, {
+    taxonomyId: 1, price: 10, quantity: 1, shippingProfileId: 5, whoMade: "i_did", whenMade: "2010_2019", isSupply: false,
+  });
+  assert.deepEqual([overridden.who_made, overridden.when_made, overridden.is_supply], ["i_did", "2010_2019", false]);
+});
+
+test("etsyItemDimensions: lbs + oz in ounces, 6 oz default, dimensions only when complete", () => {
+  assert.deepEqual(etsyItemDimensions({ weightLbs: 1, weightOz: 8 }), { item_weight: 24, item_weight_unit: "oz" });
+  assert.deepEqual(etsyItemDimensions({}), { item_weight: 6, item_weight_unit: "oz" });
+  assert.deepEqual(etsyItemDimensions({ weightLbs: "x", lengthIn: 4, widthIn: 3 }), { item_weight: 6, item_weight_unit: "oz" });
+});
+
+test("flattenTaxonomyLeaves: walks the tree and names leaves by their full path", () => {
+  const tree = [
+    { id: 1, name: "Paper & Party Supplies", children: [
+      { id: 2, name: "Paper", children: [{ id: 3, name: "Stickers", children: [] }, { id: 4, name: "Cards" }] },
+    ] },
+    { id: 5, name: "Accessories", children: [] },
+  ];
+  assert.deepEqual(flattenTaxonomyLeaves(tree), [
+    { id: 3, name: "Paper & Party Supplies > Paper > Stickers" },
+    { id: 4, name: "Paper & Party Supplies > Paper > Cards" },
+    { id: 5, name: "Accessories" },
+  ]);
+  assert.equal(matchEtsyTaxonomyId(flattenTaxonomyLeaves(tree), "Photocard", "Collectibles > Cards"), 4);
+});
+
+test("pickShippingProfile / pickReadinessState: skip pre-orders, prefer ready_to_ship", () => {
+  const profiles = [{ shipping_profile_id: 1, title: "Pre-Orders" }, { shipping_profile_id: 2, title: "USPS Priority Mail" }];
+  assert.equal(pickShippingProfile(profiles).shipping_profile_id, 2);
+  assert.equal(pickShippingProfile([profiles[0]]).shipping_profile_id, 1, "only a pre-order profile → still used");
+  assert.equal(pickShippingProfile([]), null);
+  const states = [{ readiness_state_id: 7, readiness_state: "made_to_order" }, { readiness_state_id: 8, readiness_state: "ready_to_ship" }];
+  assert.equal(pickReadinessState(states).readiness_state_id, 8);
+  assert.equal(pickReadinessState([states[0]]).readiness_state_id, 7);
+  assert.equal(pickReadinessState(undefined), null);
+});
+
+test("singleOfferingInventory: one property-less product carrying price + quantity", () => {
+  const inv = singleOfferingInventory(12.5, 3, 8);
+  assert.equal(inv.products.length, 1);
+  assert.deepEqual(inv.products[0].property_values, []);
+  assert.deepEqual(inv.products[0].offerings[0], { price: 12.5, quantity: 3, is_enabled: true, readiness_state_id: 8 });
+  assert.deepEqual(singleOfferingInventory(0.05, -1).products[0].offerings[0], { price: 0.2, quantity: 1, is_enabled: true });
+});
+
+test("etsyErrorText: reads both Etsy error shapes", () => {
+  assert.equal(etsyErrorText({ error: "Invalid value" }), "Invalid value");
+  assert.equal(etsyErrorText([{ path: "/marketplace", message: "Oh dear" }]), "Oh dear");
+  assert.equal(etsyErrorText(null), "");
+});

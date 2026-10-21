@@ -319,7 +319,7 @@ export default function Settings() {
         response_type: "code",
         client_id: ETSY_CLIENT_ID,
         redirect_uri: "https://wonni-app.web.app/web/oauth/etsy",
-        scope: "listings_w listings_r shops_r transactions_r",
+        scope: "listings_w listings_r listings_d shops_r transactions_r",
         state,
         code_challenge: codeChallenge,
         code_challenge_method: "S256",

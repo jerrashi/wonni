@@ -108,7 +108,16 @@ async function refreshEtsyToken(refreshToken) {
     body: body.toString(),
   });
   if (!res.ok) {
-    throw new Error(`Etsy token refresh failed (${res.status}): ${await res.text()}`);
+    const text = await res.text();
+    // "client_id is invalid" = the stored refresh token was issued to a different
+    // Etsy app than the deployed keyset (the keystring secret was changed on
+    // 2026-09-15 while the connection from 2026-08-31 stayed). Only a new OAuth
+    // connect fixes that, so say so instead of a bare INTERNAL.
+    if (res.status === 400 || res.status === 401) {
+      throw new HttpsError("failed-precondition",
+        `Etsy connection is no longer valid (${text.slice(0, 120)}). Reconnect Etsy in Settings.`);
+    }
+    throw new Error(`Etsy token refresh failed (${res.status}): ${text}`);
   }
   return res.json();
 }

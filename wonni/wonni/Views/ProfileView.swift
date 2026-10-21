@@ -2877,7 +2877,7 @@ struct SettingsSheet: View {
             URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "client_id", value: clientId),
             URLQueryItem(name: "redirect_uri", value: redirectUri),
-            URLQueryItem(name: "scope", value: "listings_w listings_r shops_r transactions_r"),
+            URLQueryItem(name: "scope", value: "listings_w listings_r listings_d shops_r transactions_r"),
             URLQueryItem(name: "state", value: state),
             URLQueryItem(name: "code_challenge", value: codeChallenge),
             URLQueryItem(name: "code_challenge_method", value: "S256")

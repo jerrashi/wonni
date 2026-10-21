@@ -29,6 +29,28 @@ const { loadOwnedProduct } = salesInternal;
 
 const ETSY_FALLBACK_TAXONOMY_ID = 69150398; // "Accessories"
 const ETSY_MIN_PRICE = 0.2;
+const ETSY_DEFAULT_WEIGHT_OZ = 6; // the app's default package weight
+
+// Etsy only lists handmade, vintage or craft-supply items. A product made by
+// `someone_else` in the current era is refused with `invalid_marketplace`
+// ("you cannot sell this item on Etsy") unless it is flagged `is_supply`
+// (verified live 2026-10-21). These are the defaults for a resold item; the
+// caller can override all three through the contract (whoMade / whenMade /
+// isSupply) and the seller is responsible for the choice.
+const ETSY_RESALE_DEFAULTS = { whoMade: "someone_else", isSupply: true };
+
+/** Etsy's "recent" when_made bucket is `2020_<current year>` and moves every January
+ *  (2020_2024 was refused in 2026). */
+function recentWhenMade(now = new Date()) {
+  return `2020_${now.getUTCFullYear()}`;
+}
+
+/** The `2020_…` option out of an Etsy "Invalid value (x) for enum(a, b, c)" error, or null. */
+function whenMadeFromEnumError(message) {
+  const m = /enum\(([^)]*)\)/.exec(String(message || ""));
+  if (!m) return null;
+  return m[1].split(",").map((v) => v.trim()).find((v) => /^2020_\d{4}$/.test(v)) || null;
+}
 
 let taxonomyCache = null;
 
@@ -70,10 +92,22 @@ async function getTaxonomyLeafNodes(clientId) {
     console.error(`[etsy] taxonomy fetch failed (${status})`);
     return [];
   }
-  taxonomyCache = (data.results || [])
-    .filter((n) => n.children_count === 0)
-    .map((n) => ({ id: n.id, name: n.full_path_taxonomy_string || n.name }));
+  taxonomyCache = flattenTaxonomyLeaves(data.results);
   return taxonomyCache;
+}
+
+/** Leaf nodes of Etsy's seller-taxonomy TREE (top-level nodes carry their
+ *  descendants under `children`), named by their full "A > B > C" path. The old
+ *  `children_count === 0` filter ran on the 15 roots only, so every listing fell
+ *  back to the "Accessories" id. */
+function flattenTaxonomyLeaves(nodes, path = [], out = []) {
+  for (const n of nodes || []) {
+    const name = [...path, n.name].filter(Boolean);
+    const kids = Array.isArray(n.children) ? n.children : [];
+    if (kids.length === 0) out.push({ id: n.id, name: name.join(" > ") });
+    else flattenTaxonomyLeaves(kids, name, out);
+  }
+  return out;
 }
 
 function categoryWords(s) {
@@ -106,28 +140,41 @@ function matchEtsyTaxonomyId(nodes, title, category) {
   return bestScore > 0 ? bestId : ETSY_FALLBACK_TAXONOMY_ID;
 }
 
-async function resolveEtsyFields(clientId, title, category) {
-  const taxonomy_id = matchEtsyTaxonomyId(await getTaxonomyLeafNodes(clientId), title, category);
-  // Wonni resells modern merch; Etsy requires a value for both.
-  return { taxonomy_id, when_made: "2020_2024", who_made: "someone_else" };
+async function resolveEtsyTaxonomyId(clientId, title, category) {
+  return matchEtsyTaxonomyId(await getTaxonomyLeafNodes(clientId), title, category);
 }
 
 // ── Shop-setup lookups ────────────────────────────────────────────────────
 
+/** The shop's default shipping profile: the first one not meant for pre-orders. */
+function pickShippingProfile(profiles = []) {
+  const list = Array.isArray(profiles) ? profiles : [];
+  return list.find((p) => !/pre-?orders?/i.test(String(p.title || ""))) || list[0] || null;
+}
+
+/** The shop's default processing profile: "ready to ship" over made-to-order (the
+ *  first one listed was the 1–10 week made-to-order profile on the test shop). */
+function pickReadinessState(states = []) {
+  const list = Array.isArray(states) ? states : [];
+  return list.find((s) => s.readiness_state === "ready_to_ship") || list[0] || null;
+}
+
 async function firstShippingProfileId(shopId, auth) {
   const { status, data } = await etsyReq("GET", `/v3/application/shops/${shopId}/shipping-profiles`, auth);
-  return status === 200 ? data.results?.[0]?.shipping_profile_id ?? null : null;
+  return status === 200 ? pickShippingProfile(data.results)?.shipping_profile_id ?? null : null;
 }
+/** Etsy's return policies live under `/policies/return` (the old `/return-policies`
+ *  path 404s, which made every create fail with "missing return policy"). */
 async function firstReturnPolicyId(shopId, auth) {
-  const { status, data } = await etsyReq("GET", `/v3/application/shops/${shopId}/return-policies`, auth);
+  const { status, data } = await etsyReq("GET", `/v3/application/shops/${shopId}/policies/return`, auth);
   return status === 200 ? data.results?.[0]?.return_policy_id ?? null : null;
 }
 
-/** First processing profile ("readiness state") — Etsy requires one on physical listings.
- *  Best-effort: null (omitted from the payload) if the shop has none / lookup fails. */
+/** Processing profile ("readiness state") for physical listings. Best-effort: null
+ *  (omitted from the payload) if the shop has none / lookup fails. */
 async function firstReadinessStateId(shopId, auth) {
   const { status, data } = await etsyReq("GET", `/v3/application/shops/${shopId}/readiness-state-definitions`, auth);
-  return status === 200 ? data.results?.[0]?.readiness_state_id ?? null : null;
+  return status === 200 ? pickReadinessState(data.results)?.readiness_state_id ?? null : null;
 }
 
 // ── Image upload (multipart) ──────────────────────────────────────────────
@@ -181,6 +228,37 @@ async function uploadListingImages(shopId, listingId, imageUrls, { accessToken, 
 
 // ── Payload builders (pure) ───────────────────────────────────────────────
 
+/** `item_weight` / `item_*` fields Etsy needs before it will attach a CALCULATED
+ *  shipping profile ("The listing is missing 'item_weight', …"). Weight from
+ *  weightLbs + weightOz in ounces (6 oz default), dimensions only when all three
+ *  are present — the same inputs eBay's package block uses. */
+function etsyItemDimensions(product = {}) {
+  const lbs = Number(product.weightLbs);
+  const oz = Number(product.weightOz);
+  let totalOz = (Number.isFinite(lbs) ? lbs : 0) * 16 + (Number.isFinite(oz) ? oz : 0);
+  if (!(totalOz > 0)) totalOz = ETSY_DEFAULT_WEIGHT_OZ;
+  const out = { item_weight: Math.round(totalOz * 100) / 100, item_weight_unit: "oz" };
+  const [l, w, h] = [product.lengthIn, product.widthIn, product.heightIn].map(Number);
+  if ([l, w, h].every((n) => Number.isFinite(n) && n > 0)) {
+    Object.assign(out, { item_length: l, item_width: w, item_height: h, item_dimensions_unit: "in" });
+  }
+  return out;
+}
+
+/** `PUT /listings/{id}/inventory` payload for a listing with no variations. Price and
+ *  quantity are NOT fields of `PATCH /listings/{id}` (Etsy ignores them there), so
+ *  this is how an edit reaches a single-offering listing. */
+function singleOfferingInventory(price, quantity, readinessStateId = null) {
+  const qty = Number.isFinite(Number(quantity)) && Number(quantity) >= 0 ? Number(quantity) : 1;
+  return {
+    products: [{
+      property_values: [],
+      offerings: [{ price: priceAmount(price), quantity: qty, is_enabled: true, ...(readinessStateId ? { readiness_state_id: readinessStateId } : {}) }],
+    }],
+    price_on_property: [], quantity_on_property: [], sku_on_property: [],
+  };
+}
+
 /** Etsy `PUT /listings/{id}/inventory` payload from product variants. */
 function buildEtsyInventoryPayload(variations = [], basePrice = 0, readinessStateId = null) {
   const products = variations.map((v, idx) => {
@@ -211,22 +289,24 @@ function buildEtsyInventoryPayload(variations = [], basePrice = 0, readinessStat
   return { products, price_on_property: [], quantity_on_property: [], sku_on_property: [] };
 }
 
-function buildEtsyCreateBody(product, { taxonomyId, whenMade, whoMade, price, quantity, shippingProfileId, returnPolicyId, readinessStateId }) {
+function buildEtsyCreateBody(product, { taxonomyId, whenMade, whoMade, isSupply, price, quantity, shippingProfileId, returnPolicyId, readinessStateId }) {
   const title = String(product.title || "").slice(0, 140) || "Product";
   return {
     quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
     title,
     description: String(product.description || title).slice(0, 65000) || "Product description",
     price: priceAmount(price),
-    who_made: whoMade,
-    when_made: whenMade,
+    who_made: whoMade || ETSY_RESALE_DEFAULTS.whoMade,
+    when_made: whenMade || recentWhenMade(),
+    is_supply: isSupply ?? ETSY_RESALE_DEFAULTS.isSupply,
     taxonomy_id: taxonomyId,
     // `state` can't be set on create — Etsy makes a draft; etsyCreateListingCore PATCHes it active
     // once images are attached.
     type: "physical",
     shipping_profile_id: shippingProfileId,
-    return_policy_id: returnPolicyId,
+    ...(returnPolicyId ? { return_policy_id: returnPolicyId } : {}),
     ...(readinessStateId ? { readiness_state_id: readinessStateId } : {}),
+    ...etsyItemDimensions(product),
   };
 }
 
@@ -303,35 +383,45 @@ async function etsyCreateListingCore(uid, data) {
     const auth = await getActiveEtsyToken(uid);
     const { shopId } = auth;
 
-    const shippingProfileId = data.shippingProfileId ?? await firstShippingProfileId(shopId, auth);
-    const returnPolicyId = data.returnPolicyId ?? await firstReturnPolicyId(shopId, auth);
-    if (!shippingProfileId) throw new HttpsError("failed-precondition", "etsy_missing_shipping_profile: add a shipping profile in your Etsy shop settings.");
-    if (!returnPolicyId) throw new HttpsError("failed-precondition", "etsy_missing_return_policy: add a return policy in your Etsy shop settings.");
-
-    let taxonomyId = data.taxonomyId != null ? Number(data.taxonomyId) : null;
-    let whenMade = "2020_2024";
-    let whoMade = "someone_else";
-    if (!taxonomyId) {
-      const r = await resolveEtsyFields(auth.clientId, product.title, product.category || product.artistName);
-      taxonomyId = r.taxonomy_id;
-      whenMade = r.when_made;
-      whoMade = r.who_made;
-    }
-
-    const readinessStateId = await firstReadinessStateId(shopId, auth);
     const price = resolveListingPrice(product);
-    const quantity = productTotalQuantity(product);
-    const createBody = buildEtsyCreateBody(product, {
-      taxonomyId, whenMade, whoMade, price, quantity, shippingProfileId, returnPolicyId, readinessStateId,
-    });
+    const readinessStateId = await firstReadinessStateId(shopId, auth);
 
-    const { status, data: created } = await etsyReq(
-      "POST", `/v3/application/shops/${shopId}/listings`, { ...auth, body: createBody },
-    );
-    if (status !== 200 && status !== 201) {
-      throw new Error(`Etsy create failed (${status}): ${JSON.stringify(created)}`);
+    // A previous attempt may have created the Etsy draft and then failed on photos
+    // or publish: reuse it instead of leaving a second orphan draft in the shop.
+    let etsyListingId = await reusableEtsyDraft(product, auth);
+    if (!etsyListingId) {
+      const shippingProfileId = data.shippingProfileId ?? await firstShippingProfileId(shopId, auth);
+      // Optional on Etsy's side (a draft was accepted without one on a shop that has none).
+      const returnPolicyId = data.returnPolicyId ?? await firstReturnPolicyId(shopId, auth);
+      if (!shippingProfileId) throw new HttpsError("failed-precondition", "etsy_missing_shipping_profile: add a shipping profile in your Etsy shop settings.");
+
+      const taxonomyId = data.taxonomyId != null
+        ? Number(data.taxonomyId)
+        : await resolveEtsyTaxonomyId(auth.clientId, product.title, product.category || product.artistName);
+      const quantity = productTotalQuantity(product);
+      const createBody = buildEtsyCreateBody(product, {
+        taxonomyId, whenMade: data.whenMade, whoMade: data.whoMade, isSupply: data.isSupply,
+        price, quantity, shippingProfileId, returnPolicyId, readinessStateId,
+      });
+
+      let { status, data: created } = await etsyReq(
+        "POST", `/v3/application/shops/${shopId}/listings`, { ...auth, body: createBody },
+      );
+      // Etsy rolls the "recent" when_made bucket forward each year; take the value
+      // its own error lists rather than failing on a stale constant.
+      const retryWhenMade = status === 400 && !data.whenMade ? whenMadeFromEnumError(created?.error) : null;
+      if (retryWhenMade && retryWhenMade !== createBody.when_made) {
+        ({ status, data: created } = await etsyReq(
+          "POST", `/v3/application/shops/${shopId}/listings`, { ...auth, body: { ...createBody, when_made: retryWhenMade } },
+        ));
+      }
+      if (status !== 200 && status !== 201) {
+        throw new HttpsError("failed-precondition", `Etsy refused the listing (${status}): ${etsyErrorText(created)}`);
+      }
+      etsyListingId = String(created.listing_id);
+      // Remember the draft right away so a failure below is resumable.
+      await ref.set({ etsyListingId, crossPostListingIds: { etsy: etsyListingId } }, { merge: true });
     }
-    const etsyListingId = String(created.listing_id);
 
     const images = listingImagesFor(product, 10);
     const uploaded = images.length ? await uploadListingImages(shopId, etsyListingId, images, auth) : 0;
@@ -360,6 +450,7 @@ async function etsyCreateListingCore(uid, data) {
       crossPostStatus: { etsy: "active" },
       crossPostListingIds: { etsy: etsyListingId },
       etsyListingId,
+      etsyListingUrl: `https://www.etsy.com/listing/${etsyListingId}`,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
 
@@ -370,6 +461,23 @@ async function etsyCreateListingCore(uid, data) {
     console.error(`[etsyCreateListing] ${data.productId}: ${err.stack || err.message}`);
     throw new HttpsError("internal", `Etsy listing failed: ${err.message}`);
   }
+}
+
+/** Etsy's error body as one readable line (it is either {error} or an array of {message}). */
+function etsyErrorText(body) {
+  if (!body) return "";
+  if (typeof body === "string") return body;
+  if (Array.isArray(body)) return body.map((e) => e?.message || JSON.stringify(e)).join("; ");
+  return body.error || body.message || JSON.stringify(body);
+}
+
+/** The product's remembered Etsy listing id when it is still a draft on Etsy (a
+ *  create that failed after the draft existed), else null. */
+async function reusableEtsyDraft(product, auth) {
+  const id = etsyIdOf(product);
+  if (!id || product.crossPostStatus?.etsy === "active") return null;
+  const { status, data } = await etsyReq("GET", `/v3/application/listings/${id}`, auth);
+  return status === 200 && data?.state === "draft" ? String(id) : null;
 }
 
 exports.etsyCreateListing = onCall(
@@ -399,8 +507,7 @@ exports.etsyUpdateListing = onCall(
       { ...auth, body: {
         title: String(product.title || "").slice(0, 140),
         description: product.description || product.title || "",
-        price: priceAmount(price),
-        quantity: productTotalQuantity(product),
+        ...etsyItemDimensions(product),
       } },
     );
 
@@ -409,17 +516,16 @@ exports.etsyUpdateListing = onCall(
         { crossPostStatus: { etsy: "deleted" } }, { merge: true });
       throw new HttpsError("not-found", "Etsy listing not found — it may have been deleted.");
     }
-    if (status !== 200) throw new HttpsError("internal", `Etsy update failed (${status}): ${JSON.stringify(res)}`);
+    if (status !== 200) throw new HttpsError("internal", `Etsy update failed (${status}): ${etsyErrorText(res)}`);
 
+    // Price and quantity live on the inventory resource, not the listing PATCH.
     const variants = Array.isArray(product.variants) ? product.variants.filter((v) => v.active !== false) : [];
-    if (variants.length > 1) {
-      try {
-        await etsyReq("PUT", `/v3/application/listings/${etsyId}/inventory`,
-          { ...auth, body: buildEtsyInventoryPayload(variants, priceAmount(price)) });
-      } catch (e) {
-        console.warn(`[etsyUpdateListing] inventory update failed: ${e.message}`);
-      }
-    }
+    const readinessStateId = await firstReadinessStateId(auth.shopId, auth);
+    const inventory = variants.length > 1
+      ? buildEtsyInventoryPayload(variants, priceAmount(price), readinessStateId)
+      : singleOfferingInventory(price, productTotalQuantity(product), readinessStateId);
+    const inv = await etsyReq("PUT", `/v3/application/listings/${etsyId}/inventory`, { ...auth, body: inventory });
+    if (inv.status !== 200) throw new HttpsError("internal", `Etsy price/quantity update failed (${inv.status}): ${etsyErrorText(inv.data)}`);
     await db.collection("products").doc(data.productId).set(
       { updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     return { success: true };
@@ -438,14 +544,24 @@ exports.etsyDeleteListing = onCall(
     if (!etsyId) return { success: true };
 
     const auth = await getActiveEtsyToken(uid);
-    // Etsy has no delete for active listings — set inactive (draft).
-    await etsyReq("PATCH", `/v3/application/shops/${auth.shopId}/listings/${etsyId}`,
+    // An active listing is deactivated (Etsy keeps it as inactive, no fee to
+    // re-activate). A draft cannot be deactivated; it is deleted outright, which
+    // needs the `listings_d` scope (connections made before 2026-10-21 lack it —
+    // the draft then stays in the shop's Drafts and is logged).
+    const off = await etsyReq("PATCH", `/v3/application/shops/${auth.shopId}/listings/${etsyId}`,
       { ...auth, body: { state: "inactive" } });
+    if (off.status === 400 && /draft/i.test(etsyErrorText(off.data))) {
+      const del = await etsyReq("DELETE", `/v3/application/listings/${etsyId}`, auth);
+      if (del.status !== 204) console.warn(`[etsyDeleteListing] draft ${etsyId} left on Etsy (${del.status}): ${etsyErrorText(del.data)}`);
+    } else if (off.status !== 200 && off.status !== 404) {
+      throw new HttpsError("internal", `Etsy deactivate failed (${off.status}): ${etsyErrorText(off.data)}`);
+    }
 
     await db.collection("products").doc(data.productId).set({
       crossPostStatus: { etsy: "" },
       crossPostListingIds: { etsy: admin.firestore.FieldValue.delete() },
       etsyListingId: admin.firestore.FieldValue.delete(),
+      etsyListingUrl: admin.firestore.FieldValue.delete(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
     return { success: true };
@@ -549,4 +665,7 @@ exports._internal = {
   matchEtsyTaxonomyId, categoryWords, buildEtsyInventoryPayload, buildEtsyCreateBody,
   etsyDriftDiff, etsyImportUpdates, productTotalQuantity, priceAmount, etsyIdOf,
   etsyCreateListingCore,
+  recentWhenMade, whenMadeFromEnumError, flattenTaxonomyLeaves, pickShippingProfile,
+  pickReadinessState, etsyItemDimensions, singleOfferingInventory, etsyErrorText,
+  ETSY_RESALE_DEFAULTS,
 };

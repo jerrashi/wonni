@@ -1981,6 +1981,38 @@
             }
           ]
         },
+        "whoMade": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "i_did",
+                "someone_else",
+                "collective"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "whenMade": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(made_to_order|\\d{4}_\\d{4}|before_\\d{4}|\\d{4}s)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "isSupply": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "credentialSet": {
           "type": [
             "string",
