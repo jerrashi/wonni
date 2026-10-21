@@ -20,12 +20,19 @@ const MARKETPLACE_ID = "EBAY_US";
 // when unset, fall back to the app's own documented default — a 6 oz light
 // package, the same default ProductDetail shows in the shipping row.
 // Dimensions are included only when all three are present.
+// eBay models weight as whole pounds + ounces. A fractional POUND under 1 lb
+// (a 1 oz trading card = 0.063) comes back as error 25020 "package weight is
+// not valid" at publish (seen live 2026-10-20: every card failed, every item at
+// 0.25 lb or more posted), so anything under a pound goes as whole OUNCEs,
+// never less than 1.
 function ebayPackageWeightAndSize(product) {
   const lbs = Number(product.weightLbs);
   const oz = Number(product.weightOz);
   let totalLbs = (Number.isFinite(lbs) ? lbs : 0) + (Number.isFinite(oz) ? oz : 0) / 16;
   if (!(totalLbs > 0)) totalLbs = 0.375; // 6 oz
-  const pkg = { weight: { value: Math.round(totalLbs * 1000) / 1000, unit: "POUND" } };
+  const pkg = totalLbs < 1
+    ? { weight: { value: Math.max(1, Math.ceil(totalLbs * 16 - 1e-9)), unit: "OUNCE" } }
+    : { weight: { value: Math.round(totalLbs * 1000) / 1000, unit: "POUND" } };
   const [l, w, h] = [product.lengthIn, product.widthIn, product.heightIn].map(Number);
   if ([l, w, h].every((n) => Number.isFinite(n) && n > 0)) {
     pkg.dimensions = { length: l, width: w, height: h, unit: "INCH" };
