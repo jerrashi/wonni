@@ -3,7 +3,7 @@ name: TestFlight
 on:
   push:
     branches: [main]
-    paths: [wonni/**]
+    paths: [wonni/**, .github/workflows/testflight.yml]
   # Manual re-run (Actions → TestFlight → Run workflow), e.g. after fixing signing.
   workflow_dispatch:
 
@@ -99,12 +99,31 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
       - name: Provide Secrets.xcconfig
-        # Same placeholder used by the existing test workflow (test.yml) —
-        # a real production Secrets.xcconfig is never committed. If the app
-        # needs real (non-placeholder) API keys baked into a TestFlight
-        # build, that's a separate decision (e.g. a dedicated encrypted
-        # Secrets.xcconfig secret) not made here.
-        run: cp wonni/wonni/Secrets.xcconfig.example wonni/wonni/Secrets.xcconfig
+        # OAuth client identifiers baked into the build (Info.plist reads them
+        # as build settings). They are public identifiers, not secrets — the
+        # same values ship in the web bundle — but they live in repo secrets so
+        # the file is never committed. Before 2026-10-22 this step copied the
+        # placeholder example, so every TestFlight build asked eBay/Etsy to
+        # authorize an app called "ci-placeholder" ("application requesting to
+        # connect is not recognized"). A missing secret falls back to the
+        # placeholder so the build still compiles.
+        env:
+          EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
+          EBAY_RUNAME: ${{ secrets.EBAY_RUNAME }}
+          ETSY_CLIENT_ID: ${{ secrets.ETSY_CLIENT_ID }}
+        run: |
+          cat > wonni/wonni/Secrets.xcconfig <<EOF
+          /// ebay
+          EBAY_CLIENT_KEY = ${EBAY_CLIENT_ID:-ci-placeholder}
+          EBAY_CLIENT_ID = ${EBAY_CLIENT_ID:-ci-placeholder}
+          EBAY_RUNAME = ${EBAY_RUNAME:-ci-placeholder}
+
+          /// etsy
+          ETSY_CLIENT_ID = ${ETSY_CLIENT_ID:-ci-placeholder}
+          EOF
+          [ -n "$EBAY_CLIENT_ID" ] || echo "::warning::EBAY_CLIENT_ID secret unset — eBay connect will not work in this build"
+          [ -n "$EBAY_RUNAME" ]    || echo "::warning::EBAY_RUNAME secret unset — eBay connect will not work in this build"
+          [ -n "$ETSY_CLIENT_ID" ] || echo "::warning::ETSY_CLIENT_ID secret unset — Etsy connect will not work in this build"
 
       - name: Install App Store Connect API key
         env:
