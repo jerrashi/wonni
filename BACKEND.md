@@ -480,6 +480,86 @@ with `HttpsError("invalid-argument", ...)`. Swift types: `contracts/generated/`.
 <!-- /AUTOGEN:contract-surface -->
 
 
+## Sold-out + sales tracking — product decisions (2026-10-24)
+
+Agreed with the user 2026-10-24. These supersede the older notes where they
+differ; the "reconciled" lines say what changed. Nothing here is built yet.
+
+### 1. "Mark as sold out" is a queued job, like posting
+- Selecting one or more listings and choosing Mark as sold out enqueues ONE
+  job per listing on the same queue publishing and cross-posting use (iOS
+  `AppTaskQueue` + `CrossPostRunStore` persistence, so it survives leaving the
+  app and shows the "interrupted" banner on return). The pill reads
+  "Marking sold out · 1 of 4"; tapping it opens the full-screen progress list,
+  and a Mercari row opens that listing's web view (see 2).
+- Per listing the job is: `markSoldOutAndCascade({productId})` (zeroes every
+  active variant, cascades qty 0 to eBay/Etsy/TikTok, sets `pendingMercari*`)
+  → then, if the product is on Mercari, the Mercari step below. The job is
+  `ended` only when both finished; a Mercari failure leaves the flag so the
+  pending-actions screen still shows it.
+- **Reconciled:** replaces the foreground confirm + spinner in
+  `ProfileView.markAsSoldOut` and `BulkEditSheet.markSelectedOutOfStock`
+  (3 silent retries). Closes #36's gap properly. The web "Mark as out of
+  stock" `"..."` action noted under the eBay lifecycle work calls the same
+  callable; web has no pill, and its Mercari step is the extension queue (§
+  Stretch goals) — unchanged.
+
+### 2. Mercari sold-out runs in a minimized web view, deactivate OR delete
+- The Mercari step is a `CrossPostWebView`-style job: minimized by default,
+  openable from the pill/progress list to watch or fix a login, never a fully
+  hidden headless run. `MercariListingStateAutomator` (My Listings page,
+  checkbox, Deactivate/Activate button; #17/#35, never device-verified) is the
+  starting point for the script, re-hosted in that visible-on-demand view.
+- **New user setting** `mercariSoldOutAction: "deactivate" | "delete"`,
+  default **deactivate**, next to the other Mercari prefs
+  (`settings/mercariShipping`, same surface as `keepSmartPricing`; web
+  Settings gets it too). Deactivate keeps `crossPostListingIds.mercari` so a
+  restock re-activates (#17); delete clears the id and the Mercari status,
+  and a restock re-posts from scratch — the setting's help text must say so.
+- **Reconciled:** the cascade's `pendingMercariDeactivation` flag name stays
+  (BACKEND.md "Mercari is binary" table); the client reads the setting to pick
+  the action. The `variants[i].pendingMercari*` gap still applies.
+
+### 3. Mercari sales: Refresh → review → record → link → cascade
+- A **Refresh** button (iOS Sales dashboard, web Sales page) scans Mercari's
+  `in_progress` then `complete` tabs newest-first (`sortBy=7`) and stops at
+  the **first row already recorded** on each tab (match by Mercari item/order
+  id against existing sales). This is what iOS `scanForNewSales` already does
+  for `in_progress`; the plan's "both tabs" scope stands.
+  Caveat to keep in mind: a sale can sit behind a known row if an earlier scan
+  skipped it (login wall, timeout) — the Refresh menu keeps a "Full rescan"
+  option that ignores the stop rule; dedupe makes it safe.
+- **Review step, opt-out model (user choice):** every new row is listed,
+  checked by default; the user unchecks what not to import. Rows whose Mercari
+  id matches a product (`crossPostListingIds.mercari`, product or variant) show
+  the linked product; unmatched rows show "Link to product…" (pick product +
+  variant / SKU). Import records each checked row via `recordSaleCore`
+  (dedupe by `platformOrderId` query), writes the product pointer back where
+  it was empty (so the next scan auto-matches), decrements the sold bucket and
+  fires the cascade — qty 0 ⇒ the sold-out queue in §1 handles the other
+  platforms. Unchecked rows are left; "Never import" sends a row to the inbox
+  as `discarded` (tombstone + Restore).
+- **Reconciled against the 2026-10-12 plan (Part B):** the plan auto-imported
+  matched rows and only sent unmatched ones to the inbox. Now ALL new rows
+  pass through the review list first; the `mercariSaleInbox` collection keeps
+  its three states but becomes the "decided later / discarded" store rather
+  than the main UI. `importMercariSales`, the shared scraper
+  (`MercariScanJS`), the Match-writes-pointer rule and the email-ingest idea are
+  unchanged. iOS `pendingMercariSales` is still the inbox's ancestor.
+
+### 4. eBay (and Etsy) sales import is automatic
+- `syncSales` (`sale_poller.js`: eBay Fulfillment orders + Etsy receipts) is
+  manual today — web Sales button, iOS pull-to-refresh. Decision: run it on a
+  schedule for every user with a connected eBay/Etsy integration (pattern:
+  `syncTiktokOrdersScheduled`), keep the manual button for "now". Default
+  lookback stays; a per-user `salesSyncedAt` cursor replaces the fixed window
+  once scheduled.
+- **The eBay webhook never existed in production.** `ebay_webhook.js`
+  (`setupEbayNotifications` + endpoint) lived in the nested tree and was
+  never deployed (see § Deferred ports; #26). Polling first: no endpoint
+  verification, no latency SLO needed for this use. #26 stays open as a
+  later upgrade for near-real-time alerts (§ Stretch goals sale alerts).
+
 ## Stretch goals
 
 - **Email-triggered Mercari sale import.** Manual HTML scraping via the
@@ -487,7 +567,8 @@ with `HttpsError("invalid-argument", ...)`. Swift types: `contracts/generated/`.
   forwarding address) parses Mercari's "Your item sold" / shipping-label
   emails into `MercariScrapeItem` rows and calls `recordMercariSalesBatch`.
   Dedupe already handles overlap with a later extension scrape. Non-blocking
-  for consolidation; do it after `syncSales`.
+  for consolidation; feeds the same Refresh review list (§ Sold-out + sales
+  tracking decisions, 2026-10-24, item 3).
 - **Sale-alert notifications.** Push/email to the user when any platform sale
   lands (eBay/Etsy poll, Mercari email/scrape), off the same ingest path.
 - **Extension Mercari deactivation/relist queue.** The extension can post to
@@ -496,6 +577,8 @@ with `HttpsError("invalid-argument", ...)`. Swift types: `contracts/generated/`.
   user's sold-out Mercari listings stay live until they open iOS. Add a
   background queue in the extension that watches `products/` for
   `pendingMercari*` (product- and variant-level) and runs the headless flow.
+  The action (deactivate vs delete) follows the user's `mercariSoldOutAction`
+  setting (same section, item 2).
 
 ## Settled
 
