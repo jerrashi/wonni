@@ -31,6 +31,16 @@ enum MercariFormJS {
         return !keepSmartPricing
     }
 
+    /// Smart Pricing is chosen at three levels (decided 2026-11-02): the account
+    /// setting, the Post menu's toggle for one run, and a value set on the draft or
+    /// listing itself. The most specific one the user actually touched wins; the Post
+    /// menu toggle starts at the account value each time, so "most recent" and "most
+    /// specific" agree. Under $10 the answer is always off (`mustDisableSmartPricing`).
+    static func resolveSmartPricing(price: Double, account: Bool, posting: Bool?, listing: Bool?) -> Bool {
+        if price < smartPricingForceOffBelow { return false }
+        return listing ?? posting ?? account
+    }
+
     // MARK: Smart Pricing script
 
     /// Runs via `WKWebView.callJS` (callAsyncJavaScript), hence the leading `return`.

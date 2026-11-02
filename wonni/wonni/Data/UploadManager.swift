@@ -209,6 +209,10 @@ class UploadManager: ObservableObject {
     /// runPublishContinuationIfReady once firestoreListingId + Storage paths are final.
     private var pendingWebPlatforms: [String] = []
     private var pendingWebJobItems: [Item] = []
+    /// The Post menu's Smart Pricing toggle for the run being published (nil = account
+    /// setting). Set by CreateListingView right before `beginPublish`; a draft's own
+    /// `mercariSmartPricing` wins over it.
+    var pendingMercariSmartPricing: Bool?
     /// Post-publish continuation gating. The continuation (API cross-post triggers, web
     /// autofill jobs, sheet transitions) may only run once BOTH the publish task has
     /// finished AND the confirmation sheet is fully dismissed — mutating sheet state while
@@ -1592,12 +1596,14 @@ class UploadManager: ObservableObject {
                     lengthIn: item.lengthIn,
                     widthIn: item.widthIn,
                     heightIn: item.heightIn,
-                    facebookLocation: platform == "facebook" ? CrossPostJob.facebookLocationFromSettings() : nil
+                    facebookLocation: platform == "facebook" ? CrossPostJob.facebookLocationFromSettings() : nil,
+                    smartPricing: platform == "mercari" ? (item.mercariSmartPricing ?? pendingMercariSmartPricing) : nil
                 ))
             }
         }
         pendingWebPlatforms = []
         pendingWebJobItems = []
+        pendingMercariSmartPricing = nil
         webAutofillQueue = jobs
         pendingAutofillJobsCount = jobs.count
         // Write the whole run to disk before any of it starts, so leaving the app

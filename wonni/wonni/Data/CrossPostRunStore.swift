@@ -51,6 +51,7 @@ struct PersistedCrossPostJob: Codable, Equatable, Identifiable {
     var variantId: String?
     var facebookLocation: String?
     var suggestedFacebookCategory: String?
+    var smartPricing: Bool?
     /// The attempt finished (posted, failed, or closed by the user) while the app was
     /// alive. False = never started, or cut off mid-attempt.
     var ended = false
@@ -196,7 +197,8 @@ extension PersistedCrossPostJob {
             variantProductId: job.variantProductId,
             variantId: job.variantId,
             facebookLocation: job.facebookLocation,
-            suggestedFacebookCategory: job.suggestedFacebookCategory
+            suggestedFacebookCategory: job.suggestedFacebookCategory,
+            smartPricing: job.smartPricing
         )
     }
 
@@ -220,7 +222,8 @@ extension PersistedCrossPostJob {
             variantProductId: variantProductId,
             variantId: variantId,
             facebookLocation: facebookLocation,
-            suggestedFacebookCategory: suggestedFacebookCategory
+            suggestedFacebookCategory: suggestedFacebookCategory,
+            smartPricing: smartPricing
         )
     }
 }

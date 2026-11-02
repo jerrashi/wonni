@@ -113,10 +113,16 @@ enum CrossPostPlan {
     }
 }
 
+/// Per-run choices made in the sheet besides the platform set.
+struct CrossPostOptions: Equatable {
+    /// The Smart Pricing toggle under the Mercari row; nil when Mercari was not chosen.
+    var mercariSmartPricing: Bool?
+}
+
 struct CrossPostSheet: View {
     let candidates: [CrossPostCandidate]
     let mode: CrossPostSheetMode
-    let onConfirm: (Set<String>) -> Void
+    let onConfirm: (Set<String>, CrossPostOptions) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var integrationRepo = IntegrationRepository.shared
@@ -132,6 +138,11 @@ struct CrossPostSheet: View {
     @State private var isLoadingIntegrations = true
     @State private var showEmptyPlatformsConfirm = false
     @State private var showCandidates = false
+    /// Starts at the account setting every time, so the most recent choice wins
+    /// (see MercariFormJS.resolveSmartPricing). Listings with their own value keep it.
+    @AppStorage("mercariKeepSmartPricing") private var accountSmartPricing = false
+    @State private var smartPricing = false
+    @State private var smartPricingLoaded = false
 
     private var isPublish: Bool { mode == .publish }
 
@@ -190,16 +201,23 @@ struct CrossPostSheet: View {
 
     @ViewBuilder private var candidatesSection: some View {
         Section {
-            HStack {
-                Text(candidates.count == 1 ? "1 listing" : "\(candidates.count) listings")
-                    .fontWeight(.semibold)
-                Spacer()
-                Button(showCandidates ? "Hide" : "Show") {
-                    withAnimation { showCandidates.toggle() }
+            // The count is a tappable heading that expands or collapses the rows.
+            Button {
+                withAnimation { showCandidates.toggle() }
+            } label: {
+                HStack {
+                    Text(candidates.count == 1 ? "1 Listing" : "\(candidates.count) Listings")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    Image(systemName: showCandidates ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 }
-                .font(.subheadline)
-                .accessibilityIdentifier("crossPostShowListings")
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("crossPostShowListings")
             if showCandidates {
                 ForEach(candidates) { candidate in
                     VStack(alignment: .leading, spacing: 2) {
@@ -214,7 +232,7 @@ struct CrossPostSheet: View {
             }
         } footer: {
             if isPublish {
-                Text("Every listing is also published to Wonni.")
+                Text("Every listing is automatically posted to Wonni.")
             }
         }
     }
@@ -240,6 +258,9 @@ struct CrossPostSheet: View {
             } else {
                 ForEach(integrationRepo.integrations) { integration in
                     platformRow(integration)
+                    if integration.platform == "mercari", selectedPlatforms.contains("mercari") {
+                        smartPricingRow
+                    }
                 }
             }
         } header: {
@@ -257,6 +278,17 @@ struct CrossPostSheet: View {
             return "Your choice is remembered as the default for next time. Change it any time in Profile › Settings › Cross-posting."
         }
         return "Listings already on a platform are left alone. Your choice is remembered as the default for next time."
+    }
+
+    /// Indented under the Mercari row while Mercari is on. Whatever it says at Publish
+    /// applies to every listing in this run except those with their own value.
+    private var smartPricingRow: some View {
+        Toggle(isOn: $smartPricing) {
+            Text("Smart Pricing")
+                .font(.subheadline)
+        }
+        .padding(.leading, 20)
+        .accessibilityIdentifier("crossPostSmartPricingToggle")
     }
 
     @ViewBuilder private func platformRow(_ integration: PlatformIntegration) -> some View {
@@ -307,7 +339,7 @@ struct CrossPostSheet: View {
                     Text("Connected as: \(integration.connectedUsername ?? "Unknown")")
                         .font(.caption)
                         .foregroundStyle(.green)
-                } else {
+                } else if platform != "mercari" {
                     Text(isPublish ? "Opens \(name) in the app after publishing" : "Opens \(name) in the app")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -325,6 +357,10 @@ struct CrossPostSheet: View {
     // MARK: Actions
 
     private func loadDefaults() async {
+        if !smartPricingLoaded {
+            smartPricing = accountSmartPricing
+            smartPricingLoaded = true
+        }
         await integrationRepo.loadIntegrations()
         await SellingSettingsRepository.shared.loadSettings()
         // Preselect the remembered default set (last confirm here, or Settings);
@@ -343,7 +379,8 @@ struct CrossPostSheet: View {
 
     private func confirm() {
         CrossPostDefaults.remember(selectedPlatforms)
-        onConfirm(selectedPlatforms)
+        let options = CrossPostOptions(mercariSmartPricing: selectedPlatforms.contains("mercari") ? smartPricing : nil)
+        onConfirm(selectedPlatforms, options)
         dismiss()
     }
 }

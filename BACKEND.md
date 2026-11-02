@@ -547,7 +547,7 @@ differ; the "reconciled" lines say what changed. Nothing here is built yet.
   the web view for the user to finish, never a silent success. The Deactivate pass
   reuses the 2026-07 selectors that were themselves never run on a device.
 
-### 2b. Mercari Smart Pricing is set at three levels (2026-11-02, mock pending review)
+### 2b. Mercari Smart Pricing is set at three levels (2026-11-02, mock approved, built on iOS)
 - Account default (today's `keepSmartPricing`), a per-posting toggle shown
   indented under the Mercari checkbox in `CrossPostSheet` while Mercari is on,
   and a per-listing Off/On control (in the sheet's "N listings" expander and
@@ -559,6 +559,22 @@ differ; the "reconciled" lines say what changed. Nothing here is built yet.
   used by the iOS poster, the edit flow and the extension payload. Listing
   field `mercariSmartPricing: true | false` (nil = follow). Editing it after
   posting re-runs the Mercari edit flow to flip the switch there.
+- **Built 2026-11-02 (iOS; device run pending).** `MercariFormJS.resolveSmartPricing`
+  (tests in `MercariFormJSTests`); `CrossPostJob.smartPricing` /
+  `PersistedCrossPostJob.smartPricing` (nil = account); `CrossPostSheet` returns
+  `CrossPostOptions` next to the platform set, shows the indented toggle while
+  Mercari is on (starts at the account value), the "N Listings ⌄" heading and the
+  plain Wonni footer line; the Mercari row has no caption. Per listing:
+  `Item.mercariSmartPricing` (draft pencil sheet, "Mercari" section) and
+  `UserListing.mercariSmartPricing` (EditListingSheet toggle under the Mercari row;
+  changing it writes the field and opens `MercariAutoEditSheet(smartPricing:)`, whose
+  `MercariAutoEditState` now resolves with that value instead of the account default;
+  greyed under $10). Jobs: `UploadManager.pendingMercariSmartPricing` carries the
+  Post menu value into the post-publish job build, `ProfileView.bulkPostListings`
+  takes `CrossPostOptions`; both prefer the listing's own value. The poster passes
+  `job.smartPricing ?? account` into `ShippingPreferences.keepSmartPricing`.
+  **Not done:** web (no Smart Pricing control at all) and the extension payload still
+  send only the account value.
 
 ### 3. Mercari sales: Refresh → review → record → link → cascade
 - A **Refresh** button (iOS Sales dashboard, web Sales page) scans Mercari's

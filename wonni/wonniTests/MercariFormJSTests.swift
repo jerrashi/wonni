@@ -14,6 +14,27 @@ import WebKit
 
 @MainActor
 final class MercariFormJSTests: XCTestCase {
+
+    // MARK: resolveSmartPricing (account → Post menu → listing; under $10 always off)
+
+    func test_resolve_under10_isAlwaysOff() {
+        XCTAssertFalse(MercariFormJS.resolveSmartPricing(price: 9.99, account: true, posting: true, listing: true))
+    }
+
+    func test_resolve_listingValueWinsOverPostingAndAccount() {
+        XCTAssertFalse(MercariFormJS.resolveSmartPricing(price: 20, account: true, posting: true, listing: false))
+        XCTAssertTrue(MercariFormJS.resolveSmartPricing(price: 20, account: false, posting: false, listing: true))
+    }
+
+    func test_resolve_postingValueWinsOverAccountWhenListingUnset() {
+        XCTAssertTrue(MercariFormJS.resolveSmartPricing(price: 20, account: false, posting: true, listing: nil))
+        XCTAssertFalse(MercariFormJS.resolveSmartPricing(price: 20, account: true, posting: false, listing: nil))
+    }
+
+    func test_resolve_accountIsTheFallback() {
+        XCTAssertTrue(MercariFormJS.resolveSmartPricing(price: 20, account: true, posting: nil, listing: nil))
+        XCTAssertFalse(MercariFormJS.resolveSmartPricing(price: 20, account: false, posting: nil, listing: nil))
+    }
     private var window: UIWindow!
     private var webView: WKWebView!
 

@@ -217,6 +217,9 @@ struct UserListing: Identifiable, Codable {
     /// Posted to Mercari with Smart Pricing still on although the seller wanted it off
     /// (toggle couldn't be switched; $10+ items post anyway). Highlighted on the Mercari row.
     var mercariSmartPricingOn: Bool?
+    /// The seller's own Smart Pricing choice for this listing (EditListingSheet / draft
+    /// pencil sheet); nil = Post menu or account setting decides.
+    var mercariSmartPricing: Bool?
 
     // MARK: - Convenience
 

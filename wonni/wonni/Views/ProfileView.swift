@@ -158,8 +158,8 @@ struct ProfileView: View {
             }
             .sheet(isPresented: $showBulkPost) {
                 let selectedListingsArray = listings.filter { selectedListings.contains($0.id ?? "") }
-                CrossPostSheet(candidates: selectedListingsArray.map(CrossPostCandidate.init(listing:)), mode: .crossPost) { platforms in
-                    bulkPostListings(platforms: platforms)
+                CrossPostSheet(candidates: selectedListingsArray.map(CrossPostCandidate.init(listing:)), mode: .crossPost) { platforms, options in
+                    bulkPostListings(platforms: platforms, options: options)
                 }
                 .presentationDetents([.fraction(0.75), .large])
             }
@@ -815,7 +815,7 @@ struct ProfileView: View {
         await loadListings()
     }
     
-    private func bulkPostListings(platforms: Set<String>) {
+    private func bulkPostListings(platforms: Set<String>, options: CrossPostOptions = CrossPostOptions()) {
         let selectedListingsArray = listings.filter { selectedListings.contains($0.id ?? "") }
         
         var webJobs: [CrossPostJob] = []
@@ -837,7 +837,8 @@ struct ProfileView: View {
                         photoFirebasePaths: listing.photoPaths,
                         buyerPaysShipping: listing.shippingInfo?.buyerPaysShipping ?? false,
                         condition: listing.condition.rawValue,
-                        facebookLocation: platform == "facebook" ? CrossPostJob.facebookLocationFromSettings() : nil
+                        facebookLocation: platform == "facebook" ? CrossPostJob.facebookLocationFromSettings() : nil,
+                        smartPricing: platform == "mercari" ? (listing.mercariSmartPricing ?? options.mercariSmartPricing) : nil
                     ))
                 } else if platform == "ebay" {
                     // Set pending state locally first so UI updates immediately
@@ -1105,6 +1106,11 @@ struct EditListingSheet: View {
     @State private var showMercariEdit = false
     @State private var applyEditsToMercari = true
     @State private var showMercariAutoEdit = false
+    /// Smart Pricing toggle under the Mercari row: flips it on Mercari through the
+    /// edit flow and remembers the choice on the listing (`mercariSmartPricing`).
+    @State private var listingSmartPricing: Bool?
+    @State private var showSmartPricingEdit = false
+    @AppStorage("mercariKeepSmartPricing") private var accountSmartPricing = false
     @State private var pendingOnSaveJobs: [CrossPostJob] = []
     @State private var pendingPhotosUpdated = false
     @State private var showShippingProfileAlert = false
@@ -1154,6 +1160,7 @@ struct EditListingSheet: View {
         _selectedPlatforms = State(initialValue: Set(posted))
         _initialPlatforms = State(initialValue: Set(posted))
         _linkedMercariId = State(initialValue: listing.crossPostListingIds?["mercari"])
+        _listingSmartPricing = State(initialValue: listing.mercariSmartPricing)
         _editPhotos = State(initialValue: listing.photoPaths.map { .existing(path: $0) })
     }
     
@@ -1239,6 +1246,11 @@ struct EditListingSheet: View {
                         description: description.trimmingCharacters(in: .whitespaces),
                         price: price ?? 0
                     )
+                }
+            }
+            .sheet(isPresented: $showSmartPricingEdit) {
+                if let id = linkedMercariId {
+                    MercariAutoEditSheet(listing: listing, mercariId: id, smartPricing: listingSmartPricing) {}
                 }
             }
             .sheet(isPresented: $showMercariAutoEdit, onDismiss: {
@@ -1337,6 +1349,14 @@ struct EditListingSheet: View {
     private var editSoldOutConfirmation: SoldOutPlan.Confirmation {
         let onMercari = (listing.crossPostListingIds?["mercari"] ?? linkedMercariId)?.isEmpty == false ? 1 : 0
         return SoldOutPlan.confirmation(count: 1, mercariCount: onMercari, action: editMercariSoldOutAction)
+    }
+
+    /// Stores the listing's Smart Pricing choice and flips it on Mercari.
+    private func saveSmartPricingChoice(_ value: Bool) async {
+        guard let id = listing.id else { return }
+        try? await Firestore.firestore().collection("listings").document(id)
+            .updateData(["mercariSmartPricing": value, "updatedAt": Timestamp(date: Date())])
+        showSmartPricingEdit = true
     }
 
     /// Hands the listing to the sold-out queue and closes; the pill takes it from here.
@@ -1637,15 +1657,31 @@ struct EditListingSheet: View {
                     }
                 }
             }
-            if platform == "mercari", status == "posted", listing.mercariSmartPricingOn == true {
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                    Text("Smart Pricing is still on — Mercari may lower this price. Turn it off on Mercari.")
-                        .fixedSize(horizontal: false, vertical: true)
+            if platform == "mercari", status == "posted", linkedMercariId != nil, !isDisconnected {
+                // Indented Smart Pricing control (decided 2026-11-02). Changing it
+                // re-runs the Mercari edit flow with the new value and stores the choice.
+                Toggle(isOn: Binding(
+                    get: { listingSmartPricing ?? accountSmartPricing },
+                    set: { newValue in
+                        listingSmartPricing = newValue
+                        Task { await saveSmartPricingChoice(newValue) }
+                    }
+                )) {
+                    Text("Smart Pricing").font(.subheadline)
                 }
-                .font(.caption)
-                .foregroundStyle(.orange)
-                .accessibilityIdentifier("mercariSmartPricingWarning")
+                .padding(.leading, 16)
+                .disabled((price ?? listing.price ?? 0) < MercariFormJS.smartPricingForceOffBelow)
+                .accessibilityIdentifier("listingSmartPricingToggle")
+                if (price ?? listing.price ?? 0) < MercariFormJS.smartPricingForceOffBelow {
+                    Text("Always off under $10.")
+                        .font(.caption2).foregroundStyle(.secondary).padding(.leading, 16)
+                } else if listing.mercariSmartPricingOn == true, listingSmartPricing != true {
+                    Text("Still on at Mercari — Mercari may lower this price.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .padding(.leading, 16)
+                        .accessibilityIdentifier("mercariSmartPricingWarning")
+                }
             }
             // Second row: action buttons
             if isDisconnected {

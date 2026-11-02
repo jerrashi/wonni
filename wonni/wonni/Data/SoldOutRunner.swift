@@ -215,10 +215,13 @@ final class SoldOutRunner: ObservableObject {
             update(jobId) { $0.mercariStep = .done; $0.ended = true }
         case .failure(let message):
             // The server call already zeroed stock; put it back so nothing is half done.
-            await restoreStock(listingId: listingId, quantity: job.previousQuantity)
+            // If even that fails, say so: the listing is then sold out on Wonni/API
+            // platforms but still live on Mercari, and the user has to look at it.
+            let restored = await restoreStock(listingId: listingId, quantity: job.previousQuantity)
+            let failure = restored ? message : "\(message). Stock could not be restored either — this listing is sold out here but still live on Mercari; check it."
             update(jobId) {
                 $0.mercariStep = .failed(message)
-                $0.failure = message
+                $0.failure = failure
                 $0.ended = true
             }
         }
@@ -336,9 +339,23 @@ final class SoldOutRunner: ObservableObject {
         }
     }
 
-    private func restoreStock(listingId: String, quantity: Int) async {
-        try? await ListingRepository.shared.restockListing(id: listingId, quantity: quantity)
-        _ = try? await callCloudFunction("restockAndCascade", ["productId": listingId, "quantity": quantity])
+    /// Puts the listing back in stock on Wonni and every API platform. Returns false
+    /// when either write failed, so the failure text can say the state is uncertain.
+    private func restoreStock(listingId: String, quantity: Int) async -> Bool {
+        var restored = true
+        do {
+            try await ListingRepository.shared.restockListing(id: listingId, quantity: quantity)
+        } catch {
+            print("[SoldOutRunner] restockListing failed for \(listingId): \(error)")
+            restored = false
+        }
+        do {
+            _ = try await callCloudFunction("restockAndCascade", ["productId": listingId, "quantity": quantity])
+        } catch {
+            print("[SoldOutRunner] restockAndCascade failed for \(listingId): \(error)")
+            restored = false
+        }
+        return restored
     }
 
     // MARK: Bookkeeping

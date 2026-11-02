@@ -64,6 +64,10 @@ struct CrossPostJob: Identifiable {
     /// via `aiAutofillListing` against `job.listingId`, so no construction site needs to
     /// populate this up front.
     let suggestedFacebookCategory: String?
+    /// Mercari only: Smart Pricing for this post — the listing's own value if the user
+    /// set one, else the Post menu's toggle. Nil = the account setting decides
+    /// (`MercariFormJS.resolveSmartPricing`).
+    var smartPricing: Bool? = nil
 
     /// The city from the user's Selling Settings default location (the same source eBay/
     /// Etsy shipping already uses — `SellingSettingsRepository`), or nil if unset. Every
@@ -96,8 +100,10 @@ struct CrossPostJob: Identifiable {
         variantProductId: String? = nil,
         variantId: String? = nil,
         facebookLocation: String? = nil,
-        suggestedFacebookCategory: String? = nil
+        suggestedFacebookCategory: String? = nil,
+        smartPricing: Bool? = nil
     ) {
+        self.smartPricing = smartPricing
         self.platform = platform
         self.title = title
         self.description = description
@@ -2400,7 +2406,7 @@ struct MercariAutoPosterView: View {
             acceptSuggestions: acceptSuggestions,
             mode: ShippingMode(rawValue: shippingModeRaw) ?? .cheapestPrepaid,
             selectedCarriers: selectedCarriers.isEmpty ? [.usps] : selectedCarriers,
-            keepSmartPricing: keepSmartPricing
+            keepSmartPricing: job.smartPricing ?? keepSmartPricing
         )
 
         await state.injectFields(
@@ -2461,7 +2467,7 @@ struct MercariAutoPosterView: View {
             acceptSuggestions: acceptSuggestions,
             mode: ShippingMode(rawValue: shippingModeRaw) ?? .cheapestPrepaid,
             selectedCarriers: selectedCarriers.isEmpty ? [.usps] : selectedCarriers,
-            keepSmartPricing: keepSmartPricing
+            keepSmartPricing: job.smartPricing ?? keepSmartPricing
         )
 
         await state.resumeInjection(
@@ -3848,13 +3854,17 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
     var photoBase64Strings: [String] = []
     var photosWereUpdated: Bool = false
 
-    init(mercariItemId: String, title: String, listingDescription: String, price: Double, condition: String, manualReason: String? = nil) {
+    /// The listing's own Smart Pricing choice (EditListingSheet toggle); nil = account setting.
+    private let smartPricingOverride: Bool?
+
+    init(mercariItemId: String, title: String, listingDescription: String, price: Double, condition: String, manualReason: String? = nil, smartPricing: Bool? = nil) {
         self.mercariItemId = mercariItemId
         self.title = title
         self.listingDescription = listingDescription
         self.price = price
         self.condition = condition
         self.manualReason = manualReason
+        self.smartPricingOverride = smartPricing
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.default()
         webView = WKWebView(frame: .zero, configuration: config)
@@ -4047,7 +4057,12 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
         // Smart Pricing — last step before Save (shipping/price edits re-render the section).
         // Same policy as posting: under $10 it must be off or Mercari rejects the save.
         try? await Task.sleep(nanoseconds: 1_000_000_000)
-        let keep = UserDefaults.standard.bool(forKey: "mercariKeepSmartPricing")
+        let keep = MercariFormJS.resolveSmartPricing(
+            price: price,
+            account: UserDefaults.standard.bool(forKey: "mercariKeepSmartPricing"),
+            posting: nil,
+            listing: smartPricingOverride
+        )
         let required = MercariFormJS.mustDisableSmartPricing(price: price, keepSmartPricing: keep)
         if required || !keep {
             let smart = (try? await webView.callJS(MercariFormJS.disableSmartPricing)) as? String ?? "error"
@@ -4423,7 +4438,7 @@ struct MercariAutoEditSheet: View {
 
     let photosWereUpdated: Bool
 
-    init(listing: UserListing, mercariId: String, photosWereUpdated: Bool = false, onDone: @escaping () -> Void) {
+    init(listing: UserListing, mercariId: String, photosWereUpdated: Bool = false, smartPricing: Bool? = nil, onDone: @escaping () -> Void) {
         self.listing = listing
         self.mercariId = mercariId
         self.onDone = onDone
@@ -4434,7 +4449,8 @@ struct MercariAutoEditSheet: View {
             listingDescription: listing.customDescription ?? "",
             price: listing.price ?? 0,
             condition: listing.condition.rawValue,
-            manualReason: nil
+            manualReason: nil,
+            smartPricing: smartPricing ?? listing.mercariSmartPricing
         ))
     }
 

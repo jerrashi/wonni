@@ -51,6 +51,9 @@ class Item {
     /// FacebookAutoPosterView reads them (the draft is gone by cross-post time).
     var facebookOfferShipping: Bool?
     var facebookHideFromFriends: Bool?
+    /// Mercari Smart Pricing for this draft; nil = follow the Post menu / account
+    /// setting (`MercariFormJS.resolveSmartPricing`). Optional for lightweight migration.
+    var mercariSmartPricing: Bool?
     /// "Sell similar" carry-over from a draft made out of a pasted list
     /// (BulkTextDraftService): the eBay category id and item specifics copied
     /// from the best-matching live eBay listing. Mirrored to products/{id} as

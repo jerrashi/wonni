@@ -481,6 +481,9 @@ struct DraftEditSheet: View {
     // Facebook overrides: nil = account default (see Item.facebookOfferShipping).
     @State private var facebookOfferShipping: Bool?
     @State private var facebookHideFromFriends: Bool?
+    // Mercari Smart Pricing: nil until touched (the toggle shows the account value).
+    @State private var mercariSmartPricing: Bool?
+    @AppStorage("mercariKeepSmartPricing") private var accountSmartPricing = false
 
     @State private var showPhotoEditModal = false
     @State private var selectedItems: [PhotosPickerItem] = []
@@ -655,6 +658,20 @@ struct DraftEditSheet: View {
                     Text("\"Default\" uses your account setting (Settings → Facebook Marketplace).")
                 }
 
+                Section {
+                    Toggle("Smart Pricing", isOn: Binding(
+                        get: { mercariSmartPricing ?? accountSmartPricing },
+                        set: { mercariSmartPricing = $0 }
+                    ))
+                    .accessibilityIdentifier("draftEditSmartPricingToggle")
+                } header: {
+                    Text("Mercari")
+                } footer: {
+                    Text(mercariSmartPricing == nil
+                         ? "Follows the Post menu's Smart Pricing toggle. Listings under $10 are always off."
+                         : "Set here, this draft keeps its own value when you publish, whatever the Post menu's toggle says. Listings under $10 are always off.")
+                }
+
                 Section("Shipping & Dimensions") {
                     Toggle("Buyer pays shipping", isOn: $buyerPaysShipping)
                     if !buyerPaysShipping {
@@ -823,6 +840,7 @@ struct DraftEditSheet: View {
         handlingTimeDaysOverride = item.handlingTimeDays
         tagsText = item.tags.joined(separator: ", ")
         facebookOfferShipping = item.facebookOfferShipping
+        mercariSmartPricing = item.mercariSmartPricing
         facebookHideFromFriends = item.facebookHideFromFriends
         
         // Dimensions & Weight
@@ -858,6 +876,7 @@ struct DraftEditSheet: View {
         item.handlingTimeDays = handlingTimeDaysOverride
         item.facebookOfferShipping = facebookOfferShipping
         item.facebookHideFromFriends = facebookHideFromFriends
+        item.mercariSmartPricing = mercariSmartPricing
         item.tags = tagsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         
         // Dimensions & Weight
@@ -1157,7 +1176,7 @@ struct ProcessResultsOverviewView: View {
     }
     
     @ViewBuilder private var publishConfirmationSheetContent: some View {
-        CrossPostSheet(candidates: toPublish.map(CrossPostCandidate.init(draft:)), mode: .publish) { selectedPlatforms in
+        CrossPostSheet(candidates: toPublish.map(CrossPostCandidate.init(draft:)), mode: .publish) { selectedPlatforms, options in
             // Web autofill jobs are BUILT in UploadManager.runPublishContinuationIfReady,
             // after publish completes — at this point firestoreListingId can be nil and the
             // Storage photo uploads unfinished, so a job snapshotted now would carry empty
@@ -1196,6 +1215,7 @@ struct ProcessResultsOverviewView: View {
                 let title = item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled"
                 return UploadManager.PendingAPITrigger(listingId: listingId, title: title, platforms: Array(apiPlatforms))
             }
+            uploadManager.pendingMercariSmartPricing = options.mercariSmartPricing
             uploadManager.beginPublish(
                 drafts: toPublish,
                 webPlatforms: webPlatforms,
