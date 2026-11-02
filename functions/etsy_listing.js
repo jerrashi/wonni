@@ -22,7 +22,7 @@ const https = require("https");
 
 const { validated } = require("./contracts");
 const { getActiveEtsyToken } = require("./etsy_auth");
-const { resolveListingPrice, variantPriceOr, listingImagesFor } = require("./platform_adapters");
+const { resolveListingPrice, variantPriceOr, listingImagesFor, sharedPoolQuantity } = require("./platform_adapters");
 const { _internal: salesInternal } = require("./sales");
 
 const { loadOwnedProduct } = salesInternal;
@@ -77,6 +77,8 @@ function priceAmount(raw) {
 
 /** Sum of variant quantities, or the product-level quantity, or 1. */
 function productTotalQuantity(product) {
+  const shared = sharedPoolQuantity(product);
+  if (shared !== null) return shared; // one master number, not a variant sum
   const variants = Array.isArray(product.variants) ? product.variants : [];
   if (variants.length) return variants.reduce((s, v) => s + (Number(v.quantity) || 0), 0);
   const q = Number(product.quantity);
@@ -260,10 +262,11 @@ function singleOfferingInventory(price, quantity, readinessStateId = null) {
 }
 
 /** Etsy `PUT /listings/{id}/inventory` payload from product variants. */
-function buildEtsyInventoryPayload(variations = [], basePrice = 0, readinessStateId = null) {
+function buildEtsyInventoryPayload(variations = [], basePrice = 0, readinessStateId = null, { sharedQuantity = null } = {}) {
   const products = variations.map((v, idx) => {
     const price = priceAmount(variantPriceOr(v, basePrice));
-    const qty = Number.isFinite(Number(v.quantity)) && Number(v.quantity) >= 0 ? Number(v.quantity) : 1;
+    const qty = sharedQuantity !== null ? sharedQuantity
+      : Number.isFinite(Number(v.quantity)) && Number(v.quantity) >= 0 ? Number(v.quantity) : 1;
 
     let property_values = [];
     const attrs = v.attributes || [];
@@ -430,7 +433,7 @@ async function etsyCreateListingCore(uid, data) {
     if (variants.length > 1) {
       try {
         await etsyReq("PUT", `/v3/application/listings/${etsyListingId}/inventory`,
-          { ...auth, body: buildEtsyInventoryPayload(variants, priceAmount(price), readinessStateId) });
+          { ...auth, body: buildEtsyInventoryPayload(variants, priceAmount(price), readinessStateId, { sharedQuantity: sharedPoolQuantity(product) }) });
       } catch (e) {
         console.warn(`[etsyCreateListing] inventory update failed: ${e.message}`);
       }
@@ -522,7 +525,7 @@ exports.etsyUpdateListing = onCall(
     const variants = Array.isArray(product.variants) ? product.variants.filter((v) => v.active !== false) : [];
     const readinessStateId = await firstReadinessStateId(auth.shopId, auth);
     const inventory = variants.length > 1
-      ? buildEtsyInventoryPayload(variants, priceAmount(price), readinessStateId)
+      ? buildEtsyInventoryPayload(variants, priceAmount(price), readinessStateId, { sharedQuantity: sharedPoolQuantity(product) })
       : singleOfferingInventory(price, productTotalQuantity(product), readinessStateId);
     const inv = await etsyReq("PUT", `/v3/application/listings/${etsyId}/inventory`, { ...auth, body: inventory });
     if (inv.status !== 200) throw new HttpsError("internal", `Etsy price/quantity update failed (${inv.status}): ${etsyErrorText(inv.data)}`);

@@ -122,7 +122,28 @@ function buildEbayVariations(product) {
   return ebayVariations.length > 0 ? { itemSpecifics, variations: ebayVariations } : null;
 }
 
+/**
+ * Shared stock pool (`quantityVariesByVariant === false`): ONE master number at
+ * `product.quantity`, applied identically to every variant offer on a platform
+ * (platforms have no shared-pool concept). Returns null when the product is NOT
+ * a shared pool, so callers fall back to their per-variant behavior. Same rule
+ * as ebay_listing.js postMultiVariant.
+ */
+function sharedPoolQuantity(product) {
+  if (product?.quantityVariesByVariant !== false) return null;
+  const q = product.quantity;
+  return typeof q === "number" && q >= 0 ? Math.floor(q) : 0;
+}
+
+/** TikTok SKU inventory: master number for a shared pool, else the legacy 999. */
+function tiktokSkuQuantity(product) {
+  const shared = sharedPoolQuantity(product);
+  return shared === null ? 999 : shared;
+}
+
 module.exports = {
+  sharedPoolQuantity,
+  tiktokSkuQuantity,
   resolveListingPrice,
   variantPriceOr,
   listingImagesFor,

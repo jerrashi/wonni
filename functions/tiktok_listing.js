@@ -3,7 +3,7 @@ const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const https = require("https");
 const { refreshTiktokToken, tiktokHeaders, makeHttpsRequest, TT_APP_KEY, TT_APP_SECRET } = require("./tiktok_auth");
-const { listingImagesFor, toTiktokProductPayload, resolveListingPrice } = require("./platform_adapters");
+const { listingImagesFor, toTiktokProductPayload, resolveListingPrice, tiktokSkuQuantity } = require("./platform_adapters");
 
 const TT_API_HOST = "open-api.tiktokglobalshop.com";
 
@@ -111,7 +111,7 @@ exports.tiktokCreateListing = onCall(
             amount: String(parseFloat(finalPrice).toFixed(2)),
             currency: "USD",
           },
-          inventory: [{ warehouse_id: "default", quantity: 999 }],
+          inventory: [{ warehouse_id: "default", quantity: tiktokSkuQuantity(product) }],
           identifier_code: { type: 1, code: productId },
         },
       ],

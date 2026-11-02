@@ -229,3 +229,30 @@ test("etsyErrorText: reads both Etsy error shapes", () => {
   assert.equal(etsyErrorText([{ path: "/marketplace", message: "Oh dear" }]), "Oh dear");
   assert.equal(etsyErrorText(null), "");
 });
+
+// ── shared quantity pool (quantityVariesByVariant === false) ───────────────
+
+test("regression: shared pool — productTotalQuantity is the master number, not the variant sum", () => {
+  const p = { quantity: 2, quantityVariesByVariant: false, variants: [{ quantity: 2 }, { quantity: 2 }, { quantity: 2 }] };
+  assert.equal(productTotalQuantity(p), 2);
+  assert.equal(productTotalQuantity({ ...p, quantity: 0 }), 0);
+});
+
+test("shared pool unset/true keeps the per-variant sum", () => {
+  const vs = [{ quantity: 2 }, { quantity: 3 }];
+  assert.equal(productTotalQuantity({ quantity: 9, variants: vs }), 5);
+  assert.equal(productTotalQuantity({ quantity: 9, quantityVariesByVariant: true, variants: vs }), 5);
+});
+
+test("regression: shared pool — every variant offering gets the master quantity", () => {
+  const variants = [{ sku: "A", quantity: 7, name: "S" }, { sku: "B", quantity: 1, name: "M" }];
+  const { products } = buildEtsyInventoryPayload(variants, 10, null, { sharedQuantity: 2 });
+  assert.deepEqual(products.map((p) => p.offerings[0].quantity), [2, 2]);
+  const per = buildEtsyInventoryPayload(variants, 10, null);
+  assert.deepEqual(per.products.map((p) => p.offerings[0].quantity), [7, 1]);
+});
+
+test("shared pool at 0 sends 0 to every offering (not the default 1)", () => {
+  const { products } = buildEtsyInventoryPayload([{ sku: "A", quantity: 5 }], 10, null, { sharedQuantity: 0 });
+  assert.equal(products[0].offerings[0].quantity, 0);
+});
