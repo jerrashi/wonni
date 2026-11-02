@@ -1886,112 +1886,6 @@ struct MercariConnectSheet: View {
     }
 }
 
-// MARK: - MercariShippingPreferencesView
-
-/// Lets the seller choose how the Mercari autofill handles shipping. Used both as one-time setup
-/// before the first cross-post (`isFirstTimeSetup`) and as an editable Settings screen. Writes the
-/// local AppStorage cache and syncs to Firestore for cross-device persistence.
-struct MercariShippingPreferencesView: View {
-    @Environment(\.dismiss) private var dismiss
-
-    @AppStorage("mercariAcceptSuggestions") private var acceptSuggestions = true
-    @AppStorage("mercariShippingMode") private var shippingModeRaw = ShippingMode.cheapestPrepaid.rawValue
-    @AppStorage("mercariSelectedCarriers") private var selectedCarriersRaw = Carrier.usps.rawValue
-    @AppStorage("mercariPrefsConfigured") private var prefsConfigured = false
-    @AppStorage("mercariKeepSmartPricing") private var keepSmartPricingStored = false
-
-    /// When true, shown as one-time setup before the first cross-post (vs. editing in Settings).
-    var isFirstTimeSetup = false
-    var onSaved: (() -> Void)? = nil
-
-    // Local editing copies, committed on Save.
-    @State private var accept = true
-    @State private var mode: ShippingMode = .cheapestPrepaid
-    @State private var carriers: Set<Carrier> = [.usps]
-    @State private var keepSmartPricing = false
-
-    var body: some View {
-        Form {
-            Section {
-                Toggle("Use Mercari's suggested weight & label", isOn: $accept)
-            } footer: {
-                Text("When Mercari offers a recommended label (\"Use label\") or pre-fills a weight, accept it automatically. Turn off to always enter your own weight and pick a carrier yourself.")
-            }
-
-            Section("Shipping method") {
-                Picker("Method", selection: $mode) {
-                    ForEach(ShippingMode.allCases) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.inline)
-                .labelsHidden()
-            }
-
-            if mode == .cheapestAmongCarriers {
-                Section {
-                    ForEach(Carrier.allCases) { carrier in
-                        Toggle(carrier.displayName, isOn: bindingFor(carrier))
-                    }
-                } header: {
-                    Text("Carriers to consider")
-                } footer: {
-                    Text("We'll pick the cheapest label among these carriers, falling back to the overall cheapest if none are offered.")
-                }
-            }
-
-            Section {
-                Toggle("Keep Smart Pricing on", isOn: $keepSmartPricing)
-            } header: {
-                Text("Smart pricing")
-            } footer: {
-                Text("Mercari turns Smart Pricing on by itself when we fill in a price. Off (default): we switch it off before listing so your price stays put. On: we leave it for items $10 and up. Under $10 it is always switched off — Mercari won't list those with Smart Pricing on.")
-            }
-        }
-        .navigationTitle(isFirstTimeSetup ? "Shipping preferences" : "Mercari shipping")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button(isFirstTimeSetup ? "Continue" : "Save") { save() }
-                    .disabled(mode == .cheapestAmongCarriers && carriers.isEmpty)
-            }
-        }
-        .onAppear(perform: loadLocal)
-    }
-
-    private func bindingFor(_ carrier: Carrier) -> Binding<Bool> {
-        Binding(
-            get: { carriers.contains(carrier) },
-            set: { isOn in
-                if isOn { carriers.insert(carrier) } else { carriers.remove(carrier) }
-            }
-        )
-    }
-
-    private func loadLocal() {
-        accept = acceptSuggestions
-        mode = ShippingMode(rawValue: shippingModeRaw) ?? .cheapestPrepaid
-        let parsed = Set(selectedCarriersRaw.split(separator: ",").compactMap { Carrier(rawValue: String($0)) })
-        carriers = parsed.isEmpty ? [.usps] : parsed
-        keepSmartPricing = keepSmartPricingStored
-    }
-
-    private func save() {
-        let carrierList = Array(carriers).map { $0.rawValue }
-        acceptSuggestions = accept
-        shippingModeRaw = mode.rawValue
-        selectedCarriersRaw = carrierList.joined(separator: ",")
-        keepSmartPricingStored = keepSmartPricing
-        prefsConfigured = true
-        Task {
-            await IntegrationRepository.shared.saveMercariShippingPreferences(
-                acceptSuggestions: accept, mode: mode.rawValue, carriers: carrierList,
-                keepSmartPricing: keepSmartPricing
-            )
-        }
-        onSaved?()
-        dismiss()
-    }
-}
-
 // MARK: - MercariAutoPosterView
 
 /// Terminal result of one headless posting attempt, reported to `onOutcome` when
@@ -2204,7 +2098,7 @@ struct MercariAutoPosterView: View {
             }
             .sheet(isPresented: $showPrefSetup) {
                 NavigationStack {
-                    MercariShippingPreferencesView(isFirstTimeSetup: true, onSaved: {
+                    MercariSettingsView(isFirstTimeSetup: true, onSaved: {
                         Task { await fetchPhotosAndInject() }
                     })
                 }
@@ -4252,9 +4146,20 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
 final class MercariListingStateAutomator: NSObject, ObservableObject, WKNavigationDelegate {
     enum Action: Equatable {
         case deactivate, activate
-        var tabPath: String { self == .deactivate ? "active" : "inactive" }
-        var buttonTestId: String { self == .deactivate ? "DeactivateAllButton" : "ActivateAllButton" }
-        var verb: String { self == .deactivate ? "Deactivate" : "Activate" }
+        /// Deactivate, then find the listing on the inactive tab and delete it. Used by
+        /// the sold-out queue when the account setting says Delete. The delete half's
+        /// selectors are best-effort (not captured from Mercari's markup yet): when they
+        /// miss, the run falls back to the visible web view so the user can finish.
+        case delete
+        var tabPath: String { self == .activate ? "inactive" : "active" }
+        var buttonTestId: String { self == .activate ? "ActivateAllButton" : "DeactivateAllButton" }
+        var verb: String {
+            switch self {
+            case .deactivate: return "Deactivate"
+            case .activate: return "Activate"
+            case .delete: return "Delete"
+            }
+        }
     }
 
     enum Phase: Equatable {
@@ -4271,13 +4176,20 @@ final class MercariListingStateAutomator: NSObject, ObservableObject, WKNavigati
         }
     }
 
-    private let webView: WKWebView
+    /// Exposed so a host (the sold-out progress sheet) can show the live page on demand.
+    let webView: WKWebView
     let mercariItemId: String
     let action: Action
+    /// What the automation is doing right now, for a host's header line.
+    @Published private(set) var stepText = ""
+    /// False when a host owns the pill (the sold-out queue): no AppTaskQueue task of its own.
+    private let registersOwnTask: Bool
     private var taskId = UUID()
     private var currentPage = 1
     private let maxPages = 15
     private var hasStarted = false
+    /// `.delete` runs the deactivate pass first, then this flips and the inactive tab is searched.
+    private var deleting = false
     private var terminalContinuation: CheckedContinuation<Phase, Never>?
 
     /// For callers with no UI to drive (e.g. a bulk background action) — starts the
@@ -4289,9 +4201,10 @@ final class MercariListingStateAutomator: NSObject, ObservableObject, WKNavigati
         }
     }
 
-    init(mercariItemId: String, action: Action) {
+    init(mercariItemId: String, action: Action, registersOwnTask: Bool = true) {
         self.mercariItemId = mercariItemId
         self.action = action
+        self.registersOwnTask = registersOwnTask
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.default()
         webView = WKWebView(frame: .zero, configuration: config)
@@ -4303,15 +4216,21 @@ final class MercariListingStateAutomator: NSObject, ObservableObject, WKNavigati
     func start() {
         guard !hasStarted else { return }
         hasStarted = true
-        AppTaskQueue.shared.begin(id: taskId, label: "\(action.verb.dropLast())ing Mercari listing…")
+        if registersOwnTask {
+            AppTaskQueue.shared.begin(id: taskId, label: "\(action.verb.dropLast())ing Mercari listing…")
+        }
         loadCurrentPage()
     }
 
+    /// The tab being searched: the delete pass moves to the inactive tab after deactivating.
+    private var currentTabPath: String { deleting ? "inactive" : action.tabPath }
+
     private func loadCurrentPage() {
-        guard let url = URL(string: "https://www.mercari.com/mypage/listings/\(action.tabPath)/?page=\(currentPage)") else {
+        guard let url = URL(string: "https://www.mercari.com/mypage/listings/\(currentTabPath)/?page=\(currentPage)") else {
             fail("Invalid listings URL")
             return
         }
+        stepText = "Looking for the listing on Mercari (\(currentTabPath), page \(currentPage))"
         webView.load(URLRequest(url: url))
     }
 
@@ -4371,7 +4290,7 @@ final class MercariListingStateAutomator: NSObject, ObservableObject, WKNavigati
                 currentPage += 1
                 loadCurrentPage()
             } else {
-                fail("Couldn't find this listing on Mercari's \(action.tabPath) tab — it may already be \(action == .deactivate ? "inactive" : "active"), or it's further back than page \(maxPages)")
+                fail("Couldn't find this listing on Mercari's \(currentTabPath) tab — it may already be \(currentTabPath == "active" ? "inactive" : "active"), or it's further back than page \(maxPages)")
             }
             return
         }
@@ -4379,6 +4298,11 @@ final class MercariListingStateAutomator: NSObject, ObservableObject, WKNavigati
     }
 
     private func clickActionButton() async {
+        if deleting {
+            await clickDeleteButton()
+            return
+        }
+        stepText = "Pressing \(action == .delete ? "Deactivate" : action.verb)"
         let deadline = Date().addingTimeInterval(8)
         var clicked = false
         while Date() < deadline {
@@ -4396,7 +4320,7 @@ final class MercariListingStateAutomator: NSObject, ObservableObject, WKNavigati
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
         guard clicked else {
-            fail("Couldn't find the \(action.verb) button — Mercari's page may have changed")
+            fail("Couldn't find the \(action == .delete ? "Deactivate" : action.verb) button — Mercari's page may have changed")
             return
         }
 
@@ -4413,16 +4337,77 @@ final class MercariListingStateAutomator: NSObject, ObservableObject, WKNavigati
             })();
         """, args: ["itemId": mercariItemId])) as? String
 
-        AppTaskQueue.shared.complete(id: taskId)
         if stillPresent == "gone" {
+            if action == .delete {
+                // Second pass: the listing is now inactive; find it there and delete it.
+                deleting = true
+                currentPage = 1
+                loadCurrentPage()
+                return
+            }
+            if registersOwnTask { AppTaskQueue.shared.complete(id: taskId) }
             phase = .success
         } else {
             fail("\(action.verb) click didn't take effect — try manually")
         }
     }
 
+    /// Delete pass on the inactive tab. Selectors are a best guess at Mercari's bulk
+    /// "Delete" button and its confirm dialog — a miss is a manualFallback, never a
+    /// silent success.
+    private func clickDeleteButton() async {
+        stepText = "Pressing Delete"
+        let result = (try? await webView.callJS("""
+            return (function() {
+                var btn = document.querySelector('button[data-testid="DeleteAllButton"]')
+                    || Array.from(document.querySelectorAll('button')).find(function(b) {
+                        return !b.disabled && /^\\s*delete\\s*$/i.test(b.textContent || '');
+                    });
+                if (!btn) return 'no-button';
+                if (btn.disabled) return 'disabled';
+                btn.click();
+                return 'clicked';
+            })();
+        """)) as? String
+        guard result == "clicked" else {
+            fail("Couldn't find Mercari's Delete button — finish in the web view")
+            return
+        }
+        // Mercari confirms deletes. Accept any dialog button that says Delete.
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        _ = try? await webView.callJS("""
+            return (function() {
+                var dialog = document.querySelector('[role="dialog"], [data-testid*="Modal"], [data-testid*="Dialog"]');
+                var scope = dialog || document;
+                var btn = Array.from(scope.querySelectorAll('button')).find(function(b) {
+                    return !b.disabled && /delete|confirm|yes/i.test(b.textContent || '');
+                });
+                if (!btn) return 'no-confirm';
+                btn.click();
+                return 'confirmed';
+            })();
+        """)
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        let stillPresent = (try? await webView.callJS("""
+            return (function() {
+                var items = document.querySelectorAll('li[data-testid="ListItem"]');
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i].querySelector('a[href*="/item/" + itemId + "/"]')) return 'present';
+                }
+                return 'gone';
+            })();
+        """, args: ["itemId": mercariItemId])) as? String
+        if stillPresent == "gone" {
+            if registersOwnTask { AppTaskQueue.shared.complete(id: taskId) }
+            phase = .success
+        } else {
+            fail("Delete didn't take effect — finish in the web view")
+        }
+    }
+
     private func fail(_ reason: String) {
-        AppTaskQueue.shared.complete(id: taskId)
+        if registersOwnTask { AppTaskQueue.shared.complete(id: taskId) }
+        stepText = reason
         phase = .manualFallback(reason)
     }
 }

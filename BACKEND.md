@@ -532,6 +532,21 @@ differ; the "reconciled" lines say what changed. Nothing here is built yet.
   not worth a per-run control), and a run under Delete asks once per run:
   "Delete out-of-stock listings on Mercari?".
 
+- **Built 2026-11-02 (iOS; device run pending).** `Data/SoldOutRun.swift` (rules +
+  `SoldOutRunStore`, tests `SoldOutPlanTests`), `Data/SoldOutRunner.swift` (the
+  loop: `markSoldOutAndCascade` → `MercariListingStateAutomator` with 60 s timeout
+  × 2 attempts; a Mercari failure restores stock via `restockListing` +
+  `restockAndCascade`), `Views/SoldOutProgressView.swift` (list + `SoldOutMercariWebView`
+  cover), `Views/MercariSettingsView.swift` (replaces `MercariShippingPreferencesView`;
+  `soldOutAction` added to `settings/mercariShipping`, AppStorage
+  `mercariSoldOutAction`). Entry points rewired: ProfileView row alert,
+  EditListingSheet "Mark as Sold Out", BulkEditSheet "Mark as Out of Stock".
+  MainView presents the sheet and the "interrupted" Resume alert. **Unverified:**
+  the automator's `.delete` pass (inactive tab → `DeleteAllButton` or a button
+  reading "Delete" → confirm dialog) is a guess at Mercari's markup; a miss opens
+  the web view for the user to finish, never a silent success. The Deactivate pass
+  reuses the 2026-07 selectors that were themselves never run on a device.
+
 ### 2b. Mercari Smart Pricing is set at three levels (2026-11-02, mock pending review)
 - Account default (today's `keepSmartPricing`), a per-posting toggle shown
   indented under the Mercari checkbox in `CrossPostSheet` while Mercari is on,

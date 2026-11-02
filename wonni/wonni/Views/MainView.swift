@@ -17,6 +17,7 @@ struct MainView: View {
     @EnvironmentObject var bulkImportManager: BulkImportManager
     @EnvironmentObject var mercariSyncManager: MercariSyncManager
     @ObservedObject private var bulkTextRunner = BulkTextDraftRunner.shared
+    @ObservedObject private var soldOutRunner = SoldOutRunner.shared
     @Environment(\.modelContext) private var modelContext
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
     @Environment(\.scenePhase) private var scenePhase
@@ -107,6 +108,25 @@ struct MainView: View {
             uploadManager.migrateDraftPhotoStorage(modelContext: modelContext)
             uploadManager.sweepFailedPublishDrafts(modelContext: modelContext)
             await uploadManager.checkInterruptedCrossPosts()
+            soldOutRunner.checkInterrupted()
+        }
+        // Sold-out queue: the pill reopens its progress list here; a run the process
+        // did not live to finish is offered for resume.
+        .sheet(isPresented: $soldOutRunner.showSheet) {
+            SoldOutProgressView()
+        }
+        .alert(
+            "Marking sold out was interrupted",
+            isPresented: Binding(
+                get: { soldOutRunner.interrupted != nil },
+                set: { if !$0 { soldOutRunner.dismissInterrupted() } }
+            ),
+            presenting: soldOutRunner.interrupted
+        ) { summary in
+            Button("Resume \(summary.remaining)") { soldOutRunner.resumeInterrupted() }
+            Button("Dismiss", role: .cancel) { soldOutRunner.dismissInterrupted() }
+        } message: { summary in
+            Text(summary.message)
         }
         .sheet(isPresented: $uploadManager.showProgressSheet) {
             NavigationStack { ProcessProgressView() }

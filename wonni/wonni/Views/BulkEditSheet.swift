@@ -23,7 +23,6 @@ struct BulkEditSheet: View {
     @State private var selectedCondition: ItemCondition? = nil
     @State private var selectedShipping: ShippingPolicyMode = .unchanged
     @State private var markOutOfStock = false
-    @State private var outOfStockSummary: String?
     @State private var weightWholeLbs: Int = 0
     @State private var weightOz: Double = 0
     @State private var lengthIn: Double? = nil
@@ -301,20 +300,6 @@ struct BulkEditSheet: View {
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
                 }
             }
-            .alert(
-                "Out of Stock",
-                isPresented: Binding(
-                    get: { outOfStockSummary != nil },
-                    set: { if !$0 { outOfStockSummary = nil } }
-                )
-            ) {
-                Button("OK") {
-                    onComplete()
-                    dismiss()
-                }
-            } message: {
-                Text(outOfStockSummary ?? "")
-            }
         }
     }
     
@@ -506,16 +491,10 @@ struct BulkEditSheet: View {
                 }
 
                 if markOutOfStock {
-                    let result = await markSelectedOutOfStock(Array(selectedListingIds))
-                    if result.failed > 0 {
-                        // Stay open and show the summary; onComplete/dismiss run
-                        // when the user acknowledges the alert.
-                        await MainActor.run {
-                            isApplying = false
-                            outOfStockSummary = "\(result.succeeded)/\(result.succeeded + result.failed) listings marked out of stock. \(result.failed) failed after 3 attempts — see Xcode console and Firebase function logs for details."
-                        }
-                        return
-                    }
+                    // Queued, not awaited: SoldOutRunner marks each listing sold out
+                    // (server cascade, then Mercari in a web view) with the pill
+                    // showing progress and a "not marked sold out" list at the end.
+                    await enqueueSelectedSoldOut()
                 }
 
                 await MainActor.run {
@@ -532,51 +511,17 @@ struct BulkEditSheet: View {
         }
     }
 
-    /// Marks every listing in `ids` out of stock via the `markSoldOutAndCascade`
-    /// cloud function (qty=0, status=sold, hides on eBay/Etsy, flags Mercari for
-    /// webview deactivation). Best-effort with auto-retry: each listing gets up to
-    /// 3 attempts with backoff, and failures don't stop the remaining listings.
-    /// Calls stay sequential — each invocation fans out to eBay/Etsy APIs, and
-    /// firing dozens concurrently invites rate limiting.
-    private func markSelectedOutOfStock(_ ids: [String]) async -> (succeeded: Int, failed: Int) {
-        var failedCount = 0
-        for id in ids {
-            var lastError: Error?
-            for attempt in 1...3 {
-                do {
-                    _ = try await callCloudFunction("markSoldOutAndCascade", ["productId": id])
-                    lastError = nil
-                    break
-                } catch {
-                    lastError = error
-                    if attempt < 3 {
-                        try? await Task.sleep(nanoseconds: UInt64(attempt) * 1_000_000_000)
-                    }
-                }
+    /// Fetches the selected listings and hands them to the sold-out queue.
+    private func enqueueSelectedSoldOut() async {
+        var listings: [UserListing] = []
+        for id in selectedListingIds {
+            if let listing = try? await ListingRepository.shared.fetchListing(id: id) {
+                listings.append(listing)
             }
-            if let error = lastError {
-                failedCount += 1
-                print("[BulkEdit] markSoldOutAndCascade failed for \(id) after 3 attempts: \(error)")
-                continue
-            }
-            await deactivateOnMercariIfLinked(listingId: id)
         }
-        return (ids.count - failedCount, failedCount)
-    }
-
-    /// Best-effort headless Mercari deactivation for a listing that just went out of stock.
-    /// markSoldOutAndCascade already succeeded and set pendingMercariDeactivation, so a failed
-    /// automation attempt here isn't counted against the bulk-edit result — it just leaves the
-    /// existing "Action needed" manual-deactivate entry point (MercariProfileSyncSheet) as the
-    /// fallback, same as before this automation existed.
-    private func deactivateOnMercariIfLinked(listingId: String) async {
-        guard let listing = try? await ListingRepository.shared.fetchListing(id: listingId),
-              let mercariId = listing.crossPostListingIds?["mercari"] else { return }
-        let automator = MercariListingStateAutomator(mercariItemId: mercariId, action: .deactivate)
-        let phase = await automator.run()
-        if case .success = phase {
-            try? await Firestore.firestore().collection("listings").document(listingId)
-                .updateData(["pendingMercariDeactivation": FieldValue.delete()])
+        let action = MercariSoldOutAction(rawValue: UserDefaults.standard.string(forKey: MercariSoldOutAction.storageKey) ?? "") ?? .deactivate
+        await MainActor.run {
+            SoldOutRunner.shared.enqueue(listings, action: action)
         }
     }
 }

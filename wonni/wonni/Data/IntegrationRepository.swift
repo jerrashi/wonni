@@ -194,7 +194,7 @@ public class IntegrationRepository: ObservableObject {
     /// Loads the seller's saved Mercari shipping preferences from Firestore so they sync across
     /// devices. Returns nil if the user has never configured them (caller should collect them).
     /// Stored at `users/{uid}/settings/mercariShipping`.
-    public func loadMercariShippingPreferences() async -> (acceptSuggestions: Bool, mode: String, carriers: [String], keepSmartPricing: Bool)? {
+    public func loadMercariShippingPreferences() async -> (acceptSuggestions: Bool, mode: String, carriers: [String], keepSmartPricing: Bool, soldOutAction: String)? {
         guard let uid = userId else { return nil }
         do {
             let doc = try await db.collection(usersCollection)
@@ -209,7 +209,9 @@ public class IntegrationRepository: ObservableObject {
             // Smart Pricing: off by default (we switch it off before listing). See
             // MercariFormJS.mustDisableSmartPricing for the under-$10 rule that overrides this.
             let keepSmartPricing = data["keepSmartPricing"] as? Bool ?? false
-            return (accept, mode, carriers, keepSmartPricing)
+            // What "sold out" does on Mercari (deactivate | delete); see MercariSoldOutAction.
+            let soldOutAction = data["soldOutAction"] as? String ?? MercariSoldOutAction.deactivate.rawValue
+            return (accept, mode, carriers, keepSmartPricing, soldOutAction)
         } catch {
             print("[IntegrationRepository] loadMercariShippingPreferences error: \(error)")
             return nil
@@ -217,7 +219,7 @@ public class IntegrationRepository: ObservableObject {
     }
 
     /// Persists the seller's Mercari shipping preferences to Firestore for cross-device sync.
-    public func saveMercariShippingPreferences(acceptSuggestions: Bool, mode: String, carriers: [String], keepSmartPricing: Bool = false) async {
+    public func saveMercariShippingPreferences(acceptSuggestions: Bool, mode: String, carriers: [String], keepSmartPricing: Bool = false, soldOutAction: String = "deactivate") async {
         guard let uid = userId else { return }
         do {
             try await db.collection(usersCollection)
@@ -229,6 +231,7 @@ public class IntegrationRepository: ObservableObject {
                     "mode": mode,
                     "carriers": carriers,
                     "keepSmartPricing": keepSmartPricing,
+                    "soldOutAction": soldOutAction,
                     "updatedAt": FieldValue.serverTimestamp()
                 ], merge: true)
         } catch {
