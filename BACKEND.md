@@ -519,6 +519,31 @@ differ; the "reconciled" lines say what changed. Nothing here is built yet.
 - **Reconciled:** the cascade's `pendingMercariDeactivation` flag name stays
   (BACKEND.md "Mercari is binary" table); the client reads the setting to pick
   the action. The `variants[i].pendingMercari*` gap still applies.
+- **Mock approved 2026-10-29** (https://claude.ai/artifact/FMeSfkN9c7PBsfT9NDA7wo)
+  with these answers: the progress list groups **by listing** (one row per
+  listing, one chip per platform); a job leaves the queue only once every
+  platform confirmed, and when all rows are done the pill and list close by
+  themselves — no Done tap; a platform step that has not confirmed after
+  **60 s times out and auto-retries once**, and a listing that still fails is
+  marked **back in stock** and shown in a "not marked sold out" list at the
+  end (same shape as the publish screen's failed-platform list); the
+  Deactivate | Delete choice is **account-wide only** (no per-listing choice —
+  the one edge case, deactivate pending-pickup items but delete sold ones, is
+  not worth a per-run control), and a run under Delete asks once per run:
+  "Delete out-of-stock listings on Mercari?".
+
+### 2b. Mercari Smart Pricing is set at three levels (2026-11-02, mock pending review)
+- Account default (today's `keepSmartPricing`), a per-posting toggle shown
+  indented under the Mercari checkbox in `CrossPostSheet` while Mercari is on,
+  and a per-listing Off/On control (in the sheet's "N listings" expander and
+  on the listing/draft edit sheet). **Most recent choice wins**, encoded
+  without timestamps: touching the posting toggle resets every listing's
+  override to match; a listing control touched afterwards wins for that
+  listing. Under $10 stays forced off (`mustDisableSmartPricing`). Resolution
+  = one pure, tested `resolveSmartPricing(price, account, posting, listing)`
+  used by the iOS poster, the edit flow and the extension payload. Listing
+  field `mercariSmartPricing: true | false` (nil = follow). Editing it after
+  posting re-runs the Mercari edit flow to flip the switch there.
 
 ### 3. Mercari sales: Refresh → review → record → link → cascade
 - A **Refresh** button (iOS Sales dashboard, web Sales page) scans Mercari's
