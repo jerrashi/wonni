@@ -23,6 +23,8 @@ struct BackendContracts: Codable, Sendable {
     let commitListingProposalsResponse: CommitListingProposalsResponse?
     let decrementAndCascadeRequest: DecrementAndCascadeRequest?
     let decrementAndCascadeResponse: DecrementAndCascadeResponse?
+    let deleteProductEverywhereRequest: DeleteProductEverywhereRequest?
+    let deleteProductEverywhereResponse: DeleteProductEverywhereResponse?
     let detectMercariPullSyncDiffRequest: DetectMercariPullSyncDiffRequest?
     let detectMercariPullSyncDiffResponse: DetectMercariPullSyncDiffResponse?
     let draftPhotoCandidateDetailRequest: DraftPhotoCandidateDetailRequest?
@@ -126,6 +128,8 @@ struct BackendContracts: Codable, Sendable {
         case commitListingProposalsResponse = "CommitListingProposalsResponse"
         case decrementAndCascadeRequest = "DecrementAndCascadeRequest"
         case decrementAndCascadeResponse = "DecrementAndCascadeResponse"
+        case deleteProductEverywhereRequest = "DeleteProductEverywhereRequest"
+        case deleteProductEverywhereResponse = "DeleteProductEverywhereResponse"
         case detectMercariPullSyncDiffRequest = "DetectMercariPullSyncDiffRequest"
         case detectMercariPullSyncDiffResponse = "DetectMercariPullSyncDiffResponse"
         case draftPhotoCandidateDetailRequest = "DraftPhotoCandidateDetailRequest"
@@ -249,6 +253,8 @@ extension BackendContracts {
         commitListingProposalsResponse: CommitListingProposalsResponse?? = nil,
         decrementAndCascadeRequest: DecrementAndCascadeRequest?? = nil,
         decrementAndCascadeResponse: DecrementAndCascadeResponse?? = nil,
+        deleteProductEverywhereRequest: DeleteProductEverywhereRequest?? = nil,
+        deleteProductEverywhereResponse: DeleteProductEverywhereResponse?? = nil,
         detectMercariPullSyncDiffRequest: DetectMercariPullSyncDiffRequest?? = nil,
         detectMercariPullSyncDiffResponse: DetectMercariPullSyncDiffResponse?? = nil,
         draftPhotoCandidateDetailRequest: DraftPhotoCandidateDetailRequest?? = nil,
@@ -352,6 +358,8 @@ extension BackendContracts {
             commitListingProposalsResponse: commitListingProposalsResponse ?? self.commitListingProposalsResponse,
             decrementAndCascadeRequest: decrementAndCascadeRequest ?? self.decrementAndCascadeRequest,
             decrementAndCascadeResponse: decrementAndCascadeResponse ?? self.decrementAndCascadeResponse,
+            deleteProductEverywhereRequest: deleteProductEverywhereRequest ?? self.deleteProductEverywhereRequest,
+            deleteProductEverywhereResponse: deleteProductEverywhereResponse ?? self.deleteProductEverywhereResponse,
             detectMercariPullSyncDiffRequest: detectMercariPullSyncDiffRequest ?? self.detectMercariPullSyncDiffRequest,
             detectMercariPullSyncDiffResponse: detectMercariPullSyncDiffResponse ?? self.detectMercariPullSyncDiffResponse,
             draftPhotoCandidateDetailRequest: draftPhotoCandidateDetailRequest ?? self.draftPhotoCandidateDetailRequest,
@@ -1869,6 +1877,172 @@ enum PlatformValue: String, Codable, Equatable, Sendable {
     case pendingManual = "pending-manual"
     case skipped = "skipped"
     case updated = "updated"
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - DeleteProductEverywhereRequest
+struct DeleteProductEverywhereRequest: Codable, Equatable, Sendable {
+    let productId: String
+
+    enum CodingKeys: String, CodingKey {
+        case productId = "productId"
+    }
+}
+
+// MARK: DeleteProductEverywhereRequest convenience initializers and mutators
+
+extension DeleteProductEverywhereRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(DeleteProductEverywhereRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        productId: String? = nil
+    ) -> DeleteProductEverywhereRequest {
+        return DeleteProductEverywhereRequest(
+            productId: productId ?? self.productId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - DeleteProductEverywhereResponse
+struct DeleteProductEverywhereResponse: Codable, Equatable, Sendable {
+    let deleted: Bool
+    let failed: [Failed]
+    let manualRemoval: [String]
+    let removedFrom: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case deleted = "deleted"
+        case failed = "failed"
+        case manualRemoval = "manualRemoval"
+        case removedFrom = "removedFrom"
+    }
+}
+
+// MARK: DeleteProductEverywhereResponse convenience initializers and mutators
+
+extension DeleteProductEverywhereResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(DeleteProductEverywhereResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        deleted: Bool? = nil,
+        failed: [Failed]? = nil,
+        manualRemoval: [String]? = nil,
+        removedFrom: [String]? = nil
+    ) -> DeleteProductEverywhereResponse {
+        return DeleteProductEverywhereResponse(
+            deleted: deleted ?? self.deleted,
+            failed: failed ?? self.failed,
+            manualRemoval: manualRemoval ?? self.manualRemoval,
+            removedFrom: removedFrom ?? self.removedFrom
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - Failed
+struct Failed: Codable, Equatable, Sendable {
+    let error: String
+    let platform: String
+
+    enum CodingKeys: String, CodingKey {
+        case error = "error"
+        case platform = "platform"
+    }
+}
+
+// MARK: Failed convenience initializers and mutators
+
+extension Failed {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(Failed.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        error: String? = nil,
+        platform: String? = nil
+    ) -> Failed {
+        return Failed(
+            error: error ?? self.error,
+            platform: platform ?? self.platform
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
 }
 
 //

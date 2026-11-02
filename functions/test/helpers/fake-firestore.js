@@ -82,6 +82,9 @@ class FakeDoc {
       this._parentCollection.store.set(this.id, fresh);
     }
   }
+  async delete() {
+    this._parentCollection.store.delete(this.id);
+  }
   async update(patch) {
     const cur = this._parentCollection.store.get(this.id);
     if (!cur) throw new Error(`update() on missing doc ${this._parentCollection.name}/${this.id}`);

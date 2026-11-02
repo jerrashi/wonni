@@ -86,6 +86,20 @@ module.exports = {
       response: CrossPostStatusResponseSchema,
     },
     {
+      name: "deleteProductEverywhere",
+      summary: "Stop selling a product everywhere: delete its live eBay / Etsy / TikTok listings in parallel, then the products/{id} doc. If any platform delete fails the doc is KEPT (retry-safe) and the failures are returned. Mercari has no delete automation, so it is reported in manualRemoval.",
+      request: ProductRefRequestSchema,
+      response: z.object({
+        /** true = the products/{id} doc was deleted. */
+        deleted: z.boolean(),
+        /** API platforms whose listing was removed this call. */
+        removedFrom: z.array(z.string()),
+        failed: z.array(z.object({ platform: z.string(), error: z.string() })),
+        /** Platforms the user must remove by hand (Mercari). */
+        manualRemoval: z.array(z.string()),
+      }),
+    },
+    {
       name: "postToWonni",
       summary: "Publish a products/{id} to the Wonni marketplace feed (listings/{id}, status:active). Skips a re-write when a live listing already exists.",
       request: ProductRefRequestSchema,

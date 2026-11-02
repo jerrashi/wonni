@@ -121,6 +121,12 @@
     "EbayUpdateListingResponse": {
       "$ref": "#/definitions/EbayUpdateListingResponse"
     },
+    "DeleteProductEverywhereRequest": {
+      "$ref": "#/definitions/DeleteProductEverywhereRequest"
+    },
+    "DeleteProductEverywhereResponse": {
+      "$ref": "#/definitions/DeleteProductEverywhereResponse"
+    },
     "PostToWonniRequest": {
       "$ref": "#/definitions/PostToWonniRequest"
     },
@@ -1674,6 +1680,65 @@
         "productId",
         "platform",
         "status"
+      ],
+      "additionalProperties": false
+    },
+    "DeleteProductEverywhereRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "productId"
+      ],
+      "additionalProperties": false
+    },
+    "DeleteProductEverywhereResponse": {
+      "type": "object",
+      "properties": {
+        "deleted": {
+          "type": "boolean"
+        },
+        "removedFrom": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "failed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "platform": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "platform",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "manualRemoval": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "deleted",
+        "removedFrom",
+        "failed",
+        "manualRemoval"
       ],
       "additionalProperties": false
     },

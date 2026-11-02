@@ -14,7 +14,9 @@ export function liveApiPlatforms(product) {
   return [
     (product?.ebayStatus === "active" || product?.crossPostStatus?.ebay === "active" || product?.crossPostStatus?.ebay === "posted") ? "ebay" : null,
     (product?.etsyStatus === "active" || product?.crossPostStatus?.etsy === "active" || product?.crossPostStatus?.etsy === "posted") ? "etsy" : null,
-    product?.tiktokStatus === "active" ? "tiktok" : null,
+    // tiktokCreateListing writes crossPostStatus.tiktok; `tiktokStatus` is a legacy
+    // field nothing writes anymore, so checking only it left TikTok listings live.
+    (product?.tiktokStatus === "active" || product?.crossPostStatus?.tiktok === "active") ? "tiktok" : null,
   ].filter(Boolean);
 }
 
