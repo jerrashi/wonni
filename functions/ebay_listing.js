@@ -1312,6 +1312,22 @@ async function postSingleVariant(ctx) {
 // Multi-variation listing: one inventory item per active variant → an
 // inventory item group → one offer per variant → publishOfferByInventoryItemGroup.
 // Result is ONE eBay listing with N selectable variations.
+const VARIANT_CONCURRENCY = 8;
+
+/** Run `fn` over `items` with at most `limit` in flight; results keep order. */
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 async function postMultiVariant(ctx) {
   const { uid, product, productId, docRef, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description, categoryAspects, brand, conditionEnum, conditionDescriptors } = ctx;
   const groupKey = productId;
@@ -1432,13 +1448,14 @@ async function postMultiVariant(ctx) {
   const productAspects = buildProductAspects(categoryAspects, brand, title, {}, { ...toAspectArrays(product.geminiItemSpecifics), ...toAspectArrays(product.ebayAspects) });
   for (const opt of options) delete productAspects[opt.name];
 
-  const putAllItems = ({ addedAspects = {}, condition } = {}) => Promise.all(
-    perVariant.map((pv) => ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(pv.sku)}`, {
+  // Bounded fan-out: a 250-variant listing must not fire 250 PUTs at once.
+  const putAllItems = ({ addedAspects = {}, condition } = {}) => mapLimit(
+    perVariant, VARIANT_CONCURRENCY, (pv) => ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(pv.sku)}`, {
       product: { ...sharedProduct, aspects: { ...productAspects, ...addedAspects, ...pv.aspects } },
       ...conditionFields(conditionEnum, conditionDescriptors, condition),
       packageWeightAndSize,
       availability: { shipToLocationAvailability: { quantity: pv.qty } },
-    }))
+    })
   );
   const putGroup = ({ addedAspects = {} } = {}) => ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`, {
     title,
@@ -1898,7 +1915,7 @@ async function pushSingleVariantEdit(uid, product, productId) {
 
 // Sync bidirectional: apply chosen version (wonni or ebay) to the other platform
 exports.ebaySyncListing = onCall(
-  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 60, memory: "256MiB" },
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 300, memory: "256MiB" },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
@@ -2051,9 +2068,25 @@ async function syncMultiVariantFromEbay(uid, product, productId, docRef) {
   await docRef.update(updatePayload);
 }
 
+// Push the Wonni doc to its live eBay listing, whichever shape it has.
+// Multi-variation goes through the item-group flow `postMultiVariant` uses
+// (PUT items → PUT group → per-variant offers → publish_by_inventory_item_group;
+// every variant keeps its stored SKU/offer, so the live listing is revised in
+// place). Before 2026-11-11 this threw `unimplemented` ("delete and re-post").
+// `deps` are injectable for tests.
+async function pushEbayEdit(uid, product, productId, docRef, deps = {}) {
+  const pushMulti = deps.pushMulti || syncMultiVariantToEbay;
+  const pushSingle = deps.pushSingle || pushSingleVariantEdit;
+  const isMulti = product.ebayHasVariations === true
+    || !!product.ebayInventoryItemGroupKey
+    || buildEbayVariations(product) !== null;
+  if (isMulti) return pushMulti(uid, product, productId, docRef);
+  return pushSingle(uid, product, productId);
+}
+
 // Update an eBay listing with current Wonni product data (title, description, price, images, variations/quantities, shipping)
 exports.ebayUpdateListing = onCall(
-  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 60, memory: "256MiB" },
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET], timeoutSeconds: 300, memory: "256MiB" },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
@@ -2070,16 +2103,7 @@ exports.ebayUpdateListing = onCall(
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
 
     try {
-      // Multi-variation in-place edit isn't wired to the Inventory API's
-      // item-group flow yet (a single offer update can't express N variations).
-      if (buildEbayVariations(product) !== null) {
-        throw new HttpsError(
-          "unimplemented",
-          "Editing a multi-variation eBay listing in place isn't supported yet — delete the listing and re-post it to apply changes.",
-        );
-      }
-
-      await pushSingleVariantEdit(uid, product, productId);
+      await pushEbayEdit(uid, product, productId, docRef);
 
       // Update last-synced timestamp
       await docRef.update({
@@ -2436,6 +2460,6 @@ module.exports = {
     ebayImportListingCore, ebayCreateListingCore,
     buildShippingRuleName, buildShippingRulePayload,
     validateListingFormatInput, buildEbayOfferPayload,
-    buildSingleVariantEditPayloads, pushSingleVariantEdit,
+    buildSingleVariantEditPayloads, pushSingleVariantEdit, pushEbayEdit, mapLimit,
   },
 };

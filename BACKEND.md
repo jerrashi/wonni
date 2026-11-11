@@ -617,6 +617,56 @@ differ; the "reconciled" lines say what changed. Nothing here is built yet.
   verification, no latency SLO needed for this use. #26 stays open as a
   later upgrade for near-real-time alerts (§ Stretch goals sale alerts).
 
+## Scale + multiple eBay accounts — product decisions (2026-11-11, user)
+
+**Why:** eBay caps free (no-fee) listings at about 250 per account for most
+sellers. Two levers, both deliberate product direction:
+
+1. **Pro option: several eBay accounts per user, grouped by what they sell.**
+   E.g. 240 listings on an anime-collectibles account, 213 on a trading-cards
+   account, 180 on a vintage-fashion account. Ties into the earlier "products
+   grouped" design and into the multiple-storefront idea (CLAUDE.md § Backlog):
+   integrations are one-per-platform per user today
+   (`users/{uid}/integrations/ebay`), so this needs integrations keyed by an
+   account id, an account (or group) on each product, and routing through
+   `crossPostRules`. Touches every eBay create/update/sync/delete path and the
+   sales cascade — needs its own plan before code. Check eBay's policy on
+   multiple seller accounts per person first (business reason, linked-account
+   risk).
+2. **Pack many items into ONE listing with variations, up to eBay's maximum.**
+   Example: a large comic collection sold as a single listing so it costs one
+   of the 250 slots. Realistic shape: 30+ series, 20+ options each (600+
+   variants).
+
+**Rules for every future decision (don't limit more than the platforms do):**
+- Never cap variation count/dimensions below the platform's own API limit. The
+  web editor's 2-dimension cap (`MAX_VARIATION_DIMENSIONS`) mirrors Etsy; it
+  is not a count cap — keep it that way, and do not add one.
+- **Open question — verify against eBay's current docs before building:** eBay
+  limits variations per listing (believed 250) and variation aspects per
+  listing. 30 series x 20 options = 600 exceeds that, so a collection that big
+  needs **auto-splitting into several item groups** (one listing per ~250
+  variants, e.g. per series range) while still presenting as ONE product in
+  Wonni. Etsy has its own, lower variation limits — same question there.
+- **Posting must scale to hundreds of variants.** Today `postMultiVariant`
+  does one PUT per variant item (now capped at 8 in flight, `mapLimit`) and
+  one offer call per variant in sequence; at 250+ variants that is slow
+  (callables are 300 s now). Next step is eBay's bulk endpoints
+  (`bulk_create_or_replace_inventory_item`, `bulk_create_offer`,
+  `bulk_update_price_quantity`, 25 per call) and, past that, a queued
+  background job with progress instead of a single callable.
+- **Web posting crawlers (Mercari / Facebook autofill) must survive a long
+  list**: resumable, runs in the background, per-listing retry, progress
+  persisted (see `CrossPostRunStore` on iOS and the web job queue). A run of
+  hundreds of listings is a normal case, not an edge case.
+
+**Done toward this:** `ebayUpdateListing` now edits a multi-variation listing
+in place (2026-11-11, `pushEbayEdit` -> `syncMultiVariantToEbay` ->
+`postMultiVariant`; it used to throw `unimplemented`). Not live-verified;
+unit-tested for routing and the concurrency cap only. Known gap: a variant
+deactivated/removed after posting drops out of the group on republish but its
+eBay inventory item + offer are left behind (not live, just clutter).
+
 ## Stretch goals
 
 - **Email-triggered Mercari sale import.** Manual HTML scraping via the
