@@ -672,6 +672,24 @@ sellers. Two levers, both deliberate product direction:
   been unit-tested. Fix = list the varying property ids in `*_on_property`
   (the shared-pool + uniform-price case is where empty is correct) and send
   property ids, then post one real multi-variant listing as a draft.
+- **eBay variation limits — reference copy** (verbatim figures from the
+  [Trading API variations guide](https://developer.ebay.com/api-docs/user-guides/static/trading-user-guide/variations.html),
+  fetched 2026-11-11; re-check the page if eBay changes them). Quoted:
+  "The maximum number of variations allowed for any listing is 250."
+  "You can include up to five (5) name/value pairs in each variation."
+  "You can specify up to 30 values for each name in the set."
+  "The price of each variation must satisfy the minimum price requirement for
+  the marketplace and category of the listing." Plain English: a *variation*
+  is one buyable combination (a row). A *name* is a dimension (Series, Range,
+  Issue — at most 5 per listing). Each name has at most 30 *distinct values*
+  across the WHOLE listing. Rows are flat combinations, not a tree — eBay has no
+  "sub-variation" nesting; the buyer picks one value per dropdown, and only
+  the rows you actually create are buyable. Worked example: Series > Range >
+  Issue is 3 names (fine, max 5), but "Issue" may hold only 30 distinct values
+  per listing, so #100-130 (31 issues) already doesn't fit one listing, and 5
+  ranges x 30 issues is 150 rows (under 250) only if the issue labels repeat
+  (#1-#30 in each range); distinct issue numbers across ranges still count
+  toward the 30. Our planner splits by those rules.
 - **Auto-split — built 2026-11-11, not live-tested.** `ebay_variant_groups.js`
   plans one eBay item group per <=250 variations / <=30 values per name,
   keeping a primary-option value (a series) whole in one listing. Group 1 keeps
