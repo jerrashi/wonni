@@ -1312,6 +1312,9 @@ async function postSingleVariant(ctx) {
 // Multi-variation listing: one inventory item per active variant → an
 // inventory item group → one offer per variant → publishOfferByInventoryItemGroup.
 // Result is ONE eBay listing with N selectable variations.
+const { planVariantGroups, groupTitle } = require("./ebay_variant_groups");
+const { bulkPutInventoryItems, bulkCreateOffers } = require("./ebay_bulk");
+
 const VARIANT_CONCURRENCY = 8;
 
 /** Run `fn` over `items` with at most `limit` in flight; results keep order. */
@@ -1328,19 +1331,13 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
-async function postMultiVariant(ctx) {
-  const { uid, product, productId, docRef, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description, categoryAspects, brand, conditionEnum, conditionDescriptors } = ctx;
-  const groupKey = productId;
+// Posts ONE eBay item group (one live listing) for the given subset of the
+// product's active variants. eBay caps a listing at 250 variations / 30 values
+// per name, so `postMultiVariant` plans the split and calls this per group.
+// Writes nothing to the product doc — the caller owns that.
+async function postVariantGroup(ctx, { groupKey, activeVariants }) {
+  const { uid, product, productId, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description, categoryAspects, brand, conditionEnum, conditionDescriptors } = ctx;
   const options = Array.isArray(product.options) ? product.options : [];
-  const productVariants = Array.isArray(product.variants)
-    ? product.variants
-    : Object.values(product.variants || {});
-  const activeVariants = productVariants
-    .map((v, i) => ({ v, i }))
-    .filter(({ v }) => v.active !== false);
-  if (activeVariants.length === 0) {
-    throw new HttpsError("failed-precondition", "This product has no active variants to post.");
-  }
 
   // Per-variant offers we already have — from the doc's stored pointers, and
   // (if the SKU is eBay-clean) a `getOffers?sku=` lookup. We do NOT use
@@ -1448,14 +1445,18 @@ async function postMultiVariant(ctx) {
   const productAspects = buildProductAspects(categoryAspects, brand, title, {}, { ...toAspectArrays(product.geminiItemSpecifics), ...toAspectArrays(product.ebayAspects) });
   for (const opt of options) delete productAspects[opt.name];
 
-  // Bounded fan-out: a 250-variant listing must not fire 250 PUTs at once.
-  const putAllItems = ({ addedAspects = {}, condition } = {}) => mapLimit(
-    perVariant, VARIANT_CONCURRENCY, (pv) => ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(pv.sku)}`, {
-      product: { ...sharedProduct, aspects: { ...productAspects, ...addedAspects, ...pv.aspects } },
-      ...conditionFields(conditionEnum, conditionDescriptors, condition),
-      packageWeightAndSize,
-      availability: { shipToLocationAvailability: { quantity: pv.qty } },
-    })
+  // 25 items per eBay call (bulk), single-PUT fallback per failed row.
+  const putAllItems = ({ addedAspects = {}, condition } = {}) => bulkPutInventoryItems(
+    (method, path, body) => ebayRequest(uid, method, path, body),
+    perVariant.map((pv) => ({
+      sku: pv.sku,
+      body: {
+        product: { ...sharedProduct, aspects: { ...productAspects, ...addedAspects, ...pv.aspects } },
+        ...conditionFields(conditionEnum, conditionDescriptors, condition),
+        packageWeightAndSize,
+        availability: { shipToLocationAvailability: { quantity: pv.qty } },
+      },
+    })),
   );
   const putGroup = ({ addedAspects = {} } = {}) => ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`, {
     title,
@@ -1475,20 +1476,26 @@ async function postMultiVariant(ctx) {
   await putAllItems();
   await putGroup();
 
-  // 3. One offer per variant (reuse the group's existing offers where possible).
-  for (const pv of perVariant) {
-    const offerArgs = {
-      sku: pv.sku, price: pv.price, quantity: pv.qty,
-      categoryId, description, listingPolicies, merchantLocationKey,
-    };
+  // 3. One offer per variant. Existing offers are updated in place (bounded
+  // fan-out); new ones are created 25 at a time, adopting an existing offer
+  // when eBay says it already exists.
+  const offerArgsFor = (pv) => ({
+    sku: pv.sku, price: pv.price, quantity: pv.qty,
+    categoryId, description, listingPolicies, merchantLocationKey,
+  });
+  const toUpdate = perVariant.filter((pv) => offersBySku[pv.sku]);
+  const toCreate = perVariant.filter((pv) => !offersBySku[pv.sku]);
+  await mapLimit(toUpdate, VARIANT_CONCURRENCY, async (pv) => {
     const existing = offersBySku[pv.sku];
-    if (existing) {
-      await ebayRequest(uid, "PUT", `/sell/inventory/v1/offer/${existing}`, buildEbayOfferPayload(offerArgs, { forUpdate: true }));
-      pv.offerId = existing;
-    } else {
-      pv.offerId = await createOrAdoptOffer(uid, pv.sku, buildEbayOfferPayload(offerArgs));
-    }
-  }
+    await ebayRequest(uid, "PUT", `/sell/inventory/v1/offer/${existing}`, buildEbayOfferPayload(offerArgsFor(pv), { forUpdate: true }));
+    pv.offerId = existing;
+  });
+  const createdIds = await bulkCreateOffers(
+    (method, path, body) => ebayRequest(uid, method, path, body),
+    toCreate.map((pv) => ({ sku: pv.sku, body: buildEbayOfferPayload(offerArgsFor(pv)) })),
+    (sku, body) => createOrAdoptOffer(uid, sku, body),
+  );
+  for (const pv of toCreate) pv.offerId = createdIds[pv.sku];
 
   // 4. Publish the whole group as one multi-variation listing.
   const published = await publishWithRecovery({
@@ -1503,36 +1510,76 @@ async function postMultiVariant(ctx) {
     categoryAspects, brand, title,
   });
   const listingId = published?.listingId ?? null;
+  return { listingId, groupKey, perVariant };
+}
 
-  // Rewrite the whole `variants` array — NEVER `update({ "variants.0.x": … })`:
-  // a dotted numeric field path clobbers the array into a map and drops every
-  // other variant field (price/quantity/optionValues/active).
-  const baseVariants = Array.isArray(product.variants)
+// Post a multi-variation product: plan the eBay listings (one per ≤250
+// variations / ≤30 values per name — see ebay_variant_groups.js), post each
+// group, and record the result on the product doc after every group so a
+// failure on group 3 never loses track of the live groups 1–2.
+async function postMultiVariant(ctx) {
+  const { product, productId, docRef, title } = ctx;
+  const productVariants = Array.isArray(product.variants)
     ? product.variants
     : Object.values(product.variants || {});
-  const nextVariants = baseVariants.map((v, i) => {
-    const pv = perVariant.find((p) => p.variantIndex === i);
-    return pv ? { ...v, ebayVariantSku: pv.sku, ebayOfferId: pv.offerId } : v;
-  });
+  const activeVariants = productVariants
+    .map((v, i) => ({ v, i }))
+    .filter(({ v }) => v.active !== false);
+  if (activeVariants.length === 0) {
+    throw new HttpsError("failed-precondition", "This product has no active variants to post.");
+  }
 
-  await docRef.update({
-    "crossPostStatus.ebay": "active",
-    "crossPostListingIds.ebay": listingId,
-    ebayInventoryItemGroupKey: groupKey,
-    ebayOfferId: admin.firestore.FieldValue.delete(), // single-variant only; clear any stale one
-    ebayListingId: listingId,
-    ebayListingUrl: listingId ? `https://www.ebay.com/itm/${listingId}` : null,
-    ebayHasVariations: true,
-    // Multi-variant items can never be auctions (ebaySetListingFormat already
-    // rejects that combination) — mirror FIXED_PRICE explicitly for the same
-    // "what's actually live" reason postSingleVariant does.
-    ebayListingFormat: "FIXED_PRICE",
-    variants: nextVariants,
-    ebayLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
+  let plan;
+  try {
+    plan = planVariantGroups(activeVariants, Array.isArray(product.options) ? product.options : [], { productId });
+  } catch (e) {
+    if (e.code === "too-many-dimensions") throw new HttpsError("failed-precondition", e.message);
+    throw e;
+  }
 
-  return { listingId, groupKey, alreadyListed: false, hasVariations: true, variantOfferIds: perVariant.map((pv) => pv.offerId) };
+  // NEVER `update({ "variants.0.x": … })` (dotted numeric paths turn the array
+  // into a map) — keep one whole array and rewrite it.
+  let nextVariants = productVariants.slice();
+  const groups = [];
+  for (let gi = 0; gi < plan.length; gi++) {
+    const { key, items } = plan[gi];
+    const result = await postVariantGroup(
+      { ...ctx, title: groupTitle(title, gi, plan.length) },
+      { groupKey: key, activeVariants: items },
+    );
+    for (const pv of result.perVariant) {
+      nextVariants[pv.variantIndex] = {
+        ...nextVariants[pv.variantIndex],
+        ebayVariantSku: pv.sku, ebayOfferId: pv.offerId, ebayGroupKey: key,
+      };
+    }
+    groups.push({ groupKey: key, listingId: result.listingId });
+    const first = groups[0];
+    await docRef.update({
+      "crossPostStatus.ebay": "active",
+      "crossPostListingIds.ebay": first.listingId,
+      ebayInventoryItemGroupKey: first.groupKey,
+      // Only written when split; a single listing keeps the old shape.
+      ebayGroups: plan.length > 1 ? groups : admin.firestore.FieldValue.delete(),
+      ebayOfferId: admin.firestore.FieldValue.delete(), // single-variant only; clear any stale one
+      ebayListingId: first.listingId,
+      ebayListingUrl: first.listingId ? `https://www.ebay.com/itm/${first.listingId}` : null,
+      ebayHasVariations: true,
+      // Multi-variant items can never be auctions (ebaySetListingFormat already
+      // rejects that combination) — mirror FIXED_PRICE explicitly.
+      ebayListingFormat: "FIXED_PRICE",
+      variants: nextVariants,
+      ebayLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  }
+
+  const first = groups[0];
+  return {
+    listingId: first.listingId, groupKey: first.groupKey, alreadyListed: false, hasVariations: true,
+    variantOfferIds: nextVariants.filter((v) => v.ebayOfferId).map((v) => v.ebayOfferId),
+    listings: groups,
+  };
 }
 
 // One-click list a product on eBay. Single- or multi-variation; re-posting a
@@ -1632,16 +1679,21 @@ exports.ebayDeleteListing = onCall(
     if (!force) {
       try {
         if (isMultiVariant) {
-          const groupKey = product.ebayInventoryItemGroupKey || productId;
-          try {
-            await ebayRequest(uid, "POST", "/sell/inventory/v1/offer/withdraw_by_inventory_item_group", {
-              inventoryItemGroupKey: groupKey,
-              marketplaceId: MARKETPLACE_ID,
-            });
-          } catch (withdrawErr) {
-            // 25702 = nothing published to withdraw; 404 / 25713 = group already gone — all fine.
-            const code = withdrawErr.ebayErrors?.[0]?.errorId;
-            if (code !== 25702 && code !== 25713 && withdrawErr.status !== 404) throw withdrawErr;
+          // A big product is several eBay listings (`ebayGroups`); withdraw every one.
+          const groupKeys = Array.isArray(product.ebayGroups) && product.ebayGroups.length
+            ? product.ebayGroups.map((g) => g.groupKey)
+            : [product.ebayInventoryItemGroupKey || productId];
+          for (const groupKey of groupKeys) {
+            try {
+              await ebayRequest(uid, "POST", "/sell/inventory/v1/offer/withdraw_by_inventory_item_group", {
+                inventoryItemGroupKey: groupKey,
+                marketplaceId: MARKETPLACE_ID,
+              });
+            } catch (withdrawErr) {
+              // 25702 = nothing published to withdraw; 404 / 25713 = group already gone — all fine.
+              const code = withdrawErr.ebayErrors?.[0]?.errorId;
+              if (code !== 25702 && code !== 25713 && withdrawErr.status !== 404) throw withdrawErr;
+            }
           }
         } else {
           let offerId = product.ebayOfferId;

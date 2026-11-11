@@ -19,6 +19,7 @@
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { isSharedPool } = require("./quantity_model");
+const { chunk } = require("./ebay_bulk");
 const admin = require("firebase-admin");
 const { validated } = require("./contracts");
 const { ebayRequest, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET } = require("./ebay_auth");
@@ -139,7 +140,10 @@ async function pushEbayQuantity(uid, product, productId, variantSku, newQty) {
       .filter((v) => v.ebayOfferId)
       .map((v) => ({ sku: v.ebayVariantSku, offers: [{ offerId: v.ebayOfferId, availableQuantity: qty }] }));
     if (!requests.length) return "skipped";
-    await ebayRequest(uid, "POST", "/sell/inventory/v1/bulk_update_price_quantity", { requests });
+    // eBay takes 25 per call; a 250-variant listing is 10 calls.
+    for (const batch of chunk(requests)) {
+      await ebayRequest(uid, "POST", "/sell/inventory/v1/bulk_update_price_quantity", { requests: batch });
+    }
     return "updated";
   }
 

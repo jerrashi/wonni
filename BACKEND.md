@@ -642,19 +642,34 @@ sellers. Two levers, both deliberate product direction:
 - Never cap variation count/dimensions below the platform's own API limit. The
   web editor's 2-dimension cap (`MAX_VARIATION_DIMENSIONS`) mirrors Etsy; it
   is not a count cap — keep it that way, and do not add one.
-- **Open question — verify against eBay's current docs before building:** eBay
-  limits variations per listing (believed 250) and variation aspects per
-  listing. 30 series x 20 options = 600 exceeds that, so a collection that big
-  needs **auto-splitting into several item groups** (one listing per ~250
-  variants, e.g. per series range) while still presenting as ONE product in
-  Wonni. Etsy has its own, lower variation limits — same question there.
-- **Posting must scale to hundreds of variants.** Today `postMultiVariant`
-  does one PUT per variant item (now capped at 8 in flight, `mapLimit`) and
-  one offer call per variant in sequence; at 250+ variants that is slow
-  (callables are 300 s now). Next step is eBay's bulk endpoints
-  (`bulk_create_or_replace_inventory_item`, `bulk_create_offer`,
-  `bulk_update_price_quantity`, 25 per call) and, past that, a queued
-  background job with progress instead of a single callable.
+- **eBay limits — VERIFIED 2026-11-11** ([Trading API variations guide](https://developer.ebay.com/api-docs/user-guides/static/trading-user-guide/variations.html)):
+  max **250 variations per listing**, max **5 specifics per variation**, max
+  **30 values per specific name** (so one "Series" dimension can't hold 30+
+  series in one listing either). The Inventory API reference states no limits
+  of its own; the 250 figure also matches the "too many variations" error
+  third-party integrations report. Etsy's limits still need the same check.
+- **Auto-split — built 2026-11-11, not live-tested.** `ebay_variant_groups.js`
+  plans one eBay item group per <=250 variations / <=30 values per name,
+  keeping a primary-option value (a series) whole in one listing. Group 1 keeps
+  the legacy key (`productId`), later ones are `${productId}g2`…; titles get
+  " - Part N of M". Stable across re-posts: a variant keeps `variants[i].ebayGroupKey`.
+  The doc gets `ebayGroups: [{groupKey, listingId}]` only when split;
+  `ebayInventoryItemGroupKey` / `crossPostListingIds.ebay` / `ebayListingId`
+  stay the FIRST group. Over 5 variation types is refused with a readable error.
+  `postMultiVariant` writes the doc after each group, so a failure on group 3
+  never loses groups 1-2. `ebayDeleteListing` withdraws every group.
+  **Gaps:** reads (`ebayGetListing`, `ebayPullSync`, `syncMultiVariantFromEbay`,
+  `ebayGetListingDetails`) still read only the first group; the sale cascade
+  works (it is per-variant offer) but the web "View on eBay" link shows group 1.
+- **Bulk posting — built:** `ebay_bulk.js` — inventory items via
+  `bulk_create_or_replace_inventory_item` and new offers via `bulk_create_offer`
+  (25 per call, failed rows retried singly so the real eBay error surfaces and
+  create-or-adopt still applies); existing offers PUT with bounded concurrency
+  (8); the shared-pool quantity push to `bulk_update_price_quantity` is now
+  chunked by 25 (it was a single call, a bug past 25 variants). Still ONE
+  callable (300 s) — a 600-variant product is ~3 groups x a few dozen calls,
+  expected to fit, unmeasured. A queued background job with progress is the
+  next step if a real run times out.
 - **Web posting crawlers (Mercari / Facebook autofill) must survive a long
   list**: resumable, runs in the background, per-listing retry, progress
   persisted (see `CrossPostRunStore` on iOS and the web job queue). A run of
