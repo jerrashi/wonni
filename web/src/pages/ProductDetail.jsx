@@ -6449,7 +6449,7 @@ function ProductDetail() {
               variants={variants}
               images={images}
               listingPrice={listingPrice}
-              quantityVariesByVariant={product?.quantityVariesByVariant !== false}
+              quantityVariesByVariant={product?.quantityVariesByVariant === true}
               masterQuantity={product?.quantity}
               onQuantityModelChange={handleQuantityModelChange}
               onVariantQuantityCommit={handleVariantQuantityCommit}

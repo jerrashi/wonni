@@ -42,6 +42,7 @@ function variantProduct(overrides = {}) {
     userId: UID,
     title: "Variant Tee",
     hasVariants: true,
+    quantityVariesByVariant: true,
     variants: [
       { id: "vS", sku: "TEE-S", quantity: 2, active: true, optionValues: { Size: "S" } },
       { id: "vM", sku: "TEE-M", quantity: 4, active: true, optionValues: { Size: "M" } },
@@ -195,7 +196,7 @@ test("cascade: a Mercari listing that sold out gets pendingMercariDeactivation",
 /** Variant product where each variant is its own Mercari listing. */
 function mercariVariantProduct(overrides = {}) {
   return {
-    userId: UID, title: "Mercari Variant Tee", hasVariants: true,
+    userId: UID, title: "Mercari Variant Tee", hasVariants: true, quantityVariesByVariant: true,
     variants: [
       { id: "vS", sku: "TEE-S", quantity: 2, active: true, crossPostListingIds: { mercari: "m_s" } },
       { id: "vM", sku: "TEE-M", quantity: 4, active: true, crossPostListingIds: { mercari: "m_m" } },

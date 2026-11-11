@@ -18,6 +18,7 @@
  */
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { isSharedPool } = require("./quantity_model");
 const admin = require("firebase-admin");
 const { validated } = require("./contracts");
 const { ebayRequest, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET } = require("./ebay_auth");
@@ -41,7 +42,7 @@ function resolveStock(product, variantSku) {
   // sale of ANY design should drain the shared pool of 2, not just that
   // design's own bucket. Every sale — regardless of which variant sold —
   // hits the product-level `quantity` field, same as a no-variant product.
-  if (isVariantProduct && product.quantityVariesByVariant === false) {
+  if (isVariantProduct && isSharedPool(product)) {
     const q = Number(product.quantity);
     return { scope: "product", qty: Number.isFinite(q) ? q : 1, variantIndex: -1 };
   }
@@ -82,7 +83,7 @@ async function applyQuantityDelta(db, productId, uid, variantSku, delta, { force
       // Shared pool: the master `product.quantity` is the field every read
       // path (resolveStock, postMultiVariant) treats as authoritative, so it
       // must go to 0 even though the product also has a `variants` array.
-      if (isVariantProduct && product.quantityVariesByVariant === false) {
+      if (isVariantProduct && isSharedPool(product)) {
         update.quantity = 0;
       } else if (isVariantProduct) {
         update.variants = variants.map((v) => (v.active !== false ? { ...v, quantity: 0 } : v));
@@ -133,7 +134,7 @@ async function pushEbayQuantity(uid, product, productId, variantSku, newQty) {
   // number, not just the SKU that happens to have sold — otherwise a sold-out
   // shared pool would still show other variants as in stock on eBay.
   // `bulk_update_price_quantity` takes up to 25 requests in one call.
-  if (product.quantityVariesByVariant === false && Array.isArray(product.variants) && product.variants.length) {
+  if (isSharedPool(product) && Array.isArray(product.variants) && product.variants.length) {
     const requests = product.variants
       .filter((v) => v.ebayOfferId)
       .map((v) => ({ sku: v.ebayVariantSku, offers: [{ offerId: v.ebayOfferId, availableQuantity: qty }] }));
@@ -207,7 +208,7 @@ async function pushEtsyQuantity(uid, product, newQty) {
   // Shared stock pool with an Etsy variation listing: every variation's
   // offering needs the same new quantity, not just a top-level PATCH (which
   // Etsy only honors for a listing with no variations).
-  if (product.quantityVariesByVariant === false && Array.isArray(product.variants) && product.variants.length) {
+  if (isSharedPool(product) && Array.isArray(product.variants) && product.variants.length) {
     const price = Math.max(0.2, Math.round(Number(product.listingPrice ?? 0) * 100) / 100);
     const qty = Math.max(0, newQty);
     const products = product.variants.map((v, idx) => etsySharedPoolProduct(v, idx, price, qty));
@@ -258,7 +259,7 @@ function applyMercariFlags(product, productUpdate, { variantSku, soldOut, soldOn
   const isVariantProduct = product.hasVariants === true || variants.length > 0;
   // Shared pool: every variant IS the same stock, so every Mercari-listed
   // variant needs the same flag as the one that sold, not just its own SKU.
-  const sharedPool = isVariantProduct && product.quantityVariesByVariant === false;
+  const sharedPool = isVariantProduct && isSharedPool(product);
 
   const flagName = (qtyZero) =>
     qtyZero ? "pendingMercariDeactivation"

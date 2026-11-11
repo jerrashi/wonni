@@ -1,4 +1,5 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { isSharedPool } = require("./quantity_model");
 const admin = require("firebase-admin");
 const { ebayRequest, ebayApiHost, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_ENV, throwIfCredentialsRejected } = require("./ebay_auth");
 const {
@@ -108,7 +109,7 @@ async function getOfferOrNull(uid, offerId) {
 // Wonni's own total stock for diffing against eBay. Shared pool =
 // one master number; otherwise sum the per-variant buckets.
 function wonniTotalQuantity(product) {
-  if (product.quantityVariesByVariant === false) return product.quantity ?? 0;
+  if (isSharedPool(product)) return product.quantity ?? 0;
   return product.variants?.reduce((sum, v) => sum + (v.quantity ?? 0), 0) ?? (product.quantity ?? 1);
 }
 
@@ -166,7 +167,7 @@ async function readMultiVariantEbayData(uid, product) {
     price: firstOffer?.pricingSummary?.price?.value != null ? parseFloat(firstOffer.pricingSummary.price.value) : null,
     // Shared pool: every variant offer carries the same master number, so
     // summing would multiply it by the variant count.
-    quantity: product.quantityVariesByVariant === false
+    quantity: isSharedPool(product)
       ? Math.max(0, ...perVariantQty)
       : perVariantQty.reduce((sum, q) => sum + q, 0),
     offerId: firstOffer?.offerId ?? null,
@@ -1394,7 +1395,7 @@ async function postMultiVariant(ctx) {
   // product level, not summed/split across variants (see CLAUDE.md's eBay
   // listing lifecycle section, and `resolveStock` in sales.js which decrements
   // this same master field regardless of which variant actually sold).
-  const sharedPoolQty = product.quantityVariesByVariant === false
+  const sharedPoolQty = isSharedPool(product)
     ? (typeof product.quantity === "number" && product.quantity >= 0 ? Math.floor(product.quantity) : 0)
     : null;
 

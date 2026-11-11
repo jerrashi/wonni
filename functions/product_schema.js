@@ -44,6 +44,12 @@ function buildNewProductDoc(rawData) {
     images: rawData.images || [], // Google Storage copies
     imageAssets: rawData.imageAssets || [], // Detailed metadata
 
+    // Stock. Shared pool is the default (user decision 2026-11-11): one master
+    // number; the user opts in to per-variant counts with the "Quantity varies
+    // by variant" toggle. See quantity_model.js.
+    quantityVariesByVariant: rawData.quantityVariesByVariant ?? false,
+    quantity: rawData.quantity ?? 1,
+
     // Options and variants
     options: rawData.options || [],
     variants: (rawData.variants || []).map(v => ({

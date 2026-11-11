@@ -1,4 +1,5 @@
 const { HttpsError } = require("firebase-functions/v2/https");
+const { isSharedPool } = require("./quantity_model");
 
 function cleanText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -130,7 +131,7 @@ function buildEbayVariations(product) {
  * as ebay_listing.js postMultiVariant.
  */
 function sharedPoolQuantity(product) {
-  if (product?.quantityVariesByVariant !== false) return null;
+  if (!isSharedPool(product)) return null;
   const q = product.quantity;
   return typeof q === "number" && q >= 0 ? Math.floor(q) : 0;
 }

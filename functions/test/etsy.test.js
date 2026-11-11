@@ -90,7 +90,7 @@ test("buildEtsyCreateBody / inventory: carry readiness_state_id when the shop ha
 // ── quantity + drift ───────────────────────────────────────────────────────
 
 test("productTotalQuantity: sums variants, else product.quantity, else 1", () => {
-  assert.equal(productTotalQuantity({ variants: [{ quantity: 2 }, { quantity: 3 }] }), 5);
+  assert.equal(productTotalQuantity({ quantityVariesByVariant: true, variants: [{ quantity: 2 }, { quantity: 3 }] }), 5);
   assert.equal(productTotalQuantity({ quantity: 7 }), 7);
   assert.equal(productTotalQuantity({}), 1);
 });
@@ -109,7 +109,7 @@ test("etsyDriftDiff: reports title/price/quantity drift against the product doc"
 });
 
 test("etsyDriftDiff: no drift when everything matches (variant qty summed)", () => {
-  const product = { title: "Same", listingPrice: 12, variants: [{ quantity: 1 }, { quantity: 2 }] };
+  const product = { title: "Same", listingPrice: 12, quantityVariesByVariant: true, variants: [{ quantity: 1 }, { quantity: 2 }] };
   const r = etsyDriftDiff(product, {
     listing_id: 1, title: "Same", state: "active", price: { amount: 1200, divisor: 100 }, quantity: 3,
   });
@@ -238,9 +238,9 @@ test("regression: shared pool — productTotalQuantity is the master number, not
   assert.equal(productTotalQuantity({ ...p, quantity: 0 }), 0);
 });
 
-test("shared pool unset/true keeps the per-variant sum", () => {
+test("shared pool: unset is the DEFAULT (shared); only an explicit true keeps the per-variant sum", () => {
   const vs = [{ quantity: 2 }, { quantity: 3 }];
-  assert.equal(productTotalQuantity({ quantity: 9, variants: vs }), 5);
+  assert.equal(productTotalQuantity({ quantity: 9, variants: vs }), 9);
   assert.equal(productTotalQuantity({ quantity: 9, quantityVariesByVariant: true, variants: vs }), 5);
 });
 
