@@ -575,6 +575,93 @@ async function etsyCreateListingCore(uid, data) {
   }
 }
 
+// ── Free dry run: drafts only ───────────────────────────────────────────────
+//
+// Etsy has no sandbox, but it charges its listing fee only when a listing is
+// PUBLISHED. This builds every listing the product would become as a DRAFT
+// (create → photos → the real inventory payload), never publishes, and reports
+// per listing what Etsy accepted. It keeps its ids in `etsyTestDrafts` and never
+// touches the live-listing fields (crossPostStatus / etsyListings / variants).
+
+async function etsyDraftTestCore(uid, productId, action = "create", deps = {}) {
+  const db = deps.db || admin.firestore();
+  const product = await loadOwnedProduct(db, uid, productId);
+  if (!product) throw new HttpsError("not-found", "Product not found.");
+  const ref = db.collection("products").doc(productId);
+  const auth = deps.auth || await getActiveEtsyToken(uid);
+  const upload = deps.upload || uploadListingImages;
+
+  const removeOld = async () => {
+    const old = Array.isArray(product.etsyTestDrafts) ? product.etsyTestDrafts : [];
+    for (const d of old) {
+      const del = await etsyReq("DELETE", `/v3/application/listings/${d.listingId}`, auth);
+      if (del.status !== 204 && del.status !== 404) console.warn(`[etsyDraftTest] draft ${d.listingId} not deleted (${del.status}): ${etsyErrorText(del.data)}`);
+    }
+    return old.length;
+  };
+
+  if (action === "delete") {
+    const n = await removeOld();
+    await ref.set({ etsyTestDrafts: admin.firestore.FieldValue.delete() }, { merge: true });
+    return { action, ok: true, listings: [], note: n ? `Deleted ${n} test draft${n === 1 ? "" : "s"}.` : "No test drafts to delete." };
+  }
+
+  const items = activeVariantItems(product);
+  if (items.length < 2) throw new HttpsError("failed-precondition", "Needs a product with at least 2 active variants.");
+  await removeOld(); // never pile up drafts from earlier runs
+
+  const price = resolveListingPrice(product);
+  const readinessStateId = await firstReadinessStateId(auth.shopId, auth);
+  const options = Array.isArray(product.options) ? product.options : [];
+  let plan;
+  try {
+    plan = planEtsyListings(items, options, { productId, basePrice: priceAmount(price), sharedQuantity: sharedPoolQuantity(product) });
+  } catch (e) {
+    // e.g. more than 2 variation types: report it instead of failing the call.
+    return { action, ok: false, listings: [], note: e.message };
+  }
+
+  const results = [];
+  const saved = [];
+  for (let gi = 0; gi < plan.length; gi++) {
+    const { key, items: groupItems } = plan[gi];
+    const title = groupTitle(String(product.title || "Product").slice(0, 140), gi, plan.length, 140);
+    const row = { groupKey: key, title, listingId: null, variants: groupItems.length, ok: false, error: null };
+    results.push(row);
+    try {
+      const payload = buildEtsyInventoryPayload(groupItems.map((x) => x.v), priceAmount(price), readinessStateId,
+        { sharedQuantity: sharedPoolQuantity(product) });
+      row.listingId = await createEtsyDraft(product, deps.data || {}, auth, { price, readinessStateId, title });
+      saved.push({ groupKey: key, listingId: row.listingId });
+      const images = listingImagesFor(product, 10);
+      const uploaded = images.length ? await upload(auth.shopId, row.listingId, images, auth) : 0;
+      if (uploaded < 1) throw new Error("no photo uploaded (Etsy needs one to publish)");
+      const inv = await etsyReq("PUT", `/v3/application/listings/${row.listingId}/inventory`, { ...auth, body: payload });
+      if (inv.status !== 200) throw new Error(`inventory rejected (${inv.status}): ${etsyErrorText(inv.data)}`);
+      row.ok = true;
+    } catch (e) {
+      row.error = String(e.message || e).slice(0, 400);
+    }
+  }
+  await ref.set({ etsyTestDrafts: saved }, { merge: true });
+  const ok = results.every((r) => r.ok);
+  return {
+    action, ok, listings: results,
+    note: ok
+      ? "Etsy accepted every listing as a draft. Nothing was published, so no fee. Run action \"delete\" to clear the drafts."
+      : "Etsy rejected at least one step (see the error on that listing). Drafts that were created are kept until you run action \"delete\".",
+  };
+}
+
+exports.etsyDraftTest = onCall(
+  { timeoutSeconds: 300, memory: "512MiB" },
+  validated("etsyDraftTest", async (data, request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+    return etsyDraftTestCore(uid, data.productId, data.action);
+  }),
+);
+
 /** Etsy's error body as one readable line (it is either {error} or an array of {message}). */
 function etsyErrorText(body) {
   if (!body) return "";
@@ -792,7 +879,7 @@ exports.getEtsyReturnPolicies = onCall(
 exports._internal = {
   matchEtsyTaxonomyId, categoryWords, buildEtsyInventoryPayload, buildEtsyCreateBody, ETSY_MAX_PRODUCTS, etsyGroupLimit, planEtsyListings,
   etsyDriftDiff, etsyImportUpdates, productTotalQuantity, priceAmount, etsyIdOf,
-  etsyCreateListingCore, syncEtsyGroups, planForProduct, etsyListingsOf,
+  etsyCreateListingCore, etsyDraftTestCore, syncEtsyGroups, planForProduct, etsyListingsOf,
   recentWhenMade, whenMadeFromEnumError, flattenTaxonomyLeaves, pickShippingProfile,
   pickReadinessState, etsyItemDimensions, singleOfferingInventory, etsyErrorText,
   ETSY_RESALE_DEFAULTS,

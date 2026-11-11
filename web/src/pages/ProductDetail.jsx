@@ -5171,6 +5171,29 @@ function ProductDetail() {
     }
   }
 
+  // Free dry run of an Etsy post: every listing is created as a DRAFT (Etsy only
+  // charges when a listing is published), with the real variation inventory.
+  const [etsyDryRunning, setEtsyDryRunning] = useState(false);
+  async function handleEtsyDryRun(action = "create") {
+    setEtsyDryRunning(true);
+    setError("");
+    try {
+      const { data: r } = await callFunction("etsyDraftTest", { timeout: 300000 })({ productId, action });
+      if (action === "delete") {
+        setToast({ message: r.note || "Etsy test drafts deleted." });
+      } else if (r.ok) {
+        setToast({ message: `Etsy dry run OK: ${r.listings.length} draft listing${r.listings.length === 1 ? "" : "s"} accepted (${r.listings.map((l) => l.variants).join(" + ")} variants). Nothing published, no fee. Delete the drafts from the ... menu.` });
+      } else {
+        const lines = r.listings.filter((l) => !l.ok).map((l) => `${l.title || l.groupKey}: ${l.error}`);
+        setError(`Etsy dry run found a problem. ${r.note || ""} ${lines.join(" | ")}`.trim());
+      }
+    } catch (e) {
+      setError(`Etsy dry run failed: ${e.message}`);
+    } finally {
+      setEtsyDryRunning(false);
+    }
+  }
+
   async function handleEbayDeleteListing() {
     if (!product?.crossPostListingIds?.ebay) {
       setError("No eBay listing to delete.");
@@ -5266,6 +5289,16 @@ function ProductDetail() {
                 label: markingOutOfStock ? "⏳ Marking…" : "📭 Mark as out of stock",
                 onClick: handleMarkOutOfStock,
                 disabled: markingOutOfStock
+              }] : []),
+              ...((Array.isArray(product?.variants) ? product.variants.filter((v) => v.active !== false).length : 0) > 1 ? [{
+                label: etsyDryRunning ? "⏳ Testing Etsy…" : "🧪 Test Etsy post (drafts only, no fee)",
+                onClick: () => handleEtsyDryRun("create"),
+                disabled: etsyDryRunning
+              }] : []),
+              ...(Array.isArray(product?.etsyTestDrafts) && product.etsyTestDrafts.length ? [{
+                label: "🧹 Delete Etsy test drafts",
+                onClick: () => handleEtsyDryRun("delete"),
+                disabled: etsyDryRunning
               }] : []),
               ...(product?.crossPostListingIds?.ebay ? [{
                 label: deletingEbay ? "⏳ Deleting…" : "🗑️ Delete eBay listing",
