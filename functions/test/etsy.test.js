@@ -45,7 +45,7 @@ test("buildEtsyInventoryPayload: optionValues → property_values, price overrid
     { sku: "TEE-M", quantity: 0, price: 25, optionValues: { Size: "M" } },
   ], 18);
   assert.equal(products[0].sku, "TEE-S");
-  assert.deepEqual(products[0].property_values[0], { property_name: "Size", values: ["S"] });
+  assert.deepEqual(products[0].property_values[0], { property_id: 513, property_name: "Size", scale_id: null, value_ids: [], values: ["S"] });
   assert.equal(products[0].offerings[0].price, 18, "no override → base price");
   assert.equal(products[0].offerings[0].quantity, 3);
   assert.equal(products[1].offerings[0].price, 25, "variant price override wins");
@@ -54,7 +54,7 @@ test("buildEtsyInventoryPayload: optionValues → property_values, price overrid
 
 test("buildEtsyInventoryPayload: falls back to a 'Regular' Size property when a variant has no options", () => {
   const { products } = buildEtsyInventoryPayload([{ sku: "X", quantity: 1 }], 10);
-  assert.deepEqual(products[0].property_values, [{ property_name: "Size", values: ["Regular"] }]);
+  assert.deepEqual(products[0].property_values, [{ property_id: 513, property_name: "Size", scale_id: null, value_ids: [], values: ["Regular"] }]);
 });
 
 test("buildEtsyInventoryPayload: enforces Etsy's $0.20 price floor", () => {
@@ -255,4 +255,49 @@ test("regression: shared pool — every variant offering gets the master quantit
 test("shared pool at 0 sends 0 to every offering (not the default 1)", () => {
   const { products } = buildEtsyInventoryPayload([{ sku: "A", quantity: 5 }], 10, null, { sharedQuantity: 0 });
   assert.equal(products[0].offerings[0].quantity, 0);
+});
+
+// ── *_on_property + property ids + Etsy's product-count limits (2026-11-11) ──
+
+const grid = (a, b, fn = () => ({})) => {
+  const out = [];
+  for (let i = 0; i < a; i++) for (let j = 0; j < b; j++) out.push({ optionValues: { Series: `S${i}`, Issue: `#${j}` }, quantity: 1, ...fn(i, j) });
+  return out;
+};
+
+test("regression: differing prices/quantities/SKUs are declared on ALL properties (empty arrays flatten them)", () => {
+  const r = buildEtsyInventoryPayload([
+    { sku: "A", quantity: 3, price: 10, optionValues: { Size: "S", Color: "Red" } },
+    { sku: "B", quantity: 1, price: 12, optionValues: { Size: "M", Color: "Red" } },
+  ], 10);
+  assert.deepEqual(r.price_on_property, [513, 514]);
+  assert.deepEqual(r.quantity_on_property, [513, 514]);
+  assert.deepEqual(r.sku_on_property, [513, 514]);
+  assert.deepEqual(r.readiness_state_on_property, []);
+  assert.deepEqual(r.products[0].property_values.map((p) => p.property_id), [513, 514]);
+});
+
+test("shared pool at one price with no SKUs: nothing varies, all three stay empty (4,900-product mode)", () => {
+  const r = buildEtsyInventoryPayload(grid(10, 10), 10, null, { sharedQuantity: 5 });
+  assert.deepEqual([r.price_on_property, r.quantity_on_property, r.sku_on_property], [[], [], []]);
+  assert.equal(r.products.length, 100);
+  assert.equal(r.products[0].sku, undefined, "no invented SKU_n");
+});
+
+test("only price varies → only price_on_property is set", () => {
+  const r = buildEtsyInventoryPayload(grid(2, 2, (i) => ({ price: 10 + i })), 10, null, { sharedQuantity: 1 });
+  assert.deepEqual(r.price_on_property, [513, 514]);
+  assert.deepEqual(r.quantity_on_property, []);
+});
+
+test("limits: 401 combinations that vary per combination is refused with the 400 explanation; the same grid with a shared qty passes", () => {
+  const varying = grid(20, 21, (i, j) => ({ quantity: (i + j) % 3 }));
+  assert.throws(() => buildEtsyInventoryPayload(varying, 10), /at most 400 variant combinations/);
+  assert.doesNotThrow(() => buildEtsyInventoryPayload(varying, 10, null, { sharedQuantity: 2 }));
+});
+
+test("limits: one variation type holds at most 70; three types are refused (preview-only on Etsy)", () => {
+  const one = Array.from({ length: 71 }, (_, i) => ({ optionValues: { Issue: `#${i}` }, quantity: 1 }));
+  assert.throws(() => buildEtsyInventoryPayload(one, 10), /at most 70/);
+  assert.throws(() => buildEtsyInventoryPayload([{ optionValues: { A: "1", B: "2", C: "3" } }], 10), /at most 2 variation types/);
 });
