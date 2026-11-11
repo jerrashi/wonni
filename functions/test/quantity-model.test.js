@@ -34,3 +34,17 @@ test("backfill: already set, or no variants → leave alone (null)", () => {
   assert.equal(chooseBackfillValue({ quantityVariesByVariant: false, variants: V(1, 2) }), null);
   assert.equal(chooseBackfillValue({ quantity: 3 }), null);
 });
+
+// The user's toggle is the only authority once set: matching quantities must
+// never be read as "shared" (1 red + 1 white + 1 blue with the box ticked).
+test("regression: explicit true with identical variant quantities stays per-variant", () => {
+  const tee = { hasVariants: true, quantityVariesByVariant: true, quantity: 1, variants: V(1, 1, 1) };
+  assert.equal(isSharedPool(tee), false);
+  assert.equal(sharedPoolQuantity(tee), null);
+  assert.equal(chooseBackfillValue(tee), null, "backfill never rewrites a set flag");
+});
+test("regression: explicit false with differing variant quantities stays shared", () => {
+  const tee = { hasVariants: true, quantityVariesByVariant: false, quantity: 2, variants: V(5, 0, 1) };
+  assert.equal(isSharedPool(tee), true);
+  assert.equal(chooseBackfillValue(tee), null);
+});
