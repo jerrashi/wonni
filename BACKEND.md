@@ -648,6 +648,30 @@ sellers. Two levers, both deliberate product direction:
   series in one listing either). The Inventory API reference states no limits
   of its own; the 250 figure also matches the "too many variations" error
   third-party integrations report. Etsy's limits still need the same check.
+- **Etsy limits — VERIFIED 2026-11-11** (Etsy developer docs: [Listings tutorial](https://developers.etsy.com/documentation/tutorials/listings/),
+  [Third Variation tutorial](https://developers.etsy.com/documentation/tutorials/third-variation/),
+  [seller help](https://help.etsy.com/hc/en-us/articles/115015664047-How-to-Add-Variations-to-Your-Listings)):
+  max products (variant combinations) per listing = **70** with one variation
+  type, **4,900** with two, **2,500** with three — BUT only **400** when price,
+  quantity, SKU or readiness state varies by ALL variation properties
+  (`*_on_property` covers every property) on a 2- or 3-variation listing.
+  No documented cap on options per type. Three types need
+  `max_variations_supported=3` on the inventory PUT (developer preview from
+  2026-08-17, no GA date given); the web editor's 2-type cap is therefore still
+  right for Etsy, don't raise it yet. Comics: one "Issue" type holds at most
+  70 per Etsy listing; Series x Issue holds 4,900 only if price/qty/SKU do not
+  vary per combination, else 400 — so Etsy needs the same auto-split idea as
+  eBay (not built), with a smaller group size (70 / 400 / 4,900 by shape).
+  **Probable bug found while checking (NOT fixed, not live-verified):**
+  `buildEtsyInventoryPayload` sends `price_on_property`/`quantity_on_property`/
+  `sku_on_property` as EMPTY arrays and no `property_id` on each
+  `property_values` entry. Etsy defines empty as "no property drives it", so a
+  variant listing with differing per-variant prices/quantities/SKUs is likely
+  rejected or flattened; the docs' examples always include `property_id`
+  (custom properties use 513/514). The multi-variant Etsy path has only ever
+  been unit-tested. Fix = list the varying property ids in `*_on_property`
+  (the shared-pool + uniform-price case is where empty is correct) and send
+  property ids, then post one real multi-variant listing as a draft.
 - **Auto-split — built 2026-11-11, not live-tested.** `ebay_variant_groups.js`
   plans one eBay item group per <=250 variations / <=30 values per name,
   keeping a primary-option value (a series) whole in one listing. Group 1 keeps
