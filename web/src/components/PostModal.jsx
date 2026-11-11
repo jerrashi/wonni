@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { db, auth, callFunction } from "../firebase";
+import { needsBackgroundPost, startPostJob } from "../lib/postJobs";
 import { EbayEditingNoticeModal } from "./EbayEditingNoticeModal";
 import { resolveListingPrice, variantPrice } from "../lib/pricing";
 
@@ -255,10 +256,20 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
             // ebayCreateListing owns all eBay fields on the product doc
             // (crossPostStatus.ebay, crossPostListingIds.ebay = listingId,
             // ebayOfferId, …) — don't write them here.
-            await callFunction("ebayCreateListing")({ productId: product.id });
+            if (needsBackgroundPost(product)) {
+              // Big variant set → split across several listings, posted in the
+              // background; progress shows on the product page.
+              await startPostJob(product.id, "ebay");
+            } else {
+              await callFunction("ebayCreateListing")({ productId: product.id });
+            }
             if (!localStorage.getItem("hasSeenEbayEditingNotice")) {
               setShowEbayNotice(true);
             }
+          } else if (platformId === "etsy" && needsBackgroundPost(product)) {
+            // Background job owns every Etsy field on the doc (status stays
+            // "pending" until all listings are up) — don't write them here.
+            await startPostJob(product.id, "etsy");
           } else if (platformId === "etsy") {
             const etsyRes = await callFunction("etsyCreateListing")({
               productId: product.id,

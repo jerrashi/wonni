@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { db, auth, callFunction } from "../firebase";
+import { needsBackgroundPost, startPostJob } from "../lib/postJobs";
 import { EbayEditingNoticeModal } from "./EbayEditingNoticeModal";
 import { isPlatformAlreadyPosted } from "./PostModal";
 import { resolveListingPrice, variantPrice } from "../lib/pricing";
@@ -101,10 +102,13 @@ export default function BulkPostModal({ products, onClose }) {
           try {
             if (platformId === "ebay") {
               // ebayCreateListing owns all eBay fields on the product doc.
-              await callFunction("ebayCreateListing")({ productId: product.id });
+              if (needsBackgroundPost(product)) await startPostJob(product.id, "ebay");
+              else await callFunction("ebayCreateListing")({ productId: product.id });
               if (!localStorage.getItem("hasSeenEbayEditingNotice")) {
                 setShowEbayNotice(true);
               }
+            } else if (platformId === "etsy" && needsBackgroundPost(product)) {
+              await startPostJob(product.id, "etsy");
             } else if (platformId === "etsy") {
               const etsyRes = await callFunction("etsyCreateListing")({ productId: product.id });
               const etsyListingId = etsyRes.data?.listingId;

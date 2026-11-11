@@ -11,7 +11,9 @@ import ApplyEbayEditsModal from "../components/ApplyEbayEditsModal";
 import { useDebouncedCallback } from "../hooks/useDebouncedCallback";
 import { normalizeImageAssets, buildImagePayload } from "../lib/media";
 import { useMediaJobQueue } from "../lib/mediaJobQueue";
-import { getPlatformListingUrl } from "../lib/platformLinks";
+import { getPlatformListingUrl, getPlatformListingUrls } from "../lib/platformLinks";
+import { usePostJobs } from "../lib/postJobs";
+import { SplitListingChip, PostJobChip } from "../components/ListingChips";
 import { resolveListingPrice, variantPrice, suggestedListingPrice, productCost } from "../lib/pricing";
 import { deleteProductEverywhere, isLiveOnMercari, platformNoteFor } from "../lib/deleteProduct";
 
@@ -3370,6 +3372,7 @@ function ProductDetail() {
   const { productId } = useParams();
   const navigate = useNavigate();
   const [product, setProduct] = useState(null);
+  const postJobs = usePostJobs(product?.id);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [deletingProduct, setDeletingProduct] = useState(false);
@@ -6107,8 +6110,13 @@ function ProductDetail() {
                     Wonni: Active ↗
                   </span>
                 )}
+                <PostJobChip job={postJobs.ebay} productId={product.id} />
+                <PostJobChip job={postJobs.etsy} productId={product.id} />
                 {(product.crossPostStatus?.ebay === "active" || product.crossPostStatus?.ebay === "posted") && (
                   <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    {getPlatformListingUrls("ebay", product).length > 1 ? (
+                      <SplitListingChip platformName="eBay" word="Live" urls={getPlatformListingUrls("ebay", product)} />
+                    ) : (
                     <span
                       className="chip chip-active"
                       style={{ cursor: "pointer" }}
@@ -6120,6 +6128,7 @@ function ProductDetail() {
                     >
                       eBay: Live ↗
                     </span>
+                    )}
                     <button
                       className="btn btn-ghost"
                       style={{ fontSize: 11, padding: "2px 10px", borderRadius: 12, cursor: "pointer" }}
@@ -6155,6 +6164,9 @@ function ProductDetail() {
                 )}
                 {(product.crossPostStatus?.etsy === "active" || product.crossPostStatus?.etsy === "posted") && (
                   <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    {getPlatformListingUrls("etsy", product).length > 1 ? (
+                      <SplitListingChip platformName="Etsy" word="Active" urls={getPlatformListingUrls("etsy", product)} />
+                    ) : (
                     <span
                       className="chip chip-active"
                       style={{ cursor: "pointer" }}
@@ -6166,6 +6178,7 @@ function ProductDetail() {
                     >
                       Etsy: Active ↗
                     </span>
+                    )}
                     {etsyPullSyncDiff?.hasDrift && (
                       <button
                         className="btn btn-warning"
