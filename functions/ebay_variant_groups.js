@@ -57,7 +57,7 @@ function groupKeysOf(product, productId) {
  * are packed in primary-value order so each listing is a coherent set
  * (e.g. whole series together).
  */
-function planVariantGroups(items, options, { productId, limits = EBAY_LIMITS } = {}) {
+function planVariantGroups(items, options, { productId, limits = EBAY_LIMITS, keyField = "ebayGroupKey", postedField = "ebayOfferId", legacyPosted = false } = {}) {
   const names = options.map((o) => o.name);
   if (names.length > limits.maxDimensions) {
     throw Object.assign(new Error(`eBay allows at most ${limits.maxDimensions} variation types per listing; this product has ${names.length}.`), { code: "too-many-dimensions" });
@@ -80,16 +80,18 @@ function planVariantGroups(items, options, { productId, limits = EBAY_LIMITS } =
   };
 
   const existingKeys = new Set();
-  for (const it of items) if (it.v.ebayGroupKey) existingKeys.add(it.v.ebayGroupKey);
+  for (const it of items) if (it.v[keyField]) existingKeys.add(it.v[keyField]);
   const legacyKey = groupKeyFor(productId, 0);
 
   // 1. Pin already-posted variants to their group (legacy = group 1).
   const byKey = new Map();
   const unplaced = [];
   for (const it of items) {
-    const posted = it.v.ebayOfferId || it.v.ebayGroupKey;
+    const posted = it.v[postedField] || it.v[keyField] || legacyPosted;
     if (!posted) { unplaced.push(it); continue; }
-    const key = it.v.ebayGroupKey || legacyKey;
+    const key = it.v[keyField] || legacyKey;
+    // A legacy (unkeyed) variant only stays on the old listing while it fits.
+    if (!it.v[keyField] && byKey.get(key) && !fits(byKey.get(key), it.v)) { unplaced.push(it); continue; }
     if (!byKey.has(key)) byKey.set(key, newGroup(key));
     add(byKey.get(key), it);
   }

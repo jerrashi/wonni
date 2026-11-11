@@ -24,11 +24,14 @@ const { validated } = require("./contracts");
 const { getActiveEtsyToken } = require("./etsy_auth");
 const { resolveListingPrice, variantPriceOr, listingImagesFor, sharedPoolQuantity } = require("./platform_adapters");
 const { _internal: salesInternal } = require("./sales");
+const { groupKeyFor, groupTitle, stripGroupTitle } = require("./ebay_variant_groups");
+const {
+  priceAmount, buildEtsyInventoryPayload, ETSY_MAX_PRODUCTS, etsyGroupLimit, planEtsyListings,
+} = require("./etsy_inventory");
 
 const { loadOwnedProduct } = salesInternal;
 
 const ETSY_FALLBACK_TAXONOMY_ID = 69150398; // "Accessories"
-const ETSY_MIN_PRICE = 0.2;
 const ETSY_DEFAULT_WEIGHT_OZ = 6; // the app's default package weight
 
 // Etsy only lists handmade, vintage or craft-supply items. A product made by
@@ -69,10 +72,6 @@ async function etsyReq(method, path, { accessToken, clientId, body } = {}) {
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
   return { status: res.status, data };
-}
-
-function priceAmount(raw) {
-  return Math.max(ETSY_MIN_PRICE, Math.round(Number(raw) * 100) / 100);
 }
 
 /** Sum of variant quantities, or the product-level quantity, or 1. */
@@ -261,90 +260,6 @@ function singleOfferingInventory(price, quantity, readinessStateId = null) {
   };
 }
 
-// Etsy's custom variation property ids (the user-named ones: "Series", "Issue"…).
-// A third type needs `max_variations_supported=3`, still a developer preview
-// (2026-08), so we cap at two — same as the web editor.
-const ETSY_CUSTOM_PROPERTY_IDS = [513, 514];
-// Max products (variant combinations) per listing, by Etsy's developer docs
-// (verified 2026-11-11): 70 with one variation type, 4,900 with two — but only
-// 400 once price / quantity / SKU varies by ALL properties.
-const ETSY_MAX_PRODUCTS = { one: 70, two: 4900, twoVaryingAll: 400 };
-
-const distinctCount = (list) => new Set(list.map((x) => JSON.stringify(x))).size;
-
-/** Etsy `PUT /listings/{id}/inventory` payload from product variants.
- *
- *  Each variation type is a custom property (513 / 514) carrying its name.
- *  `*_on_property` tells Etsy which properties drive price / quantity / SKU:
- *  empty = uniform across every product (e.g. a shared quantity pool at one
- *  price), all property ids = differs per combination. Etsy requires the
- *  fields to be all-or-empty together, which is what this produces. */
-function buildEtsyInventoryPayload(variations = [], basePrice = 0, readinessStateId = null, { sharedQuantity = null } = {}) {
-  const rows = variations.map((v) => {
-    let pairs = [];
-    const attrs = v.attributes || [];
-    if (attrs.length) {
-      pairs = attrs.filter((a) => a.name && a.value).map((a) => [a.name, String(a.value)]);
-    } else if (v.optionValues && Object.keys(v.optionValues).length) {
-      pairs = Object.entries(v.optionValues)
-        .filter(([n, val]) => n && val)
-        .map(([n, val]) => [n, (Array.isArray(val) ? val : [val]).map(String).join(", ")]);
-    } else if (v.name) {
-      pairs = [["Size", String(v.name)]];
-    }
-    if (!pairs.length) pairs = [["Size", "Regular"]];
-    return {
-      v, pairs,
-      price: priceAmount(variantPriceOr(v, basePrice)),
-      qty: sharedQuantity !== null ? sharedQuantity
-        : Number.isFinite(Number(v.quantity)) && Number(v.quantity) >= 0 ? Number(v.quantity) : 1,
-    };
-  });
-
-  // Variation types in first-seen order → custom property ids.
-  const names = [];
-  for (const r of rows) for (const [n] of r.pairs) if (!names.includes(n)) names.push(n);
-  if (names.length > ETSY_CUSTOM_PROPERTY_IDS.length) {
-    throw new HttpsError("failed-precondition",
-      `Etsy supports at most ${ETSY_CUSTOM_PROPERTY_IDS.length} variation types per listing; this product has ${names.length}.`);
-  }
-  const idFor = Object.fromEntries(names.map((n, i) => [n, ETSY_CUSTOM_PROPERTY_IDS[i]]));
-  const allIds = names.map((n) => idFor[n]);
-
-  const realSkus = rows.map((r) => r.v.sku).filter(Boolean);
-  const priceVaries = distinctCount(rows.map((r) => r.price)) > 1;
-  const qtyVaries = distinctCount(rows.map((r) => r.qty)) > 1;
-  // Per-combination SKUs only when the variants actually carry distinct ones;
-  // a missing SKU is left blank (Etsy allows it) instead of inventing SKU_n.
-  const skuVaries = realSkus.length > 0 && distinctCount(realSkus) > 1;
-
-  const anyAll = priceVaries || qtyVaries || skuVaries;
-  const limit = names.length <= 1 ? ETSY_MAX_PRODUCTS.one
-    : anyAll ? ETSY_MAX_PRODUCTS.twoVaryingAll : ETSY_MAX_PRODUCTS.two;
-  if (rows.length > limit) {
-    throw new HttpsError("failed-precondition",
-      `Etsy allows at most ${limit} variant combinations on this kind of listing (${rows.length} here). `
-      + (names.length > 1 && anyAll
-        ? "Giving every combination its own price/quantity/SKU lowers the limit to 400; a shared quantity and one price allows 4,900."
-        : "Reduce the variants or post them as separate listings."));
-  }
-
-  const products = rows.map((r) => ({
-    ...(r.v.sku ? { sku: r.v.sku } : {}),
-    property_values: r.pairs.map(([n, val]) => ({
-      property_id: idFor[n], property_name: n, scale_id: null, value_ids: [], values: [val],
-    })),
-    offerings: [{ price: r.price, quantity: r.qty, is_enabled: true, ...(readinessStateId ? { readiness_state_id: readinessStateId } : {}) }],
-  }));
-  return {
-    products,
-    price_on_property: priceVaries ? allIds : [],
-    quantity_on_property: qtyVaries ? allIds : [],
-    sku_on_property: skuVaries ? allIds : [],
-    readiness_state_on_property: [],
-  };
-}
-
 function buildEtsyCreateBody(product, { taxonomyId, whenMade, whoMade, isSupply, price, quantity, shippingProfileId, returnPolicyId, readinessStateId }) {
   const title = String(product.title || "").slice(0, 140) || "Product";
   return {
@@ -418,6 +333,159 @@ const etsyIdOf = (product) =>
 
 // ── Callables ─────────────────────────────────────────────────────────────
 
+/** Create ONE Etsy draft listing for `product` (title may be overridden for a
+ *  "Part N of M" listing). Returns the new listing id as a string. */
+async function createEtsyDraft(product, data, auth, { price, readinessStateId, title = null }) {
+  const { shopId } = auth;
+  const shippingProfileId = data.shippingProfileId ?? await firstShippingProfileId(shopId, auth);
+  // Optional on Etsy's side (a draft was accepted without one on a shop that has none).
+  const returnPolicyId = data.returnPolicyId ?? await firstReturnPolicyId(shopId, auth);
+  if (!shippingProfileId) throw new HttpsError("failed-precondition", "etsy_missing_shipping_profile: add a shipping profile in your Etsy shop settings.");
+
+  const taxonomyId = data.taxonomyId != null
+    ? Number(data.taxonomyId)
+    : await resolveEtsyTaxonomyId(auth.clientId, product.title, product.category || product.artistName);
+  const quantity = productTotalQuantity(product);
+  const createBody = buildEtsyCreateBody(title ? { ...product, title } : product, {
+    taxonomyId, whenMade: data.whenMade, whoMade: data.whoMade, isSupply: data.isSupply,
+    price, quantity, shippingProfileId, returnPolicyId, readinessStateId,
+  });
+
+  let { status, data: created } = await etsyReq(
+    "POST", `/v3/application/shops/${shopId}/listings`, { ...auth, body: createBody },
+  );
+  // Etsy rolls the "recent" when_made bucket forward each year; take the value
+  // its own error lists rather than failing on a stale constant.
+  const retryWhenMade = status === 400 && !data.whenMade ? whenMadeFromEnumError(created?.error) : null;
+  if (retryWhenMade && retryWhenMade !== createBody.when_made) {
+    ({ status, data: created } = await etsyReq(
+      "POST", `/v3/application/shops/${shopId}/listings`, { ...auth, body: { ...createBody, when_made: retryWhenMade } },
+    ));
+  }
+  if (status !== 200 && status !== 201) {
+    throw new HttpsError("failed-precondition", `Etsy refused the listing (${status}): ${etsyErrorText(created)}`);
+  }
+  return String(created.listing_id);
+}
+
+// ── One product → several Etsy listings ───────────────────────────────────
+//
+// A listing holds at most 70 / 400 / 4,900 variant combinations (see
+// etsy_inventory.js). A bigger product becomes several listings, still ONE
+// product in Wonni: `etsyListings: [{groupKey, listingId}]` (only when split;
+// the first is mirrored in etsyListingId / crossPostListingIds.etsy) and
+// `variants[i].etsyGroupKey`. Same engine as eBay's split.
+
+const isSharedPoolQty = (product) => sharedPoolQuantity(product) !== null;
+const etsyListingsOf = (product) =>
+  Array.isArray(product.etsyListings) ? product.etsyListings.filter((g) => g?.listingId) : [];
+
+const activeVariantItems = (product) => (Array.isArray(product.variants) ? product.variants : [])
+  .map((v, i) => ({ v, i })).filter(({ v }) => v.active !== false);
+
+/** Plan for a product, or null when it is a plain single listing (no split needed
+ *  and none exists). */
+function planForProduct(product, productId, basePrice) {
+  const items = activeVariantItems(product);
+  if (items.length < 2) return null;
+  const plan = planEtsyListings(items, Array.isArray(product.options) ? product.options : [], {
+    productId, basePrice, sharedQuantity: sharedPoolQuantity(product),
+    legacyPosted: !!etsyIdOf(product),
+  });
+  return plan.length > 1 || etsyListingsOf(product).length > 1 ? plan : null;
+}
+
+async function deactivateEtsyListing(auth, listingId) {
+  const off = await etsyReq("PATCH", `/v3/application/shops/${auth.shopId}/listings/${listingId}`,
+    { ...auth, body: { state: "inactive" } });
+  if (off.status === 400 && /draft/i.test(etsyErrorText(off.data))) {
+    const del = await etsyReq("DELETE", `/v3/application/listings/${listingId}`, auth);
+    if (del.status !== 204) console.warn(`[etsy] draft ${listingId} left on Etsy (${del.status}): ${etsyErrorText(del.data)}`);
+  } else if (off.status !== 200 && off.status !== 404) {
+    throw new HttpsError("internal", `Etsy deactivate failed (${off.status}): ${etsyErrorText(off.data)}`);
+  }
+}
+
+/**
+ * Create / update every Etsy listing of a split product to match `plan`.
+ * Existing listings are PATCHed + their inventory replaced; missing ones are
+ * created (draft → photos → inventory → publish); listings whose variants all
+ * moved away are deactivated. The product doc is written after EVERY listing,
+ * so a failure on listing 3 never loses track of 1–2.
+ */
+async function syncEtsyGroups({ ref, product, productId, plan, auth, price, readinessStateId, data = {} }, deps = {}) {
+  const upload = deps.upload || uploadListingImages;
+  const { shopId } = auth;
+  const known = new Map(etsyListingsOf(product).map((g) => [g.groupKey, String(g.listingId)]));
+  if (!known.size && etsyIdOf(product)) known.set(groupKeyFor(productId, 0), String(etsyIdOf(product)));
+
+  const baseVariants = Array.isArray(product.variants) ? product.variants : [];
+  let nextVariants = baseVariants.slice();
+  const listings = [];
+  const shared = sharedPoolQuantity(product);
+
+  const persist = () => ref.set({
+    crossPostStatus: { etsy: "active" },
+    crossPostListingIds: { etsy: listings[0].listingId },
+    etsyListingId: listings[0].listingId,
+    etsyListingUrl: `https://www.etsy.com/listing/${listings[0].listingId}`,
+    etsyListings: plan.length > 1 ? listings : admin.firestore.FieldValue.delete(),
+    variants: nextVariants,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  for (let gi = 0; gi < plan.length; gi++) {
+    const { key, items } = plan[gi];
+    const title = groupTitle(String(product.title || "Product").slice(0, 140), gi, plan.length, 140);
+    const variants = items.map((x) => x.v);
+    const payload = buildEtsyInventoryPayload(variants, priceAmount(price), readinessStateId, { sharedQuantity: shared });
+
+    let listingId = known.get(key) || null;
+    let state = null;
+    if (listingId) {
+      const got = await etsyReq("GET", `/v3/application/listings/${listingId}`, auth);
+      if (got.status === 404) listingId = null; else state = got.data?.state ?? null;
+    }
+    let needsPublish = false;
+    if (!listingId) {
+      listingId = await createEtsyDraft(product, data, auth, { price, readinessStateId, title });
+      needsPublish = true;
+      // Remember the draft right away so a failure below is resumable.
+      listings.push({ groupKey: key, listingId });
+      await ref.set({ etsyListings: [...listings], ...(gi === 0 ? { etsyListingId: listingId, crossPostListingIds: { etsy: listingId } } : {}) }, { merge: true });
+      listings.pop();
+    } else {
+      const patch = await etsyReq("PATCH", `/v3/application/shops/${shopId}/listings/${listingId}`, {
+        ...auth, body: { title, description: product.description || product.title || "", ...etsyItemDimensions(product) },
+      });
+      if (patch.status !== 200) throw new HttpsError("internal", `Etsy update failed (${patch.status}): ${etsyErrorText(patch.data)}`);
+      needsPublish = state !== "active";
+    }
+
+    if (needsPublish) {
+      const images = listingImagesFor(product, 10);
+      const uploaded = images.length ? await upload(shopId, listingId, images, auth) : 0;
+      if (uploaded < 1) throw new HttpsError("failed-precondition", `Etsy draft ${listingId} created but no photo uploaded — Etsy needs at least one photo to publish.`);
+    }
+    const inv = await etsyReq("PUT", `/v3/application/listings/${listingId}/inventory`, { ...auth, body: payload });
+    if (inv.status !== 200) throw new HttpsError("internal", `Etsy inventory update failed (${inv.status}) for "${title}": ${etsyErrorText(inv.data)}`);
+    if (needsPublish) {
+      const pub = await etsyReq("PATCH", `/v3/application/shops/${shopId}/listings/${listingId}`, { ...auth, body: { state: "active" } });
+      if (pub.status !== 200) throw new Error(`Etsy publish failed (${pub.status}): ${etsyErrorText(pub.data)}`);
+    }
+
+    listings.push({ groupKey: key, listingId: String(listingId) });
+    for (const { i } of items) nextVariants[i] = { ...nextVariants[i], etsyGroupKey: key };
+    await persist();
+  }
+
+  // Listings no planned group maps to any more (their variants were removed).
+  for (const [key, id] of known) {
+    if (!plan.some((g) => g.key === key)) await deactivateEtsyListing(auth, id);
+  }
+  return listings;
+}
+
 // Core create-listing logic, shared by the `etsyCreateListing` callable and
 // any other server-side caller (e.g. cross_post.js's rule-driven cross-post)
 // that needs to post to Etsy without going through another Cloud Function
@@ -442,39 +510,18 @@ async function etsyCreateListingCore(uid, data) {
     const price = resolveListingPrice(product);
     const readinessStateId = await firstReadinessStateId(shopId, auth);
 
+    // Too many variants for one Etsy listing → several listings.
+    const splitPlan = planForProduct(product, data.productId, priceAmount(price));
+    if (splitPlan) {
+      const listings = await syncEtsyGroups({ ref, product, productId: data.productId, plan: splitPlan, auth, price, readinessStateId, data });
+      return { success: true, listingId: listings[0].listingId, listings };
+    }
+
     // A previous attempt may have created the Etsy draft and then failed on photos
     // or publish: reuse it instead of leaving a second orphan draft in the shop.
     let etsyListingId = await reusableEtsyDraft(product, auth);
     if (!etsyListingId) {
-      const shippingProfileId = data.shippingProfileId ?? await firstShippingProfileId(shopId, auth);
-      // Optional on Etsy's side (a draft was accepted without one on a shop that has none).
-      const returnPolicyId = data.returnPolicyId ?? await firstReturnPolicyId(shopId, auth);
-      if (!shippingProfileId) throw new HttpsError("failed-precondition", "etsy_missing_shipping_profile: add a shipping profile in your Etsy shop settings.");
-
-      const taxonomyId = data.taxonomyId != null
-        ? Number(data.taxonomyId)
-        : await resolveEtsyTaxonomyId(auth.clientId, product.title, product.category || product.artistName);
-      const quantity = productTotalQuantity(product);
-      const createBody = buildEtsyCreateBody(product, {
-        taxonomyId, whenMade: data.whenMade, whoMade: data.whoMade, isSupply: data.isSupply,
-        price, quantity, shippingProfileId, returnPolicyId, readinessStateId,
-      });
-
-      let { status, data: created } = await etsyReq(
-        "POST", `/v3/application/shops/${shopId}/listings`, { ...auth, body: createBody },
-      );
-      // Etsy rolls the "recent" when_made bucket forward each year; take the value
-      // its own error lists rather than failing on a stale constant.
-      const retryWhenMade = status === 400 && !data.whenMade ? whenMadeFromEnumError(created?.error) : null;
-      if (retryWhenMade && retryWhenMade !== createBody.when_made) {
-        ({ status, data: created } = await etsyReq(
-          "POST", `/v3/application/shops/${shopId}/listings`, { ...auth, body: { ...createBody, when_made: retryWhenMade } },
-        ));
-      }
-      if (status !== 200 && status !== 201) {
-        throw new HttpsError("failed-precondition", `Etsy refused the listing (${status}): ${etsyErrorText(created)}`);
-      }
-      etsyListingId = String(created.listing_id);
+      etsyListingId = await createEtsyDraft(product, data, auth, { price, readinessStateId });
       // Remember the draft right away so a failure below is resumable.
       await ref.set({ etsyListingId, crossPostListingIds: { etsy: etsyListingId } }, { merge: true });
     }
@@ -558,6 +605,17 @@ exports.etsyUpdateListing = onCall(
 
     const auth = await getActiveEtsyToken(uid);
     const price = resolveListingPrice(product);
+
+    const updatePlan = planForProduct(product, data.productId, priceAmount(price));
+    if (updatePlan) {
+      const readiness = await firstReadinessStateId(auth.shopId, auth);
+      await syncEtsyGroups({
+        ref: db.collection("products").doc(data.productId), product, productId: data.productId,
+        plan: updatePlan, auth, price, readinessStateId: readiness, data,
+      });
+      return { success: true };
+    }
+
     const { status, data: res } = await etsyReq(
       "PATCH", `/v3/application/shops/${auth.shopId}/listings/${etsyId}`,
       { ...auth, body: {
@@ -604,20 +662,18 @@ exports.etsyDeleteListing = onCall(
     // re-activate). A draft cannot be deactivated; it is deleted outright, which
     // needs the `listings_d` scope (connections made before 2026-10-21 lack it —
     // the draft then stays in the shop's Drafts and is logged).
-    const off = await etsyReq("PATCH", `/v3/application/shops/${auth.shopId}/listings/${etsyId}`,
-      { ...auth, body: { state: "inactive" } });
-    if (off.status === 400 && /draft/i.test(etsyErrorText(off.data))) {
-      const del = await etsyReq("DELETE", `/v3/application/listings/${etsyId}`, auth);
-      if (del.status !== 204) console.warn(`[etsyDeleteListing] draft ${etsyId} left on Etsy (${del.status}): ${etsyErrorText(del.data)}`);
-    } else if (off.status !== 200 && off.status !== 404) {
-      throw new HttpsError("internal", `Etsy deactivate failed (${off.status}): ${etsyErrorText(off.data)}`);
-    }
+    // A split product has several listings; take every one down.
+    const ids = etsyListingsOf(product).length
+      ? etsyListingsOf(product).map((g) => String(g.listingId))
+      : [String(etsyId)];
+    for (const id of ids) await deactivateEtsyListing(auth, id);
 
     await db.collection("products").doc(data.productId).set({
       crossPostStatus: { etsy: "" },
       crossPostListingIds: { etsy: admin.firestore.FieldValue.delete() },
       etsyListingId: admin.firestore.FieldValue.delete(),
       etsyListingUrl: admin.firestore.FieldValue.delete(),
+      etsyListings: admin.firestore.FieldValue.delete(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
     return { success: true };
@@ -652,7 +708,14 @@ exports.etsyPullSync = onCall(
     const auth = await getActiveEtsyToken(uid);
     const { status, data: item } = await etsyReq("GET", `/v3/application/listings/${etsyId}`, auth);
     if (status !== 200) throw new HttpsError("not-found", `Etsy listing ${etsyId} not found (${status}).`);
-    return etsyDriftDiff(product, item);
+    const extra = etsyListingsOf(product).slice(1);
+    if (!extra.length) return etsyDriftDiff(product, item);
+    // Split product: title from the first listing ("Part N of M" stripped),
+    // quantity summed over every listing (each holds a share of the variants).
+    const others = await Promise.all(extra.map((g) => etsyReq("GET", `/v3/application/listings/${g.listingId}`, auth)));
+    const all = [item, ...others.filter((r) => r.status === 200).map((r) => r.data)];
+    const quantity = all.reduce((n, l) => n + (typeof l.quantity === "number" ? l.quantity : 0), 0);
+    return etsyDriftDiff(product, { ...item, title: stripGroupTitle(item.title), quantity: isSharedPoolQty(product) ? item.quantity : quantity });
   }),
 );
 
@@ -718,9 +781,9 @@ exports.getEtsyReturnPolicies = onCall(
 );
 
 exports._internal = {
-  matchEtsyTaxonomyId, categoryWords, buildEtsyInventoryPayload, buildEtsyCreateBody, ETSY_MAX_PRODUCTS,
+  matchEtsyTaxonomyId, categoryWords, buildEtsyInventoryPayload, buildEtsyCreateBody, ETSY_MAX_PRODUCTS, etsyGroupLimit, planEtsyListings,
   etsyDriftDiff, etsyImportUpdates, productTotalQuantity, priceAmount, etsyIdOf,
-  etsyCreateListingCore,
+  etsyCreateListingCore, syncEtsyGroups, planForProduct, etsyListingsOf,
   recentWhenMade, whenMadeFromEnumError, flattenTaxonomyLeaves, pickShippingProfile,
   pickReadinessState, etsyItemDimensions, singleOfferingInventory, etsyErrorText,
   ETSY_RESALE_DEFAULTS,

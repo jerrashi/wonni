@@ -20,6 +20,7 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { isSharedPool } = require("./quantity_model");
 const { chunk } = require("./ebay_bulk");
+const { buildEtsyInventoryPayload, priceAmount } = require("./etsy_inventory");
 const admin = require("firebase-admin");
 const { validated } = require("./contracts");
 const { ebayRequest, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET } = require("./ebay_auth");
@@ -177,29 +178,6 @@ async function pushEbayQuantity(uid, product, productId, variantSku, newQty) {
   return "updated";
 }
 
-// Etsy `PUT /listings/{id}/inventory` products[] entry for one variant, with
-// its quantity forced to `qty` — used by the shared-pool push below. Mirrors
-// `etsy_listing.js`'s `buildEtsyInventoryPayload` property_values logic
-// (kept local, not imported, to avoid a sales.js <-> etsy_listing.js
-// require cycle — etsy_listing.js already depends on sales.js).
-function etsySharedPoolProduct(v, idx, price, qty) {
-  let property_values = [];
-  const attrs = v.attributes || [];
-  if (attrs.length) {
-    property_values = attrs
-      .filter((a) => a.name && a.value)
-      .map((a) => ({ property_name: a.name, values: [String(a.value)] }));
-  } else if (v.optionValues && Object.keys(v.optionValues).length) {
-    property_values = Object.entries(v.optionValues)
-      .filter(([n, val]) => n && val)
-      .map(([n, val]) => ({ property_name: n, values: [String(val)] }));
-  } else if (v.name) {
-    property_values = [{ property_name: "Size", values: [String(v.name)] }];
-  }
-  if (!property_values.length) property_values = [{ property_name: "Size", values: ["Regular"] }];
-  return { sku: v.sku || `SKU_${idx + 1}`, property_values, offerings: [{ price, quantity: qty, is_enabled: true }] };
-}
-
 async function pushEtsyQuantity(uid, product, newQty) {
   const etsyListingId = product.etsyListingId || product.crossPostListingIds?.etsy;
   if (!etsyListingId) return "skipped";
@@ -213,15 +191,27 @@ async function pushEtsyQuantity(uid, product, newQty) {
   // offering needs the same new quantity, not just a top-level PATCH (which
   // Etsy only honors for a listing with no variations).
   if (isSharedPool(product) && Array.isArray(product.variants) && product.variants.length) {
-    const price = Math.max(0.2, Math.round(Number(product.listingPrice ?? 0) * 100) / 100);
+    const price = priceAmount(product.listingPrice ?? 0);
     const qty = Math.max(0, newQty);
-    const products = product.variants.map((v, idx) => etsySharedPoolProduct(v, idx, price, qty));
-    const res = await fetch(`https://openapi.etsy.com/v3/application/listings/${etsyListingId}/inventory`, {
-      method: "PUT",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "x-api-key": clientId },
-      body: JSON.stringify({ products, price_on_property: [], quantity_on_property: [], sku_on_property: [] }),
-    });
-    return res.ok ? "updated" : "failed";
+    // A big product is several Etsy listings (`etsyListings`), each holding the
+    // variants whose `etsyGroupKey` matches; push the new pool to every one.
+    const listings = Array.isArray(product.etsyListings) && product.etsyListings.length
+      ? product.etsyListings
+      : [{ groupKey: null, listingId: etsyListingId }];
+    let allOk = true;
+    for (const [li, g] of listings.entries()) {
+      const mine = product.variants.filter((v) => v.active !== false
+        && (listings.length === 1 || (v.etsyGroupKey || listings[0].groupKey) === g.groupKey));
+      if (!mine.length) continue;
+      const body = buildEtsyInventoryPayload(mine, price, null, { sharedQuantity: qty });
+      const res = await fetch(`https://openapi.etsy.com/v3/application/listings/${g.listingId}/inventory`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "x-api-key": clientId },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) allOk = false;
+    }
+    return allOk ? "updated" : "failed";
   }
 
   const res = await fetch(`https://openapi.etsy.com/v3/application/listings/${etsyListingId}`, {

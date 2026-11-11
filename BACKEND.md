@@ -671,7 +671,22 @@ sellers. Two levers, both deliberate product direction:
   or with more than 2 types with a readable error. The docs don't show the
   custom-property JSON; the shape used (`property_id` 513/514 + name + `values`,
   empty `value_ids`) is from Etsy's API conventions — confirm with one real
-  draft after re-linking Etsy. Etsy auto-split is still not built.
+  draft after re-linking Etsy. 
+  **Etsy auto-split — built 2026-11-11 (fake-Etsy tests only, not live):**
+  `etsy_inventory.js` (payload + `planEtsyListings`, same engine as eBay's
+  planner) splits a product into one Etsy listing per 70 / 400 / 4,900
+  combinations by shape, a series kept whole. Doc: `etsyListings:
+  [{groupKey, listingId}]` (only when split; first mirrored in
+  `etsyListingId` / `crossPostListingIds.etsy`) + `variants[i].etsyGroupKey`.
+  `syncEtsyGroups` (create AND update) creates missing listings (draft → photos →
+  inventory → publish), PATCHes + replaces inventory on existing ones,
+  deactivates listings whose variants all moved away, and writes the doc after
+  every listing. Delete deactivates all; pull-sync sums quantity across
+  listings and strips " - Part N of M"; the shared-pool sale push now uses the
+  same payload builder and updates every listing (the old copy in `sales.js`
+  had the empty-`*_on_property` bug). Gaps: a per-variant sale on a
+  NON-shared split product doesn't push to Etsy (same as the unsplit case
+  today); Etsy listings cost $0.20 each, so a split costs more per product.
 - **eBay variation limits — reference copy** (verbatim figures from the
   [Trading API variations guide](https://developer.ebay.com/api-docs/user-guides/static/trading-user-guide/variations.html),
   fetched 2026-11-11; re-check the page if eBay changes them). Quoted:
