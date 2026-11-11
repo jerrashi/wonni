@@ -126,14 +126,23 @@ function wonniTotalQuantity(product) {
 // per-variant offers). When the doc already knows its own group key + offer
 // IDs, use them directly — `resolveEbayOffer` is for recovery only (a lost
 // pointer, or a pre-Inventory-API legacy listing).
+// Every item group of a posted product ({groupKey, group|null}), first group
+// first. A product split across several eBay listings has one per listing.
+async function fetchEbayGroups(uid, product, productId) {
+  return Promise.all(groupKeysOf(product, productId).map(async (groupKey) => ({
+    groupKey,
+    group: await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`)
+      .catch((e) => { if (e.status !== 404) throw e; return null; }),
+  })));
+}
+
 async function readMultiVariantEbayData(uid, product) {
-  const groupKey = product.ebayInventoryItemGroupKey;
   const variants = Array.isArray(product.variants) ? product.variants : [];
-  const [group, perVariantOffers] = await Promise.all([
-    groupKey
-      ? ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`)
-          .catch((e) => { if (e.status !== 404) throw e; return null; })
-      : null,
+  // Split products have several groups; the first carries the title/photos
+  // (later ones differ only by their " - Part N of M" suffix). Variant offers
+  // below span ALL groups already, so quantity/price/ended see every listing.
+  const [groups, perVariantOffers] = await Promise.all([
+    product.ebayInventoryItemGroupKey ? fetchEbayGroups(uid, product, null) : [],
     Promise.all(variants.map((v) => (v.ebayOfferId ? getOfferOrNull(uid, v.ebayOfferId) : null))),
   ]);
   // Stock for variation listings lives on each variant's INVENTORY ITEM
@@ -147,6 +156,7 @@ async function readMultiVariantEbayData(uid, product) {
           .catch((e) => { if (e.status !== 404) throw e; return null; })
       : null
   )));
+  const group = groups[0]?.group ?? null;
   const perVariantQty = variants.map((_, i) => {
     const q = perVariantItems[i]?.availability?.shipToLocationAvailability?.quantity
       ?? perVariantOffers[i]?.availableQuantity;
@@ -161,7 +171,7 @@ async function readMultiVariantEbayData(uid, product) {
   // which for a gone listing is exactly "mark out of stock."
   const ended = !perVariantOffers.some((o) => o?.status === "PUBLISHED");
   return {
-    title: group?.title || "",
+    title: stripGroupTitle(group?.title || ""),
     description: firstOffer?.listingDescription ?? group?.description ?? "",
     photoCount: group?.imageUrls?.length ?? 0,
     price: firstOffer?.pricingSummary?.price?.value != null ? parseFloat(firstOffer.pricingSummary.price.value) : null,
@@ -1312,7 +1322,7 @@ async function postSingleVariant(ctx) {
 // Multi-variation listing: one inventory item per active variant → an
 // inventory item group → one offer per variant → publishOfferByInventoryItemGroup.
 // Result is ONE eBay listing with N selectable variations.
-const { planVariantGroups, groupTitle } = require("./ebay_variant_groups");
+const { planVariantGroups, groupTitle, stripGroupTitle, groupKeysOf } = require("./ebay_variant_groups");
 const { bulkPutInventoryItems, bulkCreateOffers } = require("./ebay_bulk");
 
 const VARIANT_CONCURRENCY = 8;
@@ -2081,13 +2091,8 @@ async function syncMultiVariantToEbay(uid, product, productId, docRef) {
 // `variants` array — a dotted `variants.N.x` update path clobbers the array
 // into a map and drops every other field on each variant.
 async function syncMultiVariantFromEbay(uid, product, productId, docRef) {
-  const groupKey = product.ebayInventoryItemGroupKey || productId;
-  let group = null;
-  try {
-    group = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`);
-  } catch (e) {
-    if (e.status !== 404) throw e;
-  }
+  // First group carries the title/description; the rest are "Part N of M" copies.
+  const group = (await fetchEbayGroups(uid, product, productId))[0]?.group ?? null;
 
   const baseVariants = Array.isArray(product.variants) ? product.variants : Object.values(product.variants || {});
   const nextVariants = await Promise.all(baseVariants.map(async (v) => {
@@ -2114,7 +2119,7 @@ async function syncMultiVariantFromEbay(uid, product, productId, docRef) {
   }));
 
   const updatePayload = { variants: nextVariants };
-  if (group?.title) updatePayload.title = group.title;
+  if (group?.title) updatePayload.title = stripGroupTitle(group.title);
   if (group?.description != null) updatePayload.description = group.description;
 
   await docRef.update(updatePayload);
@@ -2403,13 +2408,9 @@ exports.ebayGetListing = onCall(
 
     try {
       if (hasVariations) {
-        const groupKey = product.ebayInventoryItemGroupKey || productId;
-        let group = null;
-        try {
-          group = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`);
-        } catch (e) {
-          if (e.status !== 404) throw e;
-        }
+        const groupList = await fetchEbayGroups(uid, product, productId);
+        const groupKey = groupList[0].groupKey;
+        const group = groupList[0].group;
 
         const rows = await Promise.all(
           variants
@@ -2439,6 +2440,16 @@ exports.ebayGetListing = onCall(
           listingStatus: anyLive ? "ACTIVE" : (rows.some((r) => r.offer) ? "NOT_PUBLISHED" : "GONE"),
           listingUrl: product.ebayListingUrl ?? null,
           inventoryItemGroupKey: groupKey,
+          // One entry per eBay listing: a product over eBay's 250-variation /
+          // 30-value limits is split across several (see ebay_variant_groups.js).
+          groups: groupList.map(({ groupKey: key, group: g }) => ({
+            groupKey: key,
+            title: g?.title ?? null,
+            variantSKUs: g?.variantSKUs ?? [],
+            found: !!g,
+            listingId: (product.ebayGroups || []).find((x) => x.groupKey === key)?.listingId
+              ?? (key === groupKey ? product.ebayListingId ?? null : null),
+          })),
           group: group && {
             title: group.title ?? null,
             description: group.description ?? null,

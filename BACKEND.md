@@ -662,16 +662,16 @@ sellers. Two levers, both deliberate product direction:
   70 per Etsy listing; Series x Issue holds 4,900 only if price/qty/SKU do not
   vary per combination, else 400 — so Etsy needs the same auto-split idea as
   eBay (not built), with a smaller group size (70 / 400 / 4,900 by shape).
-  **Probable bug found while checking (NOT fixed, not live-verified):**
-  `buildEtsyInventoryPayload` sends `price_on_property`/`quantity_on_property`/
-  `sku_on_property` as EMPTY arrays and no `property_id` on each
-  `property_values` entry. Etsy defines empty as "no property drives it", so a
-  variant listing with differing per-variant prices/quantities/SKUs is likely
-  rejected or flattened; the docs' examples always include `property_id`
-  (custom properties use 513/514). The multi-variant Etsy path has only ever
-  been unit-tested. Fix = list the varying property ids in `*_on_property`
-  (the shared-pool + uniform-price case is where empty is correct) and send
-  property ids, then post one real multi-variant listing as a draft.
+  **Payload fixed 2026-11-11 (unit-tested only, NOT live-verified):**
+  `buildEtsyInventoryPayload` now sends custom property ids (513, 514) with
+  `property_name`, lists ALL property ids in `price_on_property` /
+  `quantity_on_property` / `sku_on_property` when that field differs across
+  variants (empty when uniform — e.g. shared pool at one price), stops
+  inventing `SKU_n`, and refuses a listing over Etsy's 70 / 400 / 4,900 limit
+  or with more than 2 types with a readable error. The docs don't show the
+  custom-property JSON; the shape used (`property_id` 513/514 + name + `values`,
+  empty `value_ids`) is from Etsy's API conventions — confirm with one real
+  draft after re-linking Etsy. Etsy auto-split is still not built.
 - **eBay variation limits — reference copy** (verbatim figures from the
   [Trading API variations guide](https://developer.ebay.com/api-docs/user-guides/static/trading-user-guide/variations.html),
   fetched 2026-11-11; re-check the page if eBay changes them). Quoted:
@@ -700,9 +700,12 @@ sellers. Two levers, both deliberate product direction:
   stay the FIRST group. Over 5 variation types is refused with a readable error.
   `postMultiVariant` writes the doc after each group, so a failure on group 3
   never loses groups 1-2. `ebayDeleteListing` withdraws every group.
-  **Gaps:** reads (`ebayGetListing`, `ebayPullSync`, `syncMultiVariantFromEbay`,
-  `ebayGetListingDetails`) still read only the first group; the sale cascade
-  works (it is per-variant offer) but the web "View on eBay" link shows group 1.
+  **Reads/sync (2026-11-11):** `ebayGetListing` returns `groups[]` (one per eBay
+  listing, with its listingId); `readMultiVariantEbayData` (pull sync, details),
+  `syncMultiVariantFromEbay` and the sale cascade already spanned every variant
+  offer, so quantity / price / "ended" cover all groups. The title comes from
+  group 1 with " - Part N of M" stripped (`stripGroupTitle`) so it never leaks
+  into the Wonni title. Gap: the web "View on eBay" link still shows group 1.
 - **Bulk posting — built:** `ebay_bulk.js` — inventory items via
   `bulk_create_or_replace_inventory_item` and new offers via `bulk_create_offer`
   (25 per call, failed rows retried singly so the real eBay error surfaces and

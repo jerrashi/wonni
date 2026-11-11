@@ -1,7 +1,7 @@
 "use strict";
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { planVariantGroups, groupKeyFor, groupTitle, EBAY_LIMITS } = require("../ebay_variant_groups");
+const { planVariantGroups, groupKeyFor, groupTitle, stripGroupTitle, groupKeysOf, EBAY_LIMITS } = require("../ebay_variant_groups");
 
 const opts = [{ name: "Series" }, { name: "Issue" }];
 const make = (series, issues) => {
@@ -76,4 +76,18 @@ test("keys are alphanumeric and titles stay within 80 chars", () => {
   assert.ok(t.length <= 80);
   assert.ok(t.endsWith(" - Part 2 of 3"));
   assert.equal(groupTitle("Hello", 0, 1), "Hello");
+});
+
+test("regression: reading a split listing back never leaks ' - Part N of M' into the Wonni title", () => {
+  const title = "Amazing Spider-Man Comic Lot";
+  for (let i = 0; i < 3; i++) assert.equal(stripGroupTitle(groupTitle(title, i, 3)), title);
+  assert.equal(stripGroupTitle("A single listing"), "A single listing");
+  assert.equal(stripGroupTitle("Part 2 of 3 in the title - stays"), "Part 2 of 3 in the title - stays");
+  assert.equal(stripGroupTitle(undefined), "");
+});
+
+test("groupKeysOf: all groups for a split product, the one legacy key otherwise", () => {
+  assert.deepEqual(groupKeysOf({ ebayGroups: [{ groupKey: "p1" }, { groupKey: "p1g2" }] }, "p1"), ["p1", "p1g2"]);
+  assert.deepEqual(groupKeysOf({ ebayInventoryItemGroupKey: "legacy" }, "p1"), ["legacy"]);
+  assert.deepEqual(groupKeysOf({}, "p1"), ["p1"]);
 });

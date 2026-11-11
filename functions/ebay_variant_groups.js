@@ -30,6 +30,19 @@ function groupTitle(title, index, count, max = 80) {
   return `${String(title).slice(0, Math.max(0, max - suffix.length)).trimEnd()}${suffix}`;
 }
 
+/** Undo `groupTitle`: the Wonni title never carries " - Part N of M". */
+function stripGroupTitle(title) {
+  return String(title ?? "").replace(/ - Part \d+ of \d+$/, "");
+}
+
+/** Every group key of a posted product, first (legacy) key first. */
+function groupKeysOf(product, productId) {
+  if (Array.isArray(product?.ebayGroups) && product.ebayGroups.length) {
+    return product.ebayGroups.map((g) => g.groupKey).filter(Boolean);
+  }
+  return [product?.ebayInventoryItemGroupKey || productId].filter(Boolean);
+}
+
 /**
  * Plan the item groups.
  * @param {Array<{v: object, i: number}>} items  active variants with their index in product.variants
@@ -135,4 +148,4 @@ function planVariantGroups(items, options, { productId, limits = EBAY_LIMITS } =
   return groups.map(({ key, items: its }) => ({ key, items: its }));
 }
 
-module.exports = { EBAY_LIMITS, groupKeyFor, groupTitle, planVariantGroups };
+module.exports = { EBAY_LIMITS, groupKeyFor, groupTitle, stripGroupTitle, groupKeysOf, planVariantGroups };
