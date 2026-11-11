@@ -102,6 +102,8 @@ struct BackendContracts: Codable, Sendable {
     let saleCarrier: SaleCarrier?
     let saleDoc: SaleDoc?
     let sourceProduct: SourceProduct?
+    let startPostJobRequest: StartPostJobRequest?
+    let startPostJobResponse: StartPostJobResponse?
     let suggestEtsyCategoryRequest: SuggestEtsyCategoryRequest?
     let suggestEtsyCategoryResponse: SuggestEtsyCategoryResponse?
     let syncSalesPlatformError: SyncSalesPlatformError?
@@ -207,6 +209,8 @@ struct BackendContracts: Codable, Sendable {
         case saleCarrier = "SaleCarrier"
         case saleDoc = "SaleDoc"
         case sourceProduct = "SourceProduct"
+        case startPostJobRequest = "StartPostJobRequest"
+        case startPostJobResponse = "StartPostJobResponse"
         case suggestEtsyCategoryRequest = "SuggestEtsyCategoryRequest"
         case suggestEtsyCategoryResponse = "SuggestEtsyCategoryResponse"
         case syncSalesPlatformError = "SyncSalesPlatformError"
@@ -332,6 +336,8 @@ extension BackendContracts {
         saleCarrier: SaleCarrier?? = nil,
         saleDoc: SaleDoc?? = nil,
         sourceProduct: SourceProduct?? = nil,
+        startPostJobRequest: StartPostJobRequest?? = nil,
+        startPostJobResponse: StartPostJobResponse?? = nil,
         suggestEtsyCategoryRequest: SuggestEtsyCategoryRequest?? = nil,
         suggestEtsyCategoryResponse: SuggestEtsyCategoryResponse?? = nil,
         syncSalesPlatformError: SyncSalesPlatformError?? = nil,
@@ -437,6 +443,8 @@ extension BackendContracts {
             saleCarrier: saleCarrier ?? self.saleCarrier,
             saleDoc: saleDoc ?? self.saleDoc,
             sourceProduct: sourceProduct ?? self.sourceProduct,
+            startPostJobRequest: startPostJobRequest ?? self.startPostJobRequest,
+            startPostJobResponse: startPostJobResponse ?? self.startPostJobResponse,
             suggestEtsyCategoryRequest: suggestEtsyCategoryRequest ?? self.suggestEtsyCategoryRequest,
             suggestEtsyCategoryResponse: suggestEtsyCategoryResponse ?? self.suggestEtsyCategoryResponse,
             syncSalesPlatformError: syncSalesPlatformError ?? self.syncSalesPlatformError,
@@ -8414,6 +8422,114 @@ enum SaleDocSource: String, Codable, Equatable, Sendable {
     case etsyPoll = "etsy-poll"
     case manual = "manual"
     case mercariScan = "mercari-scan"
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - StartPostJobRequest
+struct StartPostJobRequest: Codable, Equatable, Sendable {
+    let platform: GetOrderTakeHomeRequestPlatform
+    let productId: String
+
+    enum CodingKeys: String, CodingKey {
+        case platform = "platform"
+        case productId = "productId"
+    }
+}
+
+// MARK: StartPostJobRequest convenience initializers and mutators
+
+extension StartPostJobRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(StartPostJobRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        platform: GetOrderTakeHomeRequestPlatform? = nil,
+        productId: String? = nil
+    ) -> StartPostJobRequest {
+        return StartPostJobRequest(
+            platform: platform ?? self.platform,
+            productId: productId ?? self.productId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - StartPostJobResponse
+struct StartPostJobResponse: Codable, Equatable, Sendable {
+    let alreadyRunning: Bool
+    let jobId: String
+
+    enum CodingKeys: String, CodingKey {
+        case alreadyRunning = "alreadyRunning"
+        case jobId = "jobId"
+    }
+}
+
+// MARK: StartPostJobResponse convenience initializers and mutators
+
+extension StartPostJobResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(StartPostJobResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        alreadyRunning: Bool? = nil,
+        jobId: String? = nil
+    ) -> StartPostJobResponse {
+        return StartPostJobResponse(
+            alreadyRunning: alreadyRunning ?? self.alreadyRunning,
+            jobId: jobId ?? self.jobId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
 }
 
 //

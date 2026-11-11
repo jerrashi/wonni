@@ -424,8 +424,8 @@ async function syncEtsyGroups({ ref, product, productId, plan, auth, price, read
   const listings = [];
   const shared = sharedPoolQuantity(product);
 
-  const persist = () => ref.set({
-    crossPostStatus: { etsy: "active" },
+  const persist = (final) => ref.set({
+    crossPostStatus: { etsy: final ? "active" : "pending" },
     crossPostListingIds: { etsy: listings[0].listingId },
     etsyListingId: listings[0].listingId,
     etsyListingUrl: `https://www.etsy.com/listing/${listings[0].listingId}`,
@@ -439,6 +439,13 @@ async function syncEtsyGroups({ ref, product, productId, plan, auth, price, read
     const title = groupTitle(String(product.title || "Product").slice(0, 140), gi, plan.length, 140);
     const variants = items.map((x) => x.v);
     const payload = buildEtsyInventoryPayload(variants, priceAmount(price), readinessStateId, { sharedQuantity: shared });
+
+    // A listing a previous run of this background job already finished.
+    if ((data.skipGroupKeys || []).includes(key) && known.get(key)) {
+      listings.push({ groupKey: key, listingId: known.get(key) });
+      for (const { i } of items) nextVariants[i] = { ...nextVariants[i], etsyGroupKey: key };
+      continue;
+    }
 
     let listingId = known.get(key) || null;
     let state = null;
@@ -476,7 +483,9 @@ async function syncEtsyGroups({ ref, product, productId, plan, auth, price, read
 
     listings.push({ groupKey: key, listingId: String(listingId) });
     for (const { i } of items) nextVariants[i] = { ...nextVariants[i], etsyGroupKey: key };
-    await persist();
+    await persist(gi === plan.length - 1);
+    if (data.onProgress) await data.onProgress({ groupCount: plan.length, groups: listings.slice() });
+    if (gi < plan.length - 1 && data.shouldStop && data.shouldStop()) return Object.assign(listings, { partial: true });
   }
 
   // Listings no planned group maps to any more (their variants were removed).
@@ -514,7 +523,7 @@ async function etsyCreateListingCore(uid, data) {
     const splitPlan = planForProduct(product, data.productId, priceAmount(price));
     if (splitPlan) {
       const listings = await syncEtsyGroups({ ref, product, productId: data.productId, plan: splitPlan, auth, price, readinessStateId, data });
-      return { success: true, listingId: listings[0].listingId, listings };
+      return { success: true, listingId: listings[0].listingId, listings: [...listings], partial: !!listings.partial };
     }
 
     // A previous attempt may have created the Etsy draft and then failed on photos

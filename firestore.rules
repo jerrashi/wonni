@@ -80,6 +80,14 @@ service cloud.firestore {
       allow create: if request.auth != null && request.auth.uid == request.resource.data.userId;
     }
 
+    // ── Background posting jobs (post_jobs.js) ───────────────────────────────────
+    // Written ONLY by Cloud Functions (startPostJob + the worker); the owner can
+    // read their jobs to show progress.
+    match /postJobs/{jobId} {
+      allow read: if request.auth != null && request.auth.uid == resource.data.userId;
+      allow write: if false;
+    }
+
     // ── Marketplace orders (buyer/seller transactions, #69) ─────────────────────
     // Deliberately distinct from `orders` above (dropship fulfillment tracking) —
     // this is the future in-app checkout schema. Reserved now for account

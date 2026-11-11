@@ -63,3 +63,25 @@ export function getPlatformListingUrl(platformId, product) {
       return null;
   }
 }
+
+/**
+ * Every live listing URL of a product on a platform. A product over a
+ * platform's variation limits is posted as several listings (eBay:
+ * `ebayGroups`, Etsy: `etsyListings`, each `{groupKey, listingId}`); everything
+ * else is the single listing `getPlatformListingUrl` returns.
+ *
+ * @returns {{label: string, url: string}[]}  one entry per listing, in order
+ */
+export function getPlatformListingUrls(platformId, product) {
+  if (!product) return [];
+  const split = platformId === "ebay" ? product.ebayGroups
+    : platformId === "etsy" ? product.etsyListings
+      : null;
+  const base = platformId === "ebay" ? "https://www.ebay.com/itm/" : "https://www.etsy.com/listing/";
+  const rows = (Array.isArray(split) ? split : [])
+    .filter((g) => g && /^\d+$/.test(String(g.listingId ?? "").trim()))
+    .map((g, i, all) => ({ label: `Part ${i + 1} of ${all.length}`, url: `${base}${String(g.listingId).trim()}` }));
+  if (rows.length > 1) return rows;
+  const one = getPlatformListingUrl(platformId, product);
+  return one ? [{ label: "Listing", url: one }] : [];
+}

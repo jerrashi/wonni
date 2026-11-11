@@ -57,6 +57,7 @@ const { recordMercariSalesBatch } = require("./mercari_sales");
 const { syncSales, getOrderTakeHome } = require("./sale_poller");
 const { postToWonni } = require("./wonni_listing");
 const { deleteProductEverywhere } = require("./cascade_delete");
+const { startPostJob, onPostJobCreated } = require("./post_jobs");
 const { watchStockSourcesScheduled } = require("./stock_watch");
 const { applyCrossPostRules } = require("./cross_post");
 const { recordWeverseOrderPlaced, listWeverseOrderTasks } = require("./weverse_order_tasks");
@@ -153,6 +154,8 @@ module.exports = {
   reassignSaleStage,
   postToWonni,
   deleteProductEverywhere,
+  startPostJob,
+  onPostJobCreated,
 
   // Stock watcher
   watchStockSourcesScheduled,

@@ -86,6 +86,12 @@ module.exports = {
       response: CrossPostStatusResponseSchema,
     },
     {
+      name: "startPostJob",
+      summary: "Post a product to eBay or Etsy as a BACKGROUND job (for products split across several listings). Returns a job id at once; progress is on postJobs/{jobId} (status queued|running|partial|done|failed, groupsDone/groupsTotal, groups[]). An unfinished job for the same product+platform is returned instead of starting a second.",
+      request: ProductRefRequestSchema.extend({ platform: z.enum(["ebay", "etsy"]) }),
+      response: z.object({ jobId: z.string(), alreadyRunning: z.boolean() }),
+    },
+    {
       name: "deleteProductEverywhere",
       summary: "Stop selling a product everywhere: delete its live eBay / Etsy / TikTok listings in parallel, then the products/{id} doc. If any platform delete fails the doc is KEPT (retry-safe) and the failures are returned. Mercari has no delete automation, so it is reported in manualRemoval.",
       request: ProductRefRequestSchema,

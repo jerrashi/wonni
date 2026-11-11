@@ -121,6 +121,12 @@
     "EbayUpdateListingResponse": {
       "$ref": "#/definitions/EbayUpdateListingResponse"
     },
+    "StartPostJobRequest": {
+      "$ref": "#/definitions/StartPostJobRequest"
+    },
+    "StartPostJobResponse": {
+      "$ref": "#/definitions/StartPostJobResponse"
+    },
     "DeleteProductEverywhereRequest": {
       "$ref": "#/definitions/DeleteProductEverywhereRequest"
     },
@@ -1680,6 +1686,43 @@
         "productId",
         "platform",
         "status"
+      ],
+      "additionalProperties": false
+    },
+    "StartPostJobRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "ebay",
+            "etsy"
+          ]
+        }
+      },
+      "required": [
+        "productId",
+        "platform"
+      ],
+      "additionalProperties": false
+    },
+    "StartPostJobResponse": {
+      "type": "object",
+      "properties": {
+        "jobId": {
+          "type": "string"
+        },
+        "alreadyRunning": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "jobId",
+        "alreadyRunning"
       ],
       "additionalProperties": false
     },

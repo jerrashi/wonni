@@ -1551,8 +1551,17 @@ async function postMultiVariant(ctx) {
   // into a map) — keep one whole array and rewrite it.
   let nextVariants = productVariants.slice();
   const groups = [];
+  const priorGroups = new Map((product.ebayGroups || []).map((g) => [g.groupKey, g.listingId]));
   for (let gi = 0; gi < plan.length; gi++) {
     const { key, items } = plan[gi];
+    const last = gi === plan.length - 1;
+
+    // A group a previous run of this background job already published.
+    if ((ctx.skipGroupKeys || []).includes(key) && priorGroups.get(key)) {
+      groups.push({ groupKey: key, listingId: priorGroups.get(key) });
+      continue;
+    }
+
     const result = await postVariantGroup(
       { ...ctx, title: groupTitle(title, gi, plan.length) },
       { groupKey: key, activeVariants: items },
@@ -1566,7 +1575,9 @@ async function postMultiVariant(ctx) {
     groups.push({ groupKey: key, listingId: result.listingId });
     const first = groups[0];
     await docRef.update({
-      "crossPostStatus.ebay": "active",
+      // "active" only once EVERY listing is up: a half-posted product must not
+      // look done (a retry/continuation resumes from the saved pointers).
+      "crossPostStatus.ebay": last ? "active" : "pending",
       "crossPostListingIds.ebay": first.listingId,
       ebayInventoryItemGroupKey: first.groupKey,
       // Only written when split; a single listing keeps the old shape.
@@ -1582,6 +1593,12 @@ async function postMultiVariant(ctx) {
       ebayLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
+    if (ctx.onProgress) await ctx.onProgress({ groupCount: plan.length, groups: groups.slice() });
+    // Out of time budget with listings still to post: stop cleanly; the job
+    // runner queues a continuation that skips what is already live.
+    if (!last && ctx.shouldStop && ctx.shouldStop()) {
+      return { partial: true, groupCount: plan.length, groups, listingId: first.listingId };
+    }
   }
 
   const first = groups[0];
@@ -1599,7 +1616,7 @@ async function postMultiVariant(ctx) {
 // that needs to post to eBay without going through another Cloud Function
 // over HTTP. Assumes `uid`/`productId` are already validated/authenticated —
 // mirrors the `recordSale` / `recordSaleCore` split in sales.js.
-async function ebayCreateListingCore(uid, productId) {
+async function ebayCreateListingCore(uid, productId, opts = {}) {
   if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
 
   const db = admin.firestore();
@@ -1639,6 +1656,9 @@ async function ebayCreateListingCore(uid, productId) {
   const ctx = {
     uid, product, productId, docRef, basePrice, categoryId, listingPolicies,
     merchantLocationKey, title, description, categoryAspects, brand, conditionEnum, conditionDescriptors,
+    // Background-job hooks (post_jobs.js): progress after each group, a time
+    // budget check between groups, and groups a previous run of this job finished.
+    onProgress: opts.onProgress, shouldStop: opts.shouldStop, skipGroupKeys: opts.skipGroupKeys || [],
   };
   const hasVariations = buildEbayVariations(product) !== null;
   return hasVariations ? postMultiVariant(ctx) : postSingleVariant(ctx);
