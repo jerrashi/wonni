@@ -368,6 +368,20 @@ function shouldAdvanceStatus(current, next) {
 }
 
 /**
+ * Dedupe id for an imported sale. Historic ids are global (`<platform>_<order>`),
+ * so another account's sale can already hold that key. Use the plain id when it
+ * is free or already ours (keeps every existing sale and its dedupe), otherwise
+ * a uid-prefixed id. Never throws and never reveals that another account holds
+ * the id, so an id can neither be probed nor squatted to block someone's sync.
+ */
+async function resolveSaleId(db, uid, platform, platformOrderId) {
+  const plain = `${platform}_${platformOrderId}`;
+  const snap = await db.collection("sales").doc(plain).get();
+  if (!snap.exists || snap.data()?.userId === uid) return plain;
+  return `${uid}_${plain}`;
+}
+
+/**
  * Core sale-write + cascade. Shared by `recordSale` (one sale) and
  * `recordMercariSalesBatch` (many). `fields` uses the canonical SaleDoc names.
  * `product` is the already-fetched + ownership-checked product doc (or null).
@@ -389,16 +403,10 @@ async function recordSaleCore(db, uid, fields, product) {
 
   // Dedupe key: platform + order id when present (auto-imported sales).
   const saleId = platformOrderId
-    ? `${platform}_${platformOrderId}`
+    ? await resolveSaleId(db, uid, platform, platformOrderId)
     : db.collection("sales").doc().id;
   const saleRef = db.collection("sales").doc(saleId);
   const existing = await saleRef.get();
-  // Sale ids are global (`<platform>_<order id>`). A re-record may only touch the
-  // caller's own sale; another user's doc with the same id must never be merged
-  // into (it would overwrite their price, buyer and tracking).
-  if (existing.exists && existing.data()?.userId !== uid) {
-    throw new HttpsError("permission-denied", "That order id belongs to a different account.");
-  }
 
   const now = admin.firestore.FieldValue.serverTimestamp();
 
@@ -724,6 +732,7 @@ exports.reassignSaleStage = onCall(validated("reassignSaleStage", async (data, r
 
 // Internal — reused by mercari_sales.js recordMercariSalesBatch.
 exports._internal = {
+  resolveSaleId,
   applyQuantityDelta, cascade, resolveStock, toTimestamp, recordSaleCore,
   loadOwnedProduct, shouldAdvanceStatus, applyMercariFlags, updateSaleStatusCore,
   reassignSaleStageCore,

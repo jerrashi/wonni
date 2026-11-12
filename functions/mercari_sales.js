@@ -18,7 +18,7 @@ const admin = require("firebase-admin");
 const { validated, MercariScrapeItemSchema } = require("./contracts");
 const { _internal, EBAY_SECRETS } = require("./sales");
 
-const { recordSaleCore } = _internal;
+const { recordSaleCore, resolveSaleId } = _internal;
 
 /** Best-effort parse of a scraped date string ("7/8/2026", "Jul 8, 2026"). */
 function looseDate(text) {
@@ -48,9 +48,14 @@ function buildMercariMatchMap(productDocs) {
   return map;
 }
 
-/** Order id when the client has it, else the item id — same key recordSaleCore dedupes on. */
+/** Order id when the client has it, else the item id — the plain key recordSaleCore starts from. */
 function mercariSaleKey(item) {
   return `mercari_${item.mercariOrderId ?? item.mercariItemId}`;
+}
+
+/** The key this user's sale actually lives under (see sales.resolveSaleId). */
+function mercariSaleId(db, uid, item) {
+  return resolveSaleId(db, uid, "mercari", item.mercariOrderId ?? item.mercariItemId);
 }
 
 /**
@@ -102,7 +107,7 @@ async function reviewMercariSalesCore(db, uid, items) {
       continue;
     }
     const item = parsed.data;
-    const key = mercariSaleKey(item);
+    const key = await mercariSaleId(db, uid, item);
     const match = matchMap.get(item.mercariItemId) ?? null;
     const base = {
       mercariItemId: item.mercariItemId,
@@ -110,9 +115,8 @@ async function reviewMercariSalesCore(db, uid, items) {
       variantSku: match?.variantSku ?? null,
       productTitle: match ? productById.get(match.productId)?.title ?? null : null,
     };
-    // Only the caller's own sale counts. Sale ids are global, so another user's
-    // doc with the same key must not read as "recorded" (it would leak that it
-    // exists and move the scan's stop point).
+    // `key` is already resolved to this user's own id, so another account's sale
+    // with the same plain id can never read as "recorded".
     const saleSnap = await db.collection("sales").doc(key).get();
     if (saleSnap.exists && saleSnap.data()?.userId === uid) {
       rows.push({ ...base, reviewState: "recorded" });

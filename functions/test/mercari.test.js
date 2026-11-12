@@ -178,16 +178,25 @@ test("reviewMercariSales: another user's sale with the same id is NOT 'recorded'
   assert.equal(r.firstRecordedIndex, 1);
 });
 
-test("recordSaleCore: refuses to merge into another user's sale and leaves it untouched", async () => {
+test("recordSaleCore: an order id held by another account never touches it, and the caller's sale still records", async () => {
   const db = new FakeFirestore();
   await db.collection("sales").doc("mercari_o1").set({ userId: "victim", priceSoldFor: 50, buyerName: "Real Buyer" });
   const { _internal: s } = require("../sales");
-  await assert.rejects(
-    s.recordSaleCore(db, "attacker", { platform: "mercari", platformOrderId: "o1", soldPrice: 1, buyerName: "Evil" }, null),
-    /different account/,
-  );
-  const after = (await db.collection("sales").doc("mercari_o1").get()).data();
-  assert.equal(after.priceSoldFor, 50);
-  assert.equal(after.buyerName, "Real Buyer");
-  assert.equal(after.userId, "victim");
+  const r = await s.recordSaleCore(db, "attacker", { platform: "mercari", platformOrderId: "o1", soldPrice: 1, buyerName: "Evil" }, null);
+  assert.equal(r.created, true);
+  assert.equal(r.saleId, "attacker_mercari_o1");
+  const victim = (await db.collection("sales").doc("mercari_o1").get()).data();
+  assert.deepEqual([victim.userId, victim.priceSoldFor, victim.buyerName], ["victim", 50, "Real Buyer"]);
+  // and the attacker re-recording stays on their own doc
+  const again = await s.recordSaleCore(db, "attacker", { platform: "mercari", platformOrderId: "o1", soldPrice: 2 }, null);
+  assert.deepEqual([again.saleId, again.created], ["attacker_mercari_o1", false]);
+});
+
+test("resolveSaleId: free or own plain id is kept (existing sales dedupe unchanged)", async () => {
+  const db = new FakeFirestore();
+  const { _internal: s } = require("../sales");
+  assert.equal(await s.resolveSaleId(db, "u1", "ebay", "9"), "ebay_9");
+  await db.collection("sales").doc("ebay_9").set({ userId: "u1" });
+  assert.equal(await s.resolveSaleId(db, "u1", "ebay", "9"), "ebay_9");
+  assert.equal(await s.resolveSaleId(db, "u2", "ebay", "9"), "u2_ebay_9");
 });
