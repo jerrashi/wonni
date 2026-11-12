@@ -21,6 +21,7 @@ const {
   MercariScrapeItemSchema,
   MercariRowLooseSchema,
   MercariBatchResultSchema,
+  MercariReviewRowSchema,
   ListingFieldsSchema,
   OptionSchema,
   VariantSchema,
@@ -139,6 +140,8 @@ const REQUEST_REFS = {
 };
 const RESPONSE_REFS = {
   recordMercariSalesBatch: { MercariBatchResult: MercariBatchResultSchema },
+  // "rows" would otherwise synthesize a Swift struct named `Row`.
+  reviewMercariSales: { MercariReviewRow: MercariReviewRowSchema },
   listWeverseOrderTasks: { WeverseOrderTaskWithId: WeverseOrderTaskWithIdSchema },
   syncSales: { SyncSalesPlatformError: SyncSalesPlatformErrorSchema },
   ebayGetListing: { EbayVariantGroup: EbayListingVariantGroupSchema },

@@ -92,6 +92,7 @@ module.exports = {
   MercariScrapeItemSchema: mercari.MercariScrapeItemSchema,
   MercariRowLooseSchema: mercari.MercariRowLooseSchema,
   MercariBatchResultSchema: mercari.MercariBatchResultSchema,
+  MercariReviewRowSchema: mercari.MercariReviewRowSchema,
   ListingFieldsSchema: enrichment.ListingFieldsSchema,
   OptionSchema: products.OptionSchema,
   VariantSchema: products.VariantSchema,

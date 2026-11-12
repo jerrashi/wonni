@@ -53,7 +53,7 @@ const {
   updateSaleStatus,
   reassignSaleStage,
 } = require("./sales");
-const { recordMercariSalesBatch } = require("./mercari_sales");
+const { recordMercariSalesBatch, reviewMercariSales, setMercariSalesDiscarded } = require("./mercari_sales");
 const { syncSales, syncSalesScheduled, getOrderTakeHome } = require("./sale_poller");
 const { postToWonni } = require("./wonni_listing");
 const { deleteProductEverywhere } = require("./cascade_delete");
@@ -148,6 +148,8 @@ module.exports = {
   markSoldOutAndCascade,
   pushEbayQuantityUpdate,
   recordMercariSalesBatch,
+  reviewMercariSales,
+  setMercariSalesDiscarded,
   syncSales,
   syncSalesScheduled,
   getOrderTakeHome,

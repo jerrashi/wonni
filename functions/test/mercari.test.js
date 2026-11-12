@@ -95,3 +95,74 @@ test("recordMercariSalesBatch request: accepts items OR rawItems, rejects an emp
   assert.equal(schema.safeParse({ items: [], rawItems: [] }).success, false);
   assert.equal(schema.safeParse({}).success, false);
 });
+
+// ── Refresh: review, link pointer, discard ─────────────────────────────────
+
+const { FakeFirestore } = require("./helpers/fake-firestore");
+const { mercariSaleKey, mercariPointerPatch, reviewMercariSalesCore, setMercariSalesDiscardedCore } = _internal;
+
+const row = (id, extra = {}) => ({ mercariItemId: id, priceSoldFor: 12, title: `t ${id}`, ...extra });
+
+async function seed() {
+  const db = new FakeFirestore();
+  await db.collection("products").doc("p1").set({ userId: "u1", title: "Tee", crossPostListingIds: { mercari: "m_known" } });
+  return db;
+}
+
+test("mercariSaleKey: the order id wins, else the item id (matches recordSaleCore's dedupe key)", () => {
+  assert.equal(mercariSaleKey({ mercariItemId: "m1", mercariOrderId: "o9" }), "mercari_o9");
+  assert.equal(mercariSaleKey({ mercariItemId: "m1" }), "mercari_m1");
+});
+
+test("reviewMercariSales: new / recorded / discarded / invalid, matched product titled, stop index = first recorded", async () => {
+  const db = await seed();
+  await db.collection("sales").doc("mercari_m_old").set({ userId: "u1" });
+  await setMercariSalesDiscardedCore(db, "u1", [{ mercariItemId: "m_no" }], true);
+
+  const r = await reviewMercariSalesCore(db, "u1", [
+    row("m_known"),            // new, matches p1
+    row("m_no"),               // discarded
+    { mercariItemId: "m_bad" },// invalid: no price
+    row("m_old"),              // already a sale → stop here
+    row("m_older"),            // new, but behind the stop point
+  ]);
+  assert.deepEqual(r.rows.map((x) => x.reviewState), ["new", "discarded", "invalid", "recorded", "new"]);
+  assert.equal(r.rows[0].productId, "p1");
+  assert.equal(r.rows[0].productTitle, "Tee");
+  assert.equal(r.rows[1].productId, null);
+  assert.equal(r.firstRecordedIndex, 3);
+});
+
+test("reviewMercariSales: all new → firstRecordedIndex null (keep scrolling)", async () => {
+  const db = await seed();
+  const r = await reviewMercariSalesCore(db, "u1", [row("m_a"), row("m_b")]);
+  assert.equal(r.firstRecordedIndex, null);
+});
+
+test("setMercariSalesDiscarded: Restore removes the tombstone", async () => {
+  const db = await seed();
+  await setMercariSalesDiscardedCore(db, "u1", [{ mercariItemId: "m_x" }], true);
+  assert.equal((await reviewMercariSalesCore(db, "u1", [row("m_x")])).rows[0].reviewState, "discarded");
+  await setMercariSalesDiscardedCore(db, "u1", [{ mercariItemId: "m_x" }], false);
+  assert.equal((await reviewMercariSalesCore(db, "u1", [row("m_x")])).rows[0].reviewState, "new");
+});
+
+test("mercariPointerPatch: fills an empty product pointer; never overwrites an existing one", () => {
+  assert.deepEqual(mercariPointerPatch({ title: "x" }, null, "m1"), { crossPostListingIds: { mercari: "m1" } });
+  assert.deepEqual(
+    mercariPointerPatch({ crossPostListingIds: { ebay: "e1" } }, null, "m1"),
+    { crossPostListingIds: { ebay: "e1", mercari: "m1" } },
+  );
+  assert.equal(mercariPointerPatch({ crossPostListingIds: { mercari: "live" } }, null, "m1"), null);
+  assert.equal(mercariPointerPatch({ mercariListingId: "legacy" }, null, "m1"), null);
+});
+
+test("mercariPointerPatch: variant link rebuilds the WHOLE variants array, other variants untouched", () => {
+  const product = { variants: [{ sku: "S", price: 1 }, { sku: "M", price: 2, crossPostListingIds: { mercari: "mM" } }] };
+  const patch = mercariPointerPatch(product, "S", "m1");
+  assert.equal(patch.variants.length, 2);
+  assert.equal(patch.variants[0].crossPostListingIds.mercari, "m1");
+  assert.equal(patch.variants[0].price, 1);
+  assert.deepEqual(patch.variants[1], product.variants[1]);
+  assert.equal(mercariPointerPatch(product, "M", "m2"), null);   // already linked
+});

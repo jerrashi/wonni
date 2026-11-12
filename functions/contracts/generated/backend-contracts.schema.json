@@ -64,6 +64,21 @@
     "ReassignSaleStageResponse": {
       "$ref": "#/definitions/ReassignSaleStageResponse"
     },
+    "ReviewMercariSalesRequest": {
+      "$ref": "#/definitions/ReviewMercariSalesRequest"
+    },
+    "ReviewMercariSalesResponse": {
+      "$ref": "#/definitions/ReviewMercariSalesResponse"
+    },
+    "MercariReviewRow": {
+      "$ref": "#/definitions/MercariReviewRow"
+    },
+    "SetMercariSalesDiscardedRequest": {
+      "$ref": "#/definitions/SetMercariSalesDiscardedRequest"
+    },
+    "SetMercariSalesDiscardedResponse": {
+      "$ref": "#/definitions/SetMercariSalesDiscardedResponse"
+    },
     "RecordMercariSalesBatchRequest": {
       "$ref": "#/definitions/RecordMercariSalesBatchRequest"
     },
@@ -1042,6 +1057,169 @@
         "count"
       ]
     },
+    "ReviewMercariSalesRequest": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "minItems": 1,
+          "maxItems": 200,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mercariItemId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "mercariItemId"
+            ],
+            "additionalProperties": {}
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
+    "ReviewMercariSalesResponse": {
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MercariReviewRow"
+          }
+        },
+        "firstRecordedIndex": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "rows",
+        "firstRecordedIndex"
+      ]
+    },
+    "MercariReviewRow": {
+      "type": "object",
+      "properties": {
+        "mercariItemId": {
+          "type": "string"
+        },
+        "reviewState": {
+          "type": "string",
+          "enum": [
+            "new",
+            "recorded",
+            "discarded",
+            "invalid"
+          ]
+        },
+        "productId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "variantSku": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "productTitle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "warning": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "mercariItemId",
+        "reviewState"
+      ]
+    },
+    "SetMercariSalesDiscardedRequest": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "minItems": 1,
+          "maxItems": 200,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mercariItemId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "mercariOrderId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "priceSoldFor": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "mercariItemId"
+            ]
+          }
+        },
+        "discarded": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items",
+        "discarded"
+      ]
+    },
+    "SetMercariSalesDiscardedResponse": {
+      "type": "object",
+      "properties": {
+        "updated": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "updated"
+      ]
+    },
     "RecordMercariSalesBatchRequest": {
       "type": "object",
       "properties": {
@@ -1057,6 +1235,30 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/MercariBatchRow"
+          }
+        },
+        "links": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "productId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "variantSku": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "productId"
+            ]
           }
         }
       }
@@ -1141,6 +1343,12 @@
         "warning": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "pointerWritten": {
+          "type": [
+            "boolean",
             "null"
           ]
         }
