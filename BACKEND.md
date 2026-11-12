@@ -755,7 +755,11 @@ sellers. Two levers, both deliberate product direction:
   Etsy rejection is reported, not thrown). Ids live in `etsyTestDrafts`; live
   fields are untouched; a re-run deletes earlier test drafts first. Web: "..." menu
   "Test Etsy post (drafts only, no fee)" / "Delete Etsy test drafts". Deleting a
-  draft needs the `listings_d` scope (a fresh re-link has it).
+  draft needs the `listings_d` scope (a fresh re-link has it). **Developer-only
+  (user decision 2026-11-12):** the menu items show only in debug mode
+  (`web/src/lib/debugMode.js`: open any dashboard URL with `?debug=1`, `?debug=0`
+  turns it off); the response field is `testDrafts` (a field named `listings`
+  generated a Swift `Listing` that clashed with the SwiftData model).
 - **Web links for split products:** `web/src/lib/platformLinks.js
   getPlatformListingUrls(platform, product)` returns one `{label, url}` per
   listing (eBay `ebayGroups`, Etsy `etsyListings`); the chip/menu UI waits on the mock.

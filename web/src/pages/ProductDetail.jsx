@@ -1,3 +1,4 @@
+import { isDebugMode } from "../lib/debugMode";
 import { useCallback, useEffect, useMemo, useRef, useState, Component, Fragment } from "react";
 import { collection, deleteField, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from "firebase/firestore";
 import { useBlocker, useNavigate, useParams } from "react-router-dom";
@@ -5290,12 +5291,12 @@ function ProductDetail() {
                 onClick: handleMarkOutOfStock,
                 disabled: markingOutOfStock
               }] : []),
-              ...((Array.isArray(product?.variants) ? product.variants.filter((v) => v.active !== false).length : 0) > 1 ? [{
+              ...(isDebugMode() && (Array.isArray(product?.variants) ? product.variants.filter((v) => v.active !== false).length : 0) > 1 ? [{
                 label: etsyDryRunning ? "⏳ Testing Etsy…" : "🧪 Test Etsy post (drafts only, no fee)",
                 onClick: () => handleEtsyDryRun("create"),
                 disabled: etsyDryRunning
               }] : []),
-              ...(Array.isArray(product?.etsyTestDrafts) && product.etsyTestDrafts.length ? [{
+              ...(isDebugMode() && Array.isArray(product?.etsyTestDrafts) && product.etsyTestDrafts.length ? [{
                 label: "🧹 Delete Etsy test drafts",
                 onClick: () => handleEtsyDryRun("delete"),
                 disabled: etsyDryRunning
