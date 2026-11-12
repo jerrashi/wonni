@@ -54,8 +54,14 @@ service cloud.firestore {
     match /sales/{saleId} {
       allow read: if request.auth != null
                   && request.auth.uid == resource.data.userId;
+      // A client may only create sales/{ITS OWN uid}_<anything>. The backend files
+      // imported sales under <platform>_<order> or <uid>_<platform>_<order>; this keeps
+      // a client from pre-planting a doc at an id the backend will later use for
+      // someone else (squatting). Admin-SDK writes bypass rules. iOS builds before
+      // 2026-11-12 create auto-id sales and will be refused until updated.
       allow create: if request.auth != null
-                    && request.auth.uid == request.resource.data.userId;
+                    && request.auth.uid == request.resource.data.userId
+                    && saleId.matches(request.auth.uid + '_.*');
       allow update, delete: if request.auth != null
                              && request.auth.uid == resource.data.userId;
     }

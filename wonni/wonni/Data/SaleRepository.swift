@@ -23,7 +23,10 @@ class SaleRepository: ObservableObject {
         s.userId = userId
         s.createdAt = Timestamp(date: Date())
         s.updatedAt = Timestamp(date: Date())
-        let ref = db.collection(col).document()
+        // Id must start with the user's own uid: firestore.rules only allow a client to
+        // create sales/{uid}_..., so nobody can pre-plant a doc at an id the backend
+        // uses for someone else's imported sale (2026-11-12 security review).
+        let ref = db.collection(col).document("\(userId)_\(db.collection(col).document().documentID)")
         // The non-`await` Codable setData(from:) overload only synchronously encodes and
         // kicks off a fire-and-forget local-cache write — `try` here only ever caught encoding
         // errors, never a failed server write. Using the async overload actually confirms the
