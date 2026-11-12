@@ -381,7 +381,8 @@
         "shippingLabelCost": {
           "anyOf": [
             {
-              "$ref": "#/definitions/RecordSaleRequest/properties/shippingRevenue/anyOf/0"
+              "type": "number",
+              "minimum": 0
             },
             {
               "type": "null"
@@ -395,9 +396,10 @@
           ]
         },
         "quantity": {
+          "default": 1,
           "type": "integer",
           "exclusiveMinimum": 0,
-          "default": 1
+          "maximum": 9007199254740991
         },
         "soldAt": {
           "anyOf": [
@@ -405,11 +407,13 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "format": "date-time"
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
                 },
                 {
                   "type": "integer",
-                  "exclusiveMinimum": 0
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
                 }
               ]
             },
@@ -483,8 +487,7 @@
                     "null"
                   ]
                 }
-              },
-              "additionalProperties": false
+              }
             },
             {
               "type": "null"
@@ -525,15 +528,14 @@
           ]
         },
         "cascade": {
-          "type": "boolean",
-          "default": true
+          "default": true,
+          "type": "boolean"
         }
       },
       "required": [
         "platform",
         "soldPrice"
-      ],
-      "additionalProperties": false
+      ]
     },
     "SaleCarrier": {
       "type": "string",
@@ -573,7 +575,9 @@
                 "previousQuantity": {
                   "anyOf": [
                     {
-                      "type": "integer"
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
                     },
                     {
                       "type": "null"
@@ -583,7 +587,9 @@
                 "newQuantity": {
                   "anyOf": [
                     {
-                      "type": "integer"
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
                     },
                     {
                       "type": "null"
@@ -595,6 +601,9 @@
                 },
                 "platforms": {
                   "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
                   "additionalProperties": {
                     "type": "string",
                     "enum": [
@@ -612,8 +621,7 @@
                 "newQuantity",
                 "soldOut",
                 "platforms"
-              ],
-              "additionalProperties": false
+              ]
             },
             {
               "type": "null"
@@ -625,8 +633,7 @@
         "saleId",
         "created",
         "cascade"
-      ],
-      "additionalProperties": false
+      ]
     },
     "DecrementAndCascadeRequest": {
       "type": "object",
@@ -656,8 +663,7 @@
       "required": [
         "productId",
         "platform"
-      ],
-      "additionalProperties": false
+      ]
     },
     "DecrementAndCascadeResponse": {
       "type": "object",
@@ -683,7 +689,9 @@
             "previousQuantity": {
               "anyOf": [
                 {
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
                 },
                 {
                   "type": "null"
@@ -693,7 +701,9 @@
             "newQuantity": {
               "anyOf": [
                 {
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
                 },
                 {
                   "type": "null"
@@ -705,6 +715,9 @@
             },
             "platforms": {
               "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
               "additionalProperties": {
                 "type": "string",
                 "enum": [
@@ -722,15 +735,13 @@
             "newQuantity",
             "soldOut",
             "platforms"
-          ],
-          "additionalProperties": false
+          ]
         }
       },
       "required": [
         "success",
         "cascade"
-      ],
-      "additionalProperties": false
+      ]
     },
     "RestockAndCascadeRequest": {
       "type": "object",
@@ -741,7 +752,8 @@
         },
         "quantity": {
           "type": "integer",
-          "exclusiveMinimum": 0
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
         },
         "variantSku": {
           "type": [
@@ -753,8 +765,7 @@
       "required": [
         "productId",
         "quantity"
-      ],
-      "additionalProperties": false
+      ]
     },
     "RestockAndCascadeResponse": {
       "type": "object",
@@ -766,8 +777,7 @@
       },
       "required": [
         "success"
-      ],
-      "additionalProperties": false
+      ]
     },
     "MarkSoldOutAndCascadeRequest": {
       "type": "object",
@@ -779,8 +789,7 @@
       },
       "required": [
         "productId"
-      ],
-      "additionalProperties": false
+      ]
     },
     "MarkSoldOutAndCascadeResponse": {
       "type": "object",
@@ -792,8 +801,7 @@
       },
       "required": [
         "success"
-      ],
-      "additionalProperties": false
+      ]
     },
     "SyncSalesRequest": {
       "type": "object",
@@ -818,11 +826,13 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "format": "date-time"
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
                 },
                 {
                   "type": "integer",
-                  "exclusiveMinimum": 0
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
                 }
               ]
             },
@@ -831,17 +841,20 @@
             }
           ]
         }
-      },
-      "additionalProperties": false
+      }
     },
     "SyncSalesResponse": {
       "type": "object",
       "properties": {
         "imported": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
         },
         "skipped": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
         },
         "saleIds": {
           "type": "array",
@@ -861,8 +874,7 @@
         "skipped",
         "saleIds",
         "errors"
-      ],
-      "additionalProperties": false
+      ]
     },
     "SyncSalesPlatformError": {
       "type": "object",
@@ -877,8 +889,7 @@
       "required": [
         "platform",
         "message"
-      ],
-      "additionalProperties": false
+      ]
     },
     "GetOrderTakeHomeRequest": {
       "type": "object",
@@ -896,8 +907,7 @@
         "platformOrderId": {
           "type": "string"
         }
-      },
-      "additionalProperties": false
+      }
     },
     "GetOrderTakeHomeResponse": {
       "type": "object",
@@ -929,8 +939,7 @@
         "fees",
         "shippingLabelCost",
         "provisional"
-      ],
-      "additionalProperties": false
+      ]
     },
     "UpdateSaleStatusRequest": {
       "type": "object",
@@ -948,8 +957,7 @@
       "required": [
         "saleId",
         "status"
-      ],
-      "additionalProperties": false
+      ]
     },
     "UpdateSaleStatusResponse": {
       "type": "object",
@@ -961,8 +969,7 @@
       },
       "required": [
         "success"
-      ],
-      "additionalProperties": false
+      ]
     },
     "PushEbayQuantityUpdateRequest": {
       "type": "object",
@@ -980,8 +987,7 @@
       },
       "required": [
         "productId"
-      ],
-      "additionalProperties": false
+      ]
     },
     "PushEbayQuantityUpdateResponse": {
       "type": "object",
@@ -997,8 +1003,7 @@
       },
       "required": [
         "outcome"
-      ],
-      "additionalProperties": false
+      ]
     },
     "ReassignSaleStageRequest": {
       "type": "object",
@@ -1017,8 +1022,7 @@
       "required": [
         "fromKey",
         "toKey"
-      ],
-      "additionalProperties": false
+      ]
     },
     "ReassignSaleStageResponse": {
       "type": "object",
@@ -1029,34 +1033,33 @@
         },
         "count": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "required": [
         "success",
         "count"
-      ],
-      "additionalProperties": false
+      ]
     },
     "RecordMercariSalesBatchRequest": {
       "type": "object",
       "properties": {
         "items": {
+          "maxItems": 200,
           "type": "array",
           "items": {
             "$ref": "#/definitions/MercariBatchRow"
-          },
-          "maxItems": 200
+          }
         },
         "rawItems": {
+          "maxItems": 200,
           "type": "array",
           "items": {
             "$ref": "#/definitions/MercariBatchRow"
-          },
-          "maxItems": 200
+          }
         }
-      },
-      "additionalProperties": false
+      }
     },
     "MercariBatchRow": {
       "type": "object",
@@ -1069,7 +1072,7 @@
       "required": [
         "mercariItemId"
       ],
-      "additionalProperties": true
+      "additionalProperties": {}
     },
     "RecordMercariSalesBatchResponse": {
       "type": "object",
@@ -1081,13 +1084,19 @@
           }
         },
         "recorded": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
         },
         "duplicates": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
         },
         "unmatched": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
         }
       },
       "required": [
@@ -1095,8 +1104,7 @@
         "recorded",
         "duplicates",
         "unmatched"
-      ],
-      "additionalProperties": false
+      ]
     },
     "MercariBatchResult": {
       "type": "object",
@@ -1140,8 +1148,7 @@
       "required": [
         "mercariItemId",
         "outcome"
-      ],
-      "additionalProperties": false
+      ]
     },
     "DetectMercariPullSyncDiffRequest": {
       "type": "object",
@@ -1196,15 +1203,13 @@
                 "null"
               ]
             }
-          },
-          "additionalProperties": false
+          }
         }
       },
       "required": [
         "productId",
         "scraped"
-      ],
-      "additionalProperties": false
+      ]
     },
     "DetectMercariPullSyncDiffResponse": {
       "type": "object",
@@ -1232,9 +1237,10 @@
               "mercariValue": {}
             },
             "required": [
-              "field"
-            ],
-            "additionalProperties": false
+              "field",
+              "productValue",
+              "mercariValue"
+            ]
           }
         },
         "inSync": {
@@ -1245,8 +1251,7 @@
         "productId",
         "diffs",
         "inSync"
-      ],
-      "additionalProperties": false
+      ]
     },
     "ImportMercariPullSyncRequest": {
       "type": "object",
@@ -1256,6 +1261,7 @@
           "minLength": 1
         },
         "fields": {
+          "minItems": 1,
           "type": "array",
           "items": {
             "type": "string",
@@ -1266,8 +1272,7 @@
               "photos",
               "status"
             ]
-          },
-          "minItems": 1
+          }
         },
         "scraped": {
           "type": "object",
@@ -1315,16 +1320,14 @@
                 "null"
               ]
             }
-          },
-          "additionalProperties": false
+          }
         }
       },
       "required": [
         "productId",
         "fields",
         "scraped"
-      ],
-      "additionalProperties": false
+      ]
     },
     "ImportMercariPullSyncResponse": {
       "type": "object",
@@ -1343,8 +1346,7 @@
       "required": [
         "ok",
         "updated"
-      ],
-      "additionalProperties": false
+      ]
     },
     "UpdateMercariListingStatusRequest": {
       "type": "object",
@@ -1434,8 +1436,7 @@
       "required": [
         "productId",
         "status"
-      ],
-      "additionalProperties": false
+      ]
     },
     "UpdateMercariListingStatusResponse": {
       "type": "object",
@@ -1447,8 +1448,7 @@
       },
       "required": [
         "ok"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EbayCreateListingRequest": {
       "type": "object",
@@ -1469,14 +1469,13 @@
           ]
         },
         "skipAutofill": {
-          "type": "boolean",
-          "default": false
+          "default": false,
+          "type": "boolean"
         }
       },
       "required": [
         "productId"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EbayCreateListingResponse": {
       "type": "object",
@@ -1500,6 +1499,9 @@
           "anyOf": [
             {
               "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
               "additionalProperties": {
                 "type": "string"
               }
@@ -1517,8 +1519,7 @@
       "required": [
         "listingId",
         "listingUrl"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EbayDeleteListingRequest": {
       "type": "object",
@@ -1530,8 +1531,7 @@
       },
       "required": [
         "productId"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EbayDeleteListingResponse": {
       "type": "object",
@@ -1543,8 +1543,7 @@
       },
       "required": [
         "ok"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EbayGetListingRequest": {
       "type": "object",
@@ -1556,8 +1555,7 @@
       },
       "required": [
         "productId"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EbayGetListingResponse": {
       "type": "object",
@@ -1576,7 +1574,9 @@
           "type": "string"
         },
         "totalSold": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
         },
         "group": {
           "anyOf": [
@@ -1594,8 +1594,7 @@
         "listingId",
         "status",
         "totalSold"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EbayVariantGroup": {
       "type": "object",
@@ -1632,8 +1631,7 @@
             }
           ]
         }
-      },
-      "additionalProperties": false
+      }
     },
     "EbayUpdateListingRequest": {
       "type": "object",
@@ -1645,8 +1643,7 @@
       },
       "required": [
         "productId"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EbayUpdateListingResponse": {
       "type": "object",
@@ -1686,8 +1683,7 @@
         "productId",
         "platform",
         "status"
-      ],
-      "additionalProperties": false
+      ]
     },
     "StartPostJobRequest": {
       "type": "object",
@@ -1707,8 +1703,7 @@
       "required": [
         "productId",
         "platform"
-      ],
-      "additionalProperties": false
+      ]
     },
     "StartPostJobResponse": {
       "type": "object",
@@ -1723,8 +1718,7 @@
       "required": [
         "jobId",
         "alreadyRunning"
-      ],
-      "additionalProperties": false
+      ]
     },
     "DeleteProductEverywhereRequest": {
       "type": "object",
@@ -1736,8 +1730,7 @@
       },
       "required": [
         "productId"
-      ],
-      "additionalProperties": false
+      ]
     },
     "DeleteProductEverywhereResponse": {
       "type": "object",
@@ -1766,8 +1759,7 @@
             "required": [
               "platform",
               "error"
-            ],
-            "additionalProperties": false
+            ]
           }
         },
         "manualRemoval": {
@@ -1782,8 +1774,7 @@
         "removedFrom",
         "failed",
         "manualRemoval"
-      ],
-      "additionalProperties": false
+      ]
     },
     "PostToWonniRequest": {
       "type": "object",
@@ -1795,8 +1786,7 @@
       },
       "required": [
         "productId"
-      ],
-      "additionalProperties": false
+      ]
     },
     "PostToWonniResponse": {
       "type": "object",
@@ -1814,8 +1804,7 @@
       "required": [
         "listingId",
         "alreadyPosted"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EbayImportListingRequest": {
       "type": "object",
@@ -1827,8 +1816,7 @@
       },
       "required": [
         "itemId"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EbayImportListingResponse": {
       "type": "object",
@@ -1860,8 +1848,7 @@
         "description",
         "imageUrls",
         "condition"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EbayCheckDriftRequest": {
       "type": "object",
@@ -1873,8 +1860,7 @@
       },
       "required": [
         "productId"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EbayCheckDriftResponse": {
       "type": "object",
@@ -1917,8 +1903,7 @@
               "wonni",
               "external",
               "value"
-            ],
-            "additionalProperties": false
+            ]
           }
         },
         "ebayData": {
@@ -1958,8 +1943,7 @@
             "quantity",
             "status",
             "listingId"
-          ],
-          "additionalProperties": false
+          ]
         },
         "wonniData": {
           "type": "object",
@@ -1982,8 +1966,7 @@
             "price",
             "quantity",
             "status"
-          ],
-          "additionalProperties": false
+          ]
         }
       },
       "required": [
@@ -1991,8 +1974,7 @@
         "diff",
         "ebayData",
         "wonniData"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EbayApplyDriftRequest": {
       "type": "object",
@@ -2011,17 +1993,17 @@
               "type": "number"
             },
             "quantity": {
-              "type": "integer"
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
             }
-          },
-          "additionalProperties": false
+          }
         }
       },
       "required": [
         "productId",
         "fields"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EbayApplyDriftResponse": {
       "type": "object",
@@ -2040,8 +2022,7 @@
       "required": [
         "ok",
         "applied"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EtsyCreateListingRequest": {
       "type": "object",
@@ -2051,42 +2032,24 @@
           "minLength": 1
         },
         "taxonomyId": {
-          "anyOf": [
-            {
-              "type": [
-                "string",
-                "number"
-              ]
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "number",
+            "null"
           ]
         },
         "shippingProfileId": {
-          "anyOf": [
-            {
-              "type": [
-                "string",
-                "number"
-              ]
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "number",
+            "null"
           ]
         },
         "returnPolicyId": {
-          "anyOf": [
-            {
-              "type": [
-                "string",
-                "number"
-              ]
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "number",
+            "null"
           ]
         },
         "whoMade": {
@@ -2130,8 +2093,7 @@
       },
       "required": [
         "productId"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EtsyCreateListingResponse": {
       "type": "object",
@@ -2153,8 +2115,7 @@
       "required": [
         "success",
         "listingId"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EtsyUpdateListingRequest": {
       "type": "object",
@@ -2172,8 +2133,7 @@
       },
       "required": [
         "productId"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EtsyUpdateListingResponse": {
       "type": "object",
@@ -2185,8 +2145,7 @@
       },
       "required": [
         "success"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EtsyDeleteListingRequest": {
       "type": "object",
@@ -2204,8 +2163,7 @@
       },
       "required": [
         "productId"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EtsyDeleteListingResponse": {
       "type": "object",
@@ -2217,8 +2175,7 @@
       },
       "required": [
         "success"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EtsyCheckShopSetupRequest": {
       "type": "object",
@@ -2229,8 +2186,7 @@
             "null"
           ]
         }
-      },
-      "additionalProperties": false
+      }
     },
     "EtsyCheckShopSetupResponse": {
       "type": "object",
@@ -2245,8 +2201,7 @@
       "required": [
         "hasShippingProfile",
         "hasReturnPolicy"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EtsyPullSyncRequest": {
       "type": "object",
@@ -2264,8 +2219,7 @@
       },
       "required": [
         "productId"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EtsyPullSyncResponse": {
       "type": "object",
@@ -2308,8 +2262,7 @@
               "external",
               "key",
               "value"
-            ],
-            "additionalProperties": false
+            ]
           }
         },
         "etsyData": {
@@ -2346,8 +2299,7 @@
             "quantity",
             "status",
             "listingId"
-          ],
-          "additionalProperties": false
+          ]
         },
         "wonniData": {
           "type": "object",
@@ -2370,8 +2322,7 @@
             "price",
             "quantity",
             "status"
-          ],
-          "additionalProperties": false
+          ]
         }
       },
       "required": [
@@ -2379,8 +2330,7 @@
         "diff",
         "etsyData",
         "wonniData"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EtsyImportPullSyncRequest": {
       "type": "object",
@@ -2407,15 +2357,16 @@
             "quantity": {
               "anyOf": [
                 {
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
                 },
                 {
                   "type": "null"
                 }
               ]
             }
-          },
-          "additionalProperties": false
+          }
         },
         "credentialSet": {
           "type": [
@@ -2427,8 +2378,7 @@
       "required": [
         "productId",
         "fields"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EtsyImportPullSyncResponse": {
       "type": "object",
@@ -2440,8 +2390,7 @@
       },
       "required": [
         "success"
-      ],
-      "additionalProperties": false
+      ]
     },
     "GetEtsyCategoriesRequest": {
       "type": "object",
@@ -2452,8 +2401,7 @@
             "null"
           ]
         }
-      },
-      "additionalProperties": false
+      }
     },
     "GetEtsyCategoriesResponse": {
       "type": "object",
@@ -2473,15 +2421,13 @@
             "required": [
               "id",
               "name"
-            ],
-            "additionalProperties": false
+            ]
           }
         }
       },
       "required": [
         "categories"
-      ],
-      "additionalProperties": false
+      ]
     },
     "SuggestEtsyCategoryRequest": {
       "type": "object",
@@ -2504,8 +2450,7 @@
             "null"
           ]
         }
-      },
-      "additionalProperties": false
+      }
     },
     "SuggestEtsyCategoryResponse": {
       "type": "object",
@@ -2520,8 +2465,7 @@
       "required": [
         "taxonomyId",
         "taxonomyName"
-      ],
-      "additionalProperties": false
+      ]
     },
     "GetEtsyShippingProfilesRequest": {
       "type": "object",
@@ -2532,8 +2476,7 @@
             "null"
           ]
         }
-      },
-      "additionalProperties": false
+      }
     },
     "GetEtsyShippingProfilesResponse": {
       "type": "object",
@@ -2556,15 +2499,13 @@
             "required": [
               "id",
               "title"
-            ],
-            "additionalProperties": false
+            ]
           }
         }
       },
       "required": [
         "profiles"
-      ],
-      "additionalProperties": false
+      ]
     },
     "GetEtsyReturnPoliciesRequest": {
       "type": "object",
@@ -2575,8 +2516,7 @@
             "null"
           ]
         }
-      },
-      "additionalProperties": false
+      }
     },
     "GetEtsyReturnPoliciesResponse": {
       "type": "object",
@@ -2599,18 +2539,16 @@
             "required": [
               "id",
               "name"
-            ],
-            "additionalProperties": false
+            ]
           }
         }
       },
       "required": [
         "policies"
-      ],
-      "additionalProperties": false
+      ]
     },
     "EnrichListingRequest": {
-      "anyOf": [
+      "oneOf": [
         {
           "type": "object",
           "properties": {
@@ -2619,13 +2557,13 @@
               "const": "draft"
             },
             "images": {
+              "minItems": 1,
+              "maxItems": 8,
               "type": "array",
               "items": {
                 "type": "string",
                 "minLength": 1
-              },
-              "minItems": 1,
-              "maxItems": 8
+              }
             },
             "hints": {
               "type": "object",
@@ -2639,15 +2577,13 @@
                 "description": {
                   "type": "string"
                 }
-              },
-              "additionalProperties": false
+              }
             }
           },
           "required": [
             "mode",
             "images"
-          ],
-          "additionalProperties": false
+          ]
         },
         {
           "type": "object",
@@ -2661,19 +2597,18 @@
               "minLength": 1
             },
             "fillBlanksOnly": {
-              "type": "boolean",
-              "default": true
+              "default": true,
+              "type": "boolean"
             },
             "persist": {
-              "type": "boolean",
-              "default": true
+              "default": true,
+              "type": "boolean"
             }
           },
           "required": [
             "mode",
             "productId"
-          ],
-          "additionalProperties": false
+          ]
         }
       ]
     },
@@ -2714,11 +2649,11 @@
               ]
             },
             "tags": {
+              "maxItems": 8,
               "type": "array",
               "items": {
                 "type": "string"
-              },
-              "maxItems": 8
+              }
             },
             "suggestedPrice": {
               "type": "number",
@@ -2742,6 +2677,9 @@
             },
             "itemSpecifics": {
               "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
               "additionalProperties": {
                 "type": "string"
               }
@@ -2763,8 +2701,7 @@
               "type": "string",
               "maxLength": 20
             }
-          },
-          "additionalProperties": false
+          }
         },
         "writes": {
           "type": "object",
@@ -2800,11 +2737,11 @@
               ]
             },
             "tags": {
+              "maxItems": 8,
               "type": "array",
               "items": {
                 "type": "string"
-              },
-              "maxItems": 8
+              }
             },
             "suggestedPrice": {
               "type": "number",
@@ -2828,6 +2765,9 @@
             },
             "itemSpecifics": {
               "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
               "additionalProperties": {
                 "type": "string"
               }
@@ -2849,8 +2789,7 @@
               "type": "string",
               "maxLength": 20
             }
-          },
-          "additionalProperties": false
+          }
         },
         "proposals": {
           "type": "object",
@@ -2861,8 +2800,7 @@
             "description": {
               "type": "string"
             }
-          },
-          "additionalProperties": false
+          }
         },
         "applied": {
           "type": "array",
@@ -2884,13 +2822,14 @@
         "applied",
         "aiModel",
         "aiPromptVersion"
-      ],
-      "additionalProperties": false
+      ]
     },
     "UpdateSaleStagesRequest": {
       "type": "object",
       "properties": {
         "stages": {
+          "minItems": 1,
+          "maxItems": 50,
           "type": "array",
           "items": {
             "type": "object",
@@ -2906,24 +2845,20 @@
                 "maxLength": 60
               },
               "builtIn": {
-                "type": "boolean",
-                "default": false
+                "default": false,
+                "type": "boolean"
               }
             },
             "required": [
               "key",
               "label"
-            ],
-            "additionalProperties": false
-          },
-          "minItems": 1,
-          "maxItems": 50
+            ]
+          }
         }
       },
       "required": [
         "stages"
-      ],
-      "additionalProperties": false
+      ]
     },
     "UpdateSaleStagesResponse": {
       "type": "object",
@@ -2935,8 +2870,7 @@
       },
       "required": [
         "ok"
-      ],
-      "additionalProperties": false
+      ]
     },
     "ApplyCrossPostRulesRequest": {
       "type": "object",
@@ -2948,8 +2882,7 @@
       },
       "required": [
         "productId"
-      ],
-      "additionalProperties": false
+      ]
     },
     "ApplyCrossPostRulesResponse": {
       "type": "object",
@@ -2970,19 +2903,21 @@
           ]
         },
         "platforms": {
+          "default": {},
           "type": "object",
-          "additionalProperties": {
+          "propertyNames": {
             "type": "string"
           },
-          "default": {}
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "required": [
         "matched",
         "ruleId",
         "listingPrice"
-      ],
-      "additionalProperties": false
+      ]
     },
     "RecordWeverseOrderPlacedRequest": {
       "type": "object",
@@ -3005,8 +2940,7 @@
         "taskId",
         "orderNumber",
         "costPaid"
-      ],
-      "additionalProperties": false
+      ]
     },
     "RecordWeverseOrderPlacedResponse": {
       "type": "object",
@@ -3018,8 +2952,7 @@
       },
       "required": [
         "success"
-      ],
-      "additionalProperties": false
+      ]
     },
     "ListWeverseOrderTasksRequest": {
       "type": "object",
@@ -3057,8 +2990,7 @@
             "null"
           ]
         }
-      },
-      "additionalProperties": false
+      }
     },
     "ListWeverseOrderTasksResponse": {
       "type": "object",
@@ -3079,8 +3011,7 @@
       "required": [
         "tasks",
         "nextCursor"
-      ],
-      "additionalProperties": false
+      ]
     },
     "WeverseOrderTaskWithId": {
       "type": "object",
@@ -3166,22 +3097,41 @@
           "type": "object",
           "properties": {
             "_seconds": {
-              "type": "integer"
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
             },
             "_nanoseconds": {
-              "type": "integer"
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
             }
           },
           "required": [
             "_seconds",
             "_nanoseconds"
-          ],
-          "additionalProperties": false
+          ]
         },
         "orderedAt": {
           "anyOf": [
             {
-              "$ref": "#/definitions/WeverseOrderTaskWithId/properties/createdAt"
+              "type": "object",
+              "properties": {
+                "_seconds": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "_nanoseconds": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "_seconds",
+                "_nanoseconds"
+              ]
             },
             {
               "type": "null"
@@ -3199,8 +3149,7 @@
         "status",
         "createdAt",
         "id"
-      ],
-      "additionalProperties": false
+      ]
     },
     "TextToListingsRequest": {
       "type": "object",
@@ -3211,24 +3160,23 @@
           "maxLength": 20000
         },
         "pendingItems": {
+          "maxItems": 60,
           "type": "array",
           "items": {
             "$ref": "#/definitions/PendingItem"
-          },
-          "maxItems": 60
+          }
         },
         "context": {
           "type": "string",
           "maxLength": 500
         },
         "maxItems": {
+          "default": 40,
           "type": "integer",
           "minimum": 1,
-          "maximum": 60,
-          "default": 40
+          "maximum": 60
         }
-      },
-      "additionalProperties": false
+      }
     },
     "PendingItem": {
       "type": "object",
@@ -3254,14 +3202,21 @@
           "maxLength": 200
         },
         "condition": {
-          "$ref": "#/definitions/DraftProposal/properties/condition"
+          "type": "string",
+          "enum": [
+            "new",
+            "likenew",
+            "good",
+            "fair",
+            "poor"
+          ]
         },
         "tags": {
+          "maxItems": 8,
           "type": "array",
           "items": {
             "type": "string"
-          },
-          "maxItems": 8
+          }
         },
         "isBundle": {
           "type": "boolean"
@@ -3274,16 +3229,30 @@
         },
         "quantity": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "maximum": 9007199254740991
         },
         "sourceText": {
           "type": "string"
         },
         "included": {
-          "$ref": "#/definitions/DraftProposal/properties/included"
+          "type": "string",
+          "enum": [
+            "complete",
+            "partial",
+            "loose",
+            "sealed",
+            "packaging",
+            "unknown"
+          ]
         },
         "media": {
-          "$ref": "#/definitions/DraftProposal/properties/media"
+          "type": "string",
+          "enum": [
+            "disc",
+            "cartridge",
+            "other"
+          ]
         },
         "searchQuery": {
           "type": "string",
@@ -3296,10 +3265,12 @@
           }
         },
         "suggestedPrice": {
-          "$ref": "#/definitions/DraftProposal/properties/suggestedPrice"
+          "type": "number",
+          "exclusiveMinimum": 0
         },
         "userPrice": {
-          "$ref": "#/definitions/DraftProposal/properties/suggestedPrice"
+          "type": "number",
+          "exclusiveMinimum": 0
         },
         "weightOz": {
           "type": "number",
@@ -3321,7 +3292,8 @@
           "type": "array",
           "items": {
             "type": "integer",
-            "exclusiveMinimum": 0
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "members": {
@@ -3341,12 +3313,15 @@
             "required": [
               "title",
               "searchQuery"
-            ],
-            "additionalProperties": false
+            ]
           }
         },
         "source": {
-          "$ref": "#/definitions/SourceProduct"
+          "allOf": [
+            {
+              "$ref": "#/definitions/SourceProduct"
+            }
+          ]
         }
       },
       "required": [
@@ -3361,8 +3336,7 @@
         "sourceText",
         "searchQuery",
         "componentQueries"
-      ],
-      "additionalProperties": false
+      ]
     },
     "SourceProduct": {
       "type": "object",
@@ -3371,7 +3345,14 @@
           "type": "string"
         },
         "source": {
-          "$ref": "#/definitions/DraftProposal/properties/source"
+          "type": "string",
+          "enum": [
+            "weverse",
+            "aliexpress",
+            "amazon",
+            "ebay",
+            "web"
+          ]
         },
         "sourceId": {
           "type": "string"
@@ -3397,7 +3378,8 @@
           }
         },
         "price": {
-          "$ref": "#/definitions/DraftProposal/properties/suggestedPrice"
+          "type": "number",
+          "exclusiveMinimum": 0
         },
         "ebayCategoryId": {
           "type": "string"
@@ -3410,6 +3392,9 @@
         },
         "aspects": {
           "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
           "additionalProperties": {
             "type": "string"
           }
@@ -3420,8 +3405,7 @@
         "source",
         "status",
         "imageUrls"
-      ],
-      "additionalProperties": false
+      ]
     },
     "TextToListingsResponse": {
       "type": "object",
@@ -3474,8 +3458,7 @@
               "memberTitles",
               "asBundle",
               "asIndividual"
-            ],
-            "additionalProperties": false
+            ]
           }
         },
         "links": {
@@ -3487,7 +3470,14 @@
                 "type": "string"
               },
               "source": {
-                "$ref": "#/definitions/DraftProposal/properties/source"
+                "type": "string",
+                "enum": [
+                  "weverse",
+                  "aliexpress",
+                  "amazon",
+                  "ebay",
+                  "web"
+                ]
               },
               "status": {
                 "type": "string",
@@ -3508,8 +3498,7 @@
               "url",
               "source",
               "status"
-            ],
-            "additionalProperties": false
+            ]
           }
         },
         "unparsedText": {
@@ -3529,8 +3518,7 @@
         "unparsedText",
         "aiModel",
         "aiPromptVersion"
-      ],
-      "additionalProperties": false
+      ]
     },
     "DraftProposal": {
       "type": "object",
@@ -3566,11 +3554,11 @@
           ]
         },
         "tags": {
+          "maxItems": 8,
           "type": "array",
           "items": {
             "type": "string"
-          },
-          "maxItems": 8
+          }
         },
         "isBundle": {
           "type": "boolean"
@@ -3583,7 +3571,8 @@
         },
         "quantity": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "maximum": 9007199254740991
         },
         "suggestedPrice": {
           "type": "number",
@@ -3599,7 +3588,8 @@
           ]
         },
         "marketPrice": {
-          "$ref": "#/definitions/DraftProposal/properties/suggestedPrice"
+          "type": "number",
+          "exclusiveMinimum": 0
         },
         "marketPriceSource": {
           "type": "string",
@@ -3649,8 +3639,7 @@
               "title",
               "price",
               "itemWebUrl"
-            ],
-            "additionalProperties": false
+            ]
           }
         },
         "similarItemId": {
@@ -3667,6 +3656,9 @@
         },
         "itemSpecifics": {
           "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
           "additionalProperties": {
             "type": "string"
           }
@@ -3743,7 +3735,8 @@
           "type": "string"
         },
         "sourcePrice": {
-          "$ref": "#/definitions/DraftProposal/properties/suggestedPrice"
+          "type": "number",
+          "exclusiveMinimum": 0
         }
       },
       "required": [
@@ -3760,8 +3753,7 @@
         "imageSource",
         "comps",
         "sourceText"
-      ],
-      "additionalProperties": false
+      ]
     },
     "PhotoCandidate": {
       "type": "object",
@@ -3788,7 +3780,15 @@
           ]
         },
         "included": {
-          "$ref": "#/definitions/DraftProposal/properties/included"
+          "type": "string",
+          "enum": [
+            "complete",
+            "partial",
+            "loose",
+            "sealed",
+            "packaging",
+            "unknown"
+          ]
         },
         "markers": {
           "type": "array",
@@ -3809,8 +3809,7 @@
         "included",
         "markers",
         "strong"
-      ],
-      "additionalProperties": false
+      ]
     },
     "DraftPhotoCandidatesRequest": {
       "type": "object",
@@ -3821,6 +3820,7 @@
           "maxLength": 200
         },
         "included": {
+          "default": "unknown",
           "type": "string",
           "enum": [
             "complete",
@@ -3829,14 +3829,12 @@
             "sealed",
             "packaging",
             "unknown"
-          ],
-          "default": "unknown"
+          ]
         }
       },
       "required": [
         "query"
-      ],
-      "additionalProperties": false
+      ]
     },
     "DraftPhotoCandidatesResponse": {
       "type": "object",
@@ -3850,8 +3848,7 @@
       },
       "required": [
         "candidates"
-      ],
-      "additionalProperties": false
+      ]
     },
     "DraftPhotoCandidateDetailRequest": {
       "type": "object",
@@ -3861,14 +3858,13 @@
           "minLength": 1
         },
         "isBundle": {
-          "type": "boolean",
-          "default": false
+          "default": false,
+          "type": "boolean"
         }
       },
       "required": [
         "itemId"
-      ],
-      "additionalProperties": false
+      ]
     },
     "DraftPhotoCandidateDetailResponse": {
       "type": "object",
@@ -3893,6 +3889,9 @@
         },
         "itemSpecifics": {
           "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
           "additionalProperties": {
             "type": "string"
           }
@@ -3901,8 +3900,7 @@
       "required": [
         "title",
         "imageUrls"
-      ],
-      "additionalProperties": false
+      ]
     },
     "BulkDraftsFromTextRequest": {
       "type": "object",
@@ -3913,24 +3911,23 @@
           "maxLength": 20000
         },
         "pendingItems": {
+          "maxItems": 60,
           "type": "array",
           "items": {
             "$ref": "#/definitions/PendingItem"
-          },
-          "maxItems": 60
+          }
         },
         "context": {
           "type": "string",
           "maxLength": 500
         },
         "maxItems": {
+          "default": 40,
           "type": "integer",
           "minimum": 1,
-          "maximum": 60,
-          "default": 40
+          "maximum": 60
         }
-      },
-      "additionalProperties": false
+      }
     },
     "BulkDraftsFromTextResponse": {
       "type": "object",
@@ -3983,8 +3980,7 @@
               "memberTitles",
               "asBundle",
               "asIndividual"
-            ],
-            "additionalProperties": false
+            ]
           }
         },
         "links": {
@@ -3996,7 +3992,14 @@
                 "type": "string"
               },
               "source": {
-                "$ref": "#/definitions/DraftProposal/properties/source"
+                "type": "string",
+                "enum": [
+                  "weverse",
+                  "aliexpress",
+                  "amazon",
+                  "ebay",
+                  "web"
+                ]
               },
               "status": {
                 "type": "string",
@@ -4017,8 +4020,7 @@
               "url",
               "source",
               "status"
-            ],
-            "additionalProperties": false
+            ]
           }
         },
         "unparsedText": {
@@ -4038,25 +4040,23 @@
         "unparsedText",
         "aiModel",
         "aiPromptVersion"
-      ],
-      "additionalProperties": false
+      ]
     },
     "CommitListingProposalsRequest": {
       "type": "object",
       "properties": {
         "proposals": {
+          "minItems": 1,
+          "maxItems": 60,
           "type": "array",
           "items": {
             "$ref": "#/definitions/DraftProposal"
-          },
-          "minItems": 1,
-          "maxItems": 60
+          }
         }
       },
       "required": [
         "proposals"
-      ],
-      "additionalProperties": false
+      ]
     },
     "CommitListingProposalsResponse": {
       "type": "object",
@@ -4077,8 +4077,7 @@
       "required": [
         "productIds",
         "errors"
-      ],
-      "additionalProperties": false
+      ]
     },
     "CommitError": {
       "type": "object",
@@ -4093,8 +4092,7 @@
       "required": [
         "title",
         "error"
-      ],
-      "additionalProperties": false
+      ]
     },
     "GenerateListingPhotoRequest": {
       "type": "object",
@@ -4105,13 +4103,14 @@
           "maxLength": 140
         },
         "bundleItems": {
+          "default": [],
           "type": "array",
           "items": {
             "type": "string"
-          },
-          "default": []
+          }
         },
         "condition": {
+          "default": "good",
           "type": "string",
           "enum": [
             "new",
@@ -4119,14 +4118,12 @@
             "good",
             "fair",
             "poor"
-          ],
-          "default": "good"
+          ]
         }
       },
       "required": [
         "title"
-      ],
-      "additionalProperties": false
+      ]
     },
     "GenerateListingPhotoResponse": {
       "type": "object",
@@ -4140,8 +4137,7 @@
       },
       "required": [
         "url"
-      ],
-      "additionalProperties": false
+      ]
     },
     "SaleDoc": {
       "type": "object",
@@ -4171,6 +4167,9 @@
           "anyOf": [
             {
               "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
               "additionalProperties": {
                 "type": "string"
               }
@@ -4257,7 +4256,8 @@
         "shippingLabelCost": {
           "anyOf": [
             {
-              "$ref": "#/definitions/SaleDoc/properties/shippingRevenue/anyOf/0"
+              "type": "number",
+              "minimum": 0
             },
             {
               "type": "null"
@@ -4271,14 +4271,16 @@
           ]
         },
         "quantity": {
+          "default": 1,
           "type": "integer",
           "exclusiveMinimum": 0,
-          "default": 1
+          "maximum": 9007199254740991
         },
         "actualCostPaid": {
           "anyOf": [
             {
-              "$ref": "#/definitions/SaleDoc/properties/shippingRevenue/anyOf/0"
+              "type": "number",
+              "minimum": 0
             },
             {
               "type": "null"
@@ -4338,8 +4340,7 @@
                     "null"
                   ]
                 }
-              },
-              "additionalProperties": false
+              }
             },
             {
               "type": "null"
@@ -4371,22 +4372,41 @@
           "type": "object",
           "properties": {
             "_seconds": {
-              "type": "integer"
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
             },
             "_nanoseconds": {
-              "type": "integer"
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
             }
           },
           "required": [
             "_seconds",
             "_nanoseconds"
-          ],
-          "additionalProperties": false
+          ]
         },
         "shippedAt": {
           "anyOf": [
             {
-              "$ref": "#/definitions/SaleDoc/properties/soldAt"
+              "type": "object",
+              "properties": {
+                "_seconds": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "_nanoseconds": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "_seconds",
+                "_nanoseconds"
+              ]
             },
             {
               "type": "null"
@@ -4394,10 +4414,42 @@
           ]
         },
         "createdAt": {
-          "$ref": "#/definitions/SaleDoc/properties/soldAt"
+          "type": "object",
+          "properties": {
+            "_seconds": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "_nanoseconds": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "_seconds",
+            "_nanoseconds"
+          ]
         },
         "updatedAt": {
-          "$ref": "#/definitions/SaleDoc/properties/soldAt"
+          "type": "object",
+          "properties": {
+            "_seconds": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "_nanoseconds": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "_seconds",
+            "_nanoseconds"
+          ]
         },
         "notes": {
           "type": [
@@ -4425,7 +4477,23 @@
         "deletedAt": {
           "anyOf": [
             {
-              "$ref": "#/definitions/SaleDoc/properties/soldAt"
+              "type": "object",
+              "properties": {
+                "_seconds": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "_nanoseconds": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "_seconds",
+                "_nanoseconds"
+              ]
             },
             {
               "type": "null"
@@ -4459,8 +4527,7 @@
         "soldAt",
         "createdAt",
         "updatedAt"
-      ],
-      "additionalProperties": false
+      ]
     },
     "MercariScrapeItem": {
       "type": "object",
@@ -4514,11 +4581,13 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "format": "date-time"
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
                 },
                 {
                   "type": "integer",
-                  "exclusiveMinimum": 0
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
                 }
               ]
             },
@@ -4555,8 +4624,7 @@
       "required": [
         "mercariItemId",
         "priceSoldFor"
-      ],
-      "additionalProperties": false
+      ]
     },
     "ListingFields": {
       "type": "object",
@@ -4592,11 +4660,11 @@
           ]
         },
         "tags": {
+          "maxItems": 8,
           "type": "array",
           "items": {
             "type": "string"
-          },
-          "maxItems": 8
+          }
         },
         "suggestedPrice": {
           "type": "number",
@@ -4620,6 +4688,9 @@
         },
         "itemSpecifics": {
           "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
           "additionalProperties": {
             "type": "string"
           }
@@ -4641,8 +4712,7 @@
           "type": "string",
           "maxLength": 20
         }
-      },
-      "additionalProperties": false
+      }
     },
     "Option": {
       "type": "object",
@@ -4667,8 +4737,7 @@
       "required": [
         "name",
         "values"
-      ],
-      "additionalProperties": false
+      ]
     },
     "Variant": {
       "type": "object",
@@ -4679,6 +4748,9 @@
         },
         "optionValues": {
           "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
           "additionalProperties": {
             "type": "string"
           }
@@ -4703,7 +4775,8 @@
         },
         "quantity": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "active": {
           "type": "boolean"
@@ -4741,8 +4814,7 @@
                 "null"
               ]
             }
-          },
-          "additionalProperties": false
+          }
         },
         "crossPostListingIds": {
           "type": "object",
@@ -4771,8 +4843,7 @@
                 "null"
               ]
             }
-          },
-          "additionalProperties": false
+          }
         },
         "mercariUrl": {
           "type": [
@@ -4800,13 +4871,13 @@
         "active",
         "crossPostStatus",
         "crossPostListingIds"
-      ],
-      "additionalProperties": false
+      ]
     },
     "ProductDoc": {
       "type": "object",
       "properties": {
         "options": {
+          "default": [],
           "type": "array",
           "items": {
             "type": "object",
@@ -4831,12 +4902,11 @@
             "required": [
               "name",
               "values"
-            ],
-            "additionalProperties": false
-          },
-          "default": []
+            ]
+          }
         },
         "variants": {
+          "default": [],
           "type": "array",
           "items": {
             "type": "object",
@@ -4847,6 +4917,9 @@
               },
               "optionValues": {
                 "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
                 "additionalProperties": {
                   "type": "string"
                 }
@@ -4871,7 +4944,8 @@
               },
               "quantity": {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0,
+                "maximum": 9007199254740991
               },
               "active": {
                 "type": "boolean"
@@ -4909,8 +4983,7 @@
                       "null"
                     ]
                   }
-                },
-                "additionalProperties": false
+                }
               },
               "crossPostListingIds": {
                 "type": "object",
@@ -4939,8 +5012,7 @@
                       "null"
                     ]
                   }
-                },
-                "additionalProperties": false
+                }
               },
               "mercariUrl": {
                 "type": [
@@ -4968,21 +5040,18 @@
               "active",
               "crossPostStatus",
               "crossPostListingIds"
-            ],
-            "additionalProperties": false
-          },
-          "default": []
+            ]
+          }
         },
         "hasVariants": {
-          "type": "boolean",
-          "default": false
+          "default": false,
+          "type": "boolean"
         },
         "quantityVariesByVariant": {
-          "type": "boolean",
-          "default": false
+          "default": false,
+          "type": "boolean"
         }
-      },
-      "additionalProperties": false
+      }
     }
   }
 }

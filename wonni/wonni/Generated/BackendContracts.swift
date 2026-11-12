@@ -2240,8 +2240,8 @@ extension DetectMercariPullSyncDiffResponse {
 // MARK: - DetectMercariPullSyncDiffResponseDiff
 struct DetectMercariPullSyncDiffResponseDiff: Codable, Sendable {
     let field: Field
-    let mercariValue: JSONAny?
-    let productValue: JSONAny?
+    let mercariValue: JSONAny
+    let productValue: JSONAny
 
     enum CodingKeys: String, CodingKey {
         case field = "field"
@@ -2270,8 +2270,8 @@ extension DetectMercariPullSyncDiffResponseDiff {
 
     func with(
         field: Field? = nil,
-        mercariValue: JSONAny?? = nil,
-        productValue: JSONAny?? = nil
+        mercariValue: JSONAny? = nil,
+        productValue: JSONAny? = nil
     ) -> DetectMercariPullSyncDiffResponseDiff {
         return DetectMercariPullSyncDiffResponseDiff(
             field: field ?? self.field,
@@ -4273,9 +4273,9 @@ struct EtsyCreateListingRequest: Codable, Equatable, Sendable {
     let credentialSet: String?
     let isSupply: Bool?
     let productId: String
-    let returnPolicyId: ReturnPolicyId?
-    let shippingProfileId: ReturnPolicyId?
-    let taxonomyId: ReturnPolicyId?
+    let returnPolicyId: ID?
+    let shippingProfileId: ID?
+    let taxonomyId: ID?
     let whenMade: String?
     let whoMade: WhoMade?
 
@@ -4313,9 +4313,9 @@ extension EtsyCreateListingRequest {
         credentialSet: String?? = nil,
         isSupply: Bool?? = nil,
         productId: String? = nil,
-        returnPolicyId: ReturnPolicyId?? = nil,
-        shippingProfileId: ReturnPolicyId?? = nil,
-        taxonomyId: ReturnPolicyId?? = nil,
+        returnPolicyId: ID?? = nil,
+        shippingProfileId: ID?? = nil,
+        taxonomyId: ID?? = nil,
         whenMade: String?? = nil,
         whoMade: WhoMade?? = nil
     ) -> EtsyCreateListingRequest {
@@ -4340,7 +4340,7 @@ extension EtsyCreateListingRequest {
     }
 }
 
-enum ReturnPolicyId: Codable, Equatable, Sendable {
+enum ID: Codable, Equatable, Sendable {
     case double(Double)
     case string(String)
     case null
@@ -4359,7 +4359,7 @@ enum ReturnPolicyId: Codable, Equatable, Sendable {
             self = .null
             return
         }
-        throw DecodingError.typeMismatch(ReturnPolicyId.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Wrong type for ReturnPolicyId"))
+        throw DecodingError.typeMismatch(ID.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Wrong type for ID"))
     }
 
     func encode(to encoder: Encoder) throws {
@@ -6123,10 +6123,10 @@ extension ListWeverseOrderTasksResponse {
 // MARK: - WeverseOrderTaskWithId
 struct WeverseOrderTaskWithId: Codable, Equatable, Sendable {
     let costPaid: Double?
-    let createdAt: CreatedAt
+    let createdAt: WeverseOrderTaskWithIdCreatedAt
     let id: String
     let listingTitle: String?
-    let orderedAt: CreatedAt?
+    let orderedAt: OrderedAt?
     let orderNumber: String?
     let productId: String
     let saleId: String
@@ -6175,10 +6175,10 @@ extension WeverseOrderTaskWithId {
 
     func with(
         costPaid: Double?? = nil,
-        createdAt: CreatedAt? = nil,
+        createdAt: WeverseOrderTaskWithIdCreatedAt? = nil,
         id: String? = nil,
         listingTitle: String?? = nil,
-        orderedAt: CreatedAt?? = nil,
+        orderedAt: OrderedAt?? = nil,
         orderNumber: String?? = nil,
         productId: String? = nil,
         saleId: String? = nil,
@@ -6222,8 +6222,8 @@ extension WeverseOrderTaskWithId {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-// MARK: - CreatedAt
-struct CreatedAt: Codable, Equatable, Sendable {
+// MARK: - WeverseOrderTaskWithIdCreatedAt
+struct WeverseOrderTaskWithIdCreatedAt: Codable, Equatable, Sendable {
     let nanoseconds: Int
     let seconds: Int
 
@@ -6233,11 +6233,11 @@ struct CreatedAt: Codable, Equatable, Sendable {
     }
 }
 
-// MARK: CreatedAt convenience initializers and mutators
+// MARK: WeverseOrderTaskWithIdCreatedAt convenience initializers and mutators
 
-extension CreatedAt {
+extension WeverseOrderTaskWithIdCreatedAt {
     init(data: Data) throws {
-        self = try newJSONDecoder().decode(CreatedAt.self, from: data)
+        self = try newJSONDecoder().decode(WeverseOrderTaskWithIdCreatedAt.self, from: data)
     }
 
     init(_ json: String, using encoding: String.Encoding = .utf8) throws {
@@ -6254,8 +6254,62 @@ extension CreatedAt {
     func with(
         nanoseconds: Int? = nil,
         seconds: Int? = nil
-    ) -> CreatedAt {
-        return CreatedAt(
+    ) -> WeverseOrderTaskWithIdCreatedAt {
+        return WeverseOrderTaskWithIdCreatedAt(
+            nanoseconds: nanoseconds ?? self.nanoseconds,
+            seconds: seconds ?? self.seconds
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - OrderedAt
+struct OrderedAt: Codable, Equatable, Sendable {
+    let nanoseconds: Int
+    let seconds: Int
+
+    enum CodingKeys: String, CodingKey {
+        case nanoseconds = "_nanoseconds"
+        case seconds = "_seconds"
+    }
+}
+
+// MARK: OrderedAt convenience initializers and mutators
+
+extension OrderedAt {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(OrderedAt.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        nanoseconds: Int? = nil,
+        seconds: Int? = nil
+    ) -> OrderedAt {
+        return OrderedAt(
             nanoseconds: nanoseconds ?? self.nanoseconds,
             seconds: seconds ?? self.seconds
         )
@@ -6620,7 +6674,7 @@ struct MercariScrapeItem: Codable, Equatable, Sendable {
     let mercariOrderId: String?
     let priceSoldFor: Double
     let shippingRevenue: Double?
-    let soldAt: SoldAt?
+    let soldAt: SoldAtUnion?
     let soldDate: String?
     let soldDateText: String?
     let takeHome: Double?
@@ -6668,7 +6722,7 @@ extension MercariScrapeItem {
         mercariOrderId: String?? = nil,
         priceSoldFor: Double? = nil,
         shippingRevenue: Double?? = nil,
-        soldAt: SoldAt?? = nil,
+        soldAt: SoldAtUnion?? = nil,
         soldDate: String?? = nil,
         soldDateText: String?? = nil,
         takeHome: Double?? = nil,
@@ -6701,7 +6755,7 @@ extension MercariScrapeItem {
     }
 }
 
-enum SoldAt: Codable, Equatable, Sendable {
+enum SoldAtUnion: Codable, Equatable, Sendable {
     case dateTime(Date)
     case integer(Int)
     case null
@@ -6720,7 +6774,7 @@ enum SoldAt: Codable, Equatable, Sendable {
             self = .null
             return
         }
-        throw DecodingError.typeMismatch(SoldAt.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Wrong type for SoldAt"))
+        throw DecodingError.typeMismatch(SoldAtUnion.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Wrong type for SoldAtUnion"))
     }
 
     func encode(to encoder: Encoder) throws {
@@ -7600,7 +7654,7 @@ struct RecordSaleRequest: Codable, Equatable, Sendable {
     let quantity: Int?
     let shippingLabelCost: Double?
     let shippingRevenue: Double?
-    let soldAt: SoldAt?
+    let soldAt: SoldAtUnion?
     let soldPrice: Double
     let takeHome: Double?
     let trackingNumber: String?
@@ -7662,7 +7716,7 @@ extension RecordSaleRequest {
         quantity: Int?? = nil,
         shippingLabelCost: Double?? = nil,
         shippingRevenue: Double?? = nil,
-        soldAt: SoldAt?? = nil,
+        soldAt: SoldAtUnion?? = nil,
         soldPrice: Double? = nil,
         takeHome: Double?? = nil,
         trackingNumber: String?? = nil,
@@ -8135,8 +8189,8 @@ struct SaleDoc: Codable, Equatable, Sendable {
     let buyerName: String?
     let carrier: SaleCarrier?
     let coverPhotoPath: String?
-    let createdAt: SoldAtClass
-    let deletedAt: SoldAtClass?
+    let createdAt: SaleDocCreatedAt
+    let deletedAt: DeletedAt?
     let externalUrl: String?
     let isDeleted: Bool?
     let listingTitle: String?
@@ -8148,16 +8202,16 @@ struct SaleDoc: Codable, Equatable, Sendable {
     let productId: String?
     let productTags: [String]?
     let quantity: Int?
-    let shippedAt: SoldAtClass?
+    let shippedAt: ShippedAt?
     let shippingLabelCost: Double?
     let shippingRevenue: Double?
-    let soldAt: SoldAtClass
+    let soldAt: SoldAt
     let source: SaleDocSource?
     let status: String
     let takeHome: Double?
     let thumbnailUrl: String?
     let trackingNumber: String?
-    let updatedAt: SoldAtClass
+    let updatedAt: UpdatedAt
     let userId: String
     let variantOptionValues: [String: String]?
     let variantSku: String?
@@ -8221,8 +8275,8 @@ extension SaleDoc {
         buyerName: String?? = nil,
         carrier: SaleCarrier?? = nil,
         coverPhotoPath: String?? = nil,
-        createdAt: SoldAtClass? = nil,
-        deletedAt: SoldAtClass?? = nil,
+        createdAt: SaleDocCreatedAt? = nil,
+        deletedAt: DeletedAt?? = nil,
         externalUrl: String?? = nil,
         isDeleted: Bool?? = nil,
         listingTitle: String?? = nil,
@@ -8234,16 +8288,16 @@ extension SaleDoc {
         productId: String?? = nil,
         productTags: [String]?? = nil,
         quantity: Int?? = nil,
-        shippedAt: SoldAtClass?? = nil,
+        shippedAt: ShippedAt?? = nil,
         shippingLabelCost: Double?? = nil,
         shippingRevenue: Double?? = nil,
-        soldAt: SoldAtClass? = nil,
+        soldAt: SoldAt? = nil,
         source: SaleDocSource?? = nil,
         status: String? = nil,
         takeHome: Double?? = nil,
         thumbnailUrl: String?? = nil,
         trackingNumber: String?? = nil,
-        updatedAt: SoldAtClass? = nil,
+        updatedAt: UpdatedAt? = nil,
         userId: String? = nil,
         variantOptionValues: [String: String]?? = nil,
         variantSku: String?? = nil
@@ -8372,8 +8426,8 @@ extension SaleDocBuyerAddress {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-// MARK: - SoldAtClass
-struct SoldAtClass: Codable, Equatable, Sendable {
+// MARK: - SaleDocCreatedAt
+struct SaleDocCreatedAt: Codable, Equatable, Sendable {
     let nanoseconds: Int
     let seconds: Int
 
@@ -8383,11 +8437,11 @@ struct SoldAtClass: Codable, Equatable, Sendable {
     }
 }
 
-// MARK: SoldAtClass convenience initializers and mutators
+// MARK: SaleDocCreatedAt convenience initializers and mutators
 
-extension SoldAtClass {
+extension SaleDocCreatedAt {
     init(data: Data) throws {
-        self = try newJSONDecoder().decode(SoldAtClass.self, from: data)
+        self = try newJSONDecoder().decode(SaleDocCreatedAt.self, from: data)
     }
 
     init(_ json: String, using encoding: String.Encoding = .utf8) throws {
@@ -8404,8 +8458,170 @@ extension SoldAtClass {
     func with(
         nanoseconds: Int? = nil,
         seconds: Int? = nil
-    ) -> SoldAtClass {
-        return SoldAtClass(
+    ) -> SaleDocCreatedAt {
+        return SaleDocCreatedAt(
+            nanoseconds: nanoseconds ?? self.nanoseconds,
+            seconds: seconds ?? self.seconds
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - DeletedAt
+struct DeletedAt: Codable, Equatable, Sendable {
+    let nanoseconds: Int
+    let seconds: Int
+
+    enum CodingKeys: String, CodingKey {
+        case nanoseconds = "_nanoseconds"
+        case seconds = "_seconds"
+    }
+}
+
+// MARK: DeletedAt convenience initializers and mutators
+
+extension DeletedAt {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(DeletedAt.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        nanoseconds: Int? = nil,
+        seconds: Int? = nil
+    ) -> DeletedAt {
+        return DeletedAt(
+            nanoseconds: nanoseconds ?? self.nanoseconds,
+            seconds: seconds ?? self.seconds
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - ShippedAt
+struct ShippedAt: Codable, Equatable, Sendable {
+    let nanoseconds: Int
+    let seconds: Int
+
+    enum CodingKeys: String, CodingKey {
+        case nanoseconds = "_nanoseconds"
+        case seconds = "_seconds"
+    }
+}
+
+// MARK: ShippedAt convenience initializers and mutators
+
+extension ShippedAt {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(ShippedAt.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        nanoseconds: Int? = nil,
+        seconds: Int? = nil
+    ) -> ShippedAt {
+        return ShippedAt(
+            nanoseconds: nanoseconds ?? self.nanoseconds,
+            seconds: seconds ?? self.seconds
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - SoldAt
+struct SoldAt: Codable, Equatable, Sendable {
+    let nanoseconds: Int
+    let seconds: Int
+
+    enum CodingKeys: String, CodingKey {
+        case nanoseconds = "_nanoseconds"
+        case seconds = "_seconds"
+    }
+}
+
+// MARK: SoldAt convenience initializers and mutators
+
+extension SoldAt {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(SoldAt.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        nanoseconds: Int? = nil,
+        seconds: Int? = nil
+    ) -> SoldAt {
+        return SoldAt(
             nanoseconds: nanoseconds ?? self.nanoseconds,
             seconds: seconds ?? self.seconds
         )
@@ -8426,6 +8642,60 @@ enum SaleDocSource: String, Codable, Equatable, Sendable {
     case etsyPoll = "etsy-poll"
     case manual = "manual"
     case mercariScan = "mercari-scan"
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - UpdatedAt
+struct UpdatedAt: Codable, Equatable, Sendable {
+    let nanoseconds: Int
+    let seconds: Int
+
+    enum CodingKeys: String, CodingKey {
+        case nanoseconds = "_nanoseconds"
+        case seconds = "_seconds"
+    }
+}
+
+// MARK: UpdatedAt convenience initializers and mutators
+
+extension UpdatedAt {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(UpdatedAt.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        nanoseconds: Int? = nil,
+        seconds: Int? = nil
+    ) -> UpdatedAt {
+        return UpdatedAt(
+            nanoseconds: nanoseconds ?? self.nanoseconds,
+            seconds: seconds ?? self.seconds
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
 }
 
 //
@@ -8711,7 +8981,7 @@ extension SyncSalesPlatformError {
 // MARK: - SyncSalesRequest
 struct SyncSalesRequest: Codable, Equatable, Sendable {
     let platform: GetOrderTakeHomeRequestPlatform?
-    let since: SoldAt?
+    let since: SoldAtUnion?
 
     enum CodingKeys: String, CodingKey {
         case platform = "platform"
@@ -8739,7 +9009,7 @@ extension SyncSalesRequest {
 
     func with(
         platform: GetOrderTakeHomeRequestPlatform?? = nil,
-        since: SoldAt?? = nil
+        since: SoldAtUnion?? = nil
     ) -> SyncSalesRequest {
         return SyncSalesRequest(
             platform: platform ?? self.platform,

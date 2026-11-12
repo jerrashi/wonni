@@ -13,7 +13,7 @@
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
-const { zodToJsonSchema } = require("zod-to-json-schema");
+const { z } = require("zod");
 
 const {
   ALL,
@@ -105,20 +105,23 @@ const definitions = {};
 // `items` array field would otherwise synthesize a class literally named
 // "Item", colliding with the app's own SwiftData `Item` model).
 function add(name, schema, refs) {
-  const js = zodToJsonSchema(schema, {
-    name,
-    target: "jsonSchema7",
-    // "none" never emits $refs (even for pre-named `definitions`), so a
-    // schema passed via `refs` needs "root" to actually get referenced by
-    // name instead of inlined-and-renamed at each occurrence.
-    $refStrategy: refs ? "root" : "none",
-    ...(refs ? { definitions: refs } : {}),
+  // zod 4's native converter. Named nested schemas go in a registry so they
+  // come out as `#/definitions/<Name>` $refs instead of being inlined.
+  const reg = z.registry();
+  for (const [refName, refSchema] of Object.entries(refs ?? {})) {
+    reg.add(refSchema, { id: refName });
+  }
+  const js = z.toJSONSchema(schema, {
+    target: "draft-7",
+    // "input" keeps `.default()` fields optional, as zod-to-json-schema did.
+    io: "input",
+    unrepresentable: "any",
+    metadata: reg,
   });
-  // zodToJsonSchema nests the named schema under definitions[name]; hoist it.
-  const body = js.definitions?.[name] ?? js;
+  const { definitions: defs, $schema, ...body } = js;
   definitions[name] = body;
   for (const refName of Object.keys(refs ?? {})) {
-    if (js.definitions?.[refName]) definitions[refName] = js.definitions[refName];
+    if (defs?.[refName]) definitions[refName] = defs[refName];
   }
 }
 

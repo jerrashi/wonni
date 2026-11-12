@@ -71,7 +71,7 @@ exports.recordMercariSalesBatch = onCall(
         results.push({
           mercariItemId: rawItem?.mercariItemId ?? "(unknown)",
           outcome: "parse-failed",
-          warning: parsed.error.errors[0]?.message ?? "invalid row",
+          warning: parsed.error.issues[0]?.message ?? "invalid row",
         });
         continue;
       }

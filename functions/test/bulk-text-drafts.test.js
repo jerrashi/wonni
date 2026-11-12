@@ -401,7 +401,7 @@ test("buildDrafts: output satisfies the response contract and request defaults a
   });
 
   const check = ResponseSchemas.bulkDraftsFromText.safeParse(result);
-  assert.equal(check.success, true, JSON.stringify(check.error?.errors));
+  assert.equal(check.success, true, JSON.stringify(check.error?.issues));
   assert.equal(result.drafts.length, 2);
   assert.equal(result.drafts[0].priceSource, "comps");
   assert.equal(result.drafts[0].ebayCategoryId, "139973");
@@ -433,7 +433,7 @@ test("toPendingItem: round-trips through toProposalCore unchanged and satisfies 
   assert.equal(pending.userPrice, 25);
   assert.deepEqual(toProposalCore(pending), core);
   const req = RequestSchemas.bulkDraftsFromText.safeParse({ pendingItems: [pending] });
-  assert.equal(req.success, true, JSON.stringify(req.error?.errors));
+  assert.equal(req.success, true, JSON.stringify(req.error?.issues));
 });
 
 test("buildDrafts: text mode enriches the first batch and returns the rest in order, un-enriched", async () => {
@@ -786,7 +786,7 @@ test("decisionFor: both answers are valid pendingItems; individuals inherit the 
   assert.equal(d.asIndividual[1].weightOz, 12);
   assert.equal(d.asIndividual[1].isBundle, false);
   const req = RequestSchemas.textToListings.safeParse({ pendingItems: [d.asBundle, ...d.asIndividual] });
-  assert.equal(req.success, true, JSON.stringify(req.error?.errors));
+  assert.equal(req.success, true, JSON.stringify(req.error?.issues));
   // Sent back, individuals enrich as ordinary listings (no further decision).
   for (const item of d.asIndividual) assert.deepEqual(toProposalCore(item)._members, []);
 });
@@ -844,7 +844,7 @@ test("buildDrafts: links are resolved before the parse, attached after it, and a
   assert.equal(pokemon.photoCandidates.length, 1);
 
   const check = ResponseSchemas.textToListings.safeParse(result);
-  assert.equal(check.success, true, JSON.stringify(check.error?.errors));
+  assert.equal(check.success, true, JSON.stringify(check.error?.issues));
 });
 
 test("buildDrafts: a multi-item entry waits in needsDecision (not enriched); sending an answer back enriches normally", async () => {

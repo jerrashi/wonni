@@ -70,13 +70,13 @@ function validated(name, handler) {
     try {
       data = reqSchema.parse(request.data ?? {});
     } catch (err) {
-      throw new HttpsError("invalid-argument", `Bad ${name} payload: ${err.errors?.[0]?.message ?? err.message}`, err.errors);
+      throw new HttpsError("invalid-argument", `Bad ${name} payload: ${err.issues?.[0]?.message ?? err.message}`, err.issues);
     }
     const result = await handler(data, request);
     if (process.env.CONTRACTS_STRICT === "1" && resSchema) {
       const check = resSchema.safeParse(result);
       if (!check.success) {
-        console.error(`[contract] ${name} response violates schema`, check.error.errors);
+        console.error(`[contract] ${name} response violates schema`, check.error.issues);
       }
     }
     return result;
