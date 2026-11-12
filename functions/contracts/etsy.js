@@ -133,7 +133,7 @@ module.exports = {
         action: z.enum(["create", "delete"]),
         ok: z.boolean(),
         /** One entry per Etsy listing the product would become. */
-        listings: z.array(z.object({
+        testDrafts: z.array(z.object({
           groupKey: z.string(),
           title: z.string().nullish(),
           listingId: z.string().nullish(),

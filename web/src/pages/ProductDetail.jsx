@@ -5182,9 +5182,9 @@ function ProductDetail() {
       if (action === "delete") {
         setToast({ message: r.note || "Etsy test drafts deleted." });
       } else if (r.ok) {
-        setToast({ message: `Etsy dry run OK: ${r.listings.length} draft listing${r.listings.length === 1 ? "" : "s"} accepted (${r.listings.map((l) => l.variants).join(" + ")} variants). Nothing published, no fee. Delete the drafts from the ... menu.` });
+        setToast({ message: `Etsy dry run OK: ${r.testDrafts.length} draft listing${r.testDrafts.length === 1 ? "" : "s"} accepted (${r.testDrafts.map((l) => l.variants).join(" + ")} variants). Nothing published, no fee. Delete the drafts from the ... menu.` });
       } else {
-        const lines = r.listings.filter((l) => !l.ok).map((l) => `${l.title || l.groupKey}: ${l.error}`);
+        const lines = r.testDrafts.filter((l) => !l.ok).map((l) => `${l.title || l.groupKey}: ${l.error}`);
         setError(`Etsy dry run found a problem. ${r.note || ""} ${lines.join(" | ")}`.trim());
       }
     } catch (e) {

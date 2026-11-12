@@ -603,7 +603,7 @@ async function etsyDraftTestCore(uid, productId, action = "create", deps = {}) {
   if (action === "delete") {
     const n = await removeOld();
     await ref.set({ etsyTestDrafts: admin.firestore.FieldValue.delete() }, { merge: true });
-    return { action, ok: true, listings: [], note: n ? `Deleted ${n} test draft${n === 1 ? "" : "s"}.` : "No test drafts to delete." };
+    return { action, ok: true, testDrafts: [], note: n ? `Deleted ${n} test draft${n === 1 ? "" : "s"}.` : "No test drafts to delete." };
   }
 
   const items = activeVariantItems(product);
@@ -618,7 +618,7 @@ async function etsyDraftTestCore(uid, productId, action = "create", deps = {}) {
     plan = planEtsyListings(items, options, { productId, basePrice: priceAmount(price), sharedQuantity: sharedPoolQuantity(product) });
   } catch (e) {
     // e.g. more than 2 variation types: report it instead of failing the call.
-    return { action, ok: false, listings: [], note: e.message };
+    return { action, ok: false, testDrafts: [], note: e.message };
   }
 
   const results = [];
@@ -646,7 +646,7 @@ async function etsyDraftTestCore(uid, productId, action = "create", deps = {}) {
   await ref.set({ etsyTestDrafts: saved }, { merge: true });
   const ok = results.every((r) => r.ok);
   return {
-    action, ok, listings: results,
+    action, ok, testDrafts: results,
     note: ok
       ? "Etsy accepted every listing as a draft. Nothing was published, so no fee. Run action \"delete\" to clear the drafts."
       : "Etsy rejected at least one step (see the error on that listing). Drafts that were created are kept until you run action \"delete\".",

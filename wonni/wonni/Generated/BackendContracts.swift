@@ -4619,15 +4619,15 @@ enum Action: String, Codable, Equatable, Sendable {
 // MARK: - EtsyDraftTestResponse
 struct EtsyDraftTestResponse: Codable, Equatable, Sendable {
     let action: Action
-    let listings: [Listing]
     let note: String?
     let ok: Bool
+    let testDrafts: [TestDraft]
 
     enum CodingKeys: String, CodingKey {
         case action = "action"
-        case listings = "listings"
         case note = "note"
         case ok = "ok"
+        case testDrafts = "testDrafts"
     }
 }
 
@@ -4651,15 +4651,15 @@ extension EtsyDraftTestResponse {
 
     func with(
         action: Action? = nil,
-        listings: [Listing]? = nil,
         note: String?? = nil,
-        ok: Bool? = nil
+        ok: Bool? = nil,
+        testDrafts: [TestDraft]? = nil
     ) -> EtsyDraftTestResponse {
         return EtsyDraftTestResponse(
             action: action ?? self.action,
-            listings: listings ?? self.listings,
             note: note ?? self.note,
-            ok: ok ?? self.ok
+            ok: ok ?? self.ok,
+            testDrafts: testDrafts ?? self.testDrafts
         )
     }
 
@@ -4678,8 +4678,8 @@ extension EtsyDraftTestResponse {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-// MARK: - Listing
-struct Listing: Codable, Equatable, Sendable {
+// MARK: - TestDraft
+struct TestDraft: Codable, Equatable, Sendable {
     let error: String?
     let groupKey: String
     let listingId: String?
@@ -4697,11 +4697,11 @@ struct Listing: Codable, Equatable, Sendable {
     }
 }
 
-// MARK: Listing convenience initializers and mutators
+// MARK: TestDraft convenience initializers and mutators
 
-extension Listing {
+extension TestDraft {
     init(data: Data) throws {
-        self = try newJSONDecoder().decode(Listing.self, from: data)
+        self = try newJSONDecoder().decode(TestDraft.self, from: data)
     }
 
     init(_ json: String, using encoding: String.Encoding = .utf8) throws {
@@ -4722,8 +4722,8 @@ extension Listing {
         ok: Bool? = nil,
         title: String?? = nil,
         variants: Int? = nil
-    ) -> Listing {
-        return Listing(
+    ) -> TestDraft {
+        return TestDraft(
             error: error ?? self.error,
             groupKey: groupKey ?? self.groupKey,
             listingId: listingId ?? self.listingId,

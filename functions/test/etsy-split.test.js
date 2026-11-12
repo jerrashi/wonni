@@ -159,7 +159,7 @@ test("dry run: creates every listing as a DRAFT with real inventory, never publi
   const db = new FakeFirestore({ products: { p1: bigProduct() } });
   const res = await etsyDraftTestCore("u", "p1", "create", { db, auth: AUTH, upload: async () => 1, data: DATA });
   assert.equal(res.ok, true);
-  assert.equal(res.listings.length, 3);
+  assert.equal(res.testDrafts.length, 3);
   assert.ok([...etsy.listings.values()].every((l) => l.state === "draft"), "no listing was published");
   assert.deepEqual([...etsy.listings.values()].map((l) => l.inventory.products.length), [70, 70, 10]);
   const doc = db.peek("products", "p1");
@@ -174,7 +174,7 @@ test("dry run: an Etsy rejection is reported per listing, not thrown, and the dr
   const db = new FakeFirestore({ products: { p1: bigProduct() } });
   const res = await etsyDraftTestCore("u", "p1", "create", { db, auth: AUTH, upload: async () => 1, data: DATA });
   assert.equal(res.ok, false);
-  assert.match(res.listings[0].error, /inventory rejected \(400\).*property_id invalid/);
+  assert.match(res.testDrafts[0].error, /inventory rejected \(400\).*property_id invalid/);
   assert.equal(db.peek("products", "p1").etsyTestDrafts.length, 3);
 });
 

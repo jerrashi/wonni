@@ -2228,7 +2228,7 @@
         "ok": {
           "type": "boolean"
         },
-        "listings": {
+        "testDrafts": {
           "type": "array",
           "items": {
             "type": "object",
@@ -2279,7 +2279,7 @@
       "required": [
         "action",
         "ok",
-        "listings"
+        "testDrafts"
       ],
       "additionalProperties": false
     },
