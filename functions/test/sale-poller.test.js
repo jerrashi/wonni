@@ -221,3 +221,47 @@ test("an eBay poll result flows through recordSaleCore: new sale + cascade + ded
   assert.equal(db.peek("products", "p1").quantity, 4, "no double decrement on re-poll");
   assert.equal(db.peek("sales", "ebay_05-12345-67890").takeHome, 19.5, "corrected take-home merged in");
 });
+
+// ── scheduled poll helpers ─────────────────────────────────────────────────
+
+const { scheduledSince, uidsWithSalesIntegration, syncSalesForUser } = poller;
+
+test("scheduledSince: never polled → full default window", () => {
+  const now = Date.UTC(2026, 10, 12);
+  assert.equal(scheduledSince(undefined, now), now - 30 * 24 * 3600 * 1000);
+});
+
+test("scheduledSince: reads one hour before the last poll (Timestamp, Date or ms)", () => {
+  const now = Date.UTC(2026, 10, 12, 12);
+  const last = now - 30 * 60 * 1000;
+  const expected = last - 3600 * 1000;
+  assert.equal(scheduledSince({ toMillis: () => last }, now), expected);
+  assert.equal(scheduledSince(new Date(last), now), expected);
+  assert.equal(scheduledSince(last, now), expected);
+});
+
+test("scheduledSince: a very stale poll never reaches back past 30 days", () => {
+  const now = Date.UTC(2026, 10, 12);
+  assert.equal(scheduledSince(now - 90 * 24 * 3600 * 1000, now), now - 30 * 24 * 3600 * 1000);
+});
+
+test("uidsWithSalesIntegration: connected eBay/Etsy only, one entry per user", () => {
+  const doc = (uid, id, isConnected) => ({
+    id, data: () => ({ isConnected }), ref: { parent: { parent: { id: uid } } },
+  });
+  const uids = uidsWithSalesIntegration([
+    doc("a", "ebay", true), doc("a", "etsy", true), doc("b", "tiktok", true),
+    doc("c", "etsy", false), doc("d", "etsy", true),
+  ]);
+  assert.deepEqual(uids.sort(), ["a", "d"]);
+});
+
+test("syncSalesForUser: a platform that throws lands in errors, the other still runs", async () => {
+  // The fake db has no .doc(), so both platform reads throw. Neither may escape.
+  const db = new FakeFirestore();
+  const r = await syncSalesForUser(db, "u1", { sinceFor: () => 0 });
+  assert.equal(r.imported, 0);
+  assert.deepEqual(r.errors.map((e) => e.platform), ["ebay", "etsy"]);
+  const only = await syncSalesForUser(db, "u1", { only: "etsy", sinceFor: () => 0 });
+  assert.deepEqual(only.errors.map((e) => e.platform), ["etsy"]);
+});

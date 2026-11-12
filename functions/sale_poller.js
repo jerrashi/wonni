@@ -18,6 +18,7 @@
  */
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
 
 const { validated } = require("./contracts");
@@ -408,6 +409,65 @@ async function etsyReceiptTakeHome({ shopId, accessToken, clientId }, receiptId)
 
 // ── callables ─────────────────────────────────────────────────────────────
 
+/**
+ * One user's poll, shared by the `syncSales` callable and the scheduled run.
+ * `sinceFor(platform)` returns the lookback start for that platform, so the
+ * scheduled run can poll only what's new while the button keeps its 30 days.
+ * Platforms fail independently; a failure lands in `errors`, never throws.
+ */
+async function syncSalesForUser(db, uid, { only = null, sinceFor }) {
+  const productsSnap = await db.collection("products").where("userId", "==", uid).get();
+  const productById = new Map(productsSnap.docs.map((d) => [d.id, d.data()]));
+
+  const errors = [];
+  const saleIds = [];
+  let imported = 0;
+  let skipped = 0;
+
+  for (const [platform, fn] of [["ebay", syncEbay], ["etsy", syncEtsy]]) {
+    if (only && only !== platform) continue;
+    try {
+      const r = await fn(db, uid, productsSnap.docs, productById, await sinceFor(platform));
+      imported += r.imported;
+      skipped += r.skipped;
+      saleIds.push(...r.saleIds);
+    } catch (e) {
+      console.error(`[syncSales] ${platform} uid=${uid}: ${e.message}`);
+      errors.push({ platform, message: e.message });
+    }
+  }
+  return { imported, skipped, saleIds, errors };
+}
+
+/** Re-read this far before the last poll: orders land late, and recordSaleCore
+ *  dedupes, so overlap only costs a few already-known rows. */
+const SCHEDULED_OVERLAP_MS = 60 * 60 * 1000;
+
+/**
+ * Lookback start for a scheduled poll: just before the last successful poll,
+ * or the full default window for a platform that has never been polled.
+ * `lastPoll` is a Firestore Timestamp, a Date, epoch ms, or absent.
+ */
+function scheduledSince(lastPoll, now = Date.now()) {
+  const ms = typeof lastPoll?.toMillis === "function" ? lastPoll.toMillis()
+    : lastPoll instanceof Date ? lastPoll.getTime()
+    : typeof lastPoll === "number" ? lastPoll : null;
+  if (!ms) return now - DEFAULT_LOOKBACK_MS;
+  return Math.max(now - DEFAULT_LOOKBACK_MS, ms - SCHEDULED_OVERLAP_MS);
+}
+
+/** uids that have a connected eBay and/or Etsy integration doc. */
+function uidsWithSalesIntegration(integrationDocs) {
+  const uids = new Set();
+  for (const d of integrationDocs) {
+    if ((d.id === "ebay" || d.id === "etsy") && d.data()?.isConnected) {
+      const uid = d.ref?.parent?.parent?.id;
+      if (uid) uids.add(uid);
+    }
+  }
+  return [...uids];
+}
+
 exports.syncSales = onCall(
   { secrets: EBAY_SECRETS, timeoutSeconds: 120, memory: "512MiB" },
   validated("syncSales", async (data, request) => {
@@ -415,34 +475,40 @@ exports.syncSales = onCall(
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
     const db = admin.firestore();
 
-    const only = data.platform ?? null;
     const sinceMs = data.since != null
       ? (typeof data.since === "number" ? data.since : Date.parse(data.since))
       : Date.now() - DEFAULT_LOOKBACK_MS;
 
-    const productsSnap = await db.collection("products").where("userId", "==", uid).get();
-    const productById = new Map(productsSnap.docs.map((d) => [d.id, d.data()]));
-
-    const errors = [];
-    const saleIds = [];
-    let imported = 0;
-    let skipped = 0;
-
-    for (const [platform, fn] of [["ebay", syncEbay], ["etsy", syncEtsy]]) {
-      if (only && only !== platform) continue;
-      try {
-        const r = await fn(db, uid, productsSnap.docs, productById, sinceMs);
-        imported += r.imported;
-        skipped += r.skipped;
-        saleIds.push(...r.saleIds);
-      } catch (e) {
-        console.error(`[syncSales] ${platform} uid=${uid}: ${e.message}`);
-        errors.push({ platform, message: e.message });
-      }
-    }
-
-    return { imported, skipped, saleIds, errors };
+    return syncSalesForUser(db, uid, { only: data.platform ?? null, sinceFor: () => sinceMs });
   }),
+);
+
+/**
+ * Background sales import (2026-10-24 decision: eBay + Etsy sales become a
+ * scheduled poll, the manual button stays). Mirrors `syncTiktokOrdersScheduled`.
+ * Each user is polled since their own last poll per platform; one user's
+ * failure never stops the rest.
+ */
+exports.syncSalesScheduled = onSchedule(
+  { schedule: "every 30 minutes", secrets: EBAY_SECRETS, timeoutSeconds: 540, memory: "512MiB" },
+  async () => {
+    const db = admin.firestore();
+    const snaps = await db.collectionGroup("integrations").where("isConnected", "==", true).get();
+    const uids = uidsWithSalesIntegration(snaps.docs);
+    const BATCH = 5;
+    for (let i = 0; i < uids.length; i += BATCH) {
+      await Promise.allSettled(uids.slice(i, i + BATCH).map(async (uid) => {
+        const sinceFor = async (platform) => {
+          const snap = await db.doc(`users/${uid}/integrations/${platform}`).get();
+          return scheduledSince(snap.data()?.lastSalesPollAt);
+        };
+        const r = await syncSalesForUser(db, uid, { sinceFor });
+        if (r.imported || r.errors.length) {
+          console.log(`[syncSalesScheduled] uid=${uid} imported=${r.imported} skipped=${r.skipped} errors=${r.errors.length}`);
+        }
+      }));
+    }
+  },
 );
 
 exports.getOrderTakeHome = onCall(
@@ -495,4 +561,5 @@ exports._internal = {
   buildEbaySkuMap, buildEtsyListingMap, ebayOrderToSaleFields,
   etsyReceiptToSaleFields, resolveEbayStatus, ebayBuyerAddress,
   summarizeEbayTransactions, sumEtsyPayments, refetchTakeHomeForSale,
+  scheduledSince, uidsWithSalesIntegration, syncSalesForUser,
 };
