@@ -616,8 +616,16 @@ differ; the "reconciled" lines say what changed. Nothing here is built yet.
   variants rebuild). `setMercariSalesDiscarded {items, discarded}` writes/removes
   `users/{uid}/mercariSaleInbox/{mercari_<order|item id>}` (server-only, no rules
   change). Field is `reviewState`, not `state`: quicktype made a top-level Swift
-  `enum State` that shadows SwiftUI's `@State`. Still to build: the scraper loop
-  (iOS `scanForNewSales`, extension) calling review per page, and the review UI.
+  `enum State` that shadows SwiftUI's `@State`. **iOS review UI built 2026-11-12**
+  (`Data/MercariRefresh.swift` plan + service, `Views/MercariRefreshReviewSheet.swift`,
+  tests `MercariRefreshPlanTests`): `SalesDashboardView.syncWebPlatforms` now enriches what
+  `scanForNewSales` found, calls `reviewMercariSales`, and shows the opt-out review list
+  (uncheck / Link to product… / swipe Never import); Import calls
+  `recordMercariSalesBatch`. It replaces the old auto-import + `pendingMercariSales`
+  branches (the `mercariAutoImport` setting and the "+" modal are now unused by Refresh).
+  **Not done:** the scan still reads only the `in_progress` tab (no `complete` tab, no
+  stop-at-first-known, no "Full rescan" / Discarded menu entries), the Chrome extension
+  and web have no review step, and nothing here has run against a real Mercari account.
 
 ### 4. eBay (and Etsy) sales import is automatic
 - `syncSales` (`sale_poller.js`: eBay Fulfillment orders + Etsy receipts) is

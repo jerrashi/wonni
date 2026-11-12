@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		5E11AA0000000000000000F4 /* MercariRefreshPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E11AA0000000000000000F5 /* MercariRefreshPlanTests.swift */; };
+		5E11AA0000000000000000F2 /* MercariRefreshReviewSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E11AA0000000000000000F3 /* MercariRefreshReviewSheet.swift */; };
+		5E11AA0000000000000000F0 /* MercariRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E11AA0000000000000000F1 /* MercariRefresh.swift */; };
 		03A410AD6C5D2EE94E518114 /* WeverseSubSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = D433929DDE2859253F273096 /* WeverseSubSheets.swift */; };
 		0685922FCBC971E8E5A74D30 /* MercariFlagCriteriaTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03D0C11455159C543D7730AA /* MercariFlagCriteriaTests.swift */; };
 		0A6C5D24F71BE8393D402C56 /* VisionTitlePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F5B4C13E60AD7282C3F1B45 /* VisionTitlePolicyTests.swift */; };
@@ -156,6 +159,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		5E11AA0000000000000000F5 /* MercariRefreshPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MercariRefreshPlanTests.swift; sourceTree = "<group>"; };
+		5E11AA0000000000000000F3 /* MercariRefreshReviewSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MercariRefreshReviewSheet.swift; sourceTree = "<group>"; };
+		5E11AA0000000000000000F1 /* MercariRefresh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MercariRefresh.swift; sourceTree = "<group>"; };
 		00EE85F19AD747589FB21EB0 /* UploadPillView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadPillView.swift; sourceTree = "<group>"; };
 		0390FC2D4AC60A1E828D9ADE /* ProductRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductRepository.swift; sourceTree = "<group>"; };
 		03D0C11455159C543D7730AA /* MercariFlagCriteriaTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MercariFlagCriteriaTests.swift; sourceTree = "<group>"; };
@@ -447,6 +453,7 @@
 				6192AA5F2D7F583E00EC2EFA /* ProfileView.swift */,
 				6134E1572FDCB206007C3979 /* PublishedPhotoModal.swift */,
 				209D4C79E6D3436A97F872B1 /* RecordSaleSheet.swift */,
+				5E11AA0000000000000000F3 /* MercariRefreshReviewSheet.swift */,
 				93E1D79D693749E582DBCB13 /* SalesDashboardView.swift */,
 				F98B6103F36C4C689466B9A5 /* SalesBoardView.swift */,
 				8F58C9187109B0A023CF5811 /* SalesInsightsViews.swift */,
@@ -487,6 +494,7 @@
 				61FAA5682FAE227F001C28CE /* GeminiService.swift */,
 				D7A10001C0FFEE000000000C /* BulkTextDraftService.swift */,
 				7C1F0A2B9D3E4F5061728399 /* BulkTextDraftRunner.swift */,
+				5E11AA0000000000000000F1 /* MercariRefresh.swift */,
 				5E11AA0000000000000000A1 /* SoldOutRun.swift */,
 				5E11AA0000000000000000B1 /* SoldOutRunner.swift */,
 				D7A10001C0FFEE0000000012 /* CrossPostRunStore.swift */,
@@ -545,6 +553,7 @@
 				D7A10001C0FFEE0000000006 /* LayoutRegressionTests.swift */,
 				D7A10001C0FFEE000000000A /* FacebookAutofillPolicyTests.swift */,
 				D7A10001C0FFEE0000000010 /* BulkTextDraftMappingTests.swift */,
+				5E11AA0000000000000000F5 /* MercariRefreshPlanTests.swift */,
 				5E11AA0000000000000000E1 /* SoldOutPlanTests.swift */,
 				D7A10001C0FFEE0000000014 /* CrossPostRunStoreTests.swift */,
 				2C8E7F46193D0A5B5F624E78 /* AIQualityTrackingTests.swift */,
@@ -701,6 +710,7 @@
 				61FAA56E2FAE227F001C28CE /* GeminiService.swift in Sources */,
 				D7A10001C0FFEE000000000B /* BulkTextDraftService.swift in Sources */,
 				7C1F0A2B9D3E4F5061728398 /* BulkTextDraftRunner.swift in Sources */,
+				5E11AA0000000000000000F0 /* MercariRefresh.swift in Sources */,
 				5E11AA0000000000000000A0 /* SoldOutRun.swift in Sources */,
 				5E11AA0000000000000000B0 /* SoldOutRunner.swift in Sources */,
 				5E11AA0000000000000000C0 /* SoldOutProgressView.swift in Sources */,
@@ -759,6 +769,7 @@
 				1A589EC58F7C4BA78F4A2708 /* SaleRepository.swift in Sources */,
 				678765A92DE62F001C8C88F2 /* SalesMetrics.swift in Sources */,
 				60A7C95275BB4BCCAA8FA838 /* RecordSaleSheet.swift in Sources */,
+				5E11AA0000000000000000F2 /* MercariRefreshReviewSheet.swift in Sources */,
 				EC4CE9E74B3D4A44A464E4A6 /* SalesDashboardView.swift in Sources */,
 				5E40C361C5444016970A4A7F /* SalesBoardView.swift in Sources */,
 				EF402964D356415AABA08F1F /* SaleStage.swift in Sources */,
@@ -810,6 +821,7 @@
 				D7A10001C0FFEE0000000005 /* LayoutRegressionTests.swift in Sources */,
 				D7A10001C0FFEE0000000009 /* FacebookAutofillPolicyTests.swift in Sources */,
 				D7A10001C0FFEE000000000F /* BulkTextDraftMappingTests.swift in Sources */,
+				5E11AA0000000000000000F4 /* MercariRefreshPlanTests.swift in Sources */,
 				5E11AA0000000000000000E0 /* SoldOutPlanTests.swift in Sources */,
 				D7A10001C0FFEE0000000013 /* CrossPostRunStoreTests.swift in Sources */,
 				1B7D6E35082CF94A4E513D67 /* AIQualityTrackingTests.swift in Sources */,

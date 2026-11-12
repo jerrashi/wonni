@@ -33,6 +33,9 @@ struct SalesDashboardView: View {
     @State private var selectedSaleIds: Set<String> = []
     @State private var showBulkDeleteConfirmation = false
     @State private var showAddSale = false
+    // Mercari Refresh review (MercariRefresh.swift): set after a scan finds new sales.
+    @State private var refreshPlan: MercariRefreshPlan?
+    @State private var showRefreshReview = false
     @State private var pendingUndoSale: Sale? = nil
     @State private var toastAction: (() -> Void)? = nil
     @State private var toastActionLabel: String = "Undo"
@@ -184,6 +187,11 @@ struct SalesDashboardView: View {
             }
             .onChange(of: mercariSaleSyncManager.needsLogin) { _, needs in
                 if needs { showMercariLogin = true }
+            }
+            .sheet(isPresented: $showRefreshReview, onDismiss: { Task { await reload() } }) {
+                if let plan = refreshPlan {
+                    MercariRefreshReviewSheet(plan: plan) { _ in Task { await reload() } }
+                }
             }
             .sheet(isPresented: $showAddSale, onDismiss: { Task { await reload() } }) {
                 AddSaleSheet()
@@ -594,85 +602,32 @@ struct SalesDashboardView: View {
         )
         var result: (message: String, actionLabel: String?, action: (() -> Void)?)? = nil
         if !found.isEmpty {
-            // Read the setting NOW, not from the cached @State: that state defaults to true
-            // and only updates when reload()'s async fetch lands, so a sync tapped right
-            // after opening the dashboard could auto-import with the setting off.
-            let autoImport = await IntegrationRepository.shared.loadSalesDashboardSettings()
-            mercariAutoImport = autoImport
-            if autoImport {
-                var imported = 0
-                var needsReview: [MercariFoundSaleItem] = []
-                for item in found {
-                    // Enrich before saving so we never write a sale missing take-home or a
-                    // real sold date — scanForNewSales only reads title/price off the list page.
-                    // fetchPhoto: true also gets the confirmed-reliable item-page price, since
-                    // scanForNewSales' own price is only a cents-vs-dollars magnitude guess
-                    // (github issue #38) — falls back to that guess only if this fetch fails.
-                    let enrichment = await mercariSaleSyncManager.loadSaleData(itemId: item.id, fetchPhoto: true)
-                    guard let name = item.name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                          let price = enrichment?.price ?? item.price, price > 0,
-                          let takeHome = enrichment?.takeHome,
-                          let saleDate = enrichment?.soldAt ?? item.soldAt else {
-                        // Incomplete — never silently dropped: persist to the pending list,
-                        // pre-flagged, so the user can fix it in the "+" modal.
-                        var pending = item
-                        pending.price = enrichment?.price ?? pending.price
-                        pending.takeHome = enrichment?.takeHome ?? pending.takeHome
-                        pending.soldAt = enrichment?.soldAt ?? pending.soldAt
-                        pending.thumbnailUrl = enrichment?.thumbnailUrl ?? pending.thumbnailUrl
-                        pending.enrichFailed = true
-                        needsReview.append(pending)
-                        continue
-                    }
-                    let match = await ListingRepository.shared.findListingByMercariId(item.id)
-                    let sale = Sale(
-                        listingId: match?.listingId,
-                        listingTitle: name,
-                        coverPhotoPath: match?.coverPhotoPath,
-                        thumbnailUrl: match?.coverPhotoPath == nil ? (enrichment?.thumbnailUrl ?? item.thumbnailUrl) : nil,
-                        platform: "mercari",
-                        platformOrderId: item.id,
-                        priceSoldFor: price,
-                        takeHome: takeHome,
-                        trackingNumber: enrichment?.trackingNumber,
-                        carrier: enrichment?.carrier,
-                        status: enrichment?.status ?? .pending,
-                        soldAt: Timestamp(date: saleDate)
-                    )
-                    do {
-                        try await SaleRepository.shared.addSale(sale)
-                        imported += 1
-                        await PendingMercariSaleRepository.shared.delete(item.id)
-                    } catch {
-                        print("[SyncWebPlatforms] Failed to save \(item.id): \(error)")
-                    }
+            // Nothing is recorded here any more. Enrich what the scan found (take-home,
+            // real sold date, reliable item-page price: github issue #38), let the server
+            // classify it, and hand the user the review list. They uncheck, link or
+            // "Never import"; Import records through recordMercariSalesBatch.
+            var scraped: [MercariRefreshRow] = []
+            for item in found {
+                let enrichment = await mercariSaleSyncManager.loadSaleData(itemId: item.id, fetchPhoto: true)
+                scraped.append(MercariRefreshRow(
+                    id: item.id,
+                    title: item.name ?? "",
+                    price: enrichment?.price ?? item.price ?? 0,
+                    takeHome: enrichment?.takeHome ?? item.takeHome,
+                    soldAt: enrichment?.soldAt ?? item.soldAt,
+                    thumbnailUrl: enrichment?.thumbnailUrl ?? item.thumbnailUrl,
+                    trackingNumber: enrichment?.trackingNumber
+                ))
+            }
+            do {
+                let review = try await MercariRefreshService.review(scraped)
+                let plan = MercariRefreshPlan(rows: MercariRefreshPlan.applying(review, to: scraped))
+                if !plan.importable.isEmpty || plan.rows.contains(where: { $0.kind == .invalid }) {
+                    refreshPlan = plan
+                    showRefreshReview = true
                 }
-                if !needsReview.isEmpty {
-                    await PendingMercariSaleRepository.shared.upsert(needsReview)
-                }
-                await reload()
-                var parts: [String] = []
-                if imported > 0 { parts.append("\(imported) Mercari sale\(imported == 1 ? "" : "s") imported") }
-                if !needsReview.isEmpty { parts.append("\(needsReview.count) need\(needsReview.count == 1 ? "s" : "") review") }
-                if !parts.isEmpty {
-                    result = (parts.joined(separator: " · "),
-                              needsReview.isEmpty ? nil : "Review",
-                              needsReview.isEmpty ? nil : { showAddSale = true })
-                }
-            } else {
-                // Auto-import is off — persist to the durable pending-sales collection (not
-                // just an in-memory toast) so the "+" modal's list survives app restarts
-                // (github issue #50). Re-found already-pending items get refreshed by the
-                // merge (that's how scraper fixes reach stale records) but only genuinely
-                // new ones count toward the toast.
-                let existingPendingIds = Set(await PendingMercariSaleRepository.shared.fetchAll().map { $0.id })
-                await PendingMercariSaleRepository.shared.upsert(found)
-                let count = found.filter { !existingPendingIds.contains($0.id) }.count
-                if count > 0 {
-                    result = ("\(count) new Mercari sale\(count == 1 ? "" : "s") found — review in Import",
-                              "Review",
-                              { showAddSale = true })
-                }
+            } catch {
+                result = ("Could not check Mercari sales: \(error.localizedDescription)", nil, nil)
             }
         }
         await mercariSaleSyncManager.sync(sales: sales)
