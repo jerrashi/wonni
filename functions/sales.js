@@ -393,6 +393,12 @@ async function recordSaleCore(db, uid, fields, product) {
     : db.collection("sales").doc().id;
   const saleRef = db.collection("sales").doc(saleId);
   const existing = await saleRef.get();
+  // Sale ids are global (`<platform>_<order id>`). A re-record may only touch the
+  // caller's own sale; another user's doc with the same id must never be merged
+  // into (it would overwrite their price, buyer and tracking).
+  if (existing.exists && existing.data()?.userId !== uid) {
+    throw new HttpsError("permission-denied", "That order id belongs to a different account.");
+  }
 
   const now = admin.firestore.FieldValue.serverTimestamp();
 

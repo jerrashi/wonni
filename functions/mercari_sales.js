@@ -110,7 +110,11 @@ async function reviewMercariSalesCore(db, uid, items) {
       variantSku: match?.variantSku ?? null,
       productTitle: match ? productById.get(match.productId)?.title ?? null : null,
     };
-    if ((await db.collection("sales").doc(key).get()).exists) {
+    // Only the caller's own sale counts. Sale ids are global, so another user's
+    // doc with the same key must not read as "recorded" (it would leak that it
+    // exists and move the scan's stop point).
+    const saleSnap = await db.collection("sales").doc(key).get();
+    if (saleSnap.exists && saleSnap.data()?.userId === uid) {
       rows.push({ ...base, reviewState: "recorded" });
       if (firstRecordedIndex === null) firstRecordedIndex = i;
       continue;

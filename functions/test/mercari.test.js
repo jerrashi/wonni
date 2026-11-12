@@ -166,3 +166,28 @@ test("mercariPointerPatch: variant link rebuilds the WHOLE variants array, other
   assert.deepEqual(patch.variants[1], product.variants[1]);
   assert.equal(mercariPointerPatch(product, "M", "m2"), null);   // already linked
 });
+
+// ── cross-tenant guards (security review 2026-11-12) ───────────────────────
+
+test("reviewMercariSales: another user's sale with the same id is NOT 'recorded' for me", async () => {
+  const db = await seed();
+  await db.collection("sales").doc("mercari_m_shared").set({ userId: "someone_else" });
+  await db.collection("sales").doc("mercari_m_mine").set({ userId: "u1" });
+  const r = await reviewMercariSalesCore(db, "u1", [row("m_shared"), row("m_mine")]);
+  assert.deepEqual(r.rows.map((x) => x.reviewState), ["new", "recorded"]);
+  assert.equal(r.firstRecordedIndex, 1);
+});
+
+test("recordSaleCore: refuses to merge into another user's sale and leaves it untouched", async () => {
+  const db = new FakeFirestore();
+  await db.collection("sales").doc("mercari_o1").set({ userId: "victim", priceSoldFor: 50, buyerName: "Real Buyer" });
+  const { _internal: s } = require("../sales");
+  await assert.rejects(
+    s.recordSaleCore(db, "attacker", { platform: "mercari", platformOrderId: "o1", soldPrice: 1, buyerName: "Evil" }, null),
+    /different account/,
+  );
+  const after = (await db.collection("sales").doc("mercari_o1").get()).data();
+  assert.equal(after.priceSoldFor, 50);
+  assert.equal(after.buyerName, "Real Buyer");
+  assert.equal(after.userId, "victim");
+});
