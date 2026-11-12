@@ -328,11 +328,17 @@ async function syncEbay(db, uid, productDocs, productById, sinceMs) {
 
     for (const { li, match } of matches) {
       const fields = ebayOrderToSaleFields(order, li, match, { tracking, finance });
-      const { saleId, created } = await recordSaleCore(
-        db, uid, fields, productById.get(match.productId) ?? null,
-      );
-      saleIds.push(saleId);
-      created ? imported++ : skipped++;
+      try {
+        const { saleId, created } = await recordSaleCore(
+          db, uid, fields, productById.get(match.productId) ?? null,
+        );
+        saleIds.push(saleId);
+        created ? imported++ : skipped++;
+      } catch (e) {
+        // One order that cannot be recorded must not abort the rest of the poll.
+        console.error(`[syncSales] ebay order ${order.orderId} uid=${uid}: ${e.message}`);
+        skipped++;
+      }
     }
   }
 
@@ -368,11 +374,16 @@ async function syncEtsy(db, uid, productDocs, productById, sinceMs) {
     const match = etsyListingId != null ? listingMap.get(String(etsyListingId)) : null;
     const takeHome = await etsyReceiptTakeHome(etsyAuth, receipt.receipt_id).catch(() => null);
     const fields = etsyReceiptToSaleFields(receipt, match, takeHome);
-    const { saleId, created } = await recordSaleCore(
-      db, uid, fields, match ? productById.get(match.productId) ?? null : null,
-    );
-    saleIds.push(saleId);
-    created ? imported++ : skipped++;
+    try {
+      const { saleId, created } = await recordSaleCore(
+        db, uid, fields, match ? productById.get(match.productId) ?? null : null,
+      );
+      saleIds.push(saleId);
+      created ? imported++ : skipped++;
+    } catch (e) {
+      console.error(`[syncSales] etsy receipt ${receipt.receipt_id} uid=${uid}: ${e.message}`);
+      skipped++;
+    }
   }
 
   await db.doc(`users/${uid}/integrations/etsy`).set(

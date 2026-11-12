@@ -407,6 +407,14 @@ async function recordSaleCore(db, uid, fields, product) {
     : db.collection("sales").doc().id;
   const saleRef = db.collection("sales").doc(saleId);
   const existing = await saleRef.get();
+  // Backstop after resolveSaleId: never merge into a doc another account owns.
+  // resolveSaleId makes this unreachable for ordinary ids; it can only fire when
+  // someone pre-created a doc at another user's uid-prefixed id (firestore.rules
+  // let a client create any sales/{id} with its own userId). Generic message on
+  // purpose: it must not say whose doc it is.
+  if (existing.exists && existing.data()?.userId !== uid) {
+    throw new HttpsError("aborted", "Could not record this sale. Try again, or contact support if it keeps happening.");
+  }
 
   const now = admin.firestore.FieldValue.serverTimestamp();
 

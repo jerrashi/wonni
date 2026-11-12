@@ -200,3 +200,22 @@ test("resolveSaleId: free or own plain id is kept (existing sales dedupe unchang
   assert.equal(await s.resolveSaleId(db, "u1", "ebay", "9"), "ebay_9");
   assert.equal(await s.resolveSaleId(db, "u2", "ebay", "9"), "u2_ebay_9");
 });
+
+test("recordSaleCore: backstop refuses a pre-planted doc at the caller's prefixed id, and leaves it untouched", async () => {
+  const db = new FakeFirestore();
+  const { _internal: s } = require("../sales");
+  await db.collection("sales").doc("mercari_o2").set({ userId: "victim" });
+  // attacker guessed the victim's prefixed id and planted a doc there
+  await db.collection("sales").doc("victim_mercari_o2").set({ userId: "attacker", priceSoldFor: 1 });
+  // victim syncs: plain id is taken by someone else's doc? no, it is theirs -> plain id used
+  const r = await s.recordSaleCore(db, "victim", { platform: "mercari", platformOrderId: "o2", soldPrice: 9 }, null);
+  assert.equal(r.saleId, "mercari_o2");
+  // now the case that reaches the backstop: plain id held by a third party, prefixed id planted
+  await db.collection("sales").doc("mercari_o3").set({ userId: "third" });
+  await db.collection("sales").doc("victim_mercari_o3").set({ userId: "attacker", priceSoldFor: 1 });
+  await assert.rejects(
+    s.recordSaleCore(db, "victim", { platform: "mercari", platformOrderId: "o3", soldPrice: 9 }, null),
+    (e) => e.code === "aborted" && !/account|attacker|third/i.test(e.message),
+  );
+  assert.equal((await db.collection("sales").doc("victim_mercari_o3").get()).data().priceSoldFor, 1);
+});
