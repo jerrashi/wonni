@@ -281,7 +281,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
             const etsyUrl = etsyRes.data?.url || (etsyListingId ? `https://www.etsy.com/listing/${etsyListingId}` : null);
             try {
               await updateDoc(doc(db, "products", product.id), {
-                "crossPostStatus.etsy": "active",
+                "crossPostStatus.etsy": etsyRes.data?.draft ? "draft" : "active",
                 "crossPostListingIds.etsy": String(etsyListingId || ""),
                 etsyListingId: String(etsyListingId || ""),
                 etsyListingUrl: etsyUrl,

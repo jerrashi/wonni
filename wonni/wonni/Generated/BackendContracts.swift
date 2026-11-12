@@ -55,8 +55,6 @@ struct BackendContracts: Codable, Sendable {
     let etsyCreateListingResponse: EtsyCreateListingResponse?
     let etsyDeleteListingRequest: EtsyDeleteListingRequest?
     let etsyDeleteListingResponse: EtsyDeleteListingResponse?
-    let etsyDraftTestRequest: EtsyDraftTestRequest?
-    let etsyDraftTestResponse: EtsyDraftTestResponse?
     let etsyImportPullSyncRequest: EtsyImportPullSyncRequest?
     let etsyImportPullSyncResponse: EtsyImportPullSyncResponse?
     let etsyPullSyncRequest: EtsyPullSyncRequest?
@@ -164,8 +162,6 @@ struct BackendContracts: Codable, Sendable {
         case etsyCreateListingResponse = "EtsyCreateListingResponse"
         case etsyDeleteListingRequest = "EtsyDeleteListingRequest"
         case etsyDeleteListingResponse = "EtsyDeleteListingResponse"
-        case etsyDraftTestRequest = "EtsyDraftTestRequest"
-        case etsyDraftTestResponse = "EtsyDraftTestResponse"
         case etsyImportPullSyncRequest = "EtsyImportPullSyncRequest"
         case etsyImportPullSyncResponse = "EtsyImportPullSyncResponse"
         case etsyPullSyncRequest = "EtsyPullSyncRequest"
@@ -293,8 +289,6 @@ extension BackendContracts {
         etsyCreateListingResponse: EtsyCreateListingResponse?? = nil,
         etsyDeleteListingRequest: EtsyDeleteListingRequest?? = nil,
         etsyDeleteListingResponse: EtsyDeleteListingResponse?? = nil,
-        etsyDraftTestRequest: EtsyDraftTestRequest?? = nil,
-        etsyDraftTestResponse: EtsyDraftTestResponse?? = nil,
         etsyImportPullSyncRequest: EtsyImportPullSyncRequest?? = nil,
         etsyImportPullSyncResponse: EtsyImportPullSyncResponse?? = nil,
         etsyPullSyncRequest: EtsyPullSyncRequest?? = nil,
@@ -402,8 +396,6 @@ extension BackendContracts {
             etsyCreateListingResponse: etsyCreateListingResponse ?? self.etsyCreateListingResponse,
             etsyDeleteListingRequest: etsyDeleteListingRequest ?? self.etsyDeleteListingRequest,
             etsyDeleteListingResponse: etsyDeleteListingResponse ?? self.etsyDeleteListingResponse,
-            etsyDraftTestRequest: etsyDraftTestRequest ?? self.etsyDraftTestRequest,
-            etsyDraftTestResponse: etsyDraftTestResponse ?? self.etsyDraftTestResponse,
             etsyImportPullSyncRequest: etsyImportPullSyncRequest ?? self.etsyImportPullSyncRequest,
             etsyImportPullSyncResponse: etsyImportPullSyncResponse ?? self.etsyImportPullSyncResponse,
             etsyPullSyncRequest: etsyPullSyncRequest ?? self.etsyPullSyncRequest,
@@ -4397,10 +4389,12 @@ enum WhoMade: String, Codable, Equatable, Sendable {
 
 // MARK: - EtsyCreateListingResponse
 struct EtsyCreateListingResponse: Codable, Equatable, Sendable {
+    let draft: Bool?
     let listingId: String
     let success: Bool
 
     enum CodingKeys: String, CodingKey {
+        case draft = "draft"
         case listingId = "listingId"
         case success = "success"
     }
@@ -4425,10 +4419,12 @@ extension EtsyCreateListingResponse {
     }
 
     func with(
+        draft: Bool?? = nil,
         listingId: String? = nil,
         success: Bool? = nil
     ) -> EtsyCreateListingResponse {
         return EtsyCreateListingResponse(
+            draft: draft ?? self.draft,
             listingId: listingId ?? self.listingId,
             success: success ?? self.success
         )
@@ -4535,201 +4531,6 @@ extension EtsyDeleteListingResponse {
     ) -> EtsyDeleteListingResponse {
         return EtsyDeleteListingResponse(
             success: success ?? self.success
-        )
-    }
-
-    func jsonData() throws -> Data {
-        return try newJSONEncoder().encode(self)
-    }
-
-    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
-        return String(data: try self.jsonData(), encoding: encoding)
-    }
-}
-
-//
-// Hashable or Equatable:
-// The compiler will not be able to synthesize the implementation of Hashable or Equatable
-// for types that require the use of JSONAny, nor will the implementation of Hashable be
-// synthesized for types that have collections (such as arrays or dictionaries).
-
-// MARK: - EtsyDraftTestRequest
-struct EtsyDraftTestRequest: Codable, Equatable, Sendable {
-    let action: Action?
-    let credentialSet: String?
-    let productId: String
-
-    enum CodingKeys: String, CodingKey {
-        case action = "action"
-        case credentialSet = "credentialSet"
-        case productId = "productId"
-    }
-}
-
-// MARK: EtsyDraftTestRequest convenience initializers and mutators
-
-extension EtsyDraftTestRequest {
-    init(data: Data) throws {
-        self = try newJSONDecoder().decode(EtsyDraftTestRequest.self, from: data)
-    }
-
-    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
-        guard let data = json.data(using: encoding) else {
-            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
-        }
-        try self.init(data: data)
-    }
-
-    init(fromURL url: URL) throws {
-        try self.init(data: try Data(contentsOf: url))
-    }
-
-    func with(
-        action: Action?? = nil,
-        credentialSet: String?? = nil,
-        productId: String? = nil
-    ) -> EtsyDraftTestRequest {
-        return EtsyDraftTestRequest(
-            action: action ?? self.action,
-            credentialSet: credentialSet ?? self.credentialSet,
-            productId: productId ?? self.productId
-        )
-    }
-
-    func jsonData() throws -> Data {
-        return try newJSONEncoder().encode(self)
-    }
-
-    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
-        return String(data: try self.jsonData(), encoding: encoding)
-    }
-}
-
-enum Action: String, Codable, Equatable, Sendable {
-    case create = "create"
-    case delete = "delete"
-}
-
-//
-// Hashable or Equatable:
-// The compiler will not be able to synthesize the implementation of Hashable or Equatable
-// for types that require the use of JSONAny, nor will the implementation of Hashable be
-// synthesized for types that have collections (such as arrays or dictionaries).
-
-// MARK: - EtsyDraftTestResponse
-struct EtsyDraftTestResponse: Codable, Equatable, Sendable {
-    let action: Action
-    let note: String?
-    let ok: Bool
-    let testDrafts: [TestDraft]
-
-    enum CodingKeys: String, CodingKey {
-        case action = "action"
-        case note = "note"
-        case ok = "ok"
-        case testDrafts = "testDrafts"
-    }
-}
-
-// MARK: EtsyDraftTestResponse convenience initializers and mutators
-
-extension EtsyDraftTestResponse {
-    init(data: Data) throws {
-        self = try newJSONDecoder().decode(EtsyDraftTestResponse.self, from: data)
-    }
-
-    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
-        guard let data = json.data(using: encoding) else {
-            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
-        }
-        try self.init(data: data)
-    }
-
-    init(fromURL url: URL) throws {
-        try self.init(data: try Data(contentsOf: url))
-    }
-
-    func with(
-        action: Action? = nil,
-        note: String?? = nil,
-        ok: Bool? = nil,
-        testDrafts: [TestDraft]? = nil
-    ) -> EtsyDraftTestResponse {
-        return EtsyDraftTestResponse(
-            action: action ?? self.action,
-            note: note ?? self.note,
-            ok: ok ?? self.ok,
-            testDrafts: testDrafts ?? self.testDrafts
-        )
-    }
-
-    func jsonData() throws -> Data {
-        return try newJSONEncoder().encode(self)
-    }
-
-    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
-        return String(data: try self.jsonData(), encoding: encoding)
-    }
-}
-
-//
-// Hashable or Equatable:
-// The compiler will not be able to synthesize the implementation of Hashable or Equatable
-// for types that require the use of JSONAny, nor will the implementation of Hashable be
-// synthesized for types that have collections (such as arrays or dictionaries).
-
-// MARK: - TestDraft
-struct TestDraft: Codable, Equatable, Sendable {
-    let error: String?
-    let groupKey: String
-    let listingId: String?
-    let ok: Bool
-    let title: String?
-    let variants: Int
-
-    enum CodingKeys: String, CodingKey {
-        case error = "error"
-        case groupKey = "groupKey"
-        case listingId = "listingId"
-        case ok = "ok"
-        case title = "title"
-        case variants = "variants"
-    }
-}
-
-// MARK: TestDraft convenience initializers and mutators
-
-extension TestDraft {
-    init(data: Data) throws {
-        self = try newJSONDecoder().decode(TestDraft.self, from: data)
-    }
-
-    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
-        guard let data = json.data(using: encoding) else {
-            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
-        }
-        try self.init(data: data)
-    }
-
-    init(fromURL url: URL) throws {
-        try self.init(data: try Data(contentsOf: url))
-    }
-
-    func with(
-        error: String?? = nil,
-        groupKey: String? = nil,
-        listingId: String?? = nil,
-        ok: Bool? = nil,
-        title: String?? = nil,
-        variants: Int? = nil
-    ) -> TestDraft {
-        return TestDraft(
-            error: error ?? self.error,
-            groupKey: groupKey ?? self.groupKey,
-            listingId: listingId ?? self.listingId,
-            ok: ok ?? self.ok,
-            title: title ?? self.title,
-            variants: variants ?? self.variants
         )
     }
 

@@ -138,65 +138,36 @@ test("a small product is not split (single listing path stays as it was)", () =>
 
 // ── free dry run: drafts only ───────────────────────────────────────────────
 
-const { etsyDraftTestCore } = _internal;
-
-function draftEtsy() {
-  const e = fakeEtsy();
-  const base = globalThis.fetch;
-  e.deleted = [];
-  e.inventoryStatus = 200;
-  globalThis.fetch = async (url, opts = {}) => {
-    const path = String(url).replace("https://openapi.etsy.com", "");
-    if ((opts.method || "GET") === "DELETE") { e.deleted.push(path.split("/").pop()); return { status: 204, ok: true, text: async () => "" }; }
-    if ((opts.method || "GET") === "PUT" && e.inventoryStatus !== 200) return { status: e.inventoryStatus, ok: false, text: async () => JSON.stringify({ error: "property_id invalid" }) };
-    return base(url, opts);
-  };
-  return e;
-}
-
-test("dry run: creates every listing as a DRAFT with real inventory, never publishes, never touches live fields", async () => {
-  const etsy = draftEtsy();
+test("draft-only setting: every listing is created as a DRAFT with its real inventory, never published, and the product is marked 'draft' (not live)", async () => {
+  const etsy = fakeEtsy();
   const db = new FakeFirestore({ products: { p1: bigProduct() } });
-  const res = await etsyDraftTestCore("u", "p1", "create", { db, auth: AUTH, upload: async () => 1, data: DATA });
-  assert.equal(res.ok, true);
-  assert.equal(res.testDrafts.length, 3);
+  const ref = db.collection("products").doc("p1");
+  const product = db.peek("products", "p1");
+  const listings = await syncEtsyGroups(
+    { ref, product, productId: "p1", plan: planForProduct(product, "p1", 5), auth: AUTH, price: 5, readinessStateId: null, data: DATA, draftOnly: true },
+    { upload: async () => 1 },
+  );
+  assert.equal(listings.length, 3);
   assert.ok([...etsy.listings.values()].every((l) => l.state === "draft"), "no listing was published");
   assert.deepEqual([...etsy.listings.values()].map((l) => l.inventory.products.length), [70, 70, 10]);
   const doc = db.peek("products", "p1");
-  assert.equal(doc.etsyTestDrafts.length, 3);
-  assert.equal(doc.etsyListings, undefined, "live pointers untouched");
-  assert.equal(doc.etsyListingId, undefined);
+  assert.equal(doc.crossPostStatus.etsy, "draft", "a draft is not a live listing");
+  assert.equal(doc.etsyListings.length, 3);
 });
 
-test("dry run: an Etsy rejection is reported per listing, not thrown, and the drafts stay until deleted", async () => {
-  const etsy = draftEtsy();
-  etsy.inventoryStatus = 400;
+test("draft-only setting: posting again with the setting OFF publishes the same drafts instead of creating new ones", async () => {
+  const etsy = fakeEtsy();
   const db = new FakeFirestore({ products: { p1: bigProduct() } });
-  const res = await etsyDraftTestCore("u", "p1", "create", { db, auth: AUTH, upload: async () => 1, data: DATA });
-  assert.equal(res.ok, false);
-  assert.match(res.testDrafts[0].error, /inventory rejected \(400\).*property_id invalid/);
-  assert.equal(db.peek("products", "p1").etsyTestDrafts.length, 3);
-});
-
-test("dry run: delete removes the drafts from Etsy and the doc; a re-run replaces earlier drafts instead of piling up", async () => {
-  const etsy = draftEtsy();
-  const db = new FakeFirestore({ products: { p1: bigProduct() } });
-  await etsyDraftTestCore("u", "p1", "create", { db, auth: AUTH, upload: async () => 1, data: DATA });
-  const firstIds = db.peek("products", "p1").etsyTestDrafts.map((d) => d.listingId);
-  await etsyDraftTestCore("u", "p1", "create", { db, auth: AUTH, upload: async () => 1, data: DATA });
-  assert.deepEqual(etsy.deleted.sort(), firstIds.sort(), "earlier drafts were deleted before the new run");
-  const del = await etsyDraftTestCore("u", "p1", "delete", { db, auth: AUTH });
-  assert.equal(del.ok, true);
-  assert.equal(db.peek("products", "p1").etsyTestDrafts, undefined);
-});
-
-test("dry run: refuses a single-variant product; reports (not throws) more than 2 variation types", async () => {
-  draftEtsy();
-  const single = new FakeFirestore({ products: { p1: bigProduct({ variants: issues(1).map((x) => x.v) }) } });
-  await assert.rejects(etsyDraftTestCore("u", "p1", "create", { db: single, auth: AUTH }), /at least 2 active variants/);
-  const three = new FakeFirestore({ products: { p1: bigProduct({ options: [{ name: "A" }, { name: "B" }, { name: "C" }], variants: [
-    { id: "a", optionValues: { A: "1", B: "1", C: "1" } }, { id: "b", optionValues: { A: "2", B: "2", C: "2" } }] }) } });
-  const res = await etsyDraftTestCore("u", "p1", "create", { db: three, auth: AUTH });
-  assert.equal(res.ok, false);
-  assert.match(res.note, /at most 2 variation types/);
+  const ref = db.collection("products").doc("p1");
+  let product = db.peek("products", "p1");
+  const run = (draftOnly) => syncEtsyGroups(
+    { ref, product, productId: "p1", plan: planForProduct(product, "p1", 5), auth: AUTH, price: 5, readinessStateId: null, data: DATA, draftOnly },
+    { upload: async () => 1 },
+  );
+  await run(true);
+  product = db.peek("products", "p1");
+  await run(false);
+  assert.equal(etsy.listings.size, 3, "same listings, no duplicates");
+  assert.ok([...etsy.listings.values()].every((l) => l.state === "active"));
+  assert.equal(db.peek("products", "p1").crossPostStatus.etsy, "active");
 });

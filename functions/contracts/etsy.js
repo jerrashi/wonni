@@ -32,6 +32,8 @@ const EtsyCreateListingRequestSchema = z.object({
 const EtsyCreateListingResponseSchema = z.object({
   success: z.literal(true),
   listingId: z.string(),
+  /** true when the Advanced setting "post to Etsy as drafts" is on: nothing was published. */
+  draft: z.boolean().nullish(),
 });
 
 const EtsyProductRequestSchema = z.object({
@@ -124,26 +126,6 @@ module.exports = {
       summary: "Push title/description/price/quantity + inventory to an existing Etsy listing.",
       request: EtsyProductRequestSchema,
       response: EtsyOkResponseSchema,
-    },
-    {
-      name: "etsyDraftTest",
-      summary: "FREE dry run of an Etsy post: action \"create\" builds every Etsy listing for the product as a DRAFT (photos + the real variation inventory payload), never publishes (Etsy charges its $0.20 fee only on publish), and reports per listing what Etsy accepted or rejected; action \"delete\" removes those test drafts. Touches no live-listing fields on the product.",
-      request: EtsyProductRequestSchema.extend({ action: z.enum(["create", "delete"]).default("create") }),
-      response: z.object({
-        action: z.enum(["create", "delete"]),
-        ok: z.boolean(),
-        /** One entry per Etsy listing the product would become. */
-        testDrafts: z.array(z.object({
-          groupKey: z.string(),
-          title: z.string().nullish(),
-          listingId: z.string().nullish(),
-          variants: z.number().int(),
-          ok: z.boolean(),
-          /** What Etsy said when it rejected a step. */
-          error: z.string().nullish(),
-        })),
-        note: z.string().nullish(),
-      }),
     },
     {
       name: "etsyDeleteListing",

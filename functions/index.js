@@ -30,7 +30,7 @@ const { ebayRetrieveComps } = require("./ebay_comps");
 const { tiktokCreateListing, tiktokUpdateListing, tiktokDeleteListing, getTiktokCategories } = require("./tiktok_listing");
 const { etsyExchangeToken } = require("./etsy_auth");
 const {
-  etsyCreateListing, etsyUpdateListing, etsyDeleteListing, etsyCheckShopSetup, etsyDraftTest,
+  etsyCreateListing, etsyUpdateListing, etsyDeleteListing, etsyCheckShopSetup,
   etsyPullSync, etsyImportPullSync,
   getEtsyCategories, suggestEtsyCategory, getEtsyShippingProfiles, getEtsyReturnPolicies,
 } = require("./etsy_listing");
@@ -116,7 +116,6 @@ module.exports = {
   etsyCreateListing,
   etsyUpdateListing,
   etsyDeleteListing,
-  etsyDraftTest,
   etsyCheckShopSetup,
   etsyPullSync,
   etsyImportPullSync,

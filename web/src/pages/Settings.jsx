@@ -74,6 +74,7 @@ const SIGN_IN_METHODS = [
 ];
 
 export default function Settings() {
+  const [etsyPublishAsDraft, setEtsyPublishAsDraft] = useState(false);
   const [integrations, setIntegrations] = useState({});
   const [feeRate, setFeeRate] = useState("7.5");
   const [linkedProviderIds, setLinkedProviderIds] = useState(
@@ -134,6 +135,7 @@ export default function Settings() {
     return onSnapshot(ref, (snap) => {
       if (snap.exists()) {
         const data = snap.data();
+        setEtsyPublishAsDraft(data.etsyPublishAsDraft === true);
         if (data.defaultLocation) {
           setAddressLine1(data.defaultLocation.addressLine1 || "");
           setCity(data.defaultLocation.city || "");
@@ -1003,6 +1005,38 @@ export default function Settings() {
           Default 7.5% = 5% referral + 2.5% transaction. Used by the Chrome extension margin calculator.
         </div>
       </div>
+
+      <details className="settings-section">
+        <summary style={{ cursor: "pointer", fontSize: 18, fontWeight: 600 }}>Advanced</summary>
+        <div style={{ marginTop: 12 }}>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 14 }}>
+            <input
+              type="checkbox"
+              checked={etsyPublishAsDraft}
+              onChange={async (e) => {
+                const on = e.target.checked;
+                setEtsyPublishAsDraft(on);
+                const uid = auth.currentUser?.uid;
+                if (!uid) return;
+                try {
+                  await setDoc(doc(db, "users", uid, "sellingSettings", "default"), { etsyPublishAsDraft: on }, { merge: true });
+                } catch (err) {
+                  console.warn("Could not save etsyPublishAsDraft:", err);
+                  setEtsyPublishAsDraft(!on);
+                }
+              }}
+            />
+            <span>
+              Post to Etsy as drafts (don't publish)
+              <span style={{ display: "block", fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                For testing. Etsy charges its listing fee only when a listing is published, so drafts are free.
+                Posting works as usual but listings stay as drafts in your Etsy shop and show "Draft" here. Turn this
+                off and post again to publish them.
+              </span>
+            </span>
+          </label>
+        </div>
+      </details>
     </Layout>
   );
 }

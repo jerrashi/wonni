@@ -169,12 +169,6 @@
     "EtsyUpdateListingResponse": {
       "$ref": "#/definitions/EtsyUpdateListingResponse"
     },
-    "EtsyDraftTestRequest": {
-      "$ref": "#/definitions/EtsyDraftTestRequest"
-    },
-    "EtsyDraftTestResponse": {
-      "$ref": "#/definitions/EtsyDraftTestResponse"
-    },
     "EtsyDeleteListingRequest": {
       "$ref": "#/definitions/EtsyDeleteListingRequest"
     },
@@ -2148,6 +2142,12 @@
         },
         "listingId": {
           "type": "string"
+        },
+        "draft": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [
@@ -2185,101 +2185,6 @@
       },
       "required": [
         "success"
-      ],
-      "additionalProperties": false
-    },
-    "EtsyDraftTestRequest": {
-      "type": "object",
-      "properties": {
-        "productId": {
-          "type": "string",
-          "minLength": 1
-        },
-        "credentialSet": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "action": {
-          "type": "string",
-          "enum": [
-            "create",
-            "delete"
-          ],
-          "default": "create"
-        }
-      },
-      "required": [
-        "productId"
-      ],
-      "additionalProperties": false
-    },
-    "EtsyDraftTestResponse": {
-      "type": "object",
-      "properties": {
-        "action": {
-          "type": "string",
-          "enum": [
-            "create",
-            "delete"
-          ]
-        },
-        "ok": {
-          "type": "boolean"
-        },
-        "testDrafts": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "groupKey": {
-                "type": "string"
-              },
-              "title": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "listingId": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "variants": {
-                "type": "integer"
-              },
-              "ok": {
-                "type": "boolean"
-              },
-              "error": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              }
-            },
-            "required": [
-              "groupKey",
-              "variants",
-              "ok"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "note": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "action",
-        "ok",
-        "testDrafts"
       ],
       "additionalProperties": false
     },

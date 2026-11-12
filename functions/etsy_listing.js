@@ -413,7 +413,7 @@ async function deactivateEtsyListing(auth, listingId) {
  * moved away are deactivated. The product doc is written after EVERY listing,
  * so a failure on listing 3 never loses track of 1–2.
  */
-async function syncEtsyGroups({ ref, product, productId, plan, auth, price, readinessStateId, data = {} }, deps = {}) {
+async function syncEtsyGroups({ ref, product, productId, plan, auth, price, readinessStateId, data = {}, draftOnly = false }, deps = {}) {
   const upload = deps.upload || uploadListingImages;
   const { shopId } = auth;
   const known = new Map(etsyListingsOf(product).map((g) => [g.groupKey, String(g.listingId)]));
@@ -425,7 +425,7 @@ async function syncEtsyGroups({ ref, product, productId, plan, auth, price, read
   const shared = sharedPoolQuantity(product);
 
   const persist = (final) => ref.set({
-    crossPostStatus: { etsy: final ? "active" : "pending" },
+    crossPostStatus: { etsy: final ? (draftOnly ? "draft" : "active") : "pending" },
     crossPostListingIds: { etsy: listings[0].listingId },
     etsyListingId: listings[0].listingId,
     etsyListingUrl: `https://www.etsy.com/listing/${listings[0].listingId}`,
@@ -476,7 +476,7 @@ async function syncEtsyGroups({ ref, product, productId, plan, auth, price, read
     }
     const inv = await etsyReq("PUT", `/v3/application/listings/${listingId}/inventory`, { ...auth, body: payload });
     if (inv.status !== 200) throw new HttpsError("internal", `Etsy inventory update failed (${inv.status}) for "${title}": ${etsyErrorText(inv.data)}`);
-    if (needsPublish) {
+    if (needsPublish && !draftOnly) {
       const pub = await etsyReq("PATCH", `/v3/application/shops/${shopId}/listings/${listingId}`, { ...auth, body: { state: "active" } });
       if (pub.status !== 200) throw new Error(`Etsy publish failed (${pub.status}): ${etsyErrorText(pub.data)}`);
     }
@@ -495,6 +495,21 @@ async function syncEtsyGroups({ ref, product, productId, plan, auth, price, read
   return listings;
 }
 
+/**
+ * Advanced setting (Settings › Advanced): post to Etsy as DRAFTS only. Etsy charges
+ * its listing fee at publish, so drafts are free — useful for checking what Etsy
+ * accepts. users/{uid}/sellingSettings/default.etsyPublishAsDraft; off by default.
+ */
+async function etsyPublishAsDraft(db, uid) {
+  try {
+    const snap = await db.collection("users").doc(uid).collection("sellingSettings").doc("default").get();
+    return snap.exists && snap.data()?.etsyPublishAsDraft === true;
+  } catch (e) {
+    console.warn(`[etsy] could not read etsyPublishAsDraft: ${e.message}`);
+    return false;
+  }
+}
+
 // Core create-listing logic, shared by the `etsyCreateListing` callable and
 // any other server-side caller (e.g. cross_post.js's rule-driven cross-post)
 // that needs to post to Etsy without going through another Cloud Function
@@ -511,6 +526,7 @@ async function etsyCreateListingCore(uid, data) {
     return { success: true, listingId: String(etsyIdOf(product)) };
   }
 
+  const draftOnly = data.draftOnly ?? await etsyPublishAsDraft(db, uid);
   await ref.set({ crossPostStatus: { etsy: "pending" } }, { merge: true });
   try {
     const auth = await getActiveEtsyToken(uid);
@@ -522,8 +538,8 @@ async function etsyCreateListingCore(uid, data) {
     // Too many variants for one Etsy listing → several listings.
     const splitPlan = planForProduct(product, data.productId, priceAmount(price));
     if (splitPlan) {
-      const listings = await syncEtsyGroups({ ref, product, productId: data.productId, plan: splitPlan, auth, price, readinessStateId, data });
-      return { success: true, listingId: listings[0].listingId, listings: [...listings], partial: !!listings.partial };
+      const listings = await syncEtsyGroups({ ref, product, productId: data.productId, plan: splitPlan, auth, price, readinessStateId, data, draftOnly });
+      return { success: true, listingId: listings[0].listingId, listings: [...listings], partial: !!listings.partial, ...(draftOnly ? { draft: true } : {}) };
     }
 
     // A previous attempt may have created the Etsy draft and then failed on photos
@@ -541,9 +557,12 @@ async function etsyCreateListingCore(uid, data) {
     const variants = Array.isArray(product.variants) ? product.variants.filter((v) => v.active !== false) : [];
     if (variants.length > 1) {
       try {
-        await etsyReq("PUT", `/v3/application/listings/${etsyListingId}/inventory`,
+        const inv = await etsyReq("PUT", `/v3/application/listings/${etsyListingId}/inventory`,
           { ...auth, body: buildEtsyInventoryPayload(variants, priceAmount(price), readinessStateId, { sharedQuantity: sharedPoolQuantity(product) }) });
+        // Draft mode exists to see what Etsy accepts, so a rejection must show.
+        if (draftOnly && inv.status !== 200) throw new Error(`Etsy inventory rejected (${inv.status}): ${etsyErrorText(inv.data)}`);
       } catch (e) {
+        if (draftOnly) throw e;
         console.warn(`[etsyCreateListing] inventory update failed: ${e.message}`);
       }
     }
@@ -552,21 +571,23 @@ async function etsyCreateListingCore(uid, data) {
     if (uploaded < 1) {
       throw new HttpsError("failed-precondition", `Etsy draft ${etsyListingId} created but no photo uploaded — Etsy needs at least one photo to publish.`);
     }
-    const pub = await etsyReq("PATCH", `/v3/application/shops/${shopId}/listings/${etsyListingId}`,
-      { ...auth, body: { state: "active" } });
-    if (pub.status !== 200) {
-      throw new Error(`Etsy publish failed (${pub.status}): ${JSON.stringify(pub.data)}`);
+    if (!draftOnly) {
+      const pub = await etsyReq("PATCH", `/v3/application/shops/${shopId}/listings/${etsyListingId}`,
+        { ...auth, body: { state: "active" } });
+      if (pub.status !== 200) {
+        throw new Error(`Etsy publish failed (${pub.status}): ${JSON.stringify(pub.data)}`);
+      }
     }
 
     await ref.set({
-      crossPostStatus: { etsy: "active" },
+      crossPostStatus: { etsy: draftOnly ? "draft" : "active" },
       crossPostListingIds: { etsy: etsyListingId },
       etsyListingId,
       etsyListingUrl: `https://www.etsy.com/listing/${etsyListingId}`,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
 
-    return { success: true, listingId: etsyListingId };
+    return { success: true, listingId: etsyListingId, ...(draftOnly ? { draft: true } : {}) };
   } catch (err) {
     await ref.set({ crossPostStatus: { etsy: "failed" } }, { merge: true });
     if (err instanceof HttpsError) throw err;
@@ -574,93 +595,6 @@ async function etsyCreateListingCore(uid, data) {
     throw new HttpsError("internal", `Etsy listing failed: ${err.message}`);
   }
 }
-
-// ── Free dry run: drafts only ───────────────────────────────────────────────
-//
-// Etsy has no sandbox, but it charges its listing fee only when a listing is
-// PUBLISHED. This builds every listing the product would become as a DRAFT
-// (create → photos → the real inventory payload), never publishes, and reports
-// per listing what Etsy accepted. It keeps its ids in `etsyTestDrafts` and never
-// touches the live-listing fields (crossPostStatus / etsyListings / variants).
-
-async function etsyDraftTestCore(uid, productId, action = "create", deps = {}) {
-  const db = deps.db || admin.firestore();
-  const product = await loadOwnedProduct(db, uid, productId);
-  if (!product) throw new HttpsError("not-found", "Product not found.");
-  const ref = db.collection("products").doc(productId);
-  const auth = deps.auth || await getActiveEtsyToken(uid);
-  const upload = deps.upload || uploadListingImages;
-
-  const removeOld = async () => {
-    const old = Array.isArray(product.etsyTestDrafts) ? product.etsyTestDrafts : [];
-    for (const d of old) {
-      const del = await etsyReq("DELETE", `/v3/application/listings/${d.listingId}`, auth);
-      if (del.status !== 204 && del.status !== 404) console.warn(`[etsyDraftTest] draft ${d.listingId} not deleted (${del.status}): ${etsyErrorText(del.data)}`);
-    }
-    return old.length;
-  };
-
-  if (action === "delete") {
-    const n = await removeOld();
-    await ref.set({ etsyTestDrafts: admin.firestore.FieldValue.delete() }, { merge: true });
-    return { action, ok: true, testDrafts: [], note: n ? `Deleted ${n} test draft${n === 1 ? "" : "s"}.` : "No test drafts to delete." };
-  }
-
-  const items = activeVariantItems(product);
-  if (items.length < 2) throw new HttpsError("failed-precondition", "Needs a product with at least 2 active variants.");
-  await removeOld(); // never pile up drafts from earlier runs
-
-  const price = resolveListingPrice(product);
-  const readinessStateId = await firstReadinessStateId(auth.shopId, auth);
-  const options = Array.isArray(product.options) ? product.options : [];
-  let plan;
-  try {
-    plan = planEtsyListings(items, options, { productId, basePrice: priceAmount(price), sharedQuantity: sharedPoolQuantity(product) });
-  } catch (e) {
-    // e.g. more than 2 variation types: report it instead of failing the call.
-    return { action, ok: false, testDrafts: [], note: e.message };
-  }
-
-  const results = [];
-  const saved = [];
-  for (let gi = 0; gi < plan.length; gi++) {
-    const { key, items: groupItems } = plan[gi];
-    const title = groupTitle(String(product.title || "Product").slice(0, 140), gi, plan.length, 140);
-    const row = { groupKey: key, title, listingId: null, variants: groupItems.length, ok: false, error: null };
-    results.push(row);
-    try {
-      const payload = buildEtsyInventoryPayload(groupItems.map((x) => x.v), priceAmount(price), readinessStateId,
-        { sharedQuantity: sharedPoolQuantity(product) });
-      row.listingId = await createEtsyDraft(product, deps.data || {}, auth, { price, readinessStateId, title });
-      saved.push({ groupKey: key, listingId: row.listingId });
-      const images = listingImagesFor(product, 10);
-      const uploaded = images.length ? await upload(auth.shopId, row.listingId, images, auth) : 0;
-      if (uploaded < 1) throw new Error("no photo uploaded (Etsy needs one to publish)");
-      const inv = await etsyReq("PUT", `/v3/application/listings/${row.listingId}/inventory`, { ...auth, body: payload });
-      if (inv.status !== 200) throw new Error(`inventory rejected (${inv.status}): ${etsyErrorText(inv.data)}`);
-      row.ok = true;
-    } catch (e) {
-      row.error = String(e.message || e).slice(0, 400);
-    }
-  }
-  await ref.set({ etsyTestDrafts: saved }, { merge: true });
-  const ok = results.every((r) => r.ok);
-  return {
-    action, ok, testDrafts: results,
-    note: ok
-      ? "Etsy accepted every listing as a draft. Nothing was published, so no fee. Run action \"delete\" to clear the drafts."
-      : "Etsy rejected at least one step (see the error on that listing). Drafts that were created are kept until you run action \"delete\".",
-  };
-}
-
-exports.etsyDraftTest = onCall(
-  { timeoutSeconds: 300, memory: "512MiB" },
-  validated("etsyDraftTest", async (data, request) => {
-    const uid = request.auth?.uid;
-    if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
-    return etsyDraftTestCore(uid, data.productId, data.action);
-  }),
-);
 
 /** Etsy's error body as one readable line (it is either {error} or an array of {message}). */
 function etsyErrorText(body) {
@@ -879,7 +813,7 @@ exports.getEtsyReturnPolicies = onCall(
 exports._internal = {
   matchEtsyTaxonomyId, categoryWords, buildEtsyInventoryPayload, buildEtsyCreateBody, ETSY_MAX_PRODUCTS, etsyGroupLimit, planEtsyListings,
   etsyDriftDiff, etsyImportUpdates, productTotalQuantity, priceAmount, etsyIdOf,
-  etsyCreateListingCore, etsyDraftTestCore, syncEtsyGroups, planForProduct, etsyListingsOf,
+  etsyCreateListingCore, syncEtsyGroups, planForProduct, etsyListingsOf,
   recentWhenMade, whenMadeFromEnumError, flattenTaxonomyLeaves, pickShippingProfile,
   pickReadinessState, etsyItemDimensions, singleOfferingInventory, etsyErrorText,
   ETSY_RESALE_DEFAULTS,
