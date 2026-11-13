@@ -108,21 +108,28 @@ async function verifySignature({ header, rawBody, body, getPublicKey }) {
 
 /**
  * Which Wonni user is this eBay account? By subscription id first (exact), then
- * by eBay user id, then by username. eBay started sending an immutable user id in
- * place of the username for some US users (2025-09), hence both.
- * Returns integration doc refs (several Wonni users may have linked one eBay account).
+ * by eBay's immutable user id. eBay started sending that id in place of the
+ * username for some US users (2025-09).
+ *
+ * `allowUsername` adds a last-resort username match. Usernames can be changed and
+ * later taken by someone else, so it is only allowed where a wrong match is
+ * harmless (a sale push just triggers a poll of that Wonni user's own orders),
+ * never for account deletion. A username is never compared against a user id.
+ * Returns integration doc snapshots (several Wonni users may link one eBay account).
  */
-async function findEbayIntegrations(db, { subscriptionId, userId, username }) {
+async function findEbayIntegrations(db, { subscriptionId, userId, username, allowUsername = false }) {
   const group = db.collectionGroup("integrations");
+  const onlyEbay = (s) => s.docs.filter((d) => d.id === "ebay");
   if (subscriptionId) {
-    const s = await group.where("orderNotificationSubscriptionId", "==", subscriptionId).get();
-    if (!s.empty) return s.docs;
-  }
-  for (const [field, value] of [["ebayUserId", userId], ["connectedUsername", username], ["connectedUsername", userId]]) {
-    if (!value) continue;
-    const s = await group.where(field, "==", value).get();
-    const hits = s.docs.filter((d) => d.id === "ebay");
+    const hits = onlyEbay(await group.where("orderNotificationSubscriptionId", "==", subscriptionId).get());
     if (hits.length) return hits;
+  }
+  if (userId) {
+    const hits = onlyEbay(await group.where("ebayUserId", "==", userId).get());
+    if (hits.length) return hits;
+  }
+  if (allowUsername && username) {
+    return onlyEbay(await group.where("connectedUsername", "==", username).get());
   }
   return [];
 }
@@ -133,9 +140,12 @@ async function findEbayIntegrations(db, { subscriptionId, userId, username }) {
  * An eBay user deleted their account: forget their tokens and identity. Their
  * Wonni products and sales stay (they are the Wonni user's records), but the
  * eBay connection, which holds the eBay user's personal data, is removed.
+ * Matched ONLY by eBay's immutable user id. Connections made before 2026-11-13
+ * have no `ebayUserId` and are not matched; they gain it on the reconnect the
+ * new notification scope requires anyway.
  */
 async function handleAccountDeletion(db, data) {
-  const docs = await findEbayIntegrations(db, { userId: data?.userId, username: data?.username });
+  const docs = await findEbayIntegrations(db, { userId: data?.userId });
   for (const d of docs) {
     await d.ref.delete();
   }
@@ -148,6 +158,7 @@ async function handleOrderConfirmation(db, data, metadata, { syncUser }) {
     subscriptionId: metadata?.subscriptionId,
     userId: data?.user?.userId ?? data?.seller?.userId,
     username: data?.user?.username ?? data?.seller?.username,
+    allowUsername: true,
   });
   const uids = [...new Set(docs.filter((d) => d.data()?.isConnected).map((d) => d.ref.parent.parent.id))];
   let imported = 0;

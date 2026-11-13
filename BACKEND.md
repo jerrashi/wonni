@@ -645,9 +645,9 @@ differ; the "reconciled" lines say what changed. Nothing here is built yet.
   `X-EBAY-SIGNATURE` (ECDSA, eBay public key by `kid`, app token) and answers 412
   on a bad one, then routes: `ORDER_CONFIRMATION` (seller found by
   `orderNotificationSubscriptionId`, then `ebayUserId`, then `connectedUsername`)
-  runs `syncSalesForUser(only: "ebay", 2-day lookback)`, the same path as the
+  (username last, sale pushes only) runs `syncSalesForUser(only: "ebay", 2-day lookback)`, the same path as the
   30-minute poll, which stays as the backstop; `MARKETPLACE_ACCOUNT_DELETION`
-  deletes that eBay account's `integrations/ebay` docs (the compliance endpoint
+  deletes that eBay account's `integrations/ebay` docs, matched ONLY by `ebayUserId` (the compliance endpoint
   eBay requires, possibly why the keyset was refused 2026-10-16). Always 204,
   never a retry loop on our own errors. Subscribing: `ebayExchangeToken` stores
   `ebayUserId` and calls `ensureEbayOrderSubscription` (best effort; destination

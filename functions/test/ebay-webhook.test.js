@@ -131,13 +131,31 @@ test("regression: a failing poll never throws out of the handler (eBay would ret
   assert.equal(r.error, "boom");
 });
 
-test("MARKETPLACE_ACCOUNT_DELETION removes that eBay account's connections only", async () => {
+test("MARKETPLACE_ACCOUNT_DELETION removes that eBay account's connections only, by user id", async () => {
   const db = makeDb(seed());
-  const r = await wh.handleNotification(db, { metadata: { topic: "MARKETPLACE_ACCOUNT_DELETION" }, notification: { data: { username: "seller_two", userId: "x" } } }, {});
+  const r = await wh.handleNotification(db, { metadata: { topic: "MARKETPLACE_ACCOUNT_DELETION" }, notification: { data: { username: "whatever", userId: "EBU1" } } }, {});
   assert.equal(r.unlinked, 1);
-  assert.equal(db.store.has("users/u2/integrations/ebay"), false);
-  assert.equal(db.store.has("users/u1/integrations/ebay"), true);
+  assert.equal(db.store.has("users/u1/integrations/ebay"), false);
+  assert.equal(db.store.has("users/u2/integrations/ebay"), true);
   assert.equal(db.store.has("users/u3/integrations/etsy"), true);
+});
+
+test("regression: account deletion never matches by username (usernames are reused after a rename)", async () => {
+  const db = makeDb(seed());
+  // u2 has no ebayUserId; a deletion carrying their (possibly recycled) username must not touch it.
+  const r = await wh.handleNotification(db, { metadata: { topic: "MARKETPLACE_ACCOUNT_DELETION" }, notification: { data: { username: "seller_two", userId: "someone-new" } } }, {});
+  assert.equal(r.unlinked, 0);
+  assert.equal(db.store.has("users/u2/integrations/ebay"), true);
+});
+
+test("regression: a user id is never compared against connectedUsername", async () => {
+  const s = seed();
+  s["users/u2/integrations/ebay"].connectedUsername = "EBU9"; // legacy doc that stored an id as the name
+  const db = makeDb(s);
+  const polled = [];
+  await wh.handleNotification(db, { metadata: { topic: "ORDER_CONFIRMATION" }, notification: { data: { user: { userId: "EBU9" } } } },
+    { syncUser: async (uid) => { polled.push(uid); } });
+  assert.deepEqual(polled, []);
 });
 
 test("unknown topics are ignored", async () => {
