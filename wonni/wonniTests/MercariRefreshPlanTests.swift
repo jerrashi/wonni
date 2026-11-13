@@ -143,4 +143,23 @@ final class MercariRefreshPlanTests: XCTestCase {
         XCTAssertEqual(MercariRefreshService.filter(candidates, query: "").count, 2)
         XCTAssertEqual(MercariRefreshService.filter(candidates, query: "zzz").count, 0)
     }
+
+    func testRestoreMovesAHiddenRowBackToTheImportList() {
+        var plan = MercariRefreshPlan(rows: [
+            MercariRefreshRow(id: "a", title: "A", price: 5, kind: .discarded),
+            MercariRefreshRow(id: "b", title: "B", price: 6, kind: .new),
+        ])
+        XCTAssertEqual(plan.hidden.map(\.id), ["a"])
+        XCTAssertEqual(plan.importable.map(\.id), ["b"])
+        plan.restore("a")
+        XCTAssertTrue(plan.hidden.isEmpty)
+        XCTAssertEqual(plan.importable.map(\.id), ["a", "b"])
+        XCTAssertTrue(plan.isChecked("a"))
+        plan.restore("b") // only hidden rows can be restored; a new row is untouched
+        XCTAssertEqual(plan.importable.count, 2)
+    }
+
+    func testSaleTabsAreTheMercariUrlSegments() {
+        XCTAssertEqual(MercariSaleTab.allCases.map(\.rawValue), ["in_progress", "complete"])
+    }
 }

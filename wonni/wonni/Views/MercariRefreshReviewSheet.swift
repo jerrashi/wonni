@@ -85,6 +85,27 @@ struct MercariRefreshReviewSheet: View {
                         Text("Uncheck any you do not want. Swipe a row left for Never import.")
                     }
                 }
+                if !plan.hidden.isEmpty {
+                    Section {
+                        ForEach(plan.hidden) { row in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(row.title.isEmpty ? row.id : row.title).lineLimit(1)
+                                    Text(row.price, format: .currency(code: "USD"))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button("Restore") { Task { await restore(row) } }
+                                    .buttonStyle(.bordered)
+                                    .accessibilityIdentifier("mercariReviewRestore-\(row.id)")
+                            }
+                        }
+                    } header: {
+                        Text("Never import")
+                    } footer: {
+                        Text("You hid these earlier. Restore one to put it back on the list above.")
+                    }
+                }
                 let invalid = plan.rows.filter { $0.kind == .invalid }
                 if !invalid.isEmpty {
                     Section("Could not be read") {
@@ -224,6 +245,16 @@ struct MercariRefreshReviewSheet: View {
             onImported(response.recorded)
         } catch {
             errorMessage = "Import failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func restore(_ row: MercariRefreshRow) async {
+        errorMessage = nil
+        do {
+            try await MercariRefreshService.setDiscarded(plan, ids: [row.id], discarded: false)
+            withAnimation { plan.restore(row.id) }
+        } catch {
+            errorMessage = "Could not restore that sale: \(error.localizedDescription)"
         }
     }
 

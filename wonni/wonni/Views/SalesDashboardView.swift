@@ -474,6 +474,7 @@ struct SalesDashboardView: View {
                 }
             )
             .contextMenu {
+                Button("Full rescan of Mercari") { Task { await syncSales(force: true, fullRescan: true) } }
                 Button("Import from Mercari") { showAddSale = true }
             }
         }
@@ -532,7 +533,7 @@ struct SalesDashboardView: View {
         isLoading = false
     }
 
-    private func syncSales(force: Bool = false) async {
+    private func syncSales(force: Bool = false, fullRescan: Bool = false) async {
         if !force && secondsUntilNextSync > 0 {
             let m = secondsUntilNextSync / 60
             let s = secondsUntilNextSync % 60
@@ -548,7 +549,7 @@ struct SalesDashboardView: View {
         // Collect result messages and show exactly ONE, only after the "Syncing sales"
         // pill is gone — toasting mid-sync stacked two competing status bars.
         let apiToast = await syncAPIPlatforms(force: force)
-        let webToast = await syncWebPlatforms()
+        let webToast = await syncWebPlatforms(fullRescan: fullRescan)
 
         AppTaskQueue.shared.complete(id: taskId)
         isSyncing = false
@@ -590,16 +591,22 @@ struct SalesDashboardView: View {
     // Iterates web-autofill platform managers in order.
     // Add new platforms here as: await nextPlatformSyncManager.sync(sales: sales)
     // Returns the result message to toast AFTER the sync pill clears (never toasts itself).
-    private func syncWebPlatforms() async -> (message: String, actionLabel: String?, action: (() -> Void)?)? {
+    private func syncWebPlatforms(fullRescan: Bool = false) async -> (message: String, actionLabel: String?, action: (() -> Void)?)? {
         // Include deleted (hidden) sales so restored+deleted items never resurface on sync.
         let knownMercariIds = Set((sales + hiddenSales).compactMap { $0.platform == "mercari" ? $0.platformOrderId : nil })
-        // No date cutoff: scan the full (bounded) in_progress list and dedupe by known IDs.
-        // The old "stop at items older than the last sync day" optimization permanently hid
-        // any older sale that a previous sync failed to import.
-        let found = await mercariSaleSyncManager.scanForNewSales(
-            knownOrderIds: knownMercariIds,
-            stopBeforeDate: nil
-        )
+        // Refresh reads "in progress" then "complete", newest first, and stops at the first
+        // sale already on file in each list. Full rescan reads both lists to the end.
+        var found: [MercariFoundSaleItem] = []
+        var seenIds = Set<String>()
+        for tab in MercariSaleTab.allCases {
+            let tabItems = await mercariSaleSyncManager.scanForNewSales(
+                knownOrderIds: knownMercariIds,
+                stopBeforeDate: nil,
+                tab: tab,
+                stopAtKnown: !fullRescan
+            )
+            for item in tabItems where seenIds.insert(item.id).inserted { found.append(item) }
+        }
         var result: (message: String, actionLabel: String?, action: (() -> Void)?)? = nil
         if !found.isEmpty {
             // Nothing is recorded here any more. Enrich what the scan found (take-home,
@@ -622,7 +629,7 @@ struct SalesDashboardView: View {
             do {
                 let review = try await MercariRefreshService.review(scraped)
                 let plan = MercariRefreshPlan(rows: MercariRefreshPlan.applying(review, to: scraped))
-                if !plan.importable.isEmpty || plan.rows.contains(where: { $0.kind == .invalid }) {
+                if !plan.importable.isEmpty || plan.rows.contains(where: { $0.kind == .invalid || $0.kind == .discarded }) {
                     refreshPlan = plan
                     showRefreshReview = true
                 }

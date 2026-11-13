@@ -22,6 +22,14 @@ import FirebaseAuth
 import FirebaseFirestore
 import FirebaseFunctions
 
+// MARK: - Tabs
+
+/// The two lists Mercari keeps under mypage/listings. Raw value is the URL segment.
+enum MercariSaleTab: String, CaseIterable {
+    case inProgress = "in_progress"
+    case complete
+}
+
 // MARK: - Rows
 
 /// One scraped, enriched Mercari sale on the review list.
@@ -98,6 +106,16 @@ struct MercariRefreshPlan: Equatable {
     }
 
     mutating func unlink(_ id: String) { links[id] = nil }
+
+    /// Rows the user hid with "Never import" that a Full rescan found again.
+    var hidden: [MercariRefreshRow] { rows.filter { $0.kind == .discarded } }
+
+    /// Puts a hidden row back on the import list (after the server has un-hidden it).
+    mutating func restore(_ id: String) {
+        guard let i = rows.firstIndex(where: { $0.id == id }), rows[i].kind == .discarded else { return }
+        rows[i].kind = .new
+        unchecked.remove(id)
+    }
 
     /// Drops rows (after "Never import") so they leave the list at once.
     mutating func remove(_ ids: Set<String>) {

@@ -5274,10 +5274,15 @@ final class MercariSaleSyncManager: ObservableObject {
     /// Scans Mercari's in-progress transactions and returns newly discovered items.
     /// Stops at the first known order ID or when an item's updated date is before `stopBeforeDate`.
     /// Callers decide whether to auto-save or present for manual selection.
-    func scanForNewSales(knownOrderIds: Set<String>, stopBeforeDate: Date? = nil) async -> [MercariFoundSaleItem] {
+    ///
+    /// `tab` picks Mercari's "in progress" or "complete" list. With `stopAtKnown` the scan
+    /// ends at the first already-recorded sale (lists are newest first, so everything below
+    /// it was seen on an earlier Refresh); without it known ids are only filtered out, which
+    /// is what "Full rescan" uses to pick up older sales an earlier scan missed.
+    func scanForNewSales(knownOrderIds: Set<String>, stopBeforeDate: Date? = nil,
+                         tab: MercariSaleTab = .inProgress, stopAtKnown: Bool = false) async -> [MercariFoundSaleItem] {
         // sortBy=7 = Last Updated, so we get newest sales first without needing dropdown interaction.
-        // /in_progress/ shows transactions currently being traded — complete ones are already tracked.
-        guard let url = URL(string: "https://www.mercari.com/mypage/listings/in_progress/?sortBy=7") else { return [] }
+        guard let url = URL(string: "https://www.mercari.com/mypage/listings/\(tab.rawValue)/?sortBy=7") else { return [] }
         lastScanDiagnostics = nil
         navDelegate.reset()
         webView.load(URLRequest(url: url))
@@ -5320,8 +5325,9 @@ final class MercariSaleSyncManager: ObservableObject {
         //
         // Two deliberate behavior changes from the original implementation, both of which
         // made real scans report "0 new sales" (github issue #50):
-        //  - Already-known IDs are FILTERED, not treated as a stop signal. Stopping at the
-        //    first known sale silently hid every older not-yet-imported sale below it.
+        //  - Already-known IDs are FILTERED by default. Stopping at the first known sale hid
+        //    older not-yet-imported sales below it, so the stop is now opt-in (`stopAtKnown`,
+        //    Refresh) with "Full rescan" as the way back to the old behavior.
         //  - Items missing name/price are KEPT (with nils) and routed to enrichment /
         //    fix-and-import, matching the old visible-scan flow, instead of being dropped.
         var newItems: [MercariFoundSaleItem] = []
@@ -5359,7 +5365,11 @@ final class MercariSaleSyncManager: ObservableObject {
 
             for dict in arr.dropFirst(lastCount) {
                 guard let id = dict["id"] as? String, !id.isEmpty else { continue }
-                if knownOrderIds.contains(id) || addedIds.contains(id) { continue }
+                if knownOrderIds.contains(id) {
+                    if stopAtKnown { stopped = true; break }
+                    continue
+                }
+                if addedIds.contains(id) { continue }
 
                 // Optional cutoff: stop once items are older than the caller's date.
                 // Callers that want the full pending list (the spec'd behavior) pass nil.

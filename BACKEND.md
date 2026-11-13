@@ -623,9 +623,14 @@ differ; the "reconciled" lines say what changed. Nothing here is built yet.
   (uncheck / Link to product… / swipe Never import); Import calls
   `recordMercariSalesBatch`. It replaces the old auto-import + `pendingMercariSales`
   branches (the `mercariAutoImport` setting and the "+" modal are now unused by Refresh).
-  **Not done:** the scan still reads only the `in_progress` tab (no `complete` tab, no
-  stop-at-first-known, no "Full rescan" / Discarded menu entries), the Chrome extension
-  and web have no review step, and nothing here has run against a real Mercari account.
+  **Scan (2026-11-13):** Refresh now reads `in_progress` then `complete` (`MercariSaleTab`)
+  and stops at the first already-recorded sale in each list (`stopAtKnown`); the sync
+  button's long-press menu has "Full rescan of Mercari" (no stop; rows the user hid with
+  "Never import" come back in a "Never import" section with Restore). The `complete` URL
+  (`/mypage/listings/complete/?sortBy=7`) and its DOM are assumed to match `in_progress`;
+  unverified on a real account. **Not done:** a standing "Discarded (N)" menu entry (restore
+  works only from a Full rescan), the Chrome extension and web review step (mock first), and
+  nothing here has run against a real Mercari account.
 
 ### 4. eBay (and Etsy) sales import is automatic
 - `syncSales` (`sale_poller.js`: eBay Fulfillment orders + Etsy receipts) is
