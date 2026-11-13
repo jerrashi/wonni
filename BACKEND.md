@@ -219,7 +219,7 @@ it. Remove on the next web pass.
 | `aliexpressExchangeToken` / `tiktokExchangeToken` | **live** | reconcile integration-doc field shape (`platform`, `connectedAt` vs token-only) |
 | `requestAccountDeletion` / `cancelAccountDeletion` / `purgeDeletedAccounts` | **not deployed** — deferred port | see below |
 | `notifySavedSearchMatches` | **not deployed** — deferred port | see below |
-| `ebayWebhook` / `setupEbayNotifications` | **not deployed** — deferred port | see below |
+| `ebayWebhook` | **ported 2026-11-13, not deployed** (`functions/ebay_webhook.js`) | `setupEbayNotifications` retired: subscribing happens per seller on connect |
 | `placeAliexpressOrder` / `confirmTiktokShipment` / `pollAliexpressTracking` | **live** | keep |
 
 ---
@@ -639,11 +639,25 @@ differ; the "reconciled" lines say what changed. Nothing here is built yet.
   `syncTiktokOrdersScheduled`), keep the manual button for "now". Default
   lookback stays; a per-user `salesSyncedAt` cursor replaces the fixed window
   once scheduled.
-- **The eBay webhook never existed in production.** `ebay_webhook.js`
-  (`setupEbayNotifications` + endpoint) lived in the nested tree and was
-  never deployed (see § Deferred ports; #26). Polling first: no endpoint
-  verification, no latency SLO needed for this use. #26 stays open as a
-  later upgrade for near-real-time alerts (§ Stretch goals sale alerts).
+- **eBay webhook (#26), ported 2026-11-13, not deployed.** `functions/ebay_webhook.js`
+  `ebayWebhook` (HTTPS): GET answers eBay's challenge (sha256 of code + the
+  `EBAY_VERIFICATION_TOKEN` secret + the `EBAY_WEBHOOK_URL` param); POST checks
+  `X-EBAY-SIGNATURE` (ECDSA, eBay public key by `kid`, app token) and answers 412
+  on a bad one, then routes: `ORDER_CONFIRMATION` (seller found by
+  `orderNotificationSubscriptionId`, then `ebayUserId`, then `connectedUsername`)
+  runs `syncSalesForUser(only: "ebay", 2-day lookback)`, the same path as the
+  30-minute poll, which stays as the backstop; `MARKETPLACE_ACCOUNT_DELETION`
+  deletes that eBay account's `integrations/ebay` docs (the compliance endpoint
+  eBay requires, possibly why the keyset was refused 2026-10-16). Always 204,
+  never a retry loop on our own errors. Subscribing: `ebayExchangeToken` stores
+  `ebayUserId` and calls `ensureEbayOrderSubscription` (best effort; destination
+  created once and kept in `system/ebayNotifications`). Needs the new
+  `commerce.notification.subscription` scope (added to web Settings + iOS
+  authorize URLs and `EBAY_SCOPES_DESIRED`), so every seller reconnects once.
+  Unverified live: eBay's acceptance of the scope on our keyset, the exact
+  ORDER_CONFIRMATION payload, and destination creation with a user token.
+  Collection-group indexes for `ebayUserId` / `connectedUsername` are in
+  `firestore.indexes.json`. Tests: `test/ebay-webhook.test.js`.
 
 ## Scale + multiple eBay accounts — product decisions (2026-11-11, user)
 

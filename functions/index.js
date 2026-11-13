@@ -11,6 +11,7 @@ const { identifyProductsInImage } = require("./identify_products");
 const { placeAliexpressOrder, confirmTiktokShipment, pollAliexpressTracking } = require("./aliexpress_order");
 const { tiktokExchangeToken } = require("./tiktok_auth");
 const { ebayExchangeToken } = require("./ebay_auth");
+const { ebayWebhook } = require("./ebay_webhook");
 const {
   ebayCreateListing,
   ebayDeleteListing,
@@ -68,6 +69,7 @@ module.exports = {
   aliexpressExchangeToken,
   tiktokExchangeToken,
   ebayExchangeToken,
+  ebayWebhook,
   etsyExchangeToken,
 
   // Products

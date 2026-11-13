@@ -28,6 +28,9 @@ const EBAY_SCOPES_DESIRED = [
   "https://api.ebay.com/oauth/api_scope/sell.account",
   "https://api.ebay.com/oauth/api_scope/sell.fulfillment",
   "https://api.ebay.com/oauth/api_scope/sell.finances",
+  // ORDER_CONFIRMATION push subscriptions (ebay_webhook.js). Connections made
+  // before 2026-11-13 lack it; they keep the 30-minute poll until they reconnect.
+  "https://api.ebay.com/oauth/api_scope/commerce.notification.subscription",
 ];
 
 /** Space-delimited scope string to request when refreshing this user's token. */
@@ -56,9 +59,10 @@ function ebayIdentityApiHost() {
   return EBAY_ENV.value() === "production" ? "apiz.ebay.com" : "apiz.sandbox.ebay.com";
 }
 
-// Look up the authenticated seller's eBay username for display in Settings.
+// Look up the authenticated seller's eBay username + immutable user id.
 // Requires the commerce.identity.readonly OAuth scope on the access token.
-async function fetchEbayUsername(accessToken) {
+// The user id is what eBay notifications identify the seller by (ebay_webhook.js).
+async function fetchEbayIdentity(accessToken) {
   const response = await fetch(`https://${ebayIdentityApiHost()}/commerce/identity/v1/user/`, {
     method: "GET",
     headers: {
@@ -71,7 +75,7 @@ async function fetchEbayUsername(accessToken) {
   if (!response.ok) {
     throw new Error(`eBay identity API error (${response.status}): ${JSON.stringify(data)}`);
   }
-  return data.username || data.userId || null;
+  return { username: data.username || data.userId || null, userId: data.userId || null };
 }
 
 function basicAuthHeader() {
@@ -114,7 +118,7 @@ function throwIfCredentialsRejected(status, json) {
 
 // Exchange authorization code for access + refresh tokens
 exports.ebayExchangeToken = onCall(
-  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET] },
+  { secrets: [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, require("./ebay_webhook_params").EBAY_VERIFICATION_TOKEN] },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
@@ -148,9 +152,11 @@ exports.ebayExchangeToken = onCall(
 
     // Fetch the authenticated user's eBay username for the "Connected as" row.
     let connectedUsername = "Connected Account";
+    let ebayUserId = null;
     try {
-      connectedUsername =
-        (await fetchEbayUsername(tokens.access_token)) || connectedUsername;
+      const identity = await fetchEbayIdentity(tokens.access_token);
+      connectedUsername = identity.username || connectedUsername;
+      ebayUserId = identity.userId;
     } catch (e) {
       console.error("Failed to fetch eBay username:", e.message);
     }
@@ -159,6 +165,9 @@ exports.ebayExchangeToken = onCall(
       platform: "ebay",
       isConnected: true,
       connectedUsername,
+      ebayUserId,
+      // A new grant may belong to a different eBay account: re-subscribe below.
+      orderNotificationSubscriptionId: null,
       connectedAt: admin.firestore.FieldValue.serverTimestamp(),
       // Web-specific OAuth token storage (iOS doesn't need this)
       accessToken: tokens.access_token,
@@ -172,6 +181,16 @@ exports.ebayExchangeToken = onCall(
       environment: EBAY_ENV.value(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
+
+    // Sale push notifications (best effort; never fails the connect).
+    const { ensureEbayOrderSubscription, userEbayCall } = require("./ebay_webhook");
+    const { EBAY_VERIFICATION_TOKEN, EBAY_WEBHOOK_URL } = require("./ebay_webhook_params");
+    const sub = await ensureEbayOrderSubscription(admin.firestore(), uid, {
+      call: userEbayCall(uid),
+      webhookUrl: EBAY_WEBHOOK_URL.value(),
+      verificationToken: EBAY_VERIFICATION_TOKEN.value(),
+    });
+    console.log(`[ebayExchangeToken] sale notifications uid=${uid}: ${sub.status}${sub.message ? ` (${sub.message})` : ""}`);
 
     return { success: true, connectedUsername, username: connectedUsername };
   }

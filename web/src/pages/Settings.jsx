@@ -27,6 +27,8 @@ const EBAY_SCOPES = [
   "https://api.ebay.com/oauth/api_scope/sell.fulfillment",
   "https://api.ebay.com/oauth/api_scope/sell.finances",
   "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
+  // Sale push notifications (functions/ebay_webhook.js), added 2026-11-13.
+  "https://api.ebay.com/oauth/api_scope/commerce.notification.subscription",
 ].join(" ");
 const ETSY_CLIENT_ID = import.meta.env.VITE_ETSY_CLIENT_ID ?? "REPLACE_ME";
 
