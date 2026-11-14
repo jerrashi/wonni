@@ -33,8 +33,13 @@ struct SalesDashboardView: View {
     @State private var selectedSaleIds: Set<String> = []
     @State private var showBulkDeleteConfirmation = false
     @State private var showAddSale = false
-    // Mercari Refresh review (MercariRefresh.swift): set after a scan finds new sales.
+    // Mercari review (MercariRefresh.swift): built from the server inbox when the banner's
+    // Review is tapped. The sheet never opens on its own.
     @State private var refreshPlan: MercariRefreshPlan?
+    @State private var mercariInbox: MercariInbox = .empty
+    /// Set by Settings › Mercari › "Rescan all Mercari sales": the next refresh reads both
+    /// Mercari lists to the end instead of stopping at the first known sale.
+    @AppStorage("mercariFullRescanRequested") private var fullRescanRequested = false
     @State private var showRefreshReview = false
     @State private var pendingUndoSale: Sale? = nil
     @State private var toastAction: (() -> Void)? = nil
@@ -113,6 +118,12 @@ struct SalesDashboardView: View {
                 .opacity(0.01)
                 .allowsHitTesting(false)
         )
+        .safeAreaInset(edge: .top) {
+            if !mercariInbox.pending.isEmpty {
+                mercariBanner
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
         .navigationTitle("Sales")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -190,7 +201,14 @@ struct SalesDashboardView: View {
             }
             .sheet(isPresented: $showRefreshReview, onDismiss: { Task { await reload() } }) {
                 if let plan = refreshPlan {
-                    MercariRefreshReviewSheet(plan: plan) { _ in Task { await reload() } }
+                    MercariRefreshReviewSheet(
+                        plan: plan,
+                        onImported: { message in
+                            showToast(message)
+                            Task { await reload() }
+                        },
+                        onInboxChanged: { Task { await loadMercariInbox() } }
+                    )
                 }
             }
             .sheet(isPresented: $showAddSale, onDismiss: { Task { await reload() } }) {
@@ -473,10 +491,6 @@ struct SalesDashboardView: View {
                     Task { await syncSales(force: true) }
                 }
             )
-            .contextMenu {
-                Button("Full rescan of Mercari") { Task { await syncSales(force: true, fullRescan: true) } }
-                Button("Import from Mercari") { showAddSale = true }
-            }
         }
     }
 
@@ -486,7 +500,7 @@ struct SalesDashboardView: View {
                 .font(.system(size: 56))
                 .foregroundStyle(.secondary)
             Text("No sales yet").font(.title3.weight(.semibold))
-            Text("Tap \u{21BA} to sync from eBay and Etsy, use \u{21BA} > Check Mercari listings for Mercari, or tap + to add a sale manually.")
+            Text("Pull down or tap \u{21BA} to check eBay, Etsy and Mercari for new sales, or tap + to add a sale by hand.")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
@@ -531,9 +545,36 @@ struct SalesDashboardView: View {
         hiddenSales = (try? await fetchHidden) ?? []
         mercariAutoImport = await fetchSettings
         isLoading = false
+        await loadMercariInbox()
     }
 
-    private func syncSales(force: Bool = false, fullRescan: Bool = false) async {
+    private func loadMercariInbox() async {
+        guard let inbox = try? await MercariRefreshService.inbox() else { return }
+        withAnimation { mercariInbox = inbox }
+    }
+
+    /// "N Mercari sales waiting for review" — floats above the list, board and empty state.
+    private var mercariBanner: some View {
+        let n = mercariInbox.pending.count
+        return HStack(spacing: 12) {
+            Text("**\(n) Mercari sale\(n == 1 ? "" : "s")** waiting for review")
+                .font(.subheadline)
+            Spacer()
+            Button("Review") {
+                refreshPlan = MercariRefreshPlan(inbox: mercariInbox)
+                showRefreshReview = true
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .accessibilityIdentifier("mercariReviewBannerButton")
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 16).padding(.top, 4)
+        .accessibilityIdentifier("mercariReviewBanner")
+    }
+
+    private func syncSales(force: Bool = false) async {
         if !force && secondsUntilNextSync > 0 {
             let m = secondsUntilNextSync / 60
             let s = secondsUntilNextSync % 60
@@ -549,7 +590,9 @@ struct SalesDashboardView: View {
         // Collect result messages and show exactly ONE, only after the "Syncing sales"
         // pill is gone — toasting mid-sync stacked two competing status bars.
         let apiToast = await syncAPIPlatforms(force: force)
+        let fullRescan = fullRescanRequested
         let webToast = await syncWebPlatforms(fullRescan: fullRescan)
+        if fullRescan { fullRescanRequested = false }
 
         AppTaskQueue.shared.complete(id: taskId)
         isSyncing = false
@@ -592,15 +635,19 @@ struct SalesDashboardView: View {
     // Add new platforms here as: await nextPlatformSyncManager.sync(sales: sales)
     // Returns the result message to toast AFTER the sync pill clears (never toasts itself).
     private func syncWebPlatforms(fullRescan: Bool = false) async -> (message: String, actionLabel: String?, action: (() -> Void)?)? {
-        // Include deleted (hidden) sales so restored+deleted items never resurface on sync.
-        let knownMercariIds = Set((sales + hiddenSales).compactMap { $0.platform == "mercari" ? $0.platformOrderId : nil })
+        // Include deleted (hidden) sales so restored+deleted items never resurface on sync,
+        // and everything already waiting in (or hidden from) review: the scan stops at them.
+        var known = Set((sales + hiddenSales).compactMap { $0.platform == "mercari" ? $0.platformOrderId : nil })
+        known.formUnion(mercariInbox.knownIds)
         // Refresh reads "in progress" then "complete", newest first, and stops at the first
-        // sale already on file in each list. Full rescan reads both lists to the end.
+        // sale already seen in each list. Nothing below the stop is ever lost: rows that
+        // were not imported wait in the server inbox. "Rescan all Mercari sales" (Settings ›
+        // Mercari) reads both lists to the end once.
         var found: [MercariFoundSaleItem] = []
         var seenIds = Set<String>()
         for tab in MercariSaleTab.allCases {
             let tabItems = await mercariSaleSyncManager.scanForNewSales(
-                knownOrderIds: knownMercariIds,
+                knownOrderIds: known,
                 stopBeforeDate: nil,
                 tab: tab,
                 stopAtKnown: !fullRescan
@@ -609,29 +656,40 @@ struct SalesDashboardView: View {
         }
         var result: (message: String, actionLabel: String?, action: (() -> Void)?)? = nil
         if !found.isEmpty {
-            // Nothing is recorded here any more. Enrich what the scan found (take-home,
-            // real sold date, reliable item-page price: github issue #38), let the server
-            // classify it, and hand the user the review list. They uncheck, link or
-            // "Never import"; Import records through recordMercariSalesBatch.
+            // Enrich (take-home, real sold date, item-page price: github issue #38), then the
+            // server records the id-linked complete rows and parks the rest for review.
             var scraped: [MercariRefreshRow] = []
             for item in found {
                 let enrichment = await mercariSaleSyncManager.loadSaleData(itemId: item.id, fetchPhoto: true)
-                scraped.append(MercariRefreshRow(
-                    id: item.id,
-                    title: item.name ?? "",
-                    price: enrichment?.price ?? item.price ?? 0,
-                    takeHome: enrichment?.takeHome ?? item.takeHome,
-                    soldAt: enrichment?.soldAt ?? item.soldAt,
-                    thumbnailUrl: enrichment?.thumbnailUrl ?? item.thumbnailUrl,
-                    trackingNumber: enrichment?.trackingNumber
-                ))
+                var row = MercariRefreshRow(id: item.id, title: item.name ?? "", price: enrichment?.price ?? item.price)
+                row.takeHome = enrichment?.takeHome ?? item.takeHome
+                row.soldAt = enrichment?.soldAt ?? item.soldAt
+                row.thumbnailUrl = enrichment?.thumbnailUrl ?? item.thumbnailUrl
+                row.trackingNumber = enrichment?.trackingNumber
+                scraped.append(row)
             }
             do {
-                let review = try await MercariRefreshService.review(scraped)
-                let plan = MercariRefreshPlan(rows: MercariRefreshPlan.applying(review, to: scraped))
-                if !plan.importable.isEmpty || plan.rows.contains(where: { $0.kind == .invalid || $0.kind == .discarded }) {
-                    refreshPlan = plan
-                    showRefreshReview = true
+                let outcome = try await MercariRefreshService.review(scraped, recordLinked: mercariAutoImport)
+                withAnimation { mercariInbox = outcome.inbox }
+                let auto = outcome.autoRecordedIds
+                let waiting = outcome.inbox.pending.count
+                if !auto.isEmpty {
+                    var message = "\(auto.count) Mercari sale\(auto.count == 1 ? "" : "s") recorded"
+                    if waiting > 0 { message += " · \(waiting) to review" }
+                    result = (message, "Undo", {
+                        Task {
+                            do {
+                                let inbox = try await MercariRefreshService.undoAutoImport(ids: auto)
+                                withAnimation { mercariInbox = inbox }
+                                await reload()
+                                showToast("Moved back to review")
+                            } catch {
+                                showToast("Undo failed: \(error.localizedDescription)")
+                            }
+                        }
+                    })
+                } else if waiting > 0 {
+                    result = ("\(waiting) Mercari sale\(waiting == 1 ? "" : "s") waiting for review", nil, nil)
                 }
             } catch {
                 result = ("Could not check Mercari sales: \(error.localizedDescription)", nil, nil)

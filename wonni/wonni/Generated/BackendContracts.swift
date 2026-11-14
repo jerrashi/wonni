@@ -6094,21 +6094,21 @@ extension ListMercariSaleInboxResponse {
 
 // MARK: - ListMercariSaleInboxResponseDiscarded
 struct ListMercariSaleInboxResponseDiscarded: Codable, Equatable, Sendable {
+    let inboxState: InboxState
     let item: PurpleItem
     let missing: [Missing]
     let productId: String?
     let productTitle: String?
-    let state: State
     let suggestedProductId: String?
     let suggestedProductTitle: String?
     let variantSku: String?
 
     enum CodingKeys: String, CodingKey {
+        case inboxState = "inboxState"
         case item = "item"
         case missing = "missing"
         case productId = "productId"
         case productTitle = "productTitle"
-        case state = "state"
         case suggestedProductId = "suggestedProductId"
         case suggestedProductTitle = "suggestedProductTitle"
         case variantSku = "variantSku"
@@ -6134,21 +6134,21 @@ extension ListMercariSaleInboxResponseDiscarded {
     }
 
     func with(
+        inboxState: InboxState? = nil,
         item: PurpleItem? = nil,
         missing: [Missing]? = nil,
         productId: String?? = nil,
         productTitle: String?? = nil,
-        state: State? = nil,
         suggestedProductId: String?? = nil,
         suggestedProductTitle: String?? = nil,
         variantSku: String?? = nil
     ) -> ListMercariSaleInboxResponseDiscarded {
         return ListMercariSaleInboxResponseDiscarded(
+            inboxState: inboxState ?? self.inboxState,
             item: item ?? self.item,
             missing: missing ?? self.missing,
             productId: productId ?? self.productId,
             productTitle: productTitle ?? self.productTitle,
-            state: state ?? self.state,
             suggestedProductId: suggestedProductId ?? self.suggestedProductId,
             suggestedProductTitle: suggestedProductTitle ?? self.suggestedProductTitle,
             variantSku: variantSku ?? self.variantSku
@@ -6162,6 +6162,11 @@ extension ListMercariSaleInboxResponseDiscarded {
     func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
         return String(data: try self.jsonData(), encoding: encoding)
     }
+}
+
+enum InboxState: String, Codable, Equatable, Sendable {
+    case discarded = "discarded"
+    case pending = "pending"
 }
 
 //
@@ -6303,11 +6308,6 @@ enum Missing: String, Codable, Equatable, Sendable {
     case title = "title"
 }
 
-enum State: String, Codable, Equatable, Sendable {
-    case discarded = "discarded"
-    case pending = "pending"
-}
-
 //
 // Hashable or Equatable:
 // The compiler will not be able to synthesize the implementation of Hashable or Equatable
@@ -6316,21 +6316,21 @@ enum State: String, Codable, Equatable, Sendable {
 
 // MARK: - ListMercariSaleInboxResponsePending
 struct ListMercariSaleInboxResponsePending: Codable, Equatable, Sendable {
+    let inboxState: InboxState
     let item: FluffyItem
     let missing: [Missing]
     let productId: String?
     let productTitle: String?
-    let state: State
     let suggestedProductId: String?
     let suggestedProductTitle: String?
     let variantSku: String?
 
     enum CodingKeys: String, CodingKey {
+        case inboxState = "inboxState"
         case item = "item"
         case missing = "missing"
         case productId = "productId"
         case productTitle = "productTitle"
-        case state = "state"
         case suggestedProductId = "suggestedProductId"
         case suggestedProductTitle = "suggestedProductTitle"
         case variantSku = "variantSku"
@@ -6356,21 +6356,21 @@ extension ListMercariSaleInboxResponsePending {
     }
 
     func with(
+        inboxState: InboxState? = nil,
         item: FluffyItem? = nil,
         missing: [Missing]? = nil,
         productId: String?? = nil,
         productTitle: String?? = nil,
-        state: State? = nil,
         suggestedProductId: String?? = nil,
         suggestedProductTitle: String?? = nil,
         variantSku: String?? = nil
     ) -> ListMercariSaleInboxResponsePending {
         return ListMercariSaleInboxResponsePending(
+            inboxState: inboxState ?? self.inboxState,
             item: item ?? self.item,
             missing: missing ?? self.missing,
             productId: productId ?? self.productId,
             productTitle: productTitle ?? self.productTitle,
-            state: state ?? self.state,
             suggestedProductId: suggestedProductId ?? self.suggestedProductId,
             suggestedProductTitle: suggestedProductTitle ?? self.suggestedProductTitle,
             variantSku: variantSku ?? self.variantSku
@@ -8795,10 +8795,12 @@ extension RestockAndCascadeResponse {
 struct ReviewMercariSalesRequest: Codable, Equatable, Sendable {
     let autoImport: Bool?
     let items: [ReviewMercariSalesRequestItem]
+    let recordLinked: Bool?
 
     enum CodingKeys: String, CodingKey {
         case autoImport = "autoImport"
         case items = "items"
+        case recordLinked = "recordLinked"
     }
 }
 
@@ -8822,11 +8824,13 @@ extension ReviewMercariSalesRequest {
 
     func with(
         autoImport: Bool?? = nil,
-        items: [ReviewMercariSalesRequestItem]? = nil
+        items: [ReviewMercariSalesRequestItem]? = nil,
+        recordLinked: Bool?? = nil
     ) -> ReviewMercariSalesRequest {
         return ReviewMercariSalesRequest(
             autoImport: autoImport ?? self.autoImport,
-            items: items ?? self.items
+            items: items ?? self.items,
+            recordLinked: recordLinked ?? self.recordLinked
         )
     }
 
@@ -9013,21 +9017,21 @@ extension ReviewMercariSalesResponseInbox {
 
 // MARK: - PurpleDiscarded
 struct PurpleDiscarded: Codable, Equatable, Sendable {
+    let inboxState: InboxState
     let item: TentacledItem
     let missing: [Missing]
     let productId: String?
     let productTitle: String?
-    let state: State
     let suggestedProductId: String?
     let suggestedProductTitle: String?
     let variantSku: String?
 
     enum CodingKeys: String, CodingKey {
+        case inboxState = "inboxState"
         case item = "item"
         case missing = "missing"
         case productId = "productId"
         case productTitle = "productTitle"
-        case state = "state"
         case suggestedProductId = "suggestedProductId"
         case suggestedProductTitle = "suggestedProductTitle"
         case variantSku = "variantSku"
@@ -9053,21 +9057,21 @@ extension PurpleDiscarded {
     }
 
     func with(
+        inboxState: InboxState? = nil,
         item: TentacledItem? = nil,
         missing: [Missing]? = nil,
         productId: String?? = nil,
         productTitle: String?? = nil,
-        state: State? = nil,
         suggestedProductId: String?? = nil,
         suggestedProductTitle: String?? = nil,
         variantSku: String?? = nil
     ) -> PurpleDiscarded {
         return PurpleDiscarded(
+            inboxState: inboxState ?? self.inboxState,
             item: item ?? self.item,
             missing: missing ?? self.missing,
             productId: productId ?? self.productId,
             productTitle: productTitle ?? self.productTitle,
-            state: state ?? self.state,
             suggestedProductId: suggestedProductId ?? self.suggestedProductId,
             suggestedProductTitle: suggestedProductTitle ?? self.suggestedProductTitle,
             variantSku: variantSku ?? self.variantSku
@@ -9189,21 +9193,21 @@ extension TentacledItem {
 
 // MARK: - PurplePending
 struct PurplePending: Codable, Equatable, Sendable {
+    let inboxState: InboxState
     let item: StickyItem
     let missing: [Missing]
     let productId: String?
     let productTitle: String?
-    let state: State
     let suggestedProductId: String?
     let suggestedProductTitle: String?
     let variantSku: String?
 
     enum CodingKeys: String, CodingKey {
+        case inboxState = "inboxState"
         case item = "item"
         case missing = "missing"
         case productId = "productId"
         case productTitle = "productTitle"
-        case state = "state"
         case suggestedProductId = "suggestedProductId"
         case suggestedProductTitle = "suggestedProductTitle"
         case variantSku = "variantSku"
@@ -9229,21 +9233,21 @@ extension PurplePending {
     }
 
     func with(
+        inboxState: InboxState? = nil,
         item: StickyItem? = nil,
         missing: [Missing]? = nil,
         productId: String?? = nil,
         productTitle: String?? = nil,
-        state: State? = nil,
         suggestedProductId: String?? = nil,
         suggestedProductTitle: String?? = nil,
         variantSku: String?? = nil
     ) -> PurplePending {
         return PurplePending(
+            inboxState: inboxState ?? self.inboxState,
             item: item ?? self.item,
             missing: missing ?? self.missing,
             productId: productId ?? self.productId,
             productTitle: productTitle ?? self.productTitle,
-            state: state ?? self.state,
             suggestedProductId: suggestedProductId ?? self.suggestedProductId,
             suggestedProductTitle: suggestedProductTitle ?? self.suggestedProductTitle,
             variantSku: variantSku ?? self.variantSku
@@ -10927,21 +10931,21 @@ extension UndoMercariAutoImportResponseInbox {
 
 // MARK: - FluffyDiscarded
 struct FluffyDiscarded: Codable, Equatable, Sendable {
+    let inboxState: InboxState
     let item: IndigoItem
     let missing: [Missing]
     let productId: String?
     let productTitle: String?
-    let state: State
     let suggestedProductId: String?
     let suggestedProductTitle: String?
     let variantSku: String?
 
     enum CodingKeys: String, CodingKey {
+        case inboxState = "inboxState"
         case item = "item"
         case missing = "missing"
         case productId = "productId"
         case productTitle = "productTitle"
-        case state = "state"
         case suggestedProductId = "suggestedProductId"
         case suggestedProductTitle = "suggestedProductTitle"
         case variantSku = "variantSku"
@@ -10967,21 +10971,21 @@ extension FluffyDiscarded {
     }
 
     func with(
+        inboxState: InboxState? = nil,
         item: IndigoItem? = nil,
         missing: [Missing]? = nil,
         productId: String?? = nil,
         productTitle: String?? = nil,
-        state: State? = nil,
         suggestedProductId: String?? = nil,
         suggestedProductTitle: String?? = nil,
         variantSku: String?? = nil
     ) -> FluffyDiscarded {
         return FluffyDiscarded(
+            inboxState: inboxState ?? self.inboxState,
             item: item ?? self.item,
             missing: missing ?? self.missing,
             productId: productId ?? self.productId,
             productTitle: productTitle ?? self.productTitle,
-            state: state ?? self.state,
             suggestedProductId: suggestedProductId ?? self.suggestedProductId,
             suggestedProductTitle: suggestedProductTitle ?? self.suggestedProductTitle,
             variantSku: variantSku ?? self.variantSku
@@ -11103,21 +11107,21 @@ extension IndigoItem {
 
 // MARK: - FluffyPending
 struct FluffyPending: Codable, Equatable, Sendable {
+    let inboxState: InboxState
     let item: IndecentItem
     let missing: [Missing]
     let productId: String?
     let productTitle: String?
-    let state: State
     let suggestedProductId: String?
     let suggestedProductTitle: String?
     let variantSku: String?
 
     enum CodingKeys: String, CodingKey {
+        case inboxState = "inboxState"
         case item = "item"
         case missing = "missing"
         case productId = "productId"
         case productTitle = "productTitle"
-        case state = "state"
         case suggestedProductId = "suggestedProductId"
         case suggestedProductTitle = "suggestedProductTitle"
         case variantSku = "variantSku"
@@ -11143,21 +11147,21 @@ extension FluffyPending {
     }
 
     func with(
+        inboxState: InboxState? = nil,
         item: IndecentItem? = nil,
         missing: [Missing]? = nil,
         productId: String?? = nil,
         productTitle: String?? = nil,
-        state: State? = nil,
         suggestedProductId: String?? = nil,
         suggestedProductTitle: String?? = nil,
         variantSku: String?? = nil
     ) -> FluffyPending {
         return FluffyPending(
+            inboxState: inboxState ?? self.inboxState,
             item: item ?? self.item,
             missing: missing ?? self.missing,
             productId: productId ?? self.productId,
             productTitle: productTitle ?? self.productTitle,
-            state: state ?? self.state,
             suggestedProductId: suggestedProductId ?? self.suggestedProductId,
             suggestedProductTitle: suggestedProductTitle ?? self.suggestedProductTitle,
             variantSku: variantSku ?? self.variantSku

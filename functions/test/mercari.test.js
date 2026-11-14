@@ -340,3 +340,11 @@ test("Never import keeps the scraped row; Restore puts it straight back in revie
   inbox = await readInbox(db, "u1", await loadProducts(db, "u1"));
   assert.equal(inbox.pending[0].item.mercariItemId, "m_z");
 });
+
+test("autoImport with recordLinked false: a linked complete row waits for review instead", async () => {
+  const db = await seedStock();
+  const r = await reviewMercariSalesCore(db, "u1", [full("m_known")], { autoImport: true, recordLinked: false });
+  assert.equal(r.rows[0].reviewState, "new");
+  assert.equal(await stock(db, "p1"), 3);
+  assert.equal(r.inbox.pending[0].productId, "p1");
+});

@@ -154,7 +154,7 @@ function inboxRowView(stored, products) {
   const suggestion = match ? null : suggestProduct(item.title, products.list);
   return {
     item,
-    state: stored.state,
+    inboxState: stored.state,
     productId: match?.productId ?? null,
     variantSku: match?.variantSku ?? null,
     productTitle: match ? products.byId.get(match.productId)?.title ?? null : null,
@@ -213,7 +213,7 @@ async function recordItem(db, uid, item, match, products) {
  * sales/{mercari_<order or item id>} exists; "discarded" when the user said
  * Never import. Without `autoImport` it records nothing (older clients).
  */
-async function reviewMercariSalesCore(db, uid, items, { autoImport = false } = {}) {
+async function reviewMercariSalesCore(db, uid, items, { autoImport = false, recordLinked = true } = {}) {
   const products = await loadProducts(db, uid);
 
   const rows = [];
@@ -253,7 +253,7 @@ async function reviewMercariSalesCore(db, uid, items, { autoImport = false } = {
     if (stored?.state === "discarded") { rows.push({ ...base, reviewState: "discarded" }); continue; }
     if (!autoImport) { rows.push({ ...base, reviewState: "new" }); continue; }
 
-    if (match && missing.length === 0) {
+    if (recordLinked && match && missing.length === 0) {
       try {
         const { saleId } = await recordItem(db, uid, item, match, products);
         await db.collection("sales").doc(saleId).set({ autoImported: true }, { merge: true });
@@ -432,7 +432,9 @@ const requireUid = (request) => {
 exports.reviewMercariSales = onCall(
   { secrets: EBAY_SECRETS, timeoutSeconds: 300, memory: "512MiB" },
   validated("reviewMercariSales", async (data, request) =>
-    reviewMercariSalesCore(admin.firestore(), requireUid(request), data.items, { autoImport: data.autoImport === true }))
+    reviewMercariSalesCore(admin.firestore(), requireUid(request), data.items, {
+      autoImport: data.autoImport === true, recordLinked: data.recordLinked !== false,
+    }))
 );
 
 exports.listMercariSaleInbox = onCall(

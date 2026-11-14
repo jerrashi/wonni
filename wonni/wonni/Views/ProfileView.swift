@@ -2552,9 +2552,9 @@ struct SettingsSheet: View {
                 Section(header: Text("Sales")) {
                     Toggle(isOn: $mercariAutoImport) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Auto-import Mercari Sales")
+                            Text("Auto-import linked Mercari sales")
                                 .font(.body)
-                            Text("When syncing, automatically record all new Mercari sales. Turn off to review and select which sales to import.")
+                            Text("On refresh, a Mercari sale linked to one of your products, with a price and date, is recorded right away (with Undo). Other sales wait for review. Turn off to review every Mercari sale first.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }

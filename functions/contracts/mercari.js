@@ -108,6 +108,9 @@ const ReviewMercariSalesRequestSchema = z.object({
    *  "pending" so it waits for review across refreshes and devices. The response
    *  then carries `inbox`. Absent/false = classify only (older clients). */
   autoImport: z.boolean().optional(),
+  /** With autoImport: false = park even the linked complete rows for review (the
+   *  app's "Auto-import linked Mercari sales" switch off). Default true. */
+  recordLinked: z.boolean().optional(),
 });
 
 /** Which required review fields a row is missing. */
@@ -116,7 +119,9 @@ const MissingFieldSchema = z.enum(["title", "price", "date"]);
 /** One sale waiting in users/{uid}/mercariSaleInbox. */
 const MercariInboxRowSchema = z.object({
   item: MercariPendingItemSchema,
-  state: z.enum(["pending", "discarded"]),
+  // Not `state`: quicktype would emit a top-level Swift `enum State` that shadows
+  // SwiftUI's @State (same trap as reviewState above).
+  inboxState: z.enum(["pending", "discarded"]),
   /** Matched by a Mercari id on a product / variant. */
   productId: ProductIdSchema.nullish(),
   variantSku: z.string().nullish(),

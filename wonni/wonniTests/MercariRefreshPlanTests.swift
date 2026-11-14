@@ -16,6 +16,7 @@ final class MercariRefreshPlanTests: XCTestCase {
         var r = MercariRefreshRow(id: id, title: title, price: price)
         r.kind = kind
         r.productId = productId
+        r.soldAt = Date(timeIntervalSince1970: 1_700_000_000)
         return r
     }
 
@@ -114,19 +115,6 @@ final class MercariRefreshPlanTests: XCTestCase {
         XCTAssertEqual(r.scrapeDictionary["soldAt"] as? String, "1970-01-01T00:00:00Z")
     }
 
-    func testApplyingTheServerReviewSetsKindAndMatch() {
-        let review = ReviewMercariSalesResponse(firstRecordedIndex: 2, rows: [
-            MercariReviewRow(mercariItemId: "a", productId: "p1", productTitle: "Tee", reviewState: .new, variantSku: "S", warning: nil),
-            MercariReviewRow(mercariItemId: "b", productId: nil, productTitle: nil, reviewState: .discarded, variantSku: nil, warning: nil),
-            MercariReviewRow(mercariItemId: "c", productId: nil, productTitle: nil, reviewState: .recorded, variantSku: nil, warning: nil),
-        ])
-        let out = MercariRefreshPlan.applying(review, to: [row("a"), row("b"), row("c"), row("untouched")])
-        XCTAssertEqual(out.map(\.kind), [.new, .discarded, .recorded, .new])
-        XCTAssertEqual(out[0].productId, "p1")
-        XCTAssertEqual(out[0].variantSku, "S")
-        XCTAssertEqual(out[0].productTitle, "Tee")
-    }
-
     func testStopRuleKeepsOnlyRowsNewerThanTheFirstRecorded() {
         let rows = [row("a"), row("b"), row("c"), row("d")]
         XCTAssertEqual(MercariRefreshPlan.newerThanFirstRecorded(rows, firstRecordedIndex: 2).map(\.id), ["a", "b"])
@@ -146,8 +134,8 @@ final class MercariRefreshPlanTests: XCTestCase {
 
     func testRestoreMovesAHiddenRowBackToTheImportList() {
         var plan = MercariRefreshPlan(rows: [
-            MercariRefreshRow(id: "a", title: "A", price: 5, kind: .discarded),
-            MercariRefreshRow(id: "b", title: "B", price: 6, kind: .new),
+            row("a", price: 5, kind: .discarded),
+            row("b", price: 6),
         ])
         XCTAssertEqual(plan.hidden.map(\.id), ["a"])
         XCTAssertEqual(plan.importable.map(\.id), ["b"])
@@ -161,5 +149,104 @@ final class MercariRefreshPlanTests: XCTestCase {
 
     func testSaleTabsAreTheMercariUrlSegments() {
         XCTAssertEqual(MercariSaleTab.allCases.map(\.rawValue), ["in_progress", "complete"])
+    }
+
+    // MARK: Auto-import era (2026-11-14)
+
+    func testRowsMissingPriceOrDateAreNeedsInfo_neverSelected_andCannotBeChecked() {
+        var noDate = row("b"); noDate.soldAt = nil
+        let noPrice = row("c", price: 0)
+        var plan = MercariRefreshPlan(rows: [row("a"), noDate, noPrice])
+        XCTAssertEqual(plan.needsInfo.map(\.id), ["b", "c"])
+        XCTAssertEqual(plan.ready.map(\.id), ["a"])
+        XCTAssertEqual(plan.selected.map(\.id), ["a"])
+        XCTAssertFalse(plan.isChecked("b"))
+        plan.toggle("b")
+        XCTAssertFalse(plan.unchecked.contains("b"))
+        XCTAssertEqual(noDate.missing, ["date"])
+        XCTAssertEqual(noPrice.missing, ["price"])
+    }
+
+    func testEditingFillsTheMissingFieldAndChecksTheRow() {
+        var r = row("a"); r.soldAt = nil
+        var plan = MercariRefreshPlan(rows: [r])
+        plan.unchecked.insert("a")
+        r.soldAt = Date()
+        plan.update(r)
+        XCTAssertEqual(plan.selected.map(\.id), ["a"])
+    }
+
+    func testRecordPayloadAllowsUnlinkedRows() {
+        let plan = MercariRefreshPlan(rows: [row("a")])
+        XCTAssertEqual(plan.recordPayload()["allowUnlinked"] as? Bool, true)
+        XCTAssertEqual(plan.product(for: plan.rows[0]), .none)
+    }
+
+    func testSuggestedProductIsSentUnlessDeclined_andMatchedRowsNeedNoLink() {
+        var s = row("s"); s.suggestedProductId = "p9"; s.suggestedProductTitle = "Lightstick"
+        var plan = MercariRefreshPlan(rows: [s, row("m", productId: "p1")])
+        var links = plan.recordPayload()["links"] as? [String: [String: Any]]
+        XCTAssertEqual(links?.keys.sorted(), ["s"])
+        XCTAssertEqual(links?["s"]?["productId"] as? String, "p9")
+        plan.unlink("s")
+        links = plan.recordPayload()["links"] as? [String: [String: Any]]
+        XCTAssertNil(links)
+        XCTAssertEqual(plan.product(for: plan.rows[0]), .none)
+    }
+
+    func testUserLinkBeatsTheSuggestion() {
+        var s = row("s"); s.suggestedProductId = "p9"
+        var plan = MercariRefreshPlan(rows: [s])
+        plan.link("s", to: MercariLink(productId: "p2", variantSku: "B", productTitle: "Album", variantLabel: "Ver. B"))
+        let links = plan.recordPayload()["links"] as? [String: [String: Any]]
+        XCTAssertEqual(links?["s"]?["productId"] as? String, "p2")
+        XCTAssertEqual(links?["s"]?["variantSku"] as? String, "B")
+    }
+
+    func testNeverImportMovesTheRowToHidden() {
+        var plan = MercariRefreshPlan(rows: [row("a"), row("b")])
+        plan.hide("a")
+        XCTAssertEqual(plan.hidden.map(\.id), ["a"])
+        XCTAssertEqual(plan.importable.map(\.id), ["b"])
+    }
+
+    func testReviewPayloadAsksForAutoImport_andCarriesTheSwitch() {
+        let body = MercariRefreshPlan.reviewPayload([row("a")], recordLinked: false)
+        XCTAssertEqual(body["autoImport"] as? Bool, true)
+        XCTAssertEqual(body["recordLinked"] as? Bool, false)
+    }
+
+    func testScrapeDictionaryLeavesOutAMissingPrice_andSendsQuantity() {
+        var r = MercariRefreshRow(id: "m1", title: "Wii remote", price: nil)
+        r.quantity = 2
+        let d = r.scrapeDictionary
+        XCTAssertNil(d["priceSoldFor"])
+        XCTAssertEqual(d["quantity"] as? Int, 2)
+    }
+
+    func testEstimatedTakeHomeIsMercariFees() {
+        XCTAssertEqual(MercariRefreshRow.estimatedTakeHome(100), 86.6)
+        XCTAssertNil(MercariRefreshRow.estimatedTakeHome(nil))
+        XCTAssertNil(MercariRefreshRow.estimatedTakeHome(0))
+    }
+
+    func testInboxDecodesEveryDateShape_andBuildsThePlan() throws {
+        let json = """
+        {"pending":[
+          {"item":{"mercariItemId":"m1","title":"A","priceSoldFor":10,"soldAt":"2026-11-12T10:00:00Z"},"inboxState":"pending","productId":"p1","missing":[]},
+          {"item":{"mercariItemId":"m2","title":"B","soldDate":"11/10/26"},"inboxState":"pending","suggestedProductId":"p2","suggestedProductTitle":"Bee","missing":["price"]},
+          {"item":{"mercariItemId":"m3","priceSoldFor":4,"soldAt":1762941600000},"inboxState":"pending","missing":["title"]}
+        ],"discarded":[{"item":{"mercariItemId":"m4"},"inboxState":"discarded","missing":["title","price","date"]}]}
+        """
+        let inbox = try JSONDecoder().decode(MercariInbox.self, from: Data(json.utf8))
+        XCTAssertNotNil(inbox.pending[0].item.soldAt)
+        XCTAssertNotNil(inbox.pending[1].item.soldAt)
+        XCTAssertNotNil(inbox.pending[2].item.soldAt)
+        XCTAssertEqual(inbox.knownIds, ["m1", "m2", "m3", "m4"])
+        let plan = MercariRefreshPlan(inbox: inbox)
+        XCTAssertEqual(plan.ready.map(\.id), ["m1"])
+        XCTAssertEqual(plan.needsInfo.map(\.id), ["m2", "m3"])
+        XCTAssertEqual(plan.hidden.map(\.id), ["m4"])
+        XCTAssertEqual(plan.product(for: plan.rows[1]), .suggested(id: "p2", title: "Bee"))
     }
 }

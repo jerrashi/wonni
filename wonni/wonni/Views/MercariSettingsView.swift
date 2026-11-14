@@ -26,6 +26,8 @@ struct MercariSettingsView: View {
     @AppStorage("mercariPrefsConfigured") private var prefsConfigured = false
     @AppStorage("mercariKeepSmartPricing") private var keepSmartPricingStored = false
     @AppStorage(MercariSoldOutAction.storageKey) private var soldOutActionRaw = MercariSoldOutAction.deactivate.rawValue
+    /// Read by SalesDashboardView's next refresh (it clears it).
+    @AppStorage("mercariFullRescanRequested") private var fullRescanRequested = false
 
     /// When true, shown as one-time setup before the first cross-post (vs. editing in Settings).
     var isFirstTimeSetup = false
@@ -64,6 +66,20 @@ struct MercariSettingsView: View {
                 Text("Sold out")
             } footer: {
                 Text("Deactivate keeps the listing's likes and views for a restock. Delete removes it from Mercari, and a restock posts it again from scratch. Applies to sold-out runs you start and to sell-outs after a sale on another platform.")
+            }
+
+            Section {
+                Button(fullRescanRequested ? "Rescan requested" : "Rescan all Mercari sales") {
+                    fullRescanRequested = true
+                }
+                .disabled(fullRescanRequested)
+                .accessibilityIdentifier("mercariFullRescanButton")
+            } header: {
+                Text("Sales")
+            } footer: {
+                Text(fullRescanRequested
+                     ? "Your next refresh on the Sales screen reads both Mercari lists to the end."
+                     : "A normal refresh stops at the first Mercari sale Wonni already has. Use this only if an older sale never showed up: the next refresh reads both lists to the end, which takes longer.")
             }
 
             Section {

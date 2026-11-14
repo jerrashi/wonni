@@ -1,12 +1,12 @@
 //
 //  MercariRefreshReviewSheet.swift
 //
-//  The review screen after a Mercari Refresh scan (mock
-//  https://claude.ai/artifact/9kVDXBohrFYbQQCzfHCaWp, approved 2026-11-12):
-//  every new sale is listed and checked, the user unchecks what they don't want,
-//  links unmatched rows to a product, or swipes a row to "Never import". Nothing is
-//  recorded until Import. The screen shows its own title only; the mock's step
-//  numbers were an internal label.
+//  Review for Mercari sales a refresh could not record on its own (mock
+//  https://claude.ai/artifact/3N5S6mWWBA36jptkxDtygP v4, approved 2026-11-14). Opened
+//  from the dashboard banner, never on its own. Sections: "Needs info" (no title /
+//  price / date: can't be checked until edited), "Ready", "Never import". Every row
+//  opens MercariSaleEditSheet. Cancel just closes: the rows stay in the server-side
+//  inbox and the banner keeps counting them.
 //
 
 import SwiftUI
@@ -15,54 +15,50 @@ struct MercariRefreshReviewSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var plan: MercariRefreshPlan
-    /// Called after a successful import so the dashboard can reload.
-    let onImported: (Int) -> Void
+    /// Called after an import with the toast text, so the dashboard can reload and show it.
+    let onImported: (String) -> Void
+    /// Called after Never import / Restore so the dashboard's banner count follows.
+    let onInboxChanged: () -> Void
 
     @State private var isImporting = false
     @State private var errorMessage: String?
-    @State private var linkingRow: MercariRefreshRow?
-    @State private var importedCount: Int?
+    @State private var editingRow: MercariRefreshRow?
 
-    init(plan: MercariRefreshPlan, onImported: @escaping (Int) -> Void) {
+    init(plan: MercariRefreshPlan, onImported: @escaping (String) -> Void, onInboxChanged: @escaping () -> Void = {}) {
         _plan = State(initialValue: plan)
         self.onImported = onImported
+        self.onInboxChanged = onInboxChanged
     }
 
     var body: some View {
         NavigationStack {
-            Group {
-                if let importedCount {
-                    doneView(importedCount)
-                } else {
-                    reviewList
-                }
-            }
-            .navigationTitle(importedCount != nil ? "Imported" : title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    if importedCount == nil {
+            reviewList
+                .navigationTitle(title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
                         Button("Cancel") { dismiss() }
                             .accessibilityIdentifier("mercariReviewCancelButton")
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    if importedCount != nil {
-                        Button("Done") { dismiss() }.accessibilityIdentifier("mercariReviewDoneButton")
-                    }
-                }
-            }
         }
-        .sheet(item: $linkingRow) { row in
-            MercariLinkPickerSheet(row: row) { link in
-                plan.link(row.id, to: link)
-            }
+        .sheet(item: $editingRow) { row in
+            MercariSaleEditSheet(
+                row: row,
+                product: plan.product(for: row),
+                onDone: { edited, link, declined in
+                    plan.update(edited)
+                    if let link { plan.link(edited.id, to: link) }
+                    if declined { plan.unlink(edited.id) }
+                },
+                onNeverImport: { Task { await neverImport(row) } }
+            )
         }
     }
 
     private var title: String {
         let n = plan.importable.count
-        return n == 1 ? "1 new Mercari sale" : "\(n) new Mercari sales"
+        return n == 1 ? "1 Mercari sale" : "\(n) Mercari sales"
     }
 
     // MARK: Review list
@@ -71,18 +67,24 @@ struct MercariRefreshReviewSheet: View {
         VStack(spacing: 0) {
             List {
                 if plan.importable.isEmpty {
-                    Text("No new Mercari sales.")
-                        .foregroundStyle(.secondary)
-                } else {
+                    Text("Nothing left to review.").foregroundStyle(.secondary)
+                }
+                if !plan.needsInfo.isEmpty {
                     Section {
-                        ForEach(plan.importable) { row in
-                            rowView(row)
-                                .swipeActions(edge: .trailing) {
-                                    Button("Never import", role: .destructive) { Task { await neverImport(row) } }
-                                }
-                        }
+                        ForEach(plan.needsInfo) { rowView($0) }
+                    } header: {
+                        Text("Needs info (\(plan.needsInfo.count))")
                     } footer: {
-                        Text("Uncheck any you do not want. Swipe a row left for Never import.")
+                        Text("Mercari didn't give these a price or date. Tap one to fill it in.")
+                    }
+                }
+                if !plan.ready.isEmpty {
+                    Section {
+                        ForEach(plan.ready) { rowView($0) }
+                    } header: {
+                        Text("Ready (\(plan.ready.count))")
+                    } footer: {
+                        Text("Tap a row to edit it. Uncheck any you don't want yet; they stay here for later.")
                     }
                 }
                 if !plan.hidden.isEmpty {
@@ -91,7 +93,7 @@ struct MercariRefreshReviewSheet: View {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(row.title.isEmpty ? row.id : row.title).lineLimit(1)
-                                    Text(row.price, format: .currency(code: "USD"))
+                                    Text("Won't be imported or shown again")
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
@@ -101,21 +103,7 @@ struct MercariRefreshReviewSheet: View {
                             }
                         }
                     } header: {
-                        Text("Never import")
-                    } footer: {
-                        Text("You hid these earlier. Restore one to put it back on the list above.")
-                    }
-                }
-                let invalid = plan.rows.filter { $0.kind == .invalid }
-                if !invalid.isEmpty {
-                    Section("Could not be read") {
-                        ForEach(invalid) { row in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(row.title.isEmpty ? row.id : row.title).lineLimit(1)
-                                Text(row.warning ?? "Missing a price. Open the sale on Mercari to import it by hand.")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
+                        Text("Never import (\(plan.hidden.count))")
                     }
                 }
             }
@@ -131,61 +119,77 @@ struct MercariRefreshReviewSheet: View {
     }
 
     private func rowView(_ row: MercariRefreshRow) -> some View {
-        HStack(spacing: 12) {
+        let incomplete = !row.missing.isEmpty
+        let checked = plan.isChecked(row.id)
+        return HStack(spacing: 12) {
             Button {
                 plan.toggle(row.id)
             } label: {
-                Image(systemName: plan.isChecked(row.id) ? "checkmark.square.fill" : "square")
+                Image(systemName: checked ? "checkmark.square.fill" : "square")
                     .font(.title3)
-                    .foregroundStyle(plan.isChecked(row.id) ? Color.accentColor : .secondary)
+                    .foregroundStyle(checked ? Color.accentColor : .secondary)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Import \(row.title)")
-            .accessibilityValue(plan.isChecked(row.id) ? "checked" : "unchecked")
+            .disabled(incomplete)
+            .accessibilityLabel("Import \(row.title.isEmpty ? row.id : row.title)")
+            .accessibilityValue(checked ? "checked" : "unchecked")
             .accessibilityIdentifier("mercariReviewCheck-\(row.id)")
 
-            thumbnail(row)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(row.title.isEmpty ? row.id : row.title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                matchLine(row)
+            Button { editingRow = row } label: {
+                HStack(spacing: 12) {
+                    thumbnail(row)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(row.title.isEmpty ? row.id : row.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        statusLine(row)
+                    }
+                    Spacer(minLength: 8)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(row.price.map { $0.formatted(.currency(code: "USD")) } ?? "—").font(.subheadline.weight(.semibold))
+                        if let takeHome = row.takeHome ?? MercariRefreshRow.estimatedTakeHome(row.price) {
+                            Text(takeHome.formatted(.currency(code: "USD")))
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .contentShape(Rectangle())
             }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(row.price, format: .currency(code: "USD")).font(.subheadline.weight(.semibold))
-                if let takeHome = row.takeHome {
-                    Text("take-home \(takeHome.formatted(.currency(code: "USD")))")
-                        .font(.caption2).foregroundStyle(.secondary)
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("mercariReviewRow-\(row.id)")
+        }
+        .opacity(checked || incomplete ? 1 : 0.55)
+        .swipeActions(edge: .trailing) {
+            Button("Never import", role: .destructive) { Task { await neverImport(row) } }
+        }
+    }
+
+    @ViewBuilder private func statusLine(_ row: MercariRefreshRow) -> some View {
+        HStack(spacing: 6) {
+            if !row.missing.isEmpty {
+                chip("Needs \(row.missing.joined(separator: " + "))", .red)
+            } else {
+                switch plan.product(for: row) {
+                case .matched(let title):
+                    chip("Matched", .green)
+                    Text(title ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                case .linked(let link):
+                    chip("Linked", .green)
+                    Text(link.variantLabel.map { "\(link.productTitle), \($0)" } ?? link.productTitle)
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                case .suggested(_, let title):
+                    chip("Suggested", .orange)
+                    Text(title ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                case .none:
+                    chip("Not linked", .orange)
+                    Text("stock won't change").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
         }
-        .opacity(plan.isChecked(row.id) ? 1 : 0.55)
     }
 
-    @ViewBuilder private func matchLine(_ row: MercariRefreshRow) -> some View {
-        if let link = plan.links[row.id] {
-            HStack(spacing: 6) {
-                Text("Linked").font(.caption2).padding(.horizontal, 6).padding(.vertical, 1)
-                    .background(Color.green.opacity(0.18), in: Capsule())
-                Text(link.variantLabel.map { "\(link.productTitle), \($0)" } ?? link.productTitle)
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                Button("Change") { linkingRow = row }.font(.caption)
-            }
-        } else if let title = row.productTitle {
-            HStack(spacing: 6) {
-                Text("Matched").font(.caption2).padding(.horizontal, 6).padding(.vertical, 1)
-                    .background(Color.green.opacity(0.18), in: Capsule())
-                Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            }
-        } else {
-            Button("Link to product…") { linkingRow = row }
-                .font(.caption)
-                .padding(.horizontal, 9).padding(.vertical, 2)
-                .overlay(Capsule().stroke(Color.orange, lineWidth: 1))
-                .foregroundStyle(.orange)
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("mercariReviewLink-\(row.id)")
-        }
+    private func chip(_ text: String, _ color: Color) -> some View {
+        Text(text).font(.caption2).padding(.horizontal, 6).padding(.vertical, 1)
+            .foregroundStyle(color)
+            .background(color.opacity(0.15), in: Capsule())
     }
 
     private func thumbnail(_ row: MercariRefreshRow) -> some View {
@@ -202,7 +206,7 @@ struct MercariRefreshReviewSheet: View {
 
     private var footer: some View {
         HStack {
-            Text("\(plan.selectedCount) of \(plan.importable.count) selected")
+            Text("\(plan.selectedCount) selected")
                 .font(.footnote).foregroundStyle(.secondary)
             Spacer()
             Button {
@@ -218,21 +222,6 @@ struct MercariRefreshReviewSheet: View {
         .background(.bar)
     }
 
-    // MARK: Done
-
-    private func doneView(_ count: Int) -> some View {
-        VStack(spacing: 6) {
-            Spacer()
-            Text("\(count)").font(.system(size: 44, weight: .bold)).monospacedDigit()
-            Text(count == 1 ? "sale recorded" : "sales recorded").foregroundStyle(.secondary)
-            Text("Stock was lowered and your other platforms were updated.")
-                .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                .padding(.horizontal, 32).padding(.top, 8)
-            Spacer()
-        }
-        .frame(maxWidth: .infinity)
-    }
-
     // MARK: Actions
 
     private func importSelected() async {
@@ -241,8 +230,20 @@ struct MercariRefreshReviewSheet: View {
         defer { isImporting = false }
         do {
             let response = try await MercariRefreshService.record(plan)
-            importedCount = response.recorded
-            onImported(response.recorded)
+            let done = response.results.filter { $0.outcome == .recorded || $0.outcome == .duplicate }
+            let failed = response.results.filter { $0.outcome == .parseFailed || $0.outcome == .noMatch }
+            let lowered = response.results.filter { $0.outcome == .recorded && $0.productId != nil }.count
+            plan.remove(Set(done.map(\.mercariItemId)))
+            var message = "\(done.count) Mercari sale\(done.count == 1 ? "" : "s") recorded"
+            if lowered > 0 { message += " · stock lowered on \(lowered)" }
+            let left = plan.importable.count
+            if left > 0 { message += " · \(left) still waiting" }
+            onImported(message)
+            if failed.isEmpty {
+                dismiss()
+            } else {
+                errorMessage = failed.map { "\($0.mercariItemId): \($0.warning ?? "could not record")" }.joined(separator: "\n")
+            }
         } catch {
             errorMessage = "Import failed: \(error.localizedDescription)"
         }
@@ -253,6 +254,7 @@ struct MercariRefreshReviewSheet: View {
         do {
             try await MercariRefreshService.setDiscarded(plan, ids: [row.id], discarded: false)
             withAnimation { plan.restore(row.id) }
+            onInboxChanged()
         } catch {
             errorMessage = "Could not restore that sale: \(error.localizedDescription)"
         }
@@ -262,9 +264,168 @@ struct MercariRefreshReviewSheet: View {
         errorMessage = nil
         do {
             try await MercariRefreshService.setDiscarded(plan, ids: [row.id], discarded: true)
-            withAnimation { plan.remove([row.id]) }
+            withAnimation { plan.hide(row.id) }
+            onInboxChanged()
         } catch {
             errorMessage = "Could not hide that sale: \(error.localizedDescription)"
+        }
+    }
+}
+
+// MARK: - Edit form
+
+/// One sale's fields before import: title, price, take-home (estimated until edited), sold
+/// date, quantity, product link, Never import. Done is disabled until title, price and date
+/// are filled in.
+struct MercariSaleEditSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var row: MercariRefreshRow
+    let product: MercariRefreshPlan.Product
+    /// (edited row, new link if the user picked one, true if they unlinked)
+    let onDone: (MercariRefreshRow, MercariLink?, Bool) -> Void
+    let onNeverImport: () -> Void
+
+    @State private var priceText: String
+    @State private var takeHomeText: String
+    @State private var takeHomeTouched: Bool
+    @State private var hasDate: Bool
+    @State private var date: Date
+    @State private var newLink: MercariLink?
+    @State private var unlinked = false
+    @State private var showPicker = false
+
+    init(row: MercariRefreshRow, product: MercariRefreshPlan.Product,
+         onDone: @escaping (MercariRefreshRow, MercariLink?, Bool) -> Void, onNeverImport: @escaping () -> Void) {
+        _row = State(initialValue: row)
+        self.product = product
+        self.onDone = onDone
+        self.onNeverImport = onNeverImport
+        _priceText = State(initialValue: row.price.map { String(format: "%.2f", $0) } ?? "")
+        let estimate = MercariRefreshRow.estimatedTakeHome(row.price)
+        _takeHomeText = State(initialValue: (row.takeHome ?? estimate).map { String(format: "%.2f", $0) } ?? "")
+        _takeHomeTouched = State(initialValue: row.takeHome != nil && !row.takeHomeEstimated)
+        _hasDate = State(initialValue: row.soldAt != nil)
+        _date = State(initialValue: row.soldAt ?? Date())
+    }
+
+    private var edited: MercariRefreshRow {
+        var r = row
+        r.price = Double(priceText.replacingOccurrences(of: "$", with: ""))
+        r.takeHome = Double(takeHomeText.replacingOccurrences(of: "$", with: ""))
+        r.takeHomeEstimated = !takeHomeTouched
+        r.soldAt = hasDate ? date : nil
+        return r
+    }
+
+    private var productLine: (text: String, canChange: Bool) {
+        if let newLink { return (newLink.variantLabel.map { "\(newLink.productTitle), \($0)" } ?? newLink.productTitle, true) }
+        if unlinked { return ("Not linked. The sale still counts in your totals, but no stock changes.", true) }
+        switch product {
+        case .matched(let title): return ("\(title ?? "Product") · matched by Mercari id", false)
+        case .linked(let link): return (link.variantLabel.map { "\(link.productTitle), \($0)" } ?? link.productTitle, true)
+        case .suggested(_, let title): return ("Suggested: \(title ?? "")", true)
+        case .none: return ("Not linked. The sale still counts in your totals, but no stock changes.", true)
+        }
+    }
+
+    private var isLinked: Bool {
+        if newLink != nil { return true }
+        if unlinked { return false }
+        if case .none = product { return false }
+        return true
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Link("Open on Mercari", destination: URL(string: "https://www.mercari.com/us/item/\(row.id)/")!)
+                        .font(.footnote)
+                } footer: {
+                    Text("Mercari item \(row.id)")
+                }
+                Section("Sale") {
+                    TextField("Title (required)", text: $row.title)
+                        .accessibilityIdentifier("mercariEditTitle")
+                    HStack {
+                        Text("Sale price")
+                        Spacer()
+                        TextField("Required", text: $priceText)
+                            .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                            .accessibilityIdentifier("mercariEditPrice")
+                            .onChange(of: priceText) { _, new in
+                                guard !takeHomeTouched else { return }
+                                takeHomeText = MercariRefreshRow.estimatedTakeHome(Double(new)).map { String(format: "%.2f", $0) } ?? ""
+                            }
+                    }
+                    HStack {
+                        Text(takeHomeTouched ? "Take-home" : "Take-home (estimated)")
+                        Spacer()
+                        TextField("After fees", text: $takeHomeText)
+                            .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                            .onChange(of: takeHomeText) { old, new in
+                                if new != (MercariRefreshRow.estimatedTakeHome(Double(priceText)).map { String(format: "%.2f", $0) } ?? "") {
+                                    takeHomeTouched = true
+                                }
+                                _ = old
+                            }
+                    }
+                    if hasDate {
+                        DatePicker("Sold on", selection: $date, displayedComponents: .date)
+                    } else {
+                        Button("Add sold date (required)") { hasDate = true }
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("mercariEditAddDate")
+                    }
+                    Stepper("Quantity \(row.quantity)", value: $row.quantity, in: 1...99)
+                }
+                Section {
+                    Text(productLine.text).font(.subheadline)
+                        .foregroundStyle(isLinked ? .primary : .secondary)
+                    if productLine.canChange {
+                        Button(isLinked ? "Change product" : "Link to product…") { showPicker = true }
+                        if isLinked {
+                            Button("Unlink", role: .destructive) { newLink = nil; unlinked = true }
+                        }
+                    }
+                } header: {
+                    Text("Product")
+                }
+                Section {
+                    Button("Never import this sale", role: .destructive) {
+                        onNeverImport()
+                        dismiss()
+                    }
+                }
+                if !edited.missing.isEmpty {
+                    Section {
+                        Text("Fill in \(edited.missing.joined(separator: ", ")) to import this sale.")
+                            .font(.footnote).foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Edit sale")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Back") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        onDone(edited, newLink, unlinked && newLink == nil)
+                        dismiss()
+                    }
+                    .disabled(!edited.missing.isEmpty)
+                    .accessibilityIdentifier("mercariEditDone")
+                }
+            }
+            .sheet(isPresented: $showPicker) {
+                MercariLinkPickerSheet(row: edited) { link in
+                    newLink = link
+                    unlinked = false
+                }
+            }
         }
     }
 }
@@ -289,7 +450,7 @@ struct MercariLinkPickerSheet: View {
                 Section {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(row.title.isEmpty ? row.id : row.title).font(.subheadline.weight(.semibold))
-                        Text(row.price.formatted(.currency(code: "USD"))).font(.caption).foregroundStyle(.secondary)
+                        Text(row.price.map { $0.formatted(.currency(code: "USD")) } ?? "No price yet").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 if let chosen, !chosen.variants.isEmpty {
@@ -328,7 +489,7 @@ struct MercariLinkPickerSheet: View {
                     }
                 }
                 Section {
-                    Text("The Mercari id is saved on this product, so the next scan matches it without asking.")
+                    Text("The Mercari id is saved on this product, so the next refresh records its sales on its own.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

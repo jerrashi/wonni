@@ -634,6 +634,44 @@ differ; the "reconciled" lines say what changed. Nothing here is built yet.
   works only from a Full rescan), the Chrome extension and web review step (mock first), and
   nothing here has run against a real Mercari account.
 
+- **Amended 2026-11-14 (user; mock https://claude.ai/artifact/3N5S6mWWBA36jptkxDtygP
+  v4) — linked sales import on their own; built on web, extension and iOS, deploy
+  pending.** Supersedes the "ALL new rows pass through review" rule above.
+  - `reviewMercariSales {items, autoImport: true, recordLinked}`: a row matched by a
+    Mercari id already on a product AND carrying title + price > 0 + sold date is
+    recorded right there (`reviewState: "autoRecorded"`, sale gets `autoImported:
+    true`, inbox doc `state: "autoRecorded"` keeps the scrape + `saleId`). Every other
+    new row is written to `users/{uid}/mercariSaleInbox` as `pending` with the scraped
+    item, so it survives stop-at-known refreshes and other devices. A title-only match
+    (≥60% of the sale's words, unique) comes back as `suggestedProductId` and is only
+    ever recorded when the user imports the row. `recordLinked: false` = the app's
+    "Auto-import linked Mercari sales" switch is off (everything waits). Without
+    `autoImport` the call still only classifies (older iOS builds).
+  - `listMercariSaleInbox` → `{pending, discarded}` rows `{item, inboxState, productId,
+    variantSku, productTitle, suggestedProductId, suggestedProductTitle, missing}`
+    (field is `inboxState`, not `state`, for the same quicktype `enum State` reason).
+  - `undoMercariAutoImport {items}`: only inbox rows in `autoRecorded` whose sale has
+    `autoImported: true` — deletes the sale, `applyQuantityDelta(+qty)` + `cascade`
+    with `soldOnPlatform: null` (pushes eBay/Etsy back up, sets no Mercari flag), row
+    back to `pending`. A Weverse re-order task the sale created is left in place.
+  - `recordMercariSalesBatch {allowUnlinked: true}` records a row with no product and
+    no stock change ("Not linked"); `quantity` per row; recorded rows leave the inbox.
+  - Never import keeps the scraped row on the tombstone, so Restore puts it straight
+    back in `pending` (older tombstones without one are deleted, as before).
+  - **Clients.** Web Sales: ↻ Refresh = `syncSales` + the extension's
+    `SCAN_MERCARI_SALES` (`mercari_sold_content.js` no longer auto-records; it answers
+    the dashboard bridge only, internal message from a dashboard tab), banner + review
+    modal + edit form (`components/MercariReview.jsx`); the per-product "Check Mercari
+    for sold items" entry is gone. Edits in the review form are not saved until Import
+    (Cancel keeps the scraped row, not the edits). iOS: toolbar is ↻ and + only (Full
+    rescan moved to Settings › Mercari › "Rescan all Mercari sales", which flags the
+    next refresh), floating banner instead of the auto-opened sheet, review sections
+    Needs info / Ready / Never import, `MercariSaleEditSheet` per row. Extension
+    enrichment fetches the item page (`__NEXT_DATA__` price in cents, photo) and the
+    order-status page (take-home, sold date) by `fetch`; whether those pages carry the
+    data without client rendering is unverified, so expect "Needs info" rows until a
+    real run says otherwise.
+
 ### 4. eBay (and Etsy) sales import is automatic
 - `syncSales` (`sale_poller.js`: eBay Fulfillment orders + Etsy receipts) is
   manual today — web Sales button, iOS pull-to-refresh. Decision: run it on a
