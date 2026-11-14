@@ -3467,7 +3467,6 @@ function ProductDetail() {
   const [sourceVariants, setSourceVariants] = useState([]);
   const [lastSourceRefresh, setLastSourceRefresh] = useState(null); // timestamp
   const [sourceRefreshLoading, setSourceRefreshLoading] = useState(false);
-  const [checkingMercariSold, setCheckingMercariSold] = useState(false);
   const [mercariCheckMessage, setMercariCheckMessage] = useState("");
   const [checkingMercariPullSync, setCheckingMercariPullSync] = useState(false);
   const [mercariPullSyncDiff, setMercariPullSyncDiff] = useState(null);
@@ -4935,42 +4934,6 @@ function ProductDetail() {
     });
   }
 
-  async function checkMercariSoldItems() {
-    if (!product) return;
-    setCheckingMercariSold(true);
-    setMercariCheckMessage("Opening Mercari in background... this may take a minute");
-
-    try {
-      const extensionId = import.meta.env.VITE_EXTENSION_ID;
-      if (!extensionId || !window.chrome?.runtime?.sendMessage) {
-        throw new Error("Extension not available");
-      }
-
-      // Tell extension to check for sold items (it will scrape and call recordMercariSalesBatch)
-      const result = await new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage(extensionId, { type: "CHECK_MERCARI_SOLD" }, (response) => {
-          if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message));
-          } else {
-            resolve(response);
-          }
-        });
-      });
-
-      if (!result || result.error) {
-        throw new Error(result?.error ?? "Failed to check Mercari");
-      }
-
-      setMercariCheckMessage(
-        "✓ Mercari check complete. Any sold items have been recorded and flagged for relisting. Refresh to see updates."
-      );
-    } catch (err) {
-      setMercariCheckMessage(`Error: ${err.message}`);
-    } finally {
-      setCheckingMercariSold(false);
-    }
-  }
-
   async function checkMercariPullSyncChanges(variant) {
     if (!product || !variant?.mercariListingId) return;
     setCheckingMercariPullSync(true);
@@ -5250,17 +5213,12 @@ function ProductDetail() {
               {mercariStatus === "updating" ? "⏳ Syncing…" : "🔄 Sync"}
             </button>
           )}
-          {/* Overflow menu with Delete and Check Mercari for sold items */}
+          {/* Overflow menu (Mercari sales now come in through Sales › Refresh) */}
           <OverflowMenu
             items={[
               {
                 label: "👁️ View public listing",
                 onClick: () => window.open(`/listing/${productId}`, "_blank")
-              },
-              {
-                label: checkingMercariSold ? "⏳ Checking…" : "🔍 Check Mercari for sold items",
-                onClick: checkMercariSoldItems,
-                disabled: checkingMercariSold
               },
               ...(product?.saleStatus !== "sold" ? [{
                 label: markingOutOfStock ? "⏳ Marking…" : "📭 Mark as out of stock",

@@ -4,6 +4,7 @@ import { db, auth, callFunction } from "../firebase";
 import Layout from "../components/Layout";
 import LogSaleModal from "../components/LogSaleModal";
 import EditSaleModal from "../components/EditSaleModal";
+import MercariReviewModal, { MercariSalesBanner } from "../components/MercariReview";
 import { aggregate, trend } from "../lib/salesMetrics";
 import { BUILT_IN_SALE_STAGES, BUILT_IN_CHIP_CLASS } from "../lib/saleStages";
 
@@ -78,6 +79,11 @@ export default function Sales() {
     try { return localStorage.getItem(VIEW_STORAGE_KEY) || "spreadsheet"; } catch { return "spreadsheet"; }
   });
   const [movingSaleId, setMovingSaleId] = useState(null);
+  // Mercari review inbox (server-side; see components/MercariReview.jsx).
+  const [mercariInbox, setMercariInbox] = useState({ pending: [], discarded: [] });
+  const [showMercariReview, setShowMercariReview] = useState(false);
+  const [platformPills, setPlatformPills] = useState(null); // { ebay: "…", mercari: "…" }
+  const [toast, setToast] = useState(null);                 // { message, action?, onAction? }
   const [dragOverKey, setDragOverKey] = useState(null);
 
   function switchView(next) {
@@ -88,22 +94,103 @@ export default function Sales() {
   const stageLabel = (key) => saleStages.find((s) => s.key === key)?.label ?? key;
   const stageChipClass = (key) => BUILT_IN_CHIP_CLASS[key] ?? "chip-draft";
 
+  function showToast(message, action, onAction) {
+    const t = { message, action, onAction, at: Date.now() };
+    setToast(t);
+    setTimeout(() => setToast((cur) => (cur?.at === t.at ? null : cur)), action ? 9000 : 4000);
+  }
+
+  async function loadMercariInbox() {
+    try {
+      const res = await callFunction("listMercariSaleInbox")({});
+      setMercariInbox(res.data ?? { pending: [], discarded: [] });
+    } catch (e) {
+      console.warn("listMercariSaleInbox failed:", e?.message ?? e);
+    }
+  }
+
+  /**
+   * Mercari part of a refresh. The Wonni Chrome extension reads Mercari's sold
+   * lists (in progress, then complete) newest first, stopping at the first sale
+   * Wonni has already seen; reviewMercariSales {autoImport} records the ones
+   * linked by Mercari id with complete info and parks the rest in the review
+   * inbox. Returns { recorded: [{mercariItemId}], pill }.
+   */
+  async function refreshMercari() {
+    const ext = typeof window !== "undefined" ? window.wonniExtension : null;
+    if (!ext?.scanMercariSales) return { recorded: [], pill: "needs the Wonni extension" };
+    const known = new Set();
+    for (const s of allSales) {
+      if (s.platform !== "mercari") continue;
+      if (s.platformItemId) known.add(s.platformItemId);
+      if (s.platformOrderId) known.add(s.platformOrderId);
+    }
+    for (const r of [...mercariInbox.pending, ...mercariInbox.discarded]) known.add(r.item.mercariItemId);
+    const scan = await ext.scanMercariSales([...known]);
+    if (scan?.needsLogin) return { recorded: [], pill: "sign in to mercari.com" };
+    if (scan?.error) return { recorded: [], pill: "failed", error: scan.error };
+    const rows = (scan?.rows ?? []).map((r) => {
+      const out = {};
+      for (const [k, v] of Object.entries(r)) if (v != null && v !== "") out[k] = v;
+      if (out.thumbnailUrl && !/^https?:\/\//.test(out.thumbnailUrl)) delete out.thumbnailUrl;
+      return out;
+    });
+    if (!rows.length) return { recorded: [], pill: "✓" };
+    const res = await callFunction("reviewMercariSales", { timeout: 300000 })({ items: rows, autoImport: true });
+    const data = res.data ?? {};
+    if (data.inbox) setMercariInbox(data.inbox);
+    const recorded = (data.rows ?? []).filter((r) => r.reviewState === "autoRecorded");
+    const waiting = data.inbox?.pending?.length ?? 0;
+    return { recorded, pill: recorded.length ? `+${recorded.length}` + (waiting ? ` · ${waiting} to review` : "") : waiting ? `${waiting} to review` : "✓" };
+  }
+
+  // ↻ — eBay / Etsy / TikTok through syncSales, Mercari through the extension.
   async function handleSync() {
     setSyncing(true);
     setSyncNote("");
     setError("");
-    try {
-      const res = await callFunction("syncSales")({});
-      const { imported = 0, skipped = 0, errors = [] } = res.data || {};
-      const parts = [`${imported} new`];
-      if (skipped) parts.push(`${skipped} already logged`);
-      for (const e of errors) parts.push(`${e.platform}: ${e.message}`);
-      setSyncNote(parts.join(" · "));
-      // The sales onSnapshot listener picks up any new rows automatically.
-    } catch (e) {
+    setPlatformPills({ "eBay · Etsy": "…", Mercari: "…" });
+    let apiNew = 0;
+    const api = callFunction("syncSales")({}).then((res) => {
+      const { imported = 0, errors = [] } = res.data || {};
+      apiNew = imported;
+      const note = errors.length ? errors.map((e) => `${e.platform}: ${e.message}`).join(" · ") : "";
+      setPlatformPills((p) => ({ ...p, "eBay · Etsy": imported ? `+${imported}` : errors.length ? "needs attention" : "✓" }));
+      if (note) setSyncNote(note);
+    }).catch((e) => {
+      setPlatformPills((p) => ({ ...p, "eBay · Etsy": "failed" }));
       setError("Sync failed: " + (e?.message ?? e));
-    } finally {
-      setSyncing(false);
+    });
+    let mercari = { recorded: [] };
+    const merc = refreshMercari().then((r) => {
+      mercari = r;
+      setPlatformPills((p) => ({ ...p, Mercari: r.pill }));
+      if (r.error) setError("Mercari: " + r.error);
+    }).catch((e) => {
+      setPlatformPills((p) => ({ ...p, Mercari: "failed" }));
+      setError("Mercari: " + (e?.message ?? e));
+    });
+    await Promise.all([api, merc]);
+    setSyncing(false);
+    setTimeout(() => setPlatformPills(null), 8000);
+
+    const auto = mercari.recorded ?? [];
+    const total = apiNew + auto.length;
+    const msg = total
+      ? `${total} new sale${total === 1 ? "" : "s"} recorded${auto.length ? ` (${auto.length} from Mercari)` : ""}`
+      : "Everything is up to date";
+    if (auto.length) {
+      showToast(msg, "Undo Mercari", async () => {
+        try {
+          const res = await callFunction("undoMercariAutoImport")({ items: auto.map((r) => ({ mercariItemId: r.mercariItemId })) });
+          setMercariInbox(res.data.inbox);
+          showToast(`${res.data.undone} moved back to review`);
+        } catch (e) {
+          setError("Undo failed: " + (e?.message ?? e));
+        }
+      });
+    } else {
+      showToast(msg);
     }
   }
 
@@ -164,6 +251,8 @@ export default function Sales() {
         setLoading(false);
       }
     );
+
+    loadMercariInbox();
 
     return () => {
       unsubProd();
@@ -274,14 +363,26 @@ export default function Sales() {
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {syncNote && <span style={{ fontSize: 12, color: "var(--muted)" }}>{syncNote}</span>}
-          <button className="btn" onClick={handleSync} disabled={syncing}>
-            {syncing ? "Syncing…" : "🔄 Sync eBay / Etsy"}
+          <button className="btn" onClick={handleSync} disabled={syncing} title="Check eBay, Etsy, TikTok and Mercari for new sales">
+            {syncing ? "Refreshing…" : "↻ Refresh"}
           </button>
-          <button className="btn btn-primary" onClick={() => setShowLogModal(true)}>
-            💰 Log Sale
+          <button className="btn btn-primary" onClick={() => setShowLogModal(true)} title="Add a sale by hand">
+            + Add sale
           </button>
         </div>
       </div>
+
+      {platformPills && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          {Object.entries(platformPills).map(([name, state]) => (
+            <span key={name} className="chip" style={{ fontSize: 12, padding: "2px 10px", borderRadius: 999, border: "var(--border-thin) solid var(--border)" }}>
+              {name} {state}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <MercariSalesBanner count={mercariInbox.pending.length} onReview={() => setShowMercariReview(true)} />
 
       {error && <div className="card" style={{ marginBottom: 20, color: "var(--danger)" }}>{error}</div>}
 
@@ -804,6 +905,33 @@ export default function Sales() {
             Undo
           </button>
         </div>
+      )}
+
+      {toast && (
+        <div
+          style={{
+            position: "fixed", bottom: undoToast ? 76 : 24, left: "50%", transform: "translateX(-50%)",
+            background: "var(--surface-high)", border: "var(--border-thin) solid var(--border)", borderRadius: "var(--radius)",
+            padding: "10px 16px", display: "flex", alignItems: "center", gap: 12, boxShadow: "0 4px 16px rgba(0,0,0,0.2)", zIndex: 1000,
+          }}
+        >
+          <span style={{ fontSize: 13 }}>{toast.message}</span>
+          {toast.action && (
+            <button className="btn btn-primary" style={{ fontSize: 12, padding: "4px 10px" }} onClick={() => { setToast(null); toast.onAction(); }}>
+              {toast.action}
+            </button>
+          )}
+        </div>
+      )}
+
+      {showMercariReview && (
+        <MercariReviewModal
+          inbox={mercariInbox}
+          products={products}
+          onClose={() => setShowMercariReview(false)}
+          onInbox={setMercariInbox}
+          onToast={showToast}
+        />
       )}
 
       {showLogModal && (

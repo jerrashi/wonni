@@ -41,6 +41,24 @@
           );
         });
       },
+      // Sales refresh: reads Mercari's sold lists in background tabs and resolves
+      // with { rows } (or { needsLogin } / { error }). Records nothing.
+      scanMercariSales(knownIds) {
+        return new Promise((resolve) => {
+          const requestId = `${Date.now()}-${Math.random()}`;
+          function onMessage(event) {
+            if (event.source !== window || event.data?.source !== "wonni-dashboard-bridge") return;
+            if (event.data.type !== "SCAN_MERCARI_SALES_RESPONSE" || event.data.requestId !== requestId) return;
+            window.removeEventListener("message", onMessage);
+            resolve(event.data.result || { error: "No answer from the extension." });
+          }
+          window.addEventListener("message", onMessage);
+          window.postMessage(
+            { source: "wonni-dashboard-bridge", type: "SCAN_MERCARI_SALES_REQUEST", requestId, knownIds: knownIds || [] },
+            "*"
+          );
+        });
+      },
       // Opens Weverse's own shipping-address settings in a new tab so the
       // user can fill one in, when a probe comes back MISSING_ADDRESS.
       openWeverseAddressPage() {
@@ -69,6 +87,19 @@
             shippingCost: response?.shippingCost ?? null,
             error: chrome.runtime.lastError?.message ?? response?.error ?? null,
             errorCode: response?.errorCode ?? null,
+          }, "*");
+        }
+      );
+    }
+    if (event.data.type === "SCAN_MERCARI_SALES_REQUEST") {
+      chrome.runtime.sendMessage(
+        { type: "SCAN_MERCARI_SALES", knownIds: event.data.knownIds },
+        (response) => {
+          window.postMessage({
+            source: BRIDGE_SOURCE,
+            type: "SCAN_MERCARI_SALES_RESPONSE",
+            requestId: event.data.requestId,
+            result: chrome.runtime.lastError ? { error: chrome.runtime.lastError.message } : response,
           }, "*");
         }
       );

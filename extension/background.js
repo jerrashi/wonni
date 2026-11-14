@@ -50,8 +50,8 @@ chrome.runtime.onMessageExternal.addListener((message, _sender, sendResponse) =>
       .catch((e) => sendResponse({ error: e.message }));
     return true;
   }
-  if (message.type === "CHECK_MERCARI_SOLD") {
-    handleCheckMercariSold()
+  if (message.type === "SCAN_MERCARI_SALES") {
+    handleScanMercariSales(message.knownIds)
       .then(sendResponse)
       .catch((e) => sendResponse({ error: e.message }));
     return true;
@@ -111,12 +111,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "FETCH_MERCARI_IMAGE") {
     fetchImageAsBase64(message.url)
       .then((base64) => sendResponse({ base64 }))
-      .catch((e) => sendResponse({ error: e.message }));
-    return true;
-  }
-  if (message.type === "MERCARI_SOLD_CHECK_RESULT") {
-    handleMercariSoldCheckResult(message.sold)
-      .then(() => sendResponse({ ok: true }))
       .catch((e) => sendResponse({ error: e.message }));
     return true;
   }
@@ -353,15 +347,50 @@ async function reportMercariStatus(idToken, productId, outcome) {
   }).catch(() => {});
 }
 
-// Opens Mercari's "in progress" listings page in a background tab so the
-// content script can scrape sold items, record sales, and return the results.
-async function handleCheckMercariSold() {
-  const tab = await chrome.tabs.create({
-    url: "https://www.mercari.com/mypage/listings/in_progress/?sortBy=7",
-    active: false, // background tab
-  });
+// Sales refresh from the web dashboard: reads Mercari's "in progress" then
+// "complete" list (newest first) in a background tab each, stopping per list at
+// the first already-known id, and returns the new rows. Records nothing — the
+// dashboard sends the rows to reviewMercariSales. (Replaced the old auto-record
+// on every visit to the in-progress page, 2026-11-14.)
+async function handleScanMercariSales(knownIds = []) {
+  const rows = [];
+  const seen = new Set();
+  for (const tab of ["in_progress", "complete"]) {
+    const result = await scanMercariTab(tab, knownIds);
+    if (result.needsLogin) return { needsLogin: true, rows: [] };
+    if (result.error) return { error: result.error, rows };
+    for (const r of result.rows ?? []) {
+      if (!seen.has(r.mercariItemId)) { seen.add(r.mercariItemId); rows.push(r); }
+    }
+  }
+  return { rows };
+}
 
-  return { ok: true, tabId: tab.id };
+async function scanMercariTab(tabName, knownIds) {
+  const tab = await chrome.tabs.create({
+    url: `https://www.mercari.com/mypage/listings/${tabName}/?sortBy=7`,
+    active: false,
+  });
+  const close = () => chrome.tabs.remove(tab.id).catch(() => {});
+  try {
+    // The content script loads with the page; retry until it answers. Each list
+    // can take a while (scrolling + one item/order fetch per new sale).
+    const deadline = Date.now() + 25000;
+    while (Date.now() < deadline) {
+      const info = await chrome.tabs.get(tab.id).catch(() => null);
+      if (info?.url && /\/login|\/signup/.test(info.url)) return { needsLogin: true };
+      const res = await new Promise((resolve) => {
+        chrome.tabs.sendMessage(tab.id, { type: "MERCARI_SCAN_TAB", knownIds }, (r) => {
+          resolve(chrome.runtime.lastError ? null : r);
+        });
+      });
+      if (res) return res;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    return { error: "Mercari did not load. Check that you are signed in to mercari.com." };
+  } finally {
+    close();
+  }
 }
 
 // Opens a live Mercari item page and scrapes its current title/description/photos
@@ -403,50 +432,6 @@ async function handleCheckMercariPullSync(mercariItemId) {
       }
     }, 1000); // check every second
   });
-}
-
-// Processes sold items detected by mercari_sold_content.js — calls Cloud Function
-// to match items to listings and record sales.
-async function handleMercariSoldCheckResult(soldItems) {
-  if (!Array.isArray(soldItems) || soldItems.length === 0) {
-    console.log("[Wonni Drop] No sold items found");
-    return;
-  }
-
-  const { idToken } = await chrome.storage.local.get(["idToken"]);
-  if (!idToken) {
-    console.error("[Wonni Drop] Not signed in, cannot record sales");
-    return;
-  }
-
-  console.log(`[Wonni Drop] Found ${soldItems.length} sold items, recording via Cloud Function...`);
-
-  try {
-    const response = await fetch(`${FUNCTIONS_BASE}/recordMercariSalesBatch`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${idToken}`,
-      },
-      body: JSON.stringify({ data: { items: soldItems } }),
-    });
-
-    if (response.ok) {
-      const result = await response.json();
-      const r = result.result ?? {};
-      console.log(
-        `[Wonni Drop] recordMercariSalesBatch: ${r.recorded ?? 0} recorded, ` +
-        `${r.duplicates ?? 0} already logged, ${r.unmatched ?? 0} no matching listing`
-      );
-      const failed = (r.results ?? []).filter((x) => x.outcome === "parse-failed");
-      if (failed.length) console.warn("[Wonni Drop] parse-failed rows:", failed);
-    } else {
-      const error = await response.text();
-      console.error("[Wonni Drop] recordMercariSalesBatch failed:", error);
-    }
-  } catch (err) {
-    console.error("[Wonni Drop] Error calling recordMercariSalesBatch:", err);
-  }
 }
 
 // ── Weverse re-order tasks ──────────────────────────────────────────────

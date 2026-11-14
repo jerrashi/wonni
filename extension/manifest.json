@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Wonni Drop",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Import Weverse Shop and AliExpress products to Wonni Drop with one click.",
   "permissions": [
     "storage",
@@ -42,7 +42,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://www.mercari.com/mypage/listings/in_progress*", "https://mercari.com/mypage/listings/in_progress*"],
+      "matches": ["https://www.mercari.com/mypage/listings/*", "https://mercari.com/mypage/listings/*"],
       "js": ["mercari_sold_content.js"],
       "run_at": "document_idle"
     },
