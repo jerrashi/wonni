@@ -74,6 +74,8 @@ struct BackendContracts: Codable, Sendable {
     let importMercariPullSyncRequest: ImportMercariPullSyncRequest?
     let importMercariPullSyncResponse: ImportMercariPullSyncResponse?
     let listingFields: ListingFields?
+    let listMercariSaleInboxRequest: [String: JSONAny]?
+    let listMercariSaleInboxResponse: ListMercariSaleInboxResponse?
     let listWeverseOrderTasksRequest: ListWeverseOrderTasksRequest?
     let listWeverseOrderTasksResponse: ListWeverseOrderTasksResponse?
     let markSoldOutAndCascadeRequest: MarkSoldOutAndCascadeRequest?
@@ -116,6 +118,8 @@ struct BackendContracts: Codable, Sendable {
     let syncSalesResponse: SyncSalesResponse?
     let textToListingsRequest: TextToListingsRequest?
     let textToListingsResponse: TextToListingsResponse?
+    let undoMercariAutoImportRequest: UndoMercariAutoImportRequest?
+    let undoMercariAutoImportResponse: UndoMercariAutoImportResponse?
     let updateMercariListingStatusRequest: UpdateMercariListingStatusRequest?
     let updateMercariListingStatusResponse: UpdateMercariListingStatusResponse?
     let updateSaleStagesRequest: UpdateSaleStagesRequest?
@@ -186,6 +190,8 @@ struct BackendContracts: Codable, Sendable {
         case importMercariPullSyncRequest = "ImportMercariPullSyncRequest"
         case importMercariPullSyncResponse = "ImportMercariPullSyncResponse"
         case listingFields = "ListingFields"
+        case listMercariSaleInboxRequest = "ListMercariSaleInboxRequest"
+        case listMercariSaleInboxResponse = "ListMercariSaleInboxResponse"
         case listWeverseOrderTasksRequest = "ListWeverseOrderTasksRequest"
         case listWeverseOrderTasksResponse = "ListWeverseOrderTasksResponse"
         case markSoldOutAndCascadeRequest = "MarkSoldOutAndCascadeRequest"
@@ -228,6 +234,8 @@ struct BackendContracts: Codable, Sendable {
         case syncSalesResponse = "SyncSalesResponse"
         case textToListingsRequest = "TextToListingsRequest"
         case textToListingsResponse = "TextToListingsResponse"
+        case undoMercariAutoImportRequest = "UndoMercariAutoImportRequest"
+        case undoMercariAutoImportResponse = "UndoMercariAutoImportResponse"
         case updateMercariListingStatusRequest = "UpdateMercariListingStatusRequest"
         case updateMercariListingStatusResponse = "UpdateMercariListingStatusResponse"
         case updateSaleStagesRequest = "UpdateSaleStagesRequest"
@@ -318,6 +326,8 @@ extension BackendContracts {
         importMercariPullSyncRequest: ImportMercariPullSyncRequest?? = nil,
         importMercariPullSyncResponse: ImportMercariPullSyncResponse?? = nil,
         listingFields: ListingFields?? = nil,
+        listMercariSaleInboxRequest: [String: JSONAny]?? = nil,
+        listMercariSaleInboxResponse: ListMercariSaleInboxResponse?? = nil,
         listWeverseOrderTasksRequest: ListWeverseOrderTasksRequest?? = nil,
         listWeverseOrderTasksResponse: ListWeverseOrderTasksResponse?? = nil,
         markSoldOutAndCascadeRequest: MarkSoldOutAndCascadeRequest?? = nil,
@@ -360,6 +370,8 @@ extension BackendContracts {
         syncSalesResponse: SyncSalesResponse?? = nil,
         textToListingsRequest: TextToListingsRequest?? = nil,
         textToListingsResponse: TextToListingsResponse?? = nil,
+        undoMercariAutoImportRequest: UndoMercariAutoImportRequest?? = nil,
+        undoMercariAutoImportResponse: UndoMercariAutoImportResponse?? = nil,
         updateMercariListingStatusRequest: UpdateMercariListingStatusRequest?? = nil,
         updateMercariListingStatusResponse: UpdateMercariListingStatusResponse?? = nil,
         updateSaleStagesRequest: UpdateSaleStagesRequest?? = nil,
@@ -430,6 +442,8 @@ extension BackendContracts {
             importMercariPullSyncRequest: importMercariPullSyncRequest ?? self.importMercariPullSyncRequest,
             importMercariPullSyncResponse: importMercariPullSyncResponse ?? self.importMercariPullSyncResponse,
             listingFields: listingFields ?? self.listingFields,
+            listMercariSaleInboxRequest: listMercariSaleInboxRequest ?? self.listMercariSaleInboxRequest,
+            listMercariSaleInboxResponse: listMercariSaleInboxResponse ?? self.listMercariSaleInboxResponse,
             listWeverseOrderTasksRequest: listWeverseOrderTasksRequest ?? self.listWeverseOrderTasksRequest,
             listWeverseOrderTasksResponse: listWeverseOrderTasksResponse ?? self.listWeverseOrderTasksResponse,
             markSoldOutAndCascadeRequest: markSoldOutAndCascadeRequest ?? self.markSoldOutAndCascadeRequest,
@@ -472,6 +486,8 @@ extension BackendContracts {
             syncSalesResponse: syncSalesResponse ?? self.syncSalesResponse,
             textToListingsRequest: textToListingsRequest ?? self.textToListingsRequest,
             textToListingsResponse: textToListingsResponse ?? self.textToListingsResponse,
+            undoMercariAutoImportRequest: undoMercariAutoImportRequest ?? self.undoMercariAutoImportRequest,
+            undoMercariAutoImportResponse: undoMercariAutoImportResponse ?? self.undoMercariAutoImportResponse,
             updateMercariListingStatusRequest: updateMercariListingStatusRequest ?? self.updateMercariListingStatusRequest,
             updateMercariListingStatusResponse: updateMercariListingStatusResponse ?? self.updateMercariListingStatusResponse,
             updateSaleStagesRequest: updateSaleStagesRequest ?? self.updateSaleStagesRequest,
@@ -6022,6 +6038,458 @@ extension ImportMercariPullSyncResponse {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
+// MARK: - ListMercariSaleInboxResponse
+struct ListMercariSaleInboxResponse: Codable, Equatable, Sendable {
+    let discarded: [ListMercariSaleInboxResponseDiscarded]
+    let pending: [ListMercariSaleInboxResponsePending]
+
+    enum CodingKeys: String, CodingKey {
+        case discarded = "discarded"
+        case pending = "pending"
+    }
+}
+
+// MARK: ListMercariSaleInboxResponse convenience initializers and mutators
+
+extension ListMercariSaleInboxResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(ListMercariSaleInboxResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        discarded: [ListMercariSaleInboxResponseDiscarded]? = nil,
+        pending: [ListMercariSaleInboxResponsePending]? = nil
+    ) -> ListMercariSaleInboxResponse {
+        return ListMercariSaleInboxResponse(
+            discarded: discarded ?? self.discarded,
+            pending: pending ?? self.pending
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - ListMercariSaleInboxResponseDiscarded
+struct ListMercariSaleInboxResponseDiscarded: Codable, Equatable, Sendable {
+    let item: PurpleItem
+    let missing: [Missing]
+    let productId: String?
+    let productTitle: String?
+    let state: State
+    let suggestedProductId: String?
+    let suggestedProductTitle: String?
+    let variantSku: String?
+
+    enum CodingKeys: String, CodingKey {
+        case item = "item"
+        case missing = "missing"
+        case productId = "productId"
+        case productTitle = "productTitle"
+        case state = "state"
+        case suggestedProductId = "suggestedProductId"
+        case suggestedProductTitle = "suggestedProductTitle"
+        case variantSku = "variantSku"
+    }
+}
+
+// MARK: ListMercariSaleInboxResponseDiscarded convenience initializers and mutators
+
+extension ListMercariSaleInboxResponseDiscarded {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(ListMercariSaleInboxResponseDiscarded.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        item: PurpleItem? = nil,
+        missing: [Missing]? = nil,
+        productId: String?? = nil,
+        productTitle: String?? = nil,
+        state: State? = nil,
+        suggestedProductId: String?? = nil,
+        suggestedProductTitle: String?? = nil,
+        variantSku: String?? = nil
+    ) -> ListMercariSaleInboxResponseDiscarded {
+        return ListMercariSaleInboxResponseDiscarded(
+            item: item ?? self.item,
+            missing: missing ?? self.missing,
+            productId: productId ?? self.productId,
+            productTitle: productTitle ?? self.productTitle,
+            state: state ?? self.state,
+            suggestedProductId: suggestedProductId ?? self.suggestedProductId,
+            suggestedProductTitle: suggestedProductTitle ?? self.suggestedProductTitle,
+            variantSku: variantSku ?? self.variantSku
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - PurpleItem
+struct PurpleItem: Codable, Equatable, Sendable {
+    let buyerName: String?
+    let mercariItemId: String
+    let mercariOrderId: String?
+    let priceSoldFor: Double?
+    let quantity: Int?
+    let shippingRevenue: Double?
+    let soldAt: SoldAtUnion?
+    let soldDate: String?
+    let soldDateText: String?
+    let takeHome: Double?
+    let thumbnailUrl: String?
+    let title: String?
+    let trackingNumber: String?
+
+    enum CodingKeys: String, CodingKey {
+        case buyerName = "buyerName"
+        case mercariItemId = "mercariItemId"
+        case mercariOrderId = "mercariOrderId"
+        case priceSoldFor = "priceSoldFor"
+        case quantity = "quantity"
+        case shippingRevenue = "shippingRevenue"
+        case soldAt = "soldAt"
+        case soldDate = "soldDate"
+        case soldDateText = "soldDateText"
+        case takeHome = "takeHome"
+        case thumbnailUrl = "thumbnailUrl"
+        case title = "title"
+        case trackingNumber = "trackingNumber"
+    }
+}
+
+// MARK: PurpleItem convenience initializers and mutators
+
+extension PurpleItem {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(PurpleItem.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        buyerName: String?? = nil,
+        mercariItemId: String? = nil,
+        mercariOrderId: String?? = nil,
+        priceSoldFor: Double?? = nil,
+        quantity: Int?? = nil,
+        shippingRevenue: Double?? = nil,
+        soldAt: SoldAtUnion?? = nil,
+        soldDate: String?? = nil,
+        soldDateText: String?? = nil,
+        takeHome: Double?? = nil,
+        thumbnailUrl: String?? = nil,
+        title: String?? = nil,
+        trackingNumber: String?? = nil
+    ) -> PurpleItem {
+        return PurpleItem(
+            buyerName: buyerName ?? self.buyerName,
+            mercariItemId: mercariItemId ?? self.mercariItemId,
+            mercariOrderId: mercariOrderId ?? self.mercariOrderId,
+            priceSoldFor: priceSoldFor ?? self.priceSoldFor,
+            quantity: quantity ?? self.quantity,
+            shippingRevenue: shippingRevenue ?? self.shippingRevenue,
+            soldAt: soldAt ?? self.soldAt,
+            soldDate: soldDate ?? self.soldDate,
+            soldDateText: soldDateText ?? self.soldDateText,
+            takeHome: takeHome ?? self.takeHome,
+            thumbnailUrl: thumbnailUrl ?? self.thumbnailUrl,
+            title: title ?? self.title,
+            trackingNumber: trackingNumber ?? self.trackingNumber
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+enum SoldAtUnion: Codable, Equatable, Sendable {
+    case dateTime(Date)
+    case integer(Int)
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let x = try? container.decode(Int.self) {
+            self = .integer(x)
+            return
+        }
+        if let x = try? container.decode(Date.self) {
+            self = .dateTime(x)
+            return
+        }
+        if container.decodeNil() {
+            self = .null
+            return
+        }
+        throw DecodingError.typeMismatch(SoldAtUnion.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Wrong type for SoldAtUnion"))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .dateTime(let x):
+            try container.encode(x)
+        case .integer(let x):
+            try container.encode(x)
+        case .null:
+            try container.encodeNil()
+        }
+    }
+}
+
+enum Missing: String, Codable, Equatable, Sendable {
+    case date = "date"
+    case price = "price"
+    case title = "title"
+}
+
+enum State: String, Codable, Equatable, Sendable {
+    case discarded = "discarded"
+    case pending = "pending"
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - ListMercariSaleInboxResponsePending
+struct ListMercariSaleInboxResponsePending: Codable, Equatable, Sendable {
+    let item: FluffyItem
+    let missing: [Missing]
+    let productId: String?
+    let productTitle: String?
+    let state: State
+    let suggestedProductId: String?
+    let suggestedProductTitle: String?
+    let variantSku: String?
+
+    enum CodingKeys: String, CodingKey {
+        case item = "item"
+        case missing = "missing"
+        case productId = "productId"
+        case productTitle = "productTitle"
+        case state = "state"
+        case suggestedProductId = "suggestedProductId"
+        case suggestedProductTitle = "suggestedProductTitle"
+        case variantSku = "variantSku"
+    }
+}
+
+// MARK: ListMercariSaleInboxResponsePending convenience initializers and mutators
+
+extension ListMercariSaleInboxResponsePending {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(ListMercariSaleInboxResponsePending.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        item: FluffyItem? = nil,
+        missing: [Missing]? = nil,
+        productId: String?? = nil,
+        productTitle: String?? = nil,
+        state: State? = nil,
+        suggestedProductId: String?? = nil,
+        suggestedProductTitle: String?? = nil,
+        variantSku: String?? = nil
+    ) -> ListMercariSaleInboxResponsePending {
+        return ListMercariSaleInboxResponsePending(
+            item: item ?? self.item,
+            missing: missing ?? self.missing,
+            productId: productId ?? self.productId,
+            productTitle: productTitle ?? self.productTitle,
+            state: state ?? self.state,
+            suggestedProductId: suggestedProductId ?? self.suggestedProductId,
+            suggestedProductTitle: suggestedProductTitle ?? self.suggestedProductTitle,
+            variantSku: variantSku ?? self.variantSku
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - FluffyItem
+struct FluffyItem: Codable, Equatable, Sendable {
+    let buyerName: String?
+    let mercariItemId: String
+    let mercariOrderId: String?
+    let priceSoldFor: Double?
+    let quantity: Int?
+    let shippingRevenue: Double?
+    let soldAt: SoldAtUnion?
+    let soldDate: String?
+    let soldDateText: String?
+    let takeHome: Double?
+    let thumbnailUrl: String?
+    let title: String?
+    let trackingNumber: String?
+
+    enum CodingKeys: String, CodingKey {
+        case buyerName = "buyerName"
+        case mercariItemId = "mercariItemId"
+        case mercariOrderId = "mercariOrderId"
+        case priceSoldFor = "priceSoldFor"
+        case quantity = "quantity"
+        case shippingRevenue = "shippingRevenue"
+        case soldAt = "soldAt"
+        case soldDate = "soldDate"
+        case soldDateText = "soldDateText"
+        case takeHome = "takeHome"
+        case thumbnailUrl = "thumbnailUrl"
+        case title = "title"
+        case trackingNumber = "trackingNumber"
+    }
+}
+
+// MARK: FluffyItem convenience initializers and mutators
+
+extension FluffyItem {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(FluffyItem.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        buyerName: String?? = nil,
+        mercariItemId: String? = nil,
+        mercariOrderId: String?? = nil,
+        priceSoldFor: Double?? = nil,
+        quantity: Int?? = nil,
+        shippingRevenue: Double?? = nil,
+        soldAt: SoldAtUnion?? = nil,
+        soldDate: String?? = nil,
+        soldDateText: String?? = nil,
+        takeHome: Double?? = nil,
+        thumbnailUrl: String?? = nil,
+        title: String?? = nil,
+        trackingNumber: String?? = nil
+    ) -> FluffyItem {
+        return FluffyItem(
+            buyerName: buyerName ?? self.buyerName,
+            mercariItemId: mercariItemId ?? self.mercariItemId,
+            mercariOrderId: mercariOrderId ?? self.mercariOrderId,
+            priceSoldFor: priceSoldFor ?? self.priceSoldFor,
+            quantity: quantity ?? self.quantity,
+            shippingRevenue: shippingRevenue ?? self.shippingRevenue,
+            soldAt: soldAt ?? self.soldAt,
+            soldDate: soldDate ?? self.soldDate,
+            soldDateText: soldDateText ?? self.soldDateText,
+            takeHome: takeHome ?? self.takeHome,
+            thumbnailUrl: thumbnailUrl ?? self.thumbnailUrl,
+            title: title ?? self.title,
+            trackingNumber: trackingNumber ?? self.trackingNumber
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - ListWeverseOrderTasksRequest
 struct ListWeverseOrderTasksRequest: Codable, Equatable, Sendable {
     let cursor: String?
@@ -6694,17 +7162,21 @@ extension MercariBatchRow {
 // MARK: - MercariReviewRow
 struct MercariReviewRow: Codable, Equatable, Sendable {
     let mercariItemId: String
+    let missing: [Missing]?
     let productId: String?
     let productTitle: String?
     let reviewState: ReviewState
+    let saleId: String?
     let variantSku: String?
     let warning: String?
 
     enum CodingKeys: String, CodingKey {
         case mercariItemId = "mercariItemId"
+        case missing = "missing"
         case productId = "productId"
         case productTitle = "productTitle"
         case reviewState = "reviewState"
+        case saleId = "saleId"
         case variantSku = "variantSku"
         case warning = "warning"
     }
@@ -6730,17 +7202,21 @@ extension MercariReviewRow {
 
     func with(
         mercariItemId: String? = nil,
+        missing: [Missing]?? = nil,
         productId: String?? = nil,
         productTitle: String?? = nil,
         reviewState: ReviewState? = nil,
+        saleId: String?? = nil,
         variantSku: String?? = nil,
         warning: String?? = nil
     ) -> MercariReviewRow {
         return MercariReviewRow(
             mercariItemId: mercariItemId ?? self.mercariItemId,
+            missing: missing ?? self.missing,
             productId: productId ?? self.productId,
             productTitle: productTitle ?? self.productTitle,
             reviewState: reviewState ?? self.reviewState,
+            saleId: saleId ?? self.saleId,
             variantSku: variantSku ?? self.variantSku,
             warning: warning ?? self.warning
         )
@@ -6756,6 +7232,7 @@ extension MercariReviewRow {
 }
 
 enum ReviewState: String, Codable, Equatable, Sendable {
+    case autoRecorded = "autoRecorded"
     case discarded = "discarded"
     case invalid = "invalid"
     case new = "new"
@@ -6774,6 +7251,7 @@ struct MercariScrapeItem: Codable, Equatable, Sendable {
     let mercariItemId: String
     let mercariOrderId: String?
     let priceSoldFor: Double
+    let quantity: Int?
     let shippingRevenue: Double?
     let soldAt: SoldAtUnion?
     let soldDate: String?
@@ -6788,6 +7266,7 @@ struct MercariScrapeItem: Codable, Equatable, Sendable {
         case mercariItemId = "mercariItemId"
         case mercariOrderId = "mercariOrderId"
         case priceSoldFor = "priceSoldFor"
+        case quantity = "quantity"
         case shippingRevenue = "shippingRevenue"
         case soldAt = "soldAt"
         case soldDate = "soldDate"
@@ -6822,6 +7301,7 @@ extension MercariScrapeItem {
         mercariItemId: String? = nil,
         mercariOrderId: String?? = nil,
         priceSoldFor: Double? = nil,
+        quantity: Int?? = nil,
         shippingRevenue: Double?? = nil,
         soldAt: SoldAtUnion?? = nil,
         soldDate: String?? = nil,
@@ -6836,6 +7316,7 @@ extension MercariScrapeItem {
             mercariItemId: mercariItemId ?? self.mercariItemId,
             mercariOrderId: mercariOrderId ?? self.mercariOrderId,
             priceSoldFor: priceSoldFor ?? self.priceSoldFor,
+            quantity: quantity ?? self.quantity,
             shippingRevenue: shippingRevenue ?? self.shippingRevenue,
             soldAt: soldAt ?? self.soldAt,
             soldDate: soldDate ?? self.soldDate,
@@ -6853,41 +7334,6 @@ extension MercariScrapeItem {
 
     func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
         return String(data: try self.jsonData(), encoding: encoding)
-    }
-}
-
-enum SoldAtUnion: Codable, Equatable, Sendable {
-    case dateTime(Date)
-    case integer(Int)
-    case null
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if let x = try? container.decode(Int.self) {
-            self = .integer(x)
-            return
-        }
-        if let x = try? container.decode(Date.self) {
-            self = .dateTime(x)
-            return
-        }
-        if container.decodeNil() {
-            self = .null
-            return
-        }
-        throw DecodingError.typeMismatch(SoldAtUnion.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Wrong type for SoldAtUnion"))
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        switch self {
-        case .dateTime(let x):
-            try container.encode(x)
-        case .integer(let x):
-            try container.encode(x)
-        case .null:
-            try container.encodeNil()
-        }
     }
 }
 
@@ -7625,11 +8071,13 @@ extension ReassignSaleStageResponse {
 
 // MARK: - RecordMercariSalesBatchRequest
 struct RecordMercariSalesBatchRequest: Codable, Equatable, Sendable {
+    let allowUnlinked: Bool?
     let items: [MercariBatchRow]?
     let links: [String: LinkValue]?
     let rawItems: [MercariBatchRow]?
 
     enum CodingKeys: String, CodingKey {
+        case allowUnlinked = "allowUnlinked"
         case items = "items"
         case links = "links"
         case rawItems = "rawItems"
@@ -7655,11 +8103,13 @@ extension RecordMercariSalesBatchRequest {
     }
 
     func with(
+        allowUnlinked: Bool?? = nil,
         items: [MercariBatchRow]?? = nil,
         links: [String: LinkValue]?? = nil,
         rawItems: [MercariBatchRow]?? = nil
     ) -> RecordMercariSalesBatchRequest {
         return RecordMercariSalesBatchRequest(
+            allowUnlinked: allowUnlinked ?? self.allowUnlinked,
             items: items ?? self.items,
             links: links ?? self.links,
             rawItems: rawItems ?? self.rawItems
@@ -8343,9 +8793,11 @@ extension RestockAndCascadeResponse {
 
 // MARK: - ReviewMercariSalesRequest
 struct ReviewMercariSalesRequest: Codable, Equatable, Sendable {
+    let autoImport: Bool?
     let items: [ReviewMercariSalesRequestItem]
 
     enum CodingKeys: String, CodingKey {
+        case autoImport = "autoImport"
         case items = "items"
     }
 }
@@ -8369,9 +8821,11 @@ extension ReviewMercariSalesRequest {
     }
 
     func with(
+        autoImport: Bool?? = nil,
         items: [ReviewMercariSalesRequestItem]? = nil
     ) -> ReviewMercariSalesRequest {
         return ReviewMercariSalesRequest(
+            autoImport: autoImport ?? self.autoImport,
             items: items ?? self.items
         )
     }
@@ -8443,11 +8897,15 @@ extension ReviewMercariSalesRequestItem {
 
 // MARK: - ReviewMercariSalesResponse
 struct ReviewMercariSalesResponse: Codable, Equatable, Sendable {
+    let autoRecorded: Int?
     let firstRecordedIndex: Int?
+    let inbox: ReviewMercariSalesResponseInbox?
     let rows: [MercariReviewRow]
 
     enum CodingKeys: String, CodingKey {
+        case autoRecorded = "autoRecorded"
         case firstRecordedIndex = "firstRecordedIndex"
+        case inbox = "inbox"
         case rows = "rows"
     }
 }
@@ -8471,12 +8929,422 @@ extension ReviewMercariSalesResponse {
     }
 
     func with(
+        autoRecorded: Int?? = nil,
         firstRecordedIndex: Int?? = nil,
+        inbox: ReviewMercariSalesResponseInbox?? = nil,
         rows: [MercariReviewRow]? = nil
     ) -> ReviewMercariSalesResponse {
         return ReviewMercariSalesResponse(
+            autoRecorded: autoRecorded ?? self.autoRecorded,
             firstRecordedIndex: firstRecordedIndex ?? self.firstRecordedIndex,
+            inbox: inbox ?? self.inbox,
             rows: rows ?? self.rows
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - ReviewMercariSalesResponseInbox
+struct ReviewMercariSalesResponseInbox: Codable, Equatable, Sendable {
+    let discarded: [PurpleDiscarded]
+    let pending: [PurplePending]
+
+    enum CodingKeys: String, CodingKey {
+        case discarded = "discarded"
+        case pending = "pending"
+    }
+}
+
+// MARK: ReviewMercariSalesResponseInbox convenience initializers and mutators
+
+extension ReviewMercariSalesResponseInbox {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(ReviewMercariSalesResponseInbox.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        discarded: [PurpleDiscarded]? = nil,
+        pending: [PurplePending]? = nil
+    ) -> ReviewMercariSalesResponseInbox {
+        return ReviewMercariSalesResponseInbox(
+            discarded: discarded ?? self.discarded,
+            pending: pending ?? self.pending
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - PurpleDiscarded
+struct PurpleDiscarded: Codable, Equatable, Sendable {
+    let item: TentacledItem
+    let missing: [Missing]
+    let productId: String?
+    let productTitle: String?
+    let state: State
+    let suggestedProductId: String?
+    let suggestedProductTitle: String?
+    let variantSku: String?
+
+    enum CodingKeys: String, CodingKey {
+        case item = "item"
+        case missing = "missing"
+        case productId = "productId"
+        case productTitle = "productTitle"
+        case state = "state"
+        case suggestedProductId = "suggestedProductId"
+        case suggestedProductTitle = "suggestedProductTitle"
+        case variantSku = "variantSku"
+    }
+}
+
+// MARK: PurpleDiscarded convenience initializers and mutators
+
+extension PurpleDiscarded {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(PurpleDiscarded.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        item: TentacledItem? = nil,
+        missing: [Missing]? = nil,
+        productId: String?? = nil,
+        productTitle: String?? = nil,
+        state: State? = nil,
+        suggestedProductId: String?? = nil,
+        suggestedProductTitle: String?? = nil,
+        variantSku: String?? = nil
+    ) -> PurpleDiscarded {
+        return PurpleDiscarded(
+            item: item ?? self.item,
+            missing: missing ?? self.missing,
+            productId: productId ?? self.productId,
+            productTitle: productTitle ?? self.productTitle,
+            state: state ?? self.state,
+            suggestedProductId: suggestedProductId ?? self.suggestedProductId,
+            suggestedProductTitle: suggestedProductTitle ?? self.suggestedProductTitle,
+            variantSku: variantSku ?? self.variantSku
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - TentacledItem
+struct TentacledItem: Codable, Equatable, Sendable {
+    let buyerName: String?
+    let mercariItemId: String
+    let mercariOrderId: String?
+    let priceSoldFor: Double?
+    let quantity: Int?
+    let shippingRevenue: Double?
+    let soldAt: SoldAtUnion?
+    let soldDate: String?
+    let soldDateText: String?
+    let takeHome: Double?
+    let thumbnailUrl: String?
+    let title: String?
+    let trackingNumber: String?
+
+    enum CodingKeys: String, CodingKey {
+        case buyerName = "buyerName"
+        case mercariItemId = "mercariItemId"
+        case mercariOrderId = "mercariOrderId"
+        case priceSoldFor = "priceSoldFor"
+        case quantity = "quantity"
+        case shippingRevenue = "shippingRevenue"
+        case soldAt = "soldAt"
+        case soldDate = "soldDate"
+        case soldDateText = "soldDateText"
+        case takeHome = "takeHome"
+        case thumbnailUrl = "thumbnailUrl"
+        case title = "title"
+        case trackingNumber = "trackingNumber"
+    }
+}
+
+// MARK: TentacledItem convenience initializers and mutators
+
+extension TentacledItem {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(TentacledItem.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        buyerName: String?? = nil,
+        mercariItemId: String? = nil,
+        mercariOrderId: String?? = nil,
+        priceSoldFor: Double?? = nil,
+        quantity: Int?? = nil,
+        shippingRevenue: Double?? = nil,
+        soldAt: SoldAtUnion?? = nil,
+        soldDate: String?? = nil,
+        soldDateText: String?? = nil,
+        takeHome: Double?? = nil,
+        thumbnailUrl: String?? = nil,
+        title: String?? = nil,
+        trackingNumber: String?? = nil
+    ) -> TentacledItem {
+        return TentacledItem(
+            buyerName: buyerName ?? self.buyerName,
+            mercariItemId: mercariItemId ?? self.mercariItemId,
+            mercariOrderId: mercariOrderId ?? self.mercariOrderId,
+            priceSoldFor: priceSoldFor ?? self.priceSoldFor,
+            quantity: quantity ?? self.quantity,
+            shippingRevenue: shippingRevenue ?? self.shippingRevenue,
+            soldAt: soldAt ?? self.soldAt,
+            soldDate: soldDate ?? self.soldDate,
+            soldDateText: soldDateText ?? self.soldDateText,
+            takeHome: takeHome ?? self.takeHome,
+            thumbnailUrl: thumbnailUrl ?? self.thumbnailUrl,
+            title: title ?? self.title,
+            trackingNumber: trackingNumber ?? self.trackingNumber
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - PurplePending
+struct PurplePending: Codable, Equatable, Sendable {
+    let item: StickyItem
+    let missing: [Missing]
+    let productId: String?
+    let productTitle: String?
+    let state: State
+    let suggestedProductId: String?
+    let suggestedProductTitle: String?
+    let variantSku: String?
+
+    enum CodingKeys: String, CodingKey {
+        case item = "item"
+        case missing = "missing"
+        case productId = "productId"
+        case productTitle = "productTitle"
+        case state = "state"
+        case suggestedProductId = "suggestedProductId"
+        case suggestedProductTitle = "suggestedProductTitle"
+        case variantSku = "variantSku"
+    }
+}
+
+// MARK: PurplePending convenience initializers and mutators
+
+extension PurplePending {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(PurplePending.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        item: StickyItem? = nil,
+        missing: [Missing]? = nil,
+        productId: String?? = nil,
+        productTitle: String?? = nil,
+        state: State? = nil,
+        suggestedProductId: String?? = nil,
+        suggestedProductTitle: String?? = nil,
+        variantSku: String?? = nil
+    ) -> PurplePending {
+        return PurplePending(
+            item: item ?? self.item,
+            missing: missing ?? self.missing,
+            productId: productId ?? self.productId,
+            productTitle: productTitle ?? self.productTitle,
+            state: state ?? self.state,
+            suggestedProductId: suggestedProductId ?? self.suggestedProductId,
+            suggestedProductTitle: suggestedProductTitle ?? self.suggestedProductTitle,
+            variantSku: variantSku ?? self.variantSku
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - StickyItem
+struct StickyItem: Codable, Equatable, Sendable {
+    let buyerName: String?
+    let mercariItemId: String
+    let mercariOrderId: String?
+    let priceSoldFor: Double?
+    let quantity: Int?
+    let shippingRevenue: Double?
+    let soldAt: SoldAtUnion?
+    let soldDate: String?
+    let soldDateText: String?
+    let takeHome: Double?
+    let thumbnailUrl: String?
+    let title: String?
+    let trackingNumber: String?
+
+    enum CodingKeys: String, CodingKey {
+        case buyerName = "buyerName"
+        case mercariItemId = "mercariItemId"
+        case mercariOrderId = "mercariOrderId"
+        case priceSoldFor = "priceSoldFor"
+        case quantity = "quantity"
+        case shippingRevenue = "shippingRevenue"
+        case soldAt = "soldAt"
+        case soldDate = "soldDate"
+        case soldDateText = "soldDateText"
+        case takeHome = "takeHome"
+        case thumbnailUrl = "thumbnailUrl"
+        case title = "title"
+        case trackingNumber = "trackingNumber"
+    }
+}
+
+// MARK: StickyItem convenience initializers and mutators
+
+extension StickyItem {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(StickyItem.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        buyerName: String?? = nil,
+        mercariItemId: String? = nil,
+        mercariOrderId: String?? = nil,
+        priceSoldFor: Double?? = nil,
+        quantity: Int?? = nil,
+        shippingRevenue: Double?? = nil,
+        soldAt: SoldAtUnion?? = nil,
+        soldDate: String?? = nil,
+        soldDateText: String?? = nil,
+        takeHome: Double?? = nil,
+        thumbnailUrl: String?? = nil,
+        title: String?? = nil,
+        trackingNumber: String?? = nil
+    ) -> StickyItem {
+        return StickyItem(
+            buyerName: buyerName ?? self.buyerName,
+            mercariItemId: mercariItemId ?? self.mercariItemId,
+            mercariOrderId: mercariOrderId ?? self.mercariOrderId,
+            priceSoldFor: priceSoldFor ?? self.priceSoldFor,
+            quantity: quantity ?? self.quantity,
+            shippingRevenue: shippingRevenue ?? self.shippingRevenue,
+            soldAt: soldAt ?? self.soldAt,
+            soldDate: soldDate ?? self.soldDate,
+            soldDateText: soldDateText ?? self.soldDateText,
+            takeHome: takeHome ?? self.takeHome,
+            thumbnailUrl: thumbnailUrl ?? self.thumbnailUrl,
+            title: title ?? self.title,
+            trackingNumber: trackingNumber ?? self.trackingNumber
         )
     }
 
@@ -9827,6 +10695,570 @@ extension TextToListingsResponseNeedsDecision {
             memberTitles: memberTitles ?? self.memberTitles,
             sourceText: sourceText ?? self.sourceText,
             title: title ?? self.title
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - UndoMercariAutoImportRequest
+struct UndoMercariAutoImportRequest: Codable, Equatable, Sendable {
+    let items: [UndoMercariAutoImportRequestItem]
+
+    enum CodingKeys: String, CodingKey {
+        case items = "items"
+    }
+}
+
+// MARK: UndoMercariAutoImportRequest convenience initializers and mutators
+
+extension UndoMercariAutoImportRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(UndoMercariAutoImportRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        items: [UndoMercariAutoImportRequestItem]? = nil
+    ) -> UndoMercariAutoImportRequest {
+        return UndoMercariAutoImportRequest(
+            items: items ?? self.items
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - UndoMercariAutoImportRequestItem
+struct UndoMercariAutoImportRequestItem: Codable, Equatable, Sendable {
+    let mercariItemId: String
+    let mercariOrderId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case mercariItemId = "mercariItemId"
+        case mercariOrderId = "mercariOrderId"
+    }
+}
+
+// MARK: UndoMercariAutoImportRequestItem convenience initializers and mutators
+
+extension UndoMercariAutoImportRequestItem {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(UndoMercariAutoImportRequestItem.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        mercariItemId: String? = nil,
+        mercariOrderId: String?? = nil
+    ) -> UndoMercariAutoImportRequestItem {
+        return UndoMercariAutoImportRequestItem(
+            mercariItemId: mercariItemId ?? self.mercariItemId,
+            mercariOrderId: mercariOrderId ?? self.mercariOrderId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - UndoMercariAutoImportResponse
+struct UndoMercariAutoImportResponse: Codable, Equatable, Sendable {
+    let inbox: UndoMercariAutoImportResponseInbox
+    let undone: Int
+
+    enum CodingKeys: String, CodingKey {
+        case inbox = "inbox"
+        case undone = "undone"
+    }
+}
+
+// MARK: UndoMercariAutoImportResponse convenience initializers and mutators
+
+extension UndoMercariAutoImportResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(UndoMercariAutoImportResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        inbox: UndoMercariAutoImportResponseInbox? = nil,
+        undone: Int? = nil
+    ) -> UndoMercariAutoImportResponse {
+        return UndoMercariAutoImportResponse(
+            inbox: inbox ?? self.inbox,
+            undone: undone ?? self.undone
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - UndoMercariAutoImportResponseInbox
+struct UndoMercariAutoImportResponseInbox: Codable, Equatable, Sendable {
+    let discarded: [FluffyDiscarded]
+    let pending: [FluffyPending]
+
+    enum CodingKeys: String, CodingKey {
+        case discarded = "discarded"
+        case pending = "pending"
+    }
+}
+
+// MARK: UndoMercariAutoImportResponseInbox convenience initializers and mutators
+
+extension UndoMercariAutoImportResponseInbox {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(UndoMercariAutoImportResponseInbox.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        discarded: [FluffyDiscarded]? = nil,
+        pending: [FluffyPending]? = nil
+    ) -> UndoMercariAutoImportResponseInbox {
+        return UndoMercariAutoImportResponseInbox(
+            discarded: discarded ?? self.discarded,
+            pending: pending ?? self.pending
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - FluffyDiscarded
+struct FluffyDiscarded: Codable, Equatable, Sendable {
+    let item: IndigoItem
+    let missing: [Missing]
+    let productId: String?
+    let productTitle: String?
+    let state: State
+    let suggestedProductId: String?
+    let suggestedProductTitle: String?
+    let variantSku: String?
+
+    enum CodingKeys: String, CodingKey {
+        case item = "item"
+        case missing = "missing"
+        case productId = "productId"
+        case productTitle = "productTitle"
+        case state = "state"
+        case suggestedProductId = "suggestedProductId"
+        case suggestedProductTitle = "suggestedProductTitle"
+        case variantSku = "variantSku"
+    }
+}
+
+// MARK: FluffyDiscarded convenience initializers and mutators
+
+extension FluffyDiscarded {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(FluffyDiscarded.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        item: IndigoItem? = nil,
+        missing: [Missing]? = nil,
+        productId: String?? = nil,
+        productTitle: String?? = nil,
+        state: State? = nil,
+        suggestedProductId: String?? = nil,
+        suggestedProductTitle: String?? = nil,
+        variantSku: String?? = nil
+    ) -> FluffyDiscarded {
+        return FluffyDiscarded(
+            item: item ?? self.item,
+            missing: missing ?? self.missing,
+            productId: productId ?? self.productId,
+            productTitle: productTitle ?? self.productTitle,
+            state: state ?? self.state,
+            suggestedProductId: suggestedProductId ?? self.suggestedProductId,
+            suggestedProductTitle: suggestedProductTitle ?? self.suggestedProductTitle,
+            variantSku: variantSku ?? self.variantSku
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - IndigoItem
+struct IndigoItem: Codable, Equatable, Sendable {
+    let buyerName: String?
+    let mercariItemId: String
+    let mercariOrderId: String?
+    let priceSoldFor: Double?
+    let quantity: Int?
+    let shippingRevenue: Double?
+    let soldAt: SoldAtUnion?
+    let soldDate: String?
+    let soldDateText: String?
+    let takeHome: Double?
+    let thumbnailUrl: String?
+    let title: String?
+    let trackingNumber: String?
+
+    enum CodingKeys: String, CodingKey {
+        case buyerName = "buyerName"
+        case mercariItemId = "mercariItemId"
+        case mercariOrderId = "mercariOrderId"
+        case priceSoldFor = "priceSoldFor"
+        case quantity = "quantity"
+        case shippingRevenue = "shippingRevenue"
+        case soldAt = "soldAt"
+        case soldDate = "soldDate"
+        case soldDateText = "soldDateText"
+        case takeHome = "takeHome"
+        case thumbnailUrl = "thumbnailUrl"
+        case title = "title"
+        case trackingNumber = "trackingNumber"
+    }
+}
+
+// MARK: IndigoItem convenience initializers and mutators
+
+extension IndigoItem {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(IndigoItem.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        buyerName: String?? = nil,
+        mercariItemId: String? = nil,
+        mercariOrderId: String?? = nil,
+        priceSoldFor: Double?? = nil,
+        quantity: Int?? = nil,
+        shippingRevenue: Double?? = nil,
+        soldAt: SoldAtUnion?? = nil,
+        soldDate: String?? = nil,
+        soldDateText: String?? = nil,
+        takeHome: Double?? = nil,
+        thumbnailUrl: String?? = nil,
+        title: String?? = nil,
+        trackingNumber: String?? = nil
+    ) -> IndigoItem {
+        return IndigoItem(
+            buyerName: buyerName ?? self.buyerName,
+            mercariItemId: mercariItemId ?? self.mercariItemId,
+            mercariOrderId: mercariOrderId ?? self.mercariOrderId,
+            priceSoldFor: priceSoldFor ?? self.priceSoldFor,
+            quantity: quantity ?? self.quantity,
+            shippingRevenue: shippingRevenue ?? self.shippingRevenue,
+            soldAt: soldAt ?? self.soldAt,
+            soldDate: soldDate ?? self.soldDate,
+            soldDateText: soldDateText ?? self.soldDateText,
+            takeHome: takeHome ?? self.takeHome,
+            thumbnailUrl: thumbnailUrl ?? self.thumbnailUrl,
+            title: title ?? self.title,
+            trackingNumber: trackingNumber ?? self.trackingNumber
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - FluffyPending
+struct FluffyPending: Codable, Equatable, Sendable {
+    let item: IndecentItem
+    let missing: [Missing]
+    let productId: String?
+    let productTitle: String?
+    let state: State
+    let suggestedProductId: String?
+    let suggestedProductTitle: String?
+    let variantSku: String?
+
+    enum CodingKeys: String, CodingKey {
+        case item = "item"
+        case missing = "missing"
+        case productId = "productId"
+        case productTitle = "productTitle"
+        case state = "state"
+        case suggestedProductId = "suggestedProductId"
+        case suggestedProductTitle = "suggestedProductTitle"
+        case variantSku = "variantSku"
+    }
+}
+
+// MARK: FluffyPending convenience initializers and mutators
+
+extension FluffyPending {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(FluffyPending.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        item: IndecentItem? = nil,
+        missing: [Missing]? = nil,
+        productId: String?? = nil,
+        productTitle: String?? = nil,
+        state: State? = nil,
+        suggestedProductId: String?? = nil,
+        suggestedProductTitle: String?? = nil,
+        variantSku: String?? = nil
+    ) -> FluffyPending {
+        return FluffyPending(
+            item: item ?? self.item,
+            missing: missing ?? self.missing,
+            productId: productId ?? self.productId,
+            productTitle: productTitle ?? self.productTitle,
+            state: state ?? self.state,
+            suggestedProductId: suggestedProductId ?? self.suggestedProductId,
+            suggestedProductTitle: suggestedProductTitle ?? self.suggestedProductTitle,
+            variantSku: variantSku ?? self.variantSku
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - IndecentItem
+struct IndecentItem: Codable, Equatable, Sendable {
+    let buyerName: String?
+    let mercariItemId: String
+    let mercariOrderId: String?
+    let priceSoldFor: Double?
+    let quantity: Int?
+    let shippingRevenue: Double?
+    let soldAt: SoldAtUnion?
+    let soldDate: String?
+    let soldDateText: String?
+    let takeHome: Double?
+    let thumbnailUrl: String?
+    let title: String?
+    let trackingNumber: String?
+
+    enum CodingKeys: String, CodingKey {
+        case buyerName = "buyerName"
+        case mercariItemId = "mercariItemId"
+        case mercariOrderId = "mercariOrderId"
+        case priceSoldFor = "priceSoldFor"
+        case quantity = "quantity"
+        case shippingRevenue = "shippingRevenue"
+        case soldAt = "soldAt"
+        case soldDate = "soldDate"
+        case soldDateText = "soldDateText"
+        case takeHome = "takeHome"
+        case thumbnailUrl = "thumbnailUrl"
+        case title = "title"
+        case trackingNumber = "trackingNumber"
+    }
+}
+
+// MARK: IndecentItem convenience initializers and mutators
+
+extension IndecentItem {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(IndecentItem.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        buyerName: String?? = nil,
+        mercariItemId: String? = nil,
+        mercariOrderId: String?? = nil,
+        priceSoldFor: Double?? = nil,
+        quantity: Int?? = nil,
+        shippingRevenue: Double?? = nil,
+        soldAt: SoldAtUnion?? = nil,
+        soldDate: String?? = nil,
+        soldDateText: String?? = nil,
+        takeHome: Double?? = nil,
+        thumbnailUrl: String?? = nil,
+        title: String?? = nil,
+        trackingNumber: String?? = nil
+    ) -> IndecentItem {
+        return IndecentItem(
+            buyerName: buyerName ?? self.buyerName,
+            mercariItemId: mercariItemId ?? self.mercariItemId,
+            mercariOrderId: mercariOrderId ?? self.mercariOrderId,
+            priceSoldFor: priceSoldFor ?? self.priceSoldFor,
+            quantity: quantity ?? self.quantity,
+            shippingRevenue: shippingRevenue ?? self.shippingRevenue,
+            soldAt: soldAt ?? self.soldAt,
+            soldDate: soldDate ?? self.soldDate,
+            soldDateText: soldDateText ?? self.soldDateText,
+            takeHome: takeHome ?? self.takeHome,
+            thumbnailUrl: thumbnailUrl ?? self.thumbnailUrl,
+            title: title ?? self.title,
+            trackingNumber: trackingNumber ?? self.trackingNumber
         )
     }
 

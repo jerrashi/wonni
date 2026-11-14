@@ -54,7 +54,7 @@ const {
   updateSaleStatus,
   reassignSaleStage,
 } = require("./sales");
-const { recordMercariSalesBatch, reviewMercariSales, setMercariSalesDiscarded } = require("./mercari_sales");
+const { recordMercariSalesBatch, reviewMercariSales, setMercariSalesDiscarded, listMercariSaleInbox, undoMercariAutoImport } = require("./mercari_sales");
 const { syncSales, syncSalesScheduled, getOrderTakeHome } = require("./sale_poller");
 const { postToWonni } = require("./wonni_listing");
 const { deleteProductEverywhere } = require("./cascade_delete");
@@ -152,6 +152,8 @@ module.exports = {
   recordMercariSalesBatch,
   reviewMercariSales,
   setMercariSalesDiscarded,
+  listMercariSaleInbox,
+  undoMercariAutoImport,
   syncSales,
   syncSalesScheduled,
   getOrderTakeHome,

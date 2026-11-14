@@ -219,3 +219,124 @@ test("recordSaleCore: backstop refuses a pre-planted doc at the caller's prefixe
   );
   assert.equal((await db.collection("sales").doc("victim_mercari_o3").get()).data().priceSoldFor, 1);
 });
+
+// ── auto-import + review inbox (2026-11-14) ────────────────────────────────
+
+const {
+  recordMercariSalesBatchCore, undoMercariAutoImportCore, suggestProduct, missingFields, readInbox, loadProducts,
+} = _internal;
+
+const full = (id, extra = {}) => ({ mercariItemId: id, priceSoldFor: 20, title: `t ${id}`, soldAt: "2026-11-12T10:00:00Z", ...extra });
+
+async function seedStock() {
+  const db = new FakeFirestore();
+  await db.collection("products").doc("p1").set({ userId: "u1", title: "Tee", quantity: 3, crossPostListingIds: { mercari: "m_known" } });
+  await db.collection("products").doc("p2").set({ userId: "u1", title: "Seventeen Carat Bong lightstick ver 2", quantity: 1 });
+  return db;
+}
+const stock = async (db, id) => (await db.collection("products").doc(id).get()).data().quantity;
+const inboxDoc = async (db, key) => (await db.collection("users").doc("u1").collection("mercariSaleInbox").doc(key).get()).data();
+
+test("missingFields: title, price > 0 and a readable date are required", () => {
+  assert.deepEqual(missingFields(full("m1")), []);
+  assert.deepEqual(missingFields({ mercariItemId: "m1" }), ["title", "price", "date"]);
+  assert.deepEqual(missingFields({ mercariItemId: "m1", title: " ", priceSoldFor: 0, soldDate: "7/8/2026" }), ["title", "price"]);
+});
+
+test("suggestProduct: best word overlap ≥ 60%, unique; ties and weak overlaps suggest nothing", () => {
+  const list = [{ id: "a", data: { title: "Seventeen Carat Bong lightstick ver 2" } }, { id: "b", data: { title: "Stray Kids album" } }];
+  assert.equal(suggestProduct("Seventeen lightstick ver 2", list).productId, "a");
+  assert.equal(suggestProduct("Phone case clear", list), null);
+  const tied = [{ id: "a", data: { title: "Stray Kids Karma" } }, { id: "b", data: { title: "Stray Kids Karma" } }];
+  assert.equal(suggestProduct("Stray Kids Karma photocard", tied), null);
+});
+
+test("autoImport: an id-matched complete row is recorded now, lowers stock, and is marked undoable", async () => {
+  const db = await seedStock();
+  const r = await reviewMercariSalesCore(db, "u1", [full("m_known")], { autoImport: true });
+  assert.equal(r.rows[0].reviewState, "autoRecorded");
+  assert.equal(r.autoRecorded, 1);
+  const sale = (await db.collection("sales").doc(r.rows[0].saleId).get()).data();
+  assert.deepEqual([sale.productId, sale.autoImported, sale.priceSoldFor], ["p1", true, 20]);
+  assert.equal(await stock(db, "p1"), 2);
+  assert.equal(r.inbox.pending.length, 0);
+});
+
+test("autoImport: id-matched but missing its date waits in review (Needs info), nothing recorded", async () => {
+  const db = await seedStock();
+  const r = await reviewMercariSalesCore(db, "u1", [full("m_known", { soldAt: null })], { autoImport: true });
+  assert.equal(r.rows[0].reviewState, "new");
+  assert.deepEqual(r.rows[0].missing, ["date"]);
+  assert.equal(await stock(db, "p1"), 3);
+  assert.equal(r.inbox.pending[0].productId, "p1");
+});
+
+test("autoImport: a title-only match waits as Suggested; a price-less row is kept, not invalid", async () => {
+  const db = await seedStock();
+  const r = await reviewMercariSalesCore(db, "u1", [
+    full("m_new", { title: "Seventeen lightstick ver 2" }),
+    { mercariItemId: "m_noprice", title: "Wii remote" },
+  ], { autoImport: true });
+  assert.deepEqual(r.rows.map((x) => x.reviewState), ["new", "new"]);
+  const byId = Object.fromEntries(r.inbox.pending.map((p) => [p.item.mercariItemId, p]));
+  assert.equal(byId.m_new.suggestedProductId, "p2");
+  assert.equal(byId.m_new.productId, null);
+  assert.deepEqual(byId.m_noprice.missing, ["price", "date"]);
+  assert.equal(await stock(db, "p2"), 1);
+});
+
+test("autoImport: pending rows survive a later refresh that never reaches them (stop-at-known safe)", async () => {
+  const db = await seedStock();
+  await reviewMercariSalesCore(db, "u1", [full("m_old_unlinked")], { autoImport: true });
+  const r = await reviewMercariSalesCore(db, "u1", [full("m_newer")], { autoImport: true });
+  assert.deepEqual(r.inbox.pending.map((p) => p.item.mercariItemId).sort(), ["m_newer", "m_old_unlinked"]);
+});
+
+test("autoImport: a re-scan keeps fields the earlier scrape had when the new one is blank", async () => {
+  const db = await seedStock();
+  await reviewMercariSalesCore(db, "u1", [{ mercariItemId: "m_x", title: "Thing", priceSoldFor: 9 }], { autoImport: true });
+  await reviewMercariSalesCore(db, "u1", [{ mercariItemId: "m_x", soldDate: "11/10/2026" }], { autoImport: true });
+  const stored = await inboxDoc(db, "mercari_m_x");
+  assert.deepEqual([stored.item.title, stored.item.priceSoldFor, stored.item.soldDate], ["Thing", 9, "11/10/2026"]);
+});
+
+test("recordMercariSalesBatch: allowUnlinked records a no-product sale (no stock change) and clears the inbox row", async () => {
+  const db = await seedStock();
+  await reviewMercariSalesCore(db, "u1", [full("m_case", { title: "Phone case", quantity: 2 })], { autoImport: true });
+  const old = await recordMercariSalesBatchCore(db, "u1", { items: [full("m_case")] });
+  assert.equal(old.results[0].outcome, "no-match");
+  const r = await recordMercariSalesBatchCore(db, "u1", { items: [full("m_case", { quantity: 2 })], allowUnlinked: true });
+  assert.equal(r.results[0].outcome, "recorded");
+  const sale = (await db.collection("sales").doc(r.results[0].saleId).get()).data();
+  assert.deepEqual([sale.productId, sale.quantity], [null, 2]);
+  assert.equal(await inboxDoc(db, "mercari_m_case"), undefined);
+});
+
+test("undoMercariAutoImport: deletes the sale, restores stock, row goes back to review", async () => {
+  const db = await seedStock();
+  const r = await reviewMercariSalesCore(db, "u1", [full("m_known")], { autoImport: true });
+  const u = await undoMercariAutoImportCore(db, "u1", [{ mercariItemId: "m_known" }]);
+  assert.equal(u.undone, 1);
+  assert.equal((await db.collection("sales").doc(r.rows[0].saleId).get()).exists, false);
+  assert.equal(await stock(db, "p1"), 3);
+  assert.equal(u.inbox.pending[0].item.mercariItemId, "m_known");
+});
+
+test("regression: undoMercariAutoImport never deletes a sale the user imported by hand", async () => {
+  const db = await seedStock();
+  await recordMercariSalesBatchCore(db, "u1", { items: [full("m_known")] });
+  const u = await undoMercariAutoImportCore(db, "u1", [{ mercariItemId: "m_known" }]);
+  assert.equal(u.undone, 0);
+  assert.equal((await db.collection("sales").doc("mercari_m_known").get()).exists, true);
+});
+
+test("Never import keeps the scraped row; Restore puts it straight back in review", async () => {
+  const db = await seedStock();
+  await reviewMercariSalesCore(db, "u1", [full("m_z")], { autoImport: true });
+  await setMercariSalesDiscardedCore(db, "u1", [{ mercariItemId: "m_z" }], true);
+  let inbox = await readInbox(db, "u1", await loadProducts(db, "u1"));
+  assert.deepEqual([inbox.pending.length, inbox.discarded[0].item.title], [0, "t m_z"]);
+  await setMercariSalesDiscardedCore(db, "u1", [{ mercariItemId: "m_z" }], false);
+  inbox = await readInbox(db, "u1", await loadProducts(db, "u1"));
+  assert.equal(inbox.pending[0].item.mercariItemId, "m_z");
+});

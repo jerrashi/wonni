@@ -73,6 +73,18 @@
     "MercariReviewRow": {
       "$ref": "#/definitions/MercariReviewRow"
     },
+    "ListMercariSaleInboxRequest": {
+      "$ref": "#/definitions/ListMercariSaleInboxRequest"
+    },
+    "ListMercariSaleInboxResponse": {
+      "$ref": "#/definitions/ListMercariSaleInboxResponse"
+    },
+    "UndoMercariAutoImportRequest": {
+      "$ref": "#/definitions/UndoMercariAutoImportRequest"
+    },
+    "UndoMercariAutoImportResponse": {
+      "$ref": "#/definitions/UndoMercariAutoImportResponse"
+    },
     "SetMercariSalesDiscardedRequest": {
       "$ref": "#/definitions/SetMercariSalesDiscardedRequest"
     },
@@ -1061,7 +1073,6 @@
       "type": "object",
       "properties": {
         "items": {
-          "minItems": 1,
           "maxItems": 200,
           "type": "array",
           "items": {
@@ -1077,6 +1088,9 @@
             ],
             "additionalProperties": {}
           }
+        },
+        "autoImport": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -1093,6 +1107,406 @@
           }
         },
         "firstRecordedIndex": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inbox": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "pending": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "item": {
+                        "type": "object",
+                        "properties": {
+                          "mercariItemId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "mercariOrderId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "title": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "thumbnailUrl": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "uri"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "priceSoldFor": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "exclusiveMinimum": 0
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "takeHome": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "shippingRevenue": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "soldAt": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                  },
+                                  {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "soldDateText": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "soldDate": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "buyerName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "trackingNumber": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "quantity": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 999
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "mercariItemId"
+                        ]
+                      },
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "pending",
+                          "discarded"
+                        ]
+                      },
+                      "productId": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "variantSku": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "productTitle": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "suggestedProductId": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "suggestedProductTitle": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "missing": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "title",
+                            "price",
+                            "date"
+                          ]
+                        }
+                      }
+                    },
+                    "required": [
+                      "item",
+                      "state",
+                      "missing"
+                    ]
+                  }
+                },
+                "discarded": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "item": {
+                        "type": "object",
+                        "properties": {
+                          "mercariItemId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "mercariOrderId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "title": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "thumbnailUrl": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "uri"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "priceSoldFor": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "exclusiveMinimum": 0
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "takeHome": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "shippingRevenue": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "soldAt": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                  },
+                                  {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "soldDateText": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "soldDate": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "buyerName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "trackingNumber": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "quantity": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 999
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "mercariItemId"
+                        ]
+                      },
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "pending",
+                          "discarded"
+                        ]
+                      },
+                      "productId": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "variantSku": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "productTitle": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "suggestedProductId": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "suggestedProductTitle": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "missing": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "title",
+                            "price",
+                            "date"
+                          ]
+                        }
+                      }
+                    },
+                    "required": [
+                      "item",
+                      "state",
+                      "missing"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "pending",
+                "discarded"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "autoRecorded": {
           "anyOf": [
             {
               "type": "integer",
@@ -1122,7 +1536,8 @@
             "new",
             "recorded",
             "discarded",
-            "invalid"
+            "invalid",
+            "autoRecorded"
           ]
         },
         "productId": {
@@ -1153,11 +1568,847 @@
             "string",
             "null"
           ]
+        },
+        "saleId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "missing": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "title",
+                  "price",
+                  "date"
+                ]
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "mercariItemId",
         "reviewState"
+      ]
+    },
+    "ListMercariSaleInboxRequest": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": {}
+    },
+    "ListMercariSaleInboxResponse": {
+      "type": "object",
+      "properties": {
+        "pending": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "item": {
+                "type": "object",
+                "properties": {
+                  "mercariItemId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "mercariOrderId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "thumbnailUrl": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uri"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "priceSoldFor": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "takeHome": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "shippingRevenue": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "soldAt": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "soldDateText": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "soldDate": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "buyerName": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "trackingNumber": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "quantity": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 999
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "mercariItemId"
+                ]
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "discarded"
+                ]
+              },
+              "productId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "variantSku": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "productTitle": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "suggestedProductId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "suggestedProductTitle": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "missing": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "title",
+                    "price",
+                    "date"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "item",
+              "state",
+              "missing"
+            ]
+          }
+        },
+        "discarded": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "item": {
+                "type": "object",
+                "properties": {
+                  "mercariItemId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "mercariOrderId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "thumbnailUrl": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uri"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "priceSoldFor": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "takeHome": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "shippingRevenue": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "soldAt": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "soldDateText": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "soldDate": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "buyerName": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "trackingNumber": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "quantity": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 999
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "mercariItemId"
+                ]
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "discarded"
+                ]
+              },
+              "productId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "variantSku": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "productTitle": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "suggestedProductId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "suggestedProductTitle": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "missing": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "title",
+                    "price",
+                    "date"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "item",
+              "state",
+              "missing"
+            ]
+          }
+        }
+      },
+      "required": [
+        "pending",
+        "discarded"
+      ]
+    },
+    "UndoMercariAutoImportRequest": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "minItems": 1,
+          "maxItems": 200,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mercariItemId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "mercariOrderId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "mercariItemId"
+            ]
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
+    "UndoMercariAutoImportResponse": {
+      "type": "object",
+      "properties": {
+        "undone": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "inbox": {
+          "type": "object",
+          "properties": {
+            "pending": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "item": {
+                    "type": "object",
+                    "properties": {
+                      "mercariItemId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "mercariOrderId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "title": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "thumbnailUrl": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "uri"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "priceSoldFor": {
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "takeHome": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      },
+                      "shippingRevenue": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      },
+                      "soldAt": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "soldDateText": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "soldDate": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "buyerName": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "trackingNumber": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "quantity": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 999
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "mercariItemId"
+                    ]
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "pending",
+                      "discarded"
+                    ]
+                  },
+                  "productId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "variantSku": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "productTitle": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "suggestedProductId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "suggestedProductTitle": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "missing": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "title",
+                        "price",
+                        "date"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "item",
+                  "state",
+                  "missing"
+                ]
+              }
+            },
+            "discarded": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "item": {
+                    "type": "object",
+                    "properties": {
+                      "mercariItemId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "mercariOrderId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "title": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "thumbnailUrl": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "uri"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "priceSoldFor": {
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "takeHome": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      },
+                      "shippingRevenue": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      },
+                      "soldAt": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "soldDateText": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "soldDate": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "buyerName": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "trackingNumber": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "quantity": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 999
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "mercariItemId"
+                    ]
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "pending",
+                      "discarded"
+                    ]
+                  },
+                  "productId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "variantSku": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "productTitle": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "suggestedProductId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "suggestedProductTitle": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "missing": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "title",
+                        "price",
+                        "date"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "item",
+                  "state",
+                  "missing"
+                ]
+              }
+            }
+          },
+          "required": [
+            "pending",
+            "discarded"
+          ]
+        }
+      },
+      "required": [
+        "undone",
+        "inbox"
       ]
     },
     "SetMercariSalesDiscardedRequest": {
@@ -1260,6 +2511,9 @@
               "productId"
             ]
           }
+        },
+        "allowUnlinked": {
+          "type": "boolean"
         }
       }
     },
@@ -4826,6 +6080,18 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "quantity": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 999
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
