@@ -19,6 +19,15 @@ function normalizeDashboardUrl(rawUrl) {
   }
 }
 
+// Origins the dashboard bridge content script runs on (manifest content_scripts).
+const DASHBOARD_ORIGINS = new Set([
+  "https://wonni-app.web.app",
+  "http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:5176",
+]);
+function isDashboardOrigin(raw) {
+  try { return DASHBOARD_ORIGINS.has(new URL(raw).origin); } catch { return false; }
+}
+
 async function getDashboardUrl() {
   const { dashboardBaseUrl } = await chrome.storage.local.get(["dashboardBaseUrl"]);
   return normalizeDashboardUrl(dashboardBaseUrl);
@@ -50,12 +59,6 @@ chrome.runtime.onMessageExternal.addListener((message, _sender, sendResponse) =>
       .catch((e) => sendResponse({ error: e.message }));
     return true;
   }
-  if (message.type === "SCAN_MERCARI_SALES") {
-    handleScanMercariSales(message.knownIds)
-      .then(sendResponse)
-      .catch((e) => sendResponse({ error: e.message }));
-    return true;
-  }
   if (message.type === "CHECK_MERCARI_PULL_SYNC") {
     handleCheckMercariPullSync(message.mercariItemId)
       .then(sendResponse)
@@ -66,6 +69,18 @@ chrome.runtime.onMessageExternal.addListener((message, _sender, sendResponse) =>
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Sales refresh. Only from this extension's own dashboard bridge content script,
+  // running in a Wonni dashboard tab: the answer carries the user's Mercari sales.
+  if (message.type === "SCAN_MERCARI_SALES") {
+    if (sender.id !== chrome.runtime.id || !isDashboardOrigin(sender.origin ?? sender.tab?.url)) {
+      sendResponse({ error: "Not allowed." });
+      return false;
+    }
+    handleScanMercariSales(message.knownIds)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ error: e.message }));
+    return true;
+  }
   if (message.type === "IMPORT_PRODUCT") {
     handleImport(message.data, message.source ?? "aliexpress")
       .then(sendResponse)
