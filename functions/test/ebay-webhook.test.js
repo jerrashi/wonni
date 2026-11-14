@@ -165,7 +165,7 @@ test("unknown topics are ignored", async () => {
 
 // ── subscription ───────────────────────────────────────────────────────────
 
-const opts = (call) => ({ call, webhookUrl: "https://hook", verificationToken: "tok" });
+const opts = (call, appCall = call) => ({ call, appCall, webhookUrl: "https://hook", verificationToken: "tok" });
 
 test("ensureEbayOrderSubscription: needs the notification scope (old grants must reconnect)", async () => {
   const db = makeDb({ "users/u/integrations/ebay": { isConnected: true, grantedScopes: "https://api.ebay.com/oauth/api_scope/sell.fulfillment" } });
@@ -205,6 +205,21 @@ test("ensureEbayOrderSubscription: 409s fall back to finding the existing destin
   const r = await wh.ensureEbayOrderSubscription(db, "a", opts(call));
   assert.equal(r.subscriptionId, "S9");
   assert.equal(db.store.get("system/ebayNotifications").destinationId, "D9");
+});
+
+test("regression: the destination uses the app token, the subscription the user token (user token 403s on /destination)", async () => {
+  const db = makeDb({ "users/a/integrations/ebay": { isConnected: true, grantedScopes: NOTIFICATION_SCOPE } });
+  const userPaths = [], appPaths = [];
+  const call = async (method, path) => {
+    userPaths.push(path);
+    if (path.includes("/destination")) throw Object.assign(new Error("403 Access denied"), { status: 403 });
+    return { subscriptionId: "S1" };
+  };
+  const appCall = async (method, path) => { appPaths.push(path); return { destinationId: "D1" }; };
+  const r = await wh.ensureEbayOrderSubscription(db, "a", opts(call, appCall));
+  assert.equal(r.status, "created");
+  assert.deepEqual(appPaths, ["/commerce/notification/v1/destination"]);
+  assert.deepEqual(userPaths, ["/commerce/notification/v1/subscription"]);
 });
 
 test("ensureEbayOrderSubscription: an eBay error is returned, not thrown (connect must still succeed)", async () => {

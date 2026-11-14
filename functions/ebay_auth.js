@@ -183,10 +183,11 @@ exports.ebayExchangeToken = onCall(
     });
 
     // Sale push notifications (best effort; never fails the connect).
-    const { ensureEbayOrderSubscription, userEbayCall } = require("./ebay_webhook");
+    const { ensureEbayOrderSubscription, userEbayCall, appEbayCall } = require("./ebay_webhook");
     const { EBAY_VERIFICATION_TOKEN, EBAY_WEBHOOK_URL } = require("./ebay_webhook_params");
     const sub = await ensureEbayOrderSubscription(admin.firestore(), uid, {
       call: userEbayCall(uid),
+      appCall: appEbayCall(),
       webhookUrl: EBAY_WEBHOOK_URL.value(),
       verificationToken: EBAY_VERIFICATION_TOKEN.value(),
     });

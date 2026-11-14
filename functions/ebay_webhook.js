@@ -16,8 +16,11 @@
  *
  * Subscriptions are per seller and need a USER token carrying
  * `commerce.notification.subscription`, so `ensureEbayOrderSubscription` runs
- * right after a (re)connect. The destination (our endpoint URL) is one per app;
- * it is created on first use and remembered in `system/ebayNotifications`.
+ * right after a (re)connect. The destination (our endpoint URL) is one per app
+ * and takes the APP token (client credentials): a user token gets 403 "Access
+ * denied" on /destination (seen live 2026-11-14). It is created on first use, or
+ * found when the developer portal already made it, and remembered in
+ * `system/ebayNotifications`.
  *
  * Every POST is signature-checked (X-EBAY-SIGNATURE: base64 JSON {alg, kid,
  * signature, digest}; ECDSA over the message with eBay's public key `kid`). A
@@ -198,9 +201,10 @@ function hasNotificationScope(integrationData) {
  * Makes sure this seller is subscribed to ORDER_CONFIRMATION. Best effort: a
  * failure is logged and returned, never thrown, so a connect still succeeds and
  * the 30-minute poll keeps working. `call(method, path, body)` is an eBay REST
- * call with the user's token (injected for tests).
+ * call with the user's token, `appCall` the same with the app token (both
+ * injected for tests).
  */
-async function ensureEbayOrderSubscription(db, uid, { call, webhookUrl, verificationToken }) {
+async function ensureEbayOrderSubscription(db, uid, { call, appCall, webhookUrl, verificationToken }) {
   const ref = db.doc(`users/${uid}/integrations/ebay`);
   const integration = (await ref.get()).data();
   if (!integration?.isConnected) return { status: "not-connected" };
@@ -208,7 +212,7 @@ async function ensureEbayOrderSubscription(db, uid, { call, webhookUrl, verifica
   if (integration.orderNotificationSubscriptionId) return { status: "exists", subscriptionId: integration.orderNotificationSubscriptionId };
 
   try {
-    const destinationId = await ensureDestination(db, { call, webhookUrl, verificationToken });
+    const destinationId = await ensureDestination(db, { call: appCall, webhookUrl, verificationToken });
     let subscriptionId = null;
     try {
       const res = await call("POST", "/commerce/notification/v1/subscription", {
@@ -259,10 +263,10 @@ async function ensureDestination(db, { call, webhookUrl, verificationToken }) {
   return destinationId;
 }
 
-/** `call` for ensureEbayOrderSubscription, using this user's eBay token. */
-function userEbayCall(uid) {
+/** An eBay Notification API call with the token `getToken` returns. */
+function notificationCall(getToken) {
   return async (method, path, body) => {
-    const token = await refreshEbayToken(uid);
+    const token = await getToken();
     const hasBody = body !== undefined;
     const res = await fetch(`https://${ebayApiHost()}${path}`, {
       method,
@@ -285,6 +289,12 @@ function userEbayCall(uid) {
     return json;
   };
 }
+
+/** `call` for ensureEbayOrderSubscription: this user's eBay token (subscriptions). */
+const userEbayCall = (uid) => notificationCall(() => refreshEbayToken(uid));
+
+/** `appCall` for ensureEbayOrderSubscription: the app token (destinations). */
+const appEbayCall = () => notificationCall(() => require("./ebay_listing").getEbayAppTokenCached());
 
 // ── public key cache (app token) ───────────────────────────────────────────
 
@@ -347,6 +357,7 @@ module.exports = {
   NOTIFICATION_SCOPE,
   ensureEbayOrderSubscription,
   userEbayCall,
+  appEbayCall,
   _internal: {
     challengeResponse,
     parseSignatureHeader,
