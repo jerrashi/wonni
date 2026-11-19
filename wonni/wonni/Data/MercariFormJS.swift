@@ -137,4 +137,113 @@ enum MercariFormJS {
     static func smartPricingIsOff(_ result: String) -> Bool {
         result == "hidden" || result == "was-off" || result == "disabled"
     }
+
+    // MARK: Listing status + sold-out controls (the listing's own page)
+
+    /// Maps `readItemStatus`'s result. Anything unrecognised is `.unknown`, which is never
+    /// acted on.
+    static func listingState(raw: String?) -> MercariListingState {
+        let status = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch status {
+        case "on_sale", "active": return .active
+        case "inactive", "stop", "stopped": return .inactive
+        case "sold", "sold_out", "item_sold_out", "trading": return .sold
+        case "unavailable": return .unavailable
+        default: return status.hasSuffix("sold_out") ? .sold : .unknown
+        }
+    }
+
+    /// The listing's status, or "" while the page has not rendered one. Reads only the
+    /// item's own `status`: a text search of the page data also matches the seller's.
+    /// Takes `itemId`.
+    static let readItemStatus = #"""
+    return (function() {
+        var nd = document.getElementById('__NEXT_DATA__');
+        if (nd) {
+            try {
+                var pp = JSON.parse(nd.textContent || '').props.pageProps;
+                var item = pp && (pp.item || (pp.data && pp.data.item) || (pp.meta && pp.meta.item));
+                if (item && typeof item.status === 'string' && item.status && (!item.id || item.id === itemId)) {
+                    return item.status.toLowerCase();
+                }
+            } catch (e) {}
+        }
+        var ribbon = document.querySelector('[class*="RibbonTitle"]');
+        if (ribbon && ribbon.textContent.trim()) { return ribbon.textContent.trim().toLowerCase(); }
+        var buttons = document.querySelectorAll('button');
+        for (var i = 0; i < buttons.length; i++) {
+            var label = (buttons[i].textContent || '').trim().toLowerCase();
+            if (label === 'item sold' || label === 'view order') { return 'sold_out'; }
+        }
+        var body = ((document.body && document.body.innerText) || '').toLowerCase();
+        if (/no longer (for sale|available)/.test(body)) { return 'unavailable'; }
+        return '';
+    })();
+    """#
+
+    /// The seller's edit page: `login`, `form` (the listing exists), `gone`, or `wait`.
+    static let editPageState = #"""
+    return (function() {
+        var href = location.href.toLowerCase();
+        if (href.indexOf('login') !== -1 || href.indexOf('signin') !== -1) { return 'login'; }
+        if (document.querySelector('input[data-testid="Title"]')) { return 'form'; }
+        if (location.pathname.indexOf('/sell/edit/') === -1) { return 'gone'; }
+        var body = (document.body && document.body.innerText) || '';
+        if (/no longer (for sale|available)|not found|doesn.t exist|can.t find/i.test(body)) { return 'gone'; }
+        return 'wait';
+    })();
+    """#
+
+    /// Clicks the visible control labelled exactly Deactivate / Delete (optionally
+    /// "... listing" / "... item"). Photo delete buttons are skipped. Takes `verb`
+    /// ("deactivate" | "delete"). Returns `clicked` or `none`.
+    static let pressListingControl = #"""
+    return (function() {
+        var pattern = new RegExp('^' + verb + '( (this )?(listing|item))?$', 'i');
+        var controls = document.querySelectorAll('button, a, [role="button"], [role="menuitem"]');
+        for (var i = 0; i < controls.length; i++) {
+            var el = controls[i];
+            if (el.disabled || el.getAttribute('aria-disabled') === 'true') { continue; }
+            if (!el.getClientRects().length) { continue; }
+            var text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!pattern.test(text)) { continue; }
+            var aria = (el.getAttribute('aria-label') || '').toLowerCase();
+            if (aria.indexOf('photo') !== -1 || el.closest('[data-testid*="Photo"]')) { continue; }
+            el.click();
+            return 'clicked';
+        }
+        return 'none';
+    })();
+    """#
+
+    /// Accepts the confirm dialog a control opened. Only ever looks inside a dialog, so it
+    /// can't press an unrelated button on the page. Takes `verb`. Returns `confirmed`,
+    /// `no-confirm` (a dialog without a matching button) or `no-dialog`.
+    static let confirmListingDialog = #"""
+    return (function() {
+        var dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"], [aria-modal="true"], [data-testid*="Modal"], [data-testid*="Dialog"]');
+        if (!dialogs.length) { return 'no-dialog'; }
+        var pattern = new RegExp('^((yes,? )?' + verb + '( (this )?(listing|item))?|yes|confirm)$', 'i');
+        for (var d = 0; d < dialogs.length; d++) {
+            var buttons = dialogs[d].querySelectorAll('button');
+            for (var b = 0; b < buttons.length; b++) {
+                var text = (buttons[b].textContent || '').replace(/\s+/g, ' ').trim();
+                if (!buttons[b].disabled && pattern.test(text)) { buttons[b].click(); return 'confirmed'; }
+            }
+        }
+        return 'no-confirm';
+    })();
+    """#
+
+    /// Visible control labels, for the failure message when a control can't be found.
+    static let visibleControlLabels = #"""
+    return (function() {
+        var seen = [];
+        document.querySelectorAll('button, [role="button"]').forEach(function(el) {
+            var text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+            if (text && text.length <= 30 && el.getClientRects().length && seen.indexOf(text) === -1) { seen.push(text); }
+        });
+        return seen.slice(0, 12).join(', ');
+    })();
+    """#
 }

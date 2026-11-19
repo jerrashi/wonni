@@ -577,6 +577,45 @@ extension SellingFlowTests {
 }
 
 extension SellingFlowTests {
+    /// Regression (2026-11-19): the old floating pill covered the Photos screen's
+    /// Proceed button. The task bar now sits under the TabView, so Proceed must be
+    /// tappable and end above the bar's top edge.
+    func testTaskBarNeverCoversPickerProceed() throws {
+        app.terminate()
+        app.launchArguments += ["-uiTestingTaskBar"]
+        app.launch()
+
+        let photosInterruption = addUIInterruptionMonitor(withDescription: "Photos permission") { alert in
+            let allowButtons = alert.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'Allow' OR label CONTAINS 'OK'")
+            )
+            if allowButtons.count > 0 { allowButtons.firstMatch.tap(); return true }
+            return false
+        }
+        defer { removeUIInterruptionMonitor(photosInterruption) }
+
+        let bar = app.descendants(matching: .any).matching(identifier: "appTaskBar").firstMatch
+        XCTAssert(bar.waitForExistence(timeout: 10), "The fake task should show the task bar")
+        XCTAssertLessThanOrEqual(app.tabBars.firstMatch.frame.maxY, bar.frame.minY + 1, "Tab bar ends above the task bar")
+        let shotTab = XCTAttachment(screenshot: app.screenshot())
+        shotTab.name = "task-bar-tab"; shotTab.lifetime = .keepAlways; add(shotTab)
+
+        app.tabBars.buttons["Sell"].tap()
+        let galleryButton = app.buttons["cameraGalleryButton"]
+        XCTAssert(galleryButton.waitForExistence(timeout: 5))
+        galleryButton.tap()
+        app.tap()
+        waitForPhotoGridItem(reopeningVia: galleryButton).tap()
+
+        let proceed = app.buttons["pickerProceedButton"]
+        XCTAssert(proceed.waitForExistence(timeout: 5))
+        XCTAssert(bar.exists, "The task bar stays on the Photos screen")
+        XCTAssert(proceed.isHittable, "Proceed must not be covered by the task bar")
+        XCTAssertLessThanOrEqual(proceed.frame.maxY, bar.frame.minY + 1, "Proceed ends above the task bar")
+        let shotPicker = XCTAttachment(screenshot: app.screenshot())
+        shotPicker.name = "task-bar-picker"; shotPicker.lifetime = .keepAlways; add(shotPicker)
+    }
+
     /// Carousel "X" removes a photo and the toast's Undo puts it back (2026-10-10,
     /// replaces drag-to-trash). Also snapshots the camera and picker bottom bars.
     func testCarouselRemovePhotoThenUndo() throws {

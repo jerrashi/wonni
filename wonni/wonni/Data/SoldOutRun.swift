@@ -30,16 +30,44 @@ enum MercariSoldOutAction: String, Codable, CaseIterable, Identifiable {
     var label: String { self == .deactivate ? "Deactivate" : "Delete" }
 }
 
+/// What the listing's own Mercari page says right now.
+enum MercariListingState: Equatable {
+    case active, inactive, sold
+    /// Mercari's "no longer for sale" page: deactivated OR deleted, the page can't tell.
+    case unavailable
+    /// The page could not be read. Never acted on.
+    case unknown
+}
+
+/// How the Mercari step ended. Decides whether the stored Mercari id is kept.
+enum MercariSoldOutOutcome: Equatable {
+    case deactivated, deleted, alreadyInactive, alreadySold, alreadyGone
+
+    /// The listing no longer exists on Mercari, so Wonni's pointers to it must go.
+    /// A sold listing keeps its id: sales are matched to products by that id.
+    var removedFromMercari: Bool { self == .deleted || self == .alreadyGone }
+}
+
+enum MercariSoldOutDecision: Equatable {
+    case nothing(MercariSoldOutOutcome)
+    case deactivate
+    case delete
+    /// Status unreadable: fail the step instead of guessing.
+    case stop
+}
+
 struct SoldOutJob: Codable, Equatable, Identifiable {
     enum StepState: Codable, Equatable {
         case waiting
         case running(String)
         case done
         case failed(String)
+        /// The seller left this platform alone (already sold out there by hand).
+        case skipped
 
         var isTerminal: Bool {
             switch self {
-            case .done, .failed: return true
+            case .done, .failed, .skipped: return true
             default: return false
             }
         }
@@ -63,17 +91,32 @@ struct SoldOutJob: Codable, Equatable, Identifiable {
     var ended = false
     /// Why the listing was NOT marked sold out (stock restored). Nil = success or still running.
     var failure: String?
+    /// Platforms left alone: chosen on the confirm sheet or added by Skip. Optional so
+    /// runs persisted by older builds still decode.
+    var skipPlatforms: [String]?
+    /// API platforms the server call reported as failed, with eBay's/Etsy's reason.
+    /// Wonni itself is sold out when these are set; Skip accepts them as they are.
+    var platformErrors: [String: String]?
 
     var hasMercariStep: Bool { mercariItemId != nil }
     var succeeded: Bool { ended && failure == nil }
+    var skips: Set<String> { Set(skipPlatforms ?? []) }
+    var skipsMercari: Bool { skips.contains("mercari") }
+    /// Wonni plus the API platforms this run still changes, for the "Wonni + eBay" row.
+    var activeServerPlatforms: [String] { serverPlatforms.filter { !skips.contains($0) } }
+
+    mutating func addSkip(_ platforms: [String]) {
+        skipPlatforms = Array(skips.union(platforms)).sorted()
+    }
 
     /// Resets a cut-off or failed attempt so it can run again.
     var reset: SoldOutJob {
         var copy = self
         copy.serverStep = .waiting
-        copy.mercariStep = hasMercariStep ? .waiting : .done
+        copy.mercariStep = hasMercariStep ? (skipsMercari ? .skipped : .waiting) : .done
         copy.ended = false
         copy.failure = nil
+        copy.platformErrors = nil
         return copy
     }
 }
@@ -104,7 +147,8 @@ enum SoldOutPlan {
         quantity: Int?,
         crossPostStatus: [String: String]?,
         crossPostListingIds: [String: String]?,
-        action: MercariSoldOutAction
+        action: MercariSoldOutAction,
+        skip: Set<String> = []
     ) -> SoldOutJob {
         let live = (crossPostStatus ?? [:])
             .filter { liveStatuses.contains($0.value) }
@@ -121,8 +165,57 @@ enum SoldOutPlan {
             mercariItemId: mercariId,
             mercariAction: action
         )
-        if mercariId == nil { job.mercariStep = .done }
+        let relevant = skip.intersection(Set(apiPlatforms + (mercariId == nil ? [] : ["mercari"])))
+        if !relevant.isEmpty { job.skipPlatforms = relevant.sorted() }
+        if mercariId == nil { job.mercariStep = .done } else if relevant.contains("mercari") { job.mercariStep = .skipped }
         return job
+    }
+
+    /// Platforms the confirm sheet offers a toggle for: every one at least one of the
+    /// selected listings is on, in display order. Wonni is always on and not listed.
+    static func togglePlatforms(_ jobs: [SoldOutJob]) -> [String] {
+        let present = Set(jobs.flatMap { $0.serverPlatforms + ($0.hasMercariStep ? ["mercari"] : []) })
+        return ["ebay", "etsy", "tiktok", "mercari"].filter(present.contains)
+    }
+
+    /// The "Wonni + eBay" row title.
+    static func serverRowTitle(_ job: SoldOutJob) -> String {
+        job.activeServerPlatforms.map(displayName).joined(separator: " + ")
+    }
+
+    /// One line for a server step whose API platforms failed: "eBay: <reason>".
+    static func platformFailureText(_ errors: [String: String]) -> String {
+        errors.sorted { $0.key < $1.key }
+            .map { "\(displayName($0.key)): \($0.value)" }
+            .joined(separator: " · ")
+    }
+
+    /// The Mercari step's decision table: the listing's live status, then the seller's
+    /// sold-out preference (Profile › Settings › Mercari).
+    static func mercariDecision(state: MercariListingState, preference: MercariSoldOutAction) -> MercariSoldOutDecision {
+        switch state {
+        case .active:
+            switch preference {
+            case .deactivate: return .deactivate
+            case .delete: return .delete
+            }
+        case .inactive:
+            switch preference {
+            case .deactivate: return .nothing(.alreadyInactive)
+            case .delete: return .delete
+            }
+        case .unavailable:
+            switch preference {
+            case .deactivate: return .nothing(.alreadyInactive)
+            // May still exist as an inactive listing; the delete path checks first.
+            case .delete: return .delete
+            }
+        case .sold:
+            // Mercari keeps sold listings as order records; there is nothing to take down.
+            return .nothing(.alreadySold)
+        case .unknown:
+            return .stop
+        }
     }
 
     static func displayName(_ platform: String) -> String {
@@ -156,33 +249,6 @@ enum SoldOutPlan {
     static func progress(jobs: [SoldOutJob]) -> Double {
         guard !jobs.isEmpty else { return 0 }
         return Double(jobs.filter(\.ended).count) / Double(jobs.count)
-    }
-
-    /// The confirm dialog before anything is queued. Names the Mercari action the run
-    /// will take (read from the account setting); under Delete that line is the
-    /// once-per-run "Delete out-of-stock listings on Mercari?" confirmation.
-    struct Confirmation: Equatable {
-        let title: String
-        let message: String
-        let button: String
-    }
-
-    static func confirmation(count: Int, mercariCount: Int, action: MercariSoldOutAction) -> Confirmation {
-        let noun = count == 1 ? "listing" : "listings"
-        let title = count == 1 ? "Mark as sold out?" : "Mark \(count) \(noun) as sold out?"
-        var message = "Quantity goes to 0 on Wonni, eBay and Etsy."
-        var button = "Mark Sold Out"
-        if mercariCount > 0 {
-            let those = mercariCount == count ? (count == 1 ? "It is" : "All \(count) are") : "\(mercariCount) \(mercariCount == 1 ? "is" : "are")"
-            switch action {
-            case .deactivate:
-                message += " \(those) on Mercari and will be deactivated there (change in Settings)."
-            case .delete:
-                message += " \(those) on Mercari. Delete out-of-stock listings on Mercari? This cannot be undone there (change in Settings)."
-                button = "Mark Sold Out & Delete on Mercari"
-            }
-        }
-        return Confirmation(title: title, message: message, button: button)
     }
 
     /// The end-of-run message for listings that could not be marked sold out.

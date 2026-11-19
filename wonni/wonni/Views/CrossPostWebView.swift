@@ -4150,32 +4150,17 @@ final class MercariAutoEditState: NSObject, ObservableObject, WKNavigationDelega
 
 // MARK: - MercariListingStateAutomator
 
-/// Headless Mercari listing-state toggle (deactivate / activate). Navigates to the "My listings"
-/// management page (checkbox + bulk-action-button UI, distinct from the per-item edit form
-/// MercariAutoEditState drives), pages through results until it finds the target item by its
-/// /item/{id}/ link (Mercari's own in-page search doesn't match by item ID, so this is the only
-/// reliable way to locate a listing), then selects it and taps Deactivate/Activate. Falls back to
-/// manualFallback — same contract as MercariAutoEditState — if the button, item, or page structure
-/// isn't what's expected, so callers can drop back to the existing "do it yourself, confirm" sheet.
+/// Takes one Mercari listing down, working from its own page by item id:
+///  1. open /us/item/{id}/ and read the live status;
+///  2. `SoldOutPlan.mercariDecision` (status × the seller's preference) says what to do,
+///     which may be nothing;
+///  3. press Deactivate / Delete on the item page, else on /sell/edit/{id}/;
+///  4. re-read Mercari to confirm before reporting success.
+/// The control labels have not been captured from Mercari's seller pages yet: a miss ends in
+/// `manualFallback` naming the buttons that were on the page, never a silent success.
 @MainActor
 final class MercariListingStateAutomator: NSObject, ObservableObject, WKNavigationDelegate {
-    enum Action: Equatable {
-        case deactivate, activate
-        /// Deactivate, then find the listing on the inactive tab and delete it. Used by
-        /// the sold-out queue when the account setting says Delete. The delete half's
-        /// selectors are best-effort (not captured from Mercari's markup yet): when they
-        /// miss, the run falls back to the visible web view so the user can finish.
-        case delete
-        var tabPath: String { self == .activate ? "inactive" : "active" }
-        var buttonTestId: String { self == .activate ? "ActivateAllButton" : "DeactivateAllButton" }
-        var verb: String {
-            switch self {
-            case .deactivate: return "Deactivate"
-            case .activate: return "Activate"
-            case .delete: return "Delete"
-            }
-        }
-    }
+    typealias Action = MercariSoldOutAction
 
     enum Phase: Equatable {
         case running, success, manualFallback(String)
@@ -4197,22 +4182,30 @@ final class MercariListingStateAutomator: NSObject, ObservableObject, WKNavigati
     let action: Action
     /// What the automation is doing right now, for a host's header line.
     @Published private(set) var stepText = ""
+    /// Set when `phase` becomes `.success`.
+    private(set) var outcome: MercariSoldOutOutcome?
     /// False when a host owns the pill (the sold-out queue): no AppTaskQueue task of its own.
     private let registersOwnTask: Bool
     private var taskId = UUID()
-    private var currentPage = 1
-    private let maxPages = 15
     private var hasStarted = false
-    /// `.delete` runs the deactivate pass first, then this flips and the inactive tab is searched.
-    private var deleting = false
+    private var workTask: Task<Void, Never>?
+    private var navigationFinished = false
+    private var navigationFailed = false
     private var terminalContinuation: CheckedContinuation<Phase, Never>?
+
+    private var itemURL: String { "https://www.mercari.com/us/item/\(mercariItemId)/" }
+    private var editURL: String { "https://www.mercari.com/sell/edit/\(mercariItemId)/" }
 
     /// For callers with no UI to drive (e.g. a bulk background action) — starts the
     /// automation and suspends until it reaches a terminal phase (success or manualFallback).
     func run() async -> Phase {
-        await withCheckedContinuation { continuation in
-            terminalContinuation = continuation
-            start()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                terminalContinuation = continuation
+                start()
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.cancel() }
         }
     }
 
@@ -4232,195 +4225,183 @@ final class MercariListingStateAutomator: NSObject, ObservableObject, WKNavigati
         guard !hasStarted else { return }
         hasStarted = true
         if registersOwnTask {
-            AppTaskQueue.shared.begin(id: taskId, label: "\(action.verb.dropLast())ing Mercari listing…")
+            AppTaskQueue.shared.begin(id: taskId, label: action == .delete ? "Deleting Mercari listing…" : "Deactivating Mercari listing…")
         }
-        loadCurrentPage()
+        workTask = Task { [weak self] in await self?.runSteps() }
     }
 
-    /// The tab being searched: the delete pass moves to the inactive tab after deactivating.
-    private var currentTabPath: String { deleting ? "inactive" : action.tabPath }
-
-    private func loadCurrentPage() {
-        guard let url = URL(string: "https://www.mercari.com/mypage/listings/\(currentTabPath)/?page=\(currentPage)") else {
-            fail("Invalid listings URL")
-            return
-        }
-        stepText = "Looking for the listing on Mercari (\(currentTabPath), page \(currentPage))"
-        webView.load(URLRequest(url: url))
+    /// Ends a run the host gave up on (timeout or Stop), so it can't press anything later.
+    func cancel() {
+        workTask?.cancel()
+        guard case .running = phase else { return }
+        fail("Stopped")
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        Task { await handlePageLoaded() }
+        navigationFinished = true
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        fail("Page failed to load — try manually")
+        if (error as NSError).code != NSURLErrorCancelled { navigationFailed = true }
     }
 
-    private func handlePageLoaded() async {
-        guard case .running = phase else { return }
-
-        let deadline = Date().addingTimeInterval(15)
-        var listState = "wait"
-        while Date() < deadline {
-            listState = (try? await webView.callJS("""
-                return (function() {
-                    if (document.querySelector('li[data-testid="ListItem"]')) return 'items';
-                    var u = location.href.toLowerCase();
-                    if (u.indexOf('login') !== -1) return 'login';
-                    if (document.body.innerText.toLowerCase().indexOf('no listings') !== -1) return 'empty';
-                    return 'wait';
-                })();
-            """)) as? String ?? "wait"
-            if listState != "wait" { break }
-            try? await Task.sleep(nanoseconds: 400_000_000)
-        }
-        if listState == "login" {
-            fail("Sign in to Mercari first")
-            return
-        }
-
-        let found = (try? await webView.callJS("""
-            return (function() {
-                var items = document.querySelectorAll('li[data-testid="ListItem"]');
-                for (var i = 0; i < items.length; i++) {
-                    var link = items[i].querySelector('a[href*="/item/" + itemId + "/"]');
-                    if (link) {
-                        var cb = items[i].querySelector('input[data-testid="ListingItemCheckbox"]');
-                        if (!cb) return 'no-checkbox';
-                        cb.click();
-                        return 'found';
-                    }
-                }
-                return 'not-found';
-            })();
-        """, args: ["itemId": mercariItemId])) as? String ?? "error"
-
-        if found == "found" {
-            await clickActionButton()
-            return
-        }
-        if listState == "empty" || found == "not-found" {
-            if currentPage < maxPages {
-                currentPage += 1
-                loadCurrentPage()
-            } else {
-                fail("Couldn't find this listing on Mercari's \(currentTabPath) tab — it may already be \(currentTabPath == "active" ? "inactive" : "active"), or it's further back than page \(maxPages)")
-            }
-            return
-        }
-        fail("Couldn't read the listings page — try manually")
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        if (error as NSError).code != NSURLErrorCancelled { navigationFailed = true }
     }
 
-    private func clickActionButton() async {
-        if deleting {
-            await clickDeleteButton()
+    // MARK: Steps
+
+    private func runSteps() async {
+        stepText = "Checking the listing on Mercari"
+        guard await open(itemURL) else {
+            fail("Mercari's listing page didn't load")
             return
         }
-        stepText = "Pressing \(action == .delete ? "Deactivate" : action.verb)"
-        let deadline = Date().addingTimeInterval(8)
-        var clicked = false
-        while Date() < deadline {
-            let result = (try? await webView.callJS("""
-                return (function() {
-                    var btn = document.querySelector('button[data-testid="\(action.buttonTestId)"]');
-                    if (!btn) return 'no-button';
-                    if (btn.disabled) return 'disabled';
-                    btn.click();
-                    return 'clicked';
-                })();
-            """)) as? String
-            if result == "clicked" { clicked = true; break }
-            if result == "no-button" { break }
-            try? await Task.sleep(nanoseconds: 300_000_000)
+        let state = await readState(until: { $0 != .unknown }, timeout: 12)
+        guard !Task.isCancelled else { return }
+        switch SoldOutPlan.mercariDecision(state: state, preference: action) {
+        case .nothing(let result): finish(result)
+        case .deactivate: await deactivate()
+        case .delete: await delete(from: state)
+        case .stop: fail("Couldn't read this listing's status on Mercari")
         }
-        guard clicked else {
-            fail("Couldn't find the \(action == .delete ? "Deactivate" : action.verb) button — Mercari's page may have changed")
+    }
+
+    private func deactivate() async {
+        stepText = "Pressing Deactivate"
+        guard await press("deactivate", label: "Deactivate") else { return }
+        stepText = "Confirming with Mercari"
+        guard await open(itemURL) else {
+            fail("Couldn't confirm the listing was deactivated")
             return
         }
+        let state = await readState(until: { $0 == .inactive || $0 == .unavailable || $0 == .sold }, timeout: 12)
+        guard !Task.isCancelled else { return }
+        switch state {
+        case .inactive, .unavailable: finish(.deactivated)
+        case .sold: finish(.alreadySold)
+        default: fail("Deactivate didn't take effect on Mercari")
+        }
+    }
 
-        // No confirmation dialog on this action — give the page a moment to update, then
-        // verify by checking the item dropped off this tab's list.
-        try? await Task.sleep(nanoseconds: 1_200_000_000)
-        let stillPresent = (try? await webView.callJS("""
-            return (function() {
-                var items = document.querySelectorAll('li[data-testid="ListItem"]');
-                for (var i = 0; i < items.length; i++) {
-                    if (items[i].querySelector('a[href*="/item/" + itemId + "/"]')) return 'present';
-                }
-                return 'gone';
-            })();
-        """, args: ["itemId": mercariItemId])) as? String
-
-        if stillPresent == "gone" {
-            if action == .delete {
-                // Second pass: the listing is now inactive; find it there and delete it.
-                deleting = true
-                currentPage = 1
-                loadCurrentPage()
+    private func delete(from state: MercariListingState) async {
+        // "No longer for sale" also covers a listing that is already deleted.
+        if state == .unavailable {
+            stepText = "Checking whether the listing still exists"
+            guard await open(editURL) else {
+                fail("Mercari's edit page didn't load")
                 return
             }
-            if registersOwnTask { AppTaskQueue.shared.complete(id: taskId) }
-            phase = .success
+            switch await readEditPage() {
+            case "gone": finish(.alreadyGone); return
+            case "login": fail("Sign in to Mercari first"); return
+            case "form": break
+            default: fail("Couldn't tell whether this listing still exists on Mercari"); return
+            }
+        }
+        stepText = "Pressing Delete"
+        guard await press("delete", label: "Delete") else { return }
+        stepText = "Confirming with Mercari"
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        guard await open(editURL) else {
+            fail("Couldn't confirm the listing was deleted")
+            return
+        }
+        guard !Task.isCancelled else { return }
+        if await readEditPage() == "gone" {
+            finish(.deleted)
         } else {
-            fail("\(action.verb) click didn't take effect — try manually")
+            fail("Delete didn't take effect on Mercari")
         }
     }
 
-    /// Delete pass on the inactive tab. Selectors are a best guess at Mercari's bulk
-    /// "Delete" button and its confirm dialog — a miss is a manualFallback, never a
-    /// silent success.
-    private func clickDeleteButton() async {
-        stepText = "Pressing Delete"
-        let result = (try? await webView.callJS("""
-            return (function() {
-                var btn = document.querySelector('button[data-testid="DeleteAllButton"]')
-                    || Array.from(document.querySelectorAll('button')).find(function(b) {
-                        return !b.disabled && /^\\s*delete\\s*$/i.test(b.textContent || '');
-                    });
-                if (!btn) return 'no-button';
-                if (btn.disabled) return 'disabled';
-                btn.click();
-                return 'clicked';
-            })();
-        """)) as? String
-        guard result == "clicked" else {
-            fail("Couldn't find Mercari's Delete button — finish in the web view")
-            return
+    /// Presses the control on the current page, then on the edit page, and accepts any
+    /// confirm dialog. False means it already failed the run.
+    private func press(_ verb: String, label: String) async -> Bool {
+        var clicked = await pressControl(verb, timeout: 4)
+        if !clicked {
+            guard await open(editURL) else {
+                fail("Mercari's edit page didn't load")
+                return false
+            }
+            let page = await readEditPage()
+            if page == "login" {
+                fail("Sign in to Mercari first")
+                return false
+            }
+            clicked = await pressControl(verb, timeout: 6)
         }
-        // Mercari confirms deletes. Accept any dialog button that says Delete.
-        try? await Task.sleep(nanoseconds: 800_000_000)
-        _ = try? await webView.callJS("""
-            return (function() {
-                var dialog = document.querySelector('[role="dialog"], [data-testid*="Modal"], [data-testid*="Dialog"]');
-                var scope = dialog || document;
-                var btn = Array.from(scope.querySelectorAll('button')).find(function(b) {
-                    return !b.disabled && /delete|confirm|yes/i.test(b.textContent || '');
-                });
-                if (!btn) return 'no-confirm';
-                btn.click();
-                return 'confirmed';
-            })();
-        """)
-        try? await Task.sleep(nanoseconds: 1_500_000_000)
-        let stillPresent = (try? await webView.callJS("""
-            return (function() {
-                var items = document.querySelectorAll('li[data-testid="ListItem"]');
-                for (var i = 0; i < items.length; i++) {
-                    if (items[i].querySelector('a[href*="/item/" + itemId + "/"]')) return 'present';
-                }
-                return 'gone';
-            })();
-        """, args: ["itemId": mercariItemId])) as? String
-        if stillPresent == "gone" {
-            if registersOwnTask { AppTaskQueue.shared.complete(id: taskId) }
-            phase = .success
-        } else {
-            fail("Delete didn't take effect — finish in the web view")
+        guard !Task.isCancelled else { return false }
+        guard clicked else {
+            let labels = (try? await webView.callJS(MercariFormJS.visibleControlLabels)) as? String ?? ""
+            fail("Couldn't find Mercari's \(label) button" + (labels.isEmpty ? "" : ". Buttons on the page: \(labels)"))
+            return false
         }
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline, !Task.isCancelled {
+            let result = (try? await webView.callJS(MercariFormJS.confirmListingDialog, args: ["verb": verb])) as? String
+            if result == "confirmed" { break }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        return !Task.isCancelled
+    }
+
+    private func pressControl(_ verb: String, timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline, !Task.isCancelled {
+            let result = (try? await webView.callJS(MercariFormJS.pressListingControl, args: ["verb": verb])) as? String
+            if result == "clicked" { return true }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        return false
+    }
+
+    private func open(_ address: String) async -> Bool {
+        guard let url = URL(string: address) else { return false }
+        navigationFinished = false
+        navigationFailed = false
+        webView.load(URLRequest(url: url))
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline, !Task.isCancelled {
+            if navigationFinished { return true }
+            if navigationFailed { return false }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        return false
+    }
+
+    /// Polls the page (Mercari renders client-side) until `done` accepts the state.
+    private func readState(until done: (MercariListingState) -> Bool, timeout: TimeInterval) async -> MercariListingState {
+        var state = MercariListingState.unknown
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline, !Task.isCancelled {
+            let raw = (try? await webView.callJS(MercariFormJS.readItemStatus, args: ["itemId": mercariItemId])) as? String
+            state = MercariFormJS.listingState(raw: raw)
+            if done(state) { return state }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+        }
+        return state
+    }
+
+    private func readEditPage() async -> String {
+        let deadline = Date().addingTimeInterval(12)
+        while Date() < deadline, !Task.isCancelled {
+            let result = (try? await webView.callJS(MercariFormJS.editPageState)) as? String ?? "wait"
+            if result != "wait" { return result }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+        }
+        return "wait"
+    }
+
+    private func finish(_ result: MercariSoldOutOutcome) {
+        guard case .running = phase else { return }
+        if registersOwnTask { AppTaskQueue.shared.complete(id: taskId) }
+        outcome = result
+        phase = .success
     }
 
     private func fail(_ reason: String) {
+        guard case .running = phase else { return }
         if registersOwnTask { AppTaskQueue.shared.complete(id: taskId) }
         stepText = reason
         phase = .manualFallback(reason)

@@ -27,11 +27,6 @@ final class AppTaskQueue: ObservableObject {
     }
 
     @Published private(set) var tasks: [AppTask] = []
-    // Screens that render the pill inline in their own bottom stack (e.g. alongside a
-    // local toast) set this so MainView's global per-tab pill doesn't also render and
-    // overlap it — pushed navigationDestination content doesn't compose safe-area-wise
-    // with the tab's outer .safeAreaInset, so without this the two pills stack as a ZStack.
-    @Published var suppressGlobalPill = false
     // Short history the activity view (Q3) shows below the live queue, so a job that just
     // finished doesn't just vanish with no confirmation. Capped small — this is a glance
     // list, not a log.

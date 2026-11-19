@@ -3,7 +3,7 @@
 //  wonniTests
 //
 //  The sold-out queue's rules (SoldOutRun.swift): which platforms a job covers, the
-//  pill text, the confirm copy per Mercari action, and the persisted store's
+//  task bar text, which platforms can be skipped, and the persisted store's
 //  clear-when-finished behaviour.
 //
 
@@ -16,6 +16,43 @@ final class SoldOutPlanTests: XCTestCase {
                      action: MercariSoldOutAction = .deactivate) -> SoldOutJob {
         SoldOutPlan.makeJob(listingId: "L1", title: "Nike Dunk", coverPhotoPath: nil, quantity: quantity,
                             crossPostStatus: status, crossPostListingIds: ids, action: action)
+    }
+
+    // MARK: Mercari decision table (live status × seller preference)
+
+    func testActiveListingFollowsThePreference() {
+        XCTAssertEqual(SoldOutPlan.mercariDecision(state: .active, preference: .deactivate), .deactivate)
+        XCTAssertEqual(SoldOutPlan.mercariDecision(state: .active, preference: .delete), .delete)
+    }
+
+    func testInactiveListingIsLeftAloneUnlessThePreferenceIsDelete() {
+        XCTAssertEqual(SoldOutPlan.mercariDecision(state: .inactive, preference: .deactivate), .nothing(.alreadyInactive))
+        XCTAssertEqual(SoldOutPlan.mercariDecision(state: .inactive, preference: .delete), .delete)
+    }
+
+    func testUnavailablePageOnlyTriesDeleteWhenThePreferenceIsDelete() {
+        XCTAssertEqual(SoldOutPlan.mercariDecision(state: .unavailable, preference: .deactivate), .nothing(.alreadyInactive))
+        XCTAssertEqual(SoldOutPlan.mercariDecision(state: .unavailable, preference: .delete), .delete)
+    }
+
+    func testSoldListingIsNeverTouched() {
+        for preference in MercariSoldOutAction.allCases {
+            XCTAssertEqual(SoldOutPlan.mercariDecision(state: .sold, preference: preference), .nothing(.alreadySold))
+        }
+    }
+
+    func testUnreadableStatusNeverActs() {
+        for preference in MercariSoldOutAction.allCases {
+            XCTAssertEqual(SoldOutPlan.mercariDecision(state: .unknown, preference: preference), .stop)
+        }
+    }
+
+    func testOnlyARemovedListingLosesItsMercariId() {
+        XCTAssertTrue(MercariSoldOutOutcome.deleted.removedFromMercari)
+        XCTAssertTrue(MercariSoldOutOutcome.alreadyGone.removedFromMercari)
+        XCTAssertFalse(MercariSoldOutOutcome.deactivated.removedFromMercari)
+        XCTAssertFalse(MercariSoldOutOutcome.alreadyInactive.removedFromMercari)
+        XCTAssertFalse(MercariSoldOutOutcome.alreadySold.removedFromMercari)
     }
 
     func testJobCoversWonniPlusLiveAPIPlatformsOnly() {
@@ -74,20 +111,49 @@ final class SoldOutPlanTests: XCTestCase {
         XCTAssertNil(SoldOutPlan.pillDetail(jobs: []))
     }
 
-    func testConfirmationNamesTheMercariAction() {
-        let deactivate = SoldOutPlan.confirmation(count: 4, mercariCount: 3, action: .deactivate)
-        XCTAssertEqual(deactivate.title, "Mark 4 listings as sold out?")
-        XCTAssertTrue(deactivate.message.contains("3 are on Mercari and will be deactivated"))
-        XCTAssertEqual(deactivate.button, "Mark Sold Out")
+    // MARK: Skipping platforms (2026-11-19)
 
-        let delete = SoldOutPlan.confirmation(count: 1, mercariCount: 1, action: .delete)
-        XCTAssertEqual(delete.title, "Mark as sold out?")
-        XCTAssertTrue(delete.message.contains("Delete out-of-stock listings on Mercari?"))
-        XCTAssertEqual(delete.button, "Mark Sold Out & Delete on Mercari")
+    func testTogglesListOnlyPlatformsTheSelectionIsOn() {
+        let ebayOnly = job(status: ["ebay": "active"])
+        let mercariOnly = job(ids: ["mercari": "m1"])
+        XCTAssertEqual(SoldOutPlan.togglePlatforms([ebayOnly]), ["ebay"])
+        XCTAssertEqual(SoldOutPlan.togglePlatforms([ebayOnly, mercariOnly]), ["ebay", "mercari"])
+        XCTAssertEqual(SoldOutPlan.togglePlatforms([job()]), [])
+    }
 
-        let none = SoldOutPlan.confirmation(count: 2, mercariCount: 0, action: .delete)
-        XCTAssertFalse(none.message.contains("Mercari"))
-        XCTAssertEqual(none.button, "Mark Sold Out")
+    func testSkippedMercariStartsSkippedAndSurvivesReset() {
+        let built = SoldOutPlan.makeJob(listingId: "L1", title: "Nike Dunk", coverPhotoPath: nil, quantity: 1,
+                                        crossPostStatus: ["ebay": "active"], crossPostListingIds: ["mercari": "m1"],
+                                        action: .deactivate, skip: ["mercari", "etsy"])
+        XCTAssertEqual(built.skipPlatforms, ["mercari"], "a platform the listing isn't on is dropped")
+        XCTAssertEqual(built.mercariStep, .skipped)
+        XCTAssertEqual(built.reset.mercariStep, .skipped)
+        XCTAssertEqual(SoldOutPlan.serverRowTitle(built), "Wonni + eBay")
+    }
+
+    func testSkippedEbayDropsOutOfTheServerRow() {
+        var built = job(status: ["ebay": "active", "etsy": "active"])
+        built.addSkip(["ebay"])
+        XCTAssertEqual(SoldOutPlan.serverRowTitle(built), "Wonni + Etsy")
+        XCTAssertTrue(SoldOutJob.StepState.skipped.isTerminal)
+    }
+
+    func testPlatformFailureTextNamesEachPlatform() {
+        XCTAssertEqual(SoldOutPlan.platformFailureText(["ebay": "System error"]), "eBay: System error")
+    }
+
+    func testResetClearsPlatformErrors() {
+        var built = job(status: ["ebay": "active"])
+        built.platformErrors = ["ebay": "x"]; built.failure = "eBay: x"; built.ended = true
+        XCTAssertNil(built.reset.platformErrors)
+    }
+
+    func testRunsSavedByOlderBuildsStillDecode() throws {
+        // Persisted before skipPlatforms / platformErrors existed.
+        let old = #"{"id":"6B1C1D52-2A0E-4D8E-9F8A-0D1F2C3B4A59","listingId":"L1","title":"T","previousQuantity":1,"serverPlatforms":["wonni"],"mercariAction":"deactivate","serverStep":{"waiting":{}},"mercariStep":{"done":{}},"ended":false}"#
+        let decoded = try JSONDecoder().decode(SoldOutJob.self, from: Data(old.utf8))
+        XCTAssertNil(decoded.skipPlatforms)
+        XCTAssertFalse(decoded.skipsMercari)
     }
 
     func testFailureSummaryAndPill() {

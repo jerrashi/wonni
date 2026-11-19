@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import Combine
 import SwiftData
 import FirebaseStorage
 import FirebaseAuth
@@ -60,7 +61,6 @@ struct ProfileView: View {
     @State private var soldOutListings: [UserListing] = []
     @State private var listingToRestock: UserListing?
     @State private var isSoldOutExpanded = false
-    @State private var listingToMarkSoldOut: UserListing?
     @State private var listingToDelete: UserListing?
     @State private var isSellingSimilar = false
     // "Sell Similar" now spawns a local draft `Item` (products/{id} + adoptProduct,
@@ -168,6 +168,10 @@ struct ProfileView: View {
                 await loadProfile()
                 await loadSaleSummary()
             }
+            // A finished sold-out run moves listings into the Sold Out section.
+            .onReceive(SoldOutRunner.shared.$finishedRunCount.dropFirst()) { _ in
+                Task { await loadListings() }
+            }
             .sheet(item: $listingToRestock) { listing in
                 RestockSheet(listing: listing) { restockedQty in
                     Task {
@@ -178,20 +182,6 @@ struct ProfileView: View {
                         await loadListings()
                     }
                 }
-            }
-            // Sold out is a queued job (SoldOutRunner): the dialog closes at once, the
-            // pill tracks progress, and the Mercari step runs in its own web view.
-            .alert(soldOutConfirmation.title, isPresented: Binding(
-                get: { listingToMarkSoldOut != nil },
-                set: { if !$0 { listingToMarkSoldOut = nil } }
-            ), presenting: listingToMarkSoldOut) { listing in
-                Button(soldOutConfirmation.button, role: .destructive) {
-                    SoldOutRunner.shared.enqueue([listing], action: mercariSoldOutAction)
-                    listings.removeAll { $0.id == listing.id }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: { _ in
-                Text(soldOutConfirmation.message)
             }
             .confirmationDialog(
                 "Delete Listing?",
@@ -602,16 +592,6 @@ struct ProfileView: View {
                 .background(.bar)
             }
         }
-    }
-
-    /// The account-wide Mercari sold-out setting (Profile › Settings › Mercari).
-    private var mercariSoldOutAction: MercariSoldOutAction {
-        MercariSoldOutAction(rawValue: UserDefaults.standard.string(forKey: MercariSoldOutAction.storageKey) ?? "") ?? .deactivate
-    }
-
-    private var soldOutConfirmation: SoldOutPlan.Confirmation {
-        let onMercari = listingToMarkSoldOut?.crossPostListingIds?["mercari"]?.isEmpty == false ? 1 : 0
-        return SoldOutPlan.confirmation(count: 1, mercariCount: onMercari, action: mercariSoldOutAction)
     }
 
     @ViewBuilder private var soldOutSection: some View {
@@ -1129,7 +1109,6 @@ struct EditListingSheet: View {
     @State private var isSavingMercariId = false
 
     // Mark as Sold Out
-    @State private var showMarkSoldOutConfirm = false
 
     // Photo Editing
     @State private var editPhotos: [EditPhotoItem]
@@ -1279,17 +1258,6 @@ struct EditListingSheet: View {
             } message: {
                 Text("This removes the Mercari link. The listing stays live on Mercari but won't be tracked here.")
             }
-            .confirmationDialog(
-                editSoldOutConfirmation.title,
-                isPresented: $showMarkSoldOutConfirm,
-                titleVisibility: .visible
-            ) {
-                Button(editSoldOutConfirmation.button, role: .destructive) {
-                    markAsSoldOut()
-                }
-            } message: {
-                Text(editSoldOutConfirmation.message)
-            }
             .alert("Shipping Profile", isPresented: $showShippingProfileAlert) {
                 Button("Got it", role: .cancel) {}
             } message: {
@@ -1327,7 +1295,7 @@ struct EditListingSheet: View {
     @ViewBuilder private var markSoldOutSection: some View {
         Section {
             Button {
-                showMarkSoldOutConfirm = true
+                markAsSoldOut()
             } label: {
                 HStack {
                     Image(systemName: "xmark.circle")
@@ -1337,18 +1305,9 @@ struct EditListingSheet: View {
                 .frame(maxWidth: .infinity, alignment: .center)
             }
         } footer: {
-            Text("Runs in the background: quantity goes to 0 everywhere this listing is live, and it moves to the Sold Out section. Progress shows in the pill.")
+            Text("Runs in the background: quantity goes to 0 everywhere this listing is live, and it moves to the Sold Out section. Progress shows in the task bar.")
                 .font(.caption)
         }
-    }
-
-    private var editMercariSoldOutAction: MercariSoldOutAction {
-        MercariSoldOutAction(rawValue: UserDefaults.standard.string(forKey: MercariSoldOutAction.storageKey) ?? "") ?? .deactivate
-    }
-
-    private var editSoldOutConfirmation: SoldOutPlan.Confirmation {
-        let onMercari = (listing.crossPostListingIds?["mercari"] ?? linkedMercariId)?.isEmpty == false ? 1 : 0
-        return SoldOutPlan.confirmation(count: 1, mercariCount: onMercari, action: editMercariSoldOutAction)
     }
 
     /// Stores the listing's Smart Pricing choice and flips it on Mercari.
@@ -1359,9 +1318,10 @@ struct EditListingSheet: View {
         showSmartPricingEdit = true
     }
 
-    /// Hands the listing to the sold-out queue and closes; the pill takes it from here.
+    /// Closes and opens the sold-out confirm sheet (platform toggles); the task bar
+    /// takes it from there.
     private func markAsSoldOut() {
-        SoldOutRunner.shared.enqueue([listing], action: editMercariSoldOutAction)
+        SoldOutRunner.shared.requestMarkSoldOut([listing])
         dismiss()
     }
 

@@ -34,7 +34,13 @@ struct MainView: View {
     }
 
     var body: some View {
-        tabContent
+        // The task bar sits UNDER the TabView, not over it: while a task runs the
+        // TabView is shorter, so no tab bar, toolbar or button can end up beneath
+        // the bar (see TaskBarView.swift).
+        VStack(spacing: 0) {
+            tabContent
+            AppTaskBarHost()
+        }
         // Cross-posting can't run while the app is closed (iOS suspends the web view),
         // so leaving mid-queue pauses it. These two hooks finish the listing in flight,
         // line up a "paused" notice, and on return offer to resume what's left.
@@ -76,27 +82,22 @@ struct MainView: View {
     @ViewBuilder private var tabContent: some View {
         TabView(selection: $uploadManager.selectedTab) {
             NavigationStack { HomeView() }
-                .appTaskQueuePill()
                 .tabItem { Label("Home", systemImage: "house.fill") }
                 .tag(0)
 
             NavigationStack { SearchView() }
-                .appTaskQueuePill()
                 .tabItem { Label("Search", systemImage: "magnifyingglass") }
                 .tag(1)
 
             CameraViewController()
-                .appTaskQueuePill()
                 .tabItem { Label("Sell", systemImage: "plus.circle.fill") }
                 .tag(2)
 
             NavigationStack { InboxView() }
-                .appTaskQueuePill()
                 .tabItem { Label("Inbox", systemImage: "tray.fill") }
                 .tag(3)
 
             NavigationStack { ProfileView() }
-                .appTaskQueuePill()
                 .tabItem { Label("Profile", systemImage: "person.crop.circle.fill") }
                 .tag(4)
         }
@@ -104,6 +105,13 @@ struct MainView: View {
         // isDraft never cleared) — see cleanupOrphanedPublishedDrafts. Idempotent no-op
         // once the device's local data is clean.
         .task {
+            #if DEBUG
+            // UI tests: a fake running task so the task bar is on screen (see
+            // SellingFlowTests.testTaskBarNeverCoversPickerProceed).
+            if ProcessInfo.processInfo.arguments.contains("-uiTestingTaskBar") {
+                AppTaskQueue.shared.begin(id: UUID(), label: "Marking sold out · 1 of 2", progress: 0.5)
+            }
+            #endif
             uploadManager.cleanupOrphanedPublishedDrafts(modelContext: modelContext)
             uploadManager.migrateDraftPhotoStorage(modelContext: modelContext)
             uploadManager.sweepFailedPublishDrafts(modelContext: modelContext)
@@ -114,6 +122,13 @@ struct MainView: View {
         // did not live to finish is offered for resume.
         .sheet(isPresented: $soldOutRunner.showSheet) {
             SoldOutProgressView()
+        }
+        // Every "Mark as sold out" entry point asks the runner, which opens this.
+        .sheet(isPresented: Binding(
+            get: { soldOutRunner.pendingConfirmation != nil },
+            set: { if !$0 { soldOutRunner.pendingConfirmation = nil } }
+        )) {
+            SoldOutConfirmSheet(listings: soldOutRunner.pendingConfirmation ?? [])
         }
         .alert(
             "Marking sold out was interrupted",
@@ -223,7 +238,7 @@ struct MainView: View {
         }
         // Mercari cross-post job (Q1/Q2): mounted invisibly so its WebView keeps running
         // headlessly and its fullScreenCover is available — the visible pill is now the
-        // single shared AppTaskQueue pill (.appTaskQueuePill() per tab), registered by
+        // single shared AppTaskQueue task bar (AppTaskBarHost, under the TabView), registered by
         // UploadManager.checkAndStartNextWebJob.
         .background(
             Group {
@@ -318,49 +333,6 @@ struct MainView: View {
         guard assets.count > 0 else { return }
         PHPhotoLibrary.shared().performChanges {
             PHAssetChangeRequest.deleteAssets(assets)
-        }
-    }
-}
-
-private extension View {
-    // Pins the universal task queue pill just above the tab bar.
-    // Applied per-tab (not on the TabView) so the pill sits in each tab's
-    // content area rather than overlapping the tab bar itself.
-    func appTaskQueuePill() -> some View {
-        self.safeAreaInset(edge: .bottom, spacing: 0) {
-            AppTaskQueuePillContent()
-        }
-    }
-}
-
-// MARK: - Universal task queue pill
-
-struct AppTaskQueuePillContent: View {
-    @ObservedObject private var queue = AppTaskQueue.shared
-    @EnvironmentObject private var uploadManager: UploadManager
-    @State private var showActivity = false
-
-    var body: some View {
-        if queue.hasActiveTasks, !queue.suppressGlobalPill, let task = queue.current {
-            let pillView = AppTaskQueuePillView(
-                task: task,
-                queueCount: queue.count,
-                onExpand: {
-                    if queue.count == 1 {
-                        // Single task: tap goes directly into its detail view
-                        task.onTap?()
-                    } else {
-                        // Multiple tasks: show the queue list first
-                        showActivity = true
-                    }
-                }
-            )
-            pillView
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .sheet(isPresented: $showActivity) {
-                    NavigationStack { AppTaskActivityView() }
-                        .environmentObject(uploadManager)
-                }
         }
     }
 }
@@ -462,86 +434,6 @@ struct AppTaskActivityView: View {
             }
         }
         .padding(.vertical, 2)
-    }
-}
-
-struct AppTaskQueuePillView: View {
-    let task: AppTaskQueue.AppTask
-    let queueCount: Int
-    var onExpand: () -> Void = {}
-
-    private var pillColor: Color {
-        task.isError ? .red : task.accentColor
-    }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            if task.isError {
-                Image(systemName: "exclamationmark.circle.fill")
-                    .foregroundStyle(.white)
-                    .frame(width: 20, height: 20)
-            } else if task.progress < 0 {
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .tint(.white)
-                    .scaleEffect(0.75)
-                    .frame(width: 20, height: 20)
-            } else {
-                ZStack {
-                    Circle()
-                        .stroke(Color.white.opacity(0.25), lineWidth: 2.5)
-                    Circle()
-                        .trim(from: 0, to: task.progress)
-                        .stroke(Color.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .animation(.linear(duration: 0.3), value: task.progress)
-                }
-                .frame(width: 20, height: 20)
-            }
-
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text(task.label)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white)
-                    if queueCount > 1 {
-                        Text("+\(queueCount - 1)")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(.white.opacity(0.25)))
-                    }
-                }
-                if let detail = task.detail {
-                    Text(detail)
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.65))
-                }
-            }
-
-            Spacer()
-
-            Button {
-                onExpand()
-            } label: {
-                Image(systemName: "chevron.up")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.white.opacity(0.8))
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(
-            Capsule()
-                .fill(.ultraThinMaterial)
-                .overlay(Capsule().fill(pillColor.opacity(0.85)))
-                .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
-        )
-        .padding(.horizontal, 20)
-        .padding(.bottom, 4)
-        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: task.label)
-        .animation(.easeInOut(duration: 0.3), value: task.isError)
     }
 }
 

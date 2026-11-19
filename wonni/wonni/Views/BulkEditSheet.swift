@@ -511,7 +511,7 @@ struct BulkEditSheet: View {
         }
     }
 
-    /// Fetches the selected listings and hands them to the sold-out queue.
+    /// Fetches the selected listings and asks to mark them sold out.
     private func enqueueSelectedSoldOut() async {
         var listings: [UserListing] = []
         for id in selectedListingIds {
@@ -519,9 +519,9 @@ struct BulkEditSheet: View {
                 listings.append(listing)
             }
         }
-        let action = MercariSoldOutAction(rawValue: UserDefaults.standard.string(forKey: MercariSoldOutAction.storageKey) ?? "") ?? .deactivate
+        // The confirm sheet (platform toggles) opens once this sheet has closed.
         await MainActor.run {
-            SoldOutRunner.shared.enqueue(listings, action: action)
+            SoldOutRunner.shared.requestMarkSoldOut(listings)
         }
     }
 }

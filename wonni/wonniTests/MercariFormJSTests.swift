@@ -215,3 +215,128 @@ final class MercariFormJSTests: XCTestCase {
         for bad in ["still-on", "no-toggle", "error"] { XCTAssertFalse(MercariFormJS.smartPricingIsOff(bad), bad) }
     }
 }
+
+/// The sold-out step's page scripts. The status shapes come from the item-page reader that
+/// was already in production; the Deactivate / Delete markup is ASSUMED (not captured from
+/// Mercari's seller pages yet), so these pin the safety rules rather than Mercari's markup.
+@MainActor
+final class MercariListingControlJSTests: XCTestCase {
+    private var window: UIWindow!
+    private var webView: WKWebView!
+
+    override func setUp() async throws {
+        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = UIViewController()
+        window.makeKeyAndVisible()
+        webView = WKWebView(frame: window.bounds)
+        window.rootViewController!.view.addSubview(webView)
+    }
+
+    override func tearDown() async throws {
+        webView.removeFromSuperview()
+        window.isHidden = true
+        webView = nil
+        window = nil
+    }
+
+    private final class LoadWaiter: NSObject, WKNavigationDelegate {
+        var continuation: CheckedContinuation<Void, Never>?
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            continuation?.resume()
+            continuation = nil
+        }
+    }
+
+    private func load(_ body: String) async {
+        let waiter = LoadWaiter()
+        webView.navigationDelegate = waiter
+        await withCheckedContinuation { continuation in
+            waiter.continuation = continuation
+            webView.loadHTMLString("<html><body>\(body)</body></html>", baseURL: URL(string: "https://www.mercari.com/us/item/m1/"))
+        }
+    }
+
+    private func status(_ body: String) async throws -> MercariListingState {
+        await load(body)
+        let raw = try await webView.callJS(MercariFormJS.readItemStatus, args: ["itemId": "m1"]) as? String
+        return MercariFormJS.listingState(raw: raw)
+    }
+
+    private func nextData(_ json: String) -> String {
+        "<script id=\"__NEXT_DATA__\" type=\"application/json\">\(json)</script>"
+    }
+
+    func test_status_readsTheItemsOwnStatus() async throws {
+        let active = try await status(nextData(#"{"props":{"pageProps":{"item":{"id":"m1","status":"on_sale"}}}}"#))
+        XCTAssertEqual(active, .active)
+        let inactive = try await status(nextData(#"{"props":{"pageProps":{"data":{"item":{"id":"m1","status":"inactive"}}}}}"#))
+        XCTAssertEqual(inactive, .inactive)
+        let sold = try await status(nextData(#"{"props":{"pageProps":{"item":{"id":"m1","status":"sold_out"}}}}"#))
+        XCTAssertEqual(sold, .sold)
+    }
+
+    func test_status_ignoresTheSellersStatusAndOtherItems() async throws {
+        let seller = try await status(nextData(#"{"props":{"pageProps":{"seller":{"status":"active"}}}}"#))
+        XCTAssertEqual(seller, .unknown)
+        let other = try await status(nextData(#"{"props":{"pageProps":{"item":{"id":"m2","status":"on_sale"}}}}"#))
+        XCTAssertEqual(other, .unknown)
+    }
+
+    func test_status_pageFallbacks() async throws {
+        let ribbon = try await status(#"<div class="Ribbon__RibbonTitle-abc">Inactive</div>"#)
+        XCTAssertEqual(ribbon, .inactive)
+        let viewOrder = try await status("<button>View order</button>")
+        XCTAssertEqual(viewOrder, .sold)
+        let gone = try await status("<p>This item is no longer for sale</p>")
+        XCTAssertEqual(gone, .unavailable)
+    }
+
+    func test_status_unrecognisedValueIsUnknown() {
+        XCTAssertEqual(MercariFormJS.listingState(raw: "suspended"), .unknown)
+        XCTAssertEqual(MercariFormJS.listingState(raw: nil), .unknown)
+    }
+
+    private func press(_ verb: String) async throws -> (result: String?, clicked: String?) {
+        let result = try await webView.callJS(MercariFormJS.pressListingControl, args: ["verb": verb]) as? String
+        let clicked = try await webView.callJS("return window.clicked || null") as? String
+        return (result, clicked)
+    }
+
+    private let recorder = "<script>document.addEventListener('click',function(e){e.preventDefault();window.clicked=e.target.id;},true);</script>"
+
+    func test_press_clicksTheExactControl() async throws {
+        await load(recorder + #"<button id="other">Delete my account</button><button id="target">Delete listing</button>"#)
+        let pressed = try await press("delete")
+        XCTAssertEqual(pressed.result, "clicked")
+        XCTAssertEqual(pressed.clicked, "target")
+    }
+
+    func test_press_neverClicksAPhotoDeleteButton() async throws {
+        await load(recorder + #"<div data-testid="SellPhotoPreview"><button id="a">Delete</button></div><button id="b" aria-label="Delete photo">Delete</button>"#)
+        let pressed = try await press("delete")
+        XCTAssertEqual(pressed.result, "none")
+        XCTAssertNil(pressed.clicked)
+    }
+
+    func test_press_skipsHiddenAndDisabledControls() async throws {
+        await load(recorder + #"<button id="a" style="display:none">Deactivate</button><button id="b" disabled>Deactivate</button>"#)
+        let pressed = try await press("deactivate")
+        XCTAssertEqual(pressed.result, "none")
+    }
+
+    func test_confirm_onlyPressesInsideADialog() async throws {
+        await load(recorder + #"<button id="page">Delete</button>"#)
+        let none = try await webView.callJS(MercariFormJS.confirmListingDialog, args: ["verb": "delete"]) as? String
+        XCTAssertEqual(none, "no-dialog")
+        let clicked = try await webView.callJS("return window.clicked || null") as? String
+        XCTAssertNil(clicked)
+    }
+
+    func test_confirm_pressesTheConfirmButtonNotCancel() async throws {
+        await load(recorder + #"<div role="dialog"><button id="no">Cancel</button><button id="yes">Yes, delete</button></div>"#)
+        let result = try await webView.callJS(MercariFormJS.confirmListingDialog, args: ["verb": "delete"]) as? String
+        XCTAssertEqual(result, "confirmed")
+        let clicked = try await webView.callJS("return window.clicked || null") as? String
+        XCTAssertEqual(clicked, "yes")
+    }
+}

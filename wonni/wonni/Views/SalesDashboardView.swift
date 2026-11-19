@@ -45,7 +45,6 @@ struct SalesDashboardView: View {
     @State private var toastAction: (() -> Void)? = nil
     @State private var toastActionLabel: String = "Undo"
     @State private var saleToPurge: Sale? = nil
-    @ObservedObject private var taskQueue = AppTaskQueue.shared
 
     // Board view (tap-to-move, no drag) — iOS step of docs/specs/2026-09-11-
     // stage-board-and-revenue-accounting.md §6, after web's board shipped.
@@ -136,14 +135,8 @@ struct SalesDashboardView: View {
                 }
             }
         }
-        .onAppear { taskQueue.suppressGlobalPill = true }
-        .onDisappear { taskQueue.suppressGlobalPill = false }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
-                if let task = taskQueue.current {
-                    AppTaskQueuePillView(task: task, queueCount: taskQueue.count)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
                 if let toast = syncToast {
                     HStack(spacing: 12) {
                         Text(toast)
@@ -179,7 +172,6 @@ struct SalesDashboardView: View {
             }
             .animation(.spring(duration: 0.3), value: syncToast)
             .animation(.spring(duration: 0.25), value: selectedSaleIds.isEmpty)
-            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: taskQueue.current?.id)
         }
             .sheet(item: $selectedSale) { sale in
                 SaleDetailSheet(sale: sale, stages: saleStages) {
