@@ -6,12 +6,17 @@
 //  capsule "pill"). Every background job registers with `AppTaskQueue`; this file
 //  is the only place that draws it, so a redesign is a change here and nowhere else.
 //
-//  Placement rule: `MainView` stacks `AppTaskBarHost` UNDER the TabView in a VStack,
-//  so the TabView itself gets shorter while a task runs. Its tab bar, every pushed
-//  screen's bottom toolbar (Photos › Proceed) and every safe-area inset end above
-//  the bar, so the bar can never cover a control. The old per-tab
-//  `.safeAreaInset` pill did not compose with pushed screens' system toolbars and
-//  covered the Photos screen's Proceed button.
+//  Bottom chrome (2026-11-19 v2, mock https://claude.ai/artifact/E7eUWbTaJMkEKhWvkwfzUq):
+//  the task row is the TOP row of the screen's bottom toolbar, on the same `.bar`
+//  surface, never a separate strip. Two entry points, both `.safeAreaInset(edge: .bottom)`
+//  so the content above shrinks instead of being covered:
+//  - `.bottomActionBar { leading } trailing: { primary }` — screens with actions. The
+//    Sell flow puts ‹ Back (or Cancel) leading and Continue (or Save) trailing, nothing
+//    else; every other action lives in the top bar as (Select) · title · (⋯).
+//  - `.appTaskBarInset()` — the four tab stacks without a bottom toolbar (MainView); the
+//    row sits directly above the tab bar.
+//  Don't use the system `.toolbar(.bottomBar)` on a screen that should show tasks: its
+//  layout ignores safe-area insets and the task row ends up under it.
 //
 
 import SwiftUI
@@ -60,7 +65,6 @@ struct TaskBar: View {
         }
         .buttonStyle(.plain)
         .overlay(alignment: .bottom) { progressLine }
-        .overlay(alignment: .top) { Divider() }
         .accessibilityElement(children: .combine)
         .accessibilityHint(queueCount > 1 ? "Shows all \(queueCount) tasks" : "Opens this task")
         .accessibilityIdentifier("appTaskBar")
@@ -103,9 +107,10 @@ struct TaskBar: View {
     }
 }
 
-// MARK: - Host (mounted once, in MainView)
+// MARK: - Host (the task row inside every bottom bar)
 
-/// Shows the queue's current task. Tap: a single task opens its own screen, several
+/// Shows the queue's current task, with no background of its own (the bar it sits in
+/// owns the surface). Tap: a single task opens its own screen, several
 /// open the activity list. Hidden while the keyboard is up, so it never rides above
 /// the keyboard and steals height from the field being typed into.
 struct AppTaskBarHost: View {
@@ -124,7 +129,6 @@ struct AppTaskBarHost: View {
                         showActivity = true
                     }
                 }
-                .background(Color(.secondarySystemBackground).ignoresSafeArea(edges: .bottom))
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
@@ -140,5 +144,124 @@ struct AppTaskBarHost: View {
             NavigationStack { AppTaskActivityView() }
                 .environmentObject(uploadManager)
         }
+    }
+}
+
+// MARK: - Bottom toolbar
+
+/// The app's one bottom toolbar: the task row (only while a task runs) above one row of
+/// actions, on a single `.bar` surface with one divider on top.
+struct BottomActionBar<Leading: View, Trailing: View>: View {
+    @ViewBuilder var leading: Leading
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        VStack(spacing: 0) {
+            AppTaskBarHost()
+            HStack(spacing: 12) {
+                leading
+                Spacer(minLength: 12)
+                trailing
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        }
+        .frame(maxWidth: .infinity)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+    }
+}
+
+/// Capsule buttons for `BottomActionBar`. `.primary` is the screen's one forward action.
+struct BottomBarButtonStyle: ButtonStyle {
+    enum Kind { case secondary, primary, destructive }
+    var kind: Kind = .secondary
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.body.weight(kind == .primary ? .semibold : .regular))
+            .foregroundStyle(foreground)
+            .lineLimit(1)
+            .padding(.horizontal, 18)
+            .frame(minHeight: 40)
+            .background(Capsule().fill(background))
+            .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.45)
+            .contentShape(Capsule())
+    }
+
+    private var foreground: Color {
+        switch kind {
+        case .primary: return .white
+        case .destructive: return .red
+        case .secondary: return .accentColor
+        }
+    }
+
+    private var background: Color {
+        kind == .primary ? .accentColor : Color(.tertiarySystemFill)
+    }
+}
+
+/// ‹ Back — leading slot of every Sell-flow bottom bar.
+struct BackBarButton: View {
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.left").font(.body.weight(.semibold))
+                Text("Back")
+            }
+        }
+        .buttonStyle(BottomBarButtonStyle(kind: .secondary))
+    }
+}
+
+/// The trailing primary action. One word across the Sell flow ("Continue", user
+/// 2026-11-19); `isBusy` shows a spinner in place of nothing else changing.
+struct PrimaryBarButton: View {
+    var title: String = "Continue"
+    var isBusy: Bool = false
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if isBusy { ProgressView().tint(.white).controlSize(.small) }
+                Text(title)
+            }
+        }
+        .buttonStyle(BottomBarButtonStyle(kind: .primary))
+    }
+}
+
+extension View {
+    /// Pins the app's bottom toolbar (task row + actions) under this screen.
+    func bottomActionBar<L: View, T: View>(
+        @ViewBuilder leading: () -> L,
+        @ViewBuilder trailing: () -> T
+    ) -> some View {
+        safeAreaInset(edge: .bottom, spacing: 0) {
+            BottomActionBar(leading: leading, trailing: trailing)
+        }
+    }
+
+    /// Task row only, for a tab's NavigationStack: it sits directly above the tab bar on
+    /// the same bar material, and appears only while a task runs.
+    func appTaskBarInset() -> some View {
+        safeAreaInset(edge: .bottom, spacing: 0) {
+            TaskRowSurface()
+        }
+    }
+}
+
+/// The task row on its own bar surface; collapses to nothing when no task runs.
+private struct TaskRowSurface: View {
+    @ObservedObject private var queue = AppTaskQueue.shared
+    var body: some View {
+        AppTaskBarHost()
+            .background(.bar)
+            .overlay(alignment: .top) {
+                if queue.hasActiveTasks { Divider() }
+            }
     }
 }

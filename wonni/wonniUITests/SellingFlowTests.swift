@@ -111,7 +111,7 @@ final class SellingFlowTests: XCTestCase {
         backButton.tap()
 
         // 4. Proceed to drafts
-        let proceedButton = app.buttons["Proceed"]
+        let proceedButton = app.buttons["cameraProceedButton"]
         XCTAssert(proceedButton.waitForExistence(timeout: 5), "Proceed button should exist")
         proceedButton.tap()
 
@@ -125,7 +125,7 @@ final class SellingFlowTests: XCTestCase {
         XCTAssert(draftCell.waitForExistence(timeout: 5), "At least one draft cell should exist")
 
         // 6. Tap Process button
-        let processButton = app.buttons["Process"]
+        let processButton = app.buttons["draftsProcessButton"]
         XCTAssert(processButton.exists, "Process button should exist")
         processButton.tap()
 
@@ -145,14 +145,14 @@ final class SellingFlowTests: XCTestCase {
         // real assertion (found 2026-09-15, CI run 35007555834).
 
         // 10. Wait for ProcessResultsOverviewView (Review & Publish sheet) to appear
-        let reviewTitle = app.staticTexts["Review & Publish"]
-        XCTAssert(reviewTitle.waitForExistence(timeout: 10), "Review & Publish sheet should appear")
+        let reviewTitle = app.navigationBars["Review"]
+        XCTAssert(reviewTitle.waitForExistence(timeout: 10), "Review screen should appear")
 
-        // 11. Verify Publish button is enabled
-        let publishButton = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Publish'")).firstMatch
-        XCTAssert(publishButton.exists && !publishButton.isHittable == false, "Publish button should be enabled")
+        // 11. Verify Continue (opens the publish sheet) is enabled
+        let publishButton = app.buttons["reviewContinueButton"]
+        XCTAssert(publishButton.exists && publishButton.isEnabled, "Continue should be enabled")
 
-        // 12. Tap Publish
+        // 12. Tap Continue
         publishButton.tap()
 
         // 13. Wait for PublishConfirmationSheet with platform toggles
@@ -379,40 +379,38 @@ final class SellingFlowTests: XCTestCase {
         XCTAssert(selectButton.waitForExistence(timeout: 5), "Select button should appear")
         selectButton.tap()
 
-        // Selection mode layout: Cancel fixed top-right with the "…" actions menu
-        // (Bulk Edit / Delete) beside it, Select All ⇄ Deselect All top-left. The menu
-        // is present the whole time and disabled (not hidden) with nothing selected.
+        // Selection mode layout (2026-11-19): Select All ⇄ Deselect All top-left, the "⋯"
+        // actions menu top-right only once something is selected, and Back turned into
+        // Cancel in the bottom bar, which never hides.
         let cancelButton = app.buttons["draftHistoryCancelButton"]
         let selectAllButton = app.buttons["draftHistorySelectAllButton"]
         let selectionMenu = app.buttons["draftHistorySelectionMenu"]
         XCTAssert(cancelButton.waitForExistence(timeout: 5), "Cancel should appear in selection mode")
         XCTAssert(selectAllButton.exists, "Select All should appear in selection mode")
-        XCTAssert(selectionMenu.waitForExistence(timeout: 5), "Actions menu should be in the nav bar: \(app.debugDescription)")
-        XCTAssertFalse(selectionMenu.isEnabled, "Actions menu should be disabled with nothing selected")
+        XCTAssertFalse(selectionMenu.exists, "Actions menu should be hidden with nothing selected")
         XCTAssertGreaterThan(
-            cancelButton.frame.minX, selectionMenu.frame.minX,
-            "Cancel must be the far-right item, with the actions menu to its left: cancel \(cancelButton.frame) vs menu \(selectionMenu.frame)"
+            cancelButton.frame.minY, selectAllButton.frame.maxY,
+            "Cancel lives in the bottom bar: cancel \(cancelButton.frame) vs select all \(selectAllButton.frame)"
         )
-        let cancelFrameBefore = cancelButton.frame
+        XCTAssert(app.buttons["draftsProcessButton"].exists, "The bottom bar stays while selecting")
 
-        // Select All -> menu enabled, leading flips, Cancel doesn't move.
+        // Select All -> menu appears, leading flips.
         selectAllButton.tap()
         let deselectAllButton = app.buttons["draftHistoryDeselectAllButton"]
         XCTAssert(deselectAllButton.waitForExistence(timeout: 5), "Select All should become Deselect All once everything is selected")
-        XCTAssert(selectionMenu.isEnabled, "Actions menu should be enabled with a selection")
-        XCTAssertEqual(cancelButton.frame, cancelFrameBefore, "Cancel must stay put while the selection changes")
+        XCTAssert(selectionMenu.waitForExistence(timeout: 5), "Actions menu should appear with a selection")
 
         // Deselect All -> back to the empty state, still in selection mode.
         deselectAllButton.tap()
         XCTAssert(selectAllButton.waitForExistence(timeout: 5), "Deselect All should flip back to Select All")
-        XCTAssertFalse(selectionMenu.isEnabled, "Actions menu should be disabled again after Deselect All")
+        XCTAssertFalse(selectionMenu.waitForExistence(timeout: 1), "Actions menu should hide again after Deselect All")
 
         // One whole draft -> Delete available, Bulk Edit not (needs two or more).
         let fullSelectToggle = app.descendants(matching: .any).matching(identifier: "draftFullSelectToggle").firstMatch
         XCTAssert(fullSelectToggle.waitForExistence(timeout: 5), "Full-select toggle should appear")
         fullSelectToggle.tap()
 
-        XCTAssert(selectionMenu.isEnabled, "Actions menu should be enabled with one draft selected")
+        XCTAssert(selectionMenu.waitForExistence(timeout: 5), "Actions menu should appear with one draft selected")
         XCTAssert(selectionMenu.isHittable, "Actions menu should be directly tappable: \(app.debugDescription)")
         selectionMenu.tap()
 
@@ -464,7 +462,7 @@ final class SellingFlowTests: XCTestCase {
         XCTAssert(backButton.waitForExistence(timeout: 5))
         backButton.tap()
 
-        let proceedButton = app.buttons["Proceed"]
+        let proceedButton = app.buttons["cameraProceedButton"]
         XCTAssert(proceedButton.waitForExistence(timeout: 5), "Proceed button should exist")
         proceedButton.tap()
 
@@ -492,7 +490,7 @@ final class SellingFlowTests: XCTestCase {
         // Go through flow to reach Review & Publish sheet
         // (abbreviated - full flow would be testPublishSingleListing)
 
-        let reviewTitle = app.staticTexts["Review & Publish"]
+        let reviewTitle = app.navigationBars["Review"]
         if reviewTitle.waitForExistence(timeout: 20) {
             // Find a title field
             let titleField = app.textFields.matching(NSPredicate(format: "placeholderValue CONTAINS 'title' OR placeholderValue CONTAINS 'Title'")).firstMatch
@@ -578,8 +576,9 @@ extension SellingFlowTests {
 
 extension SellingFlowTests {
     /// Regression (2026-11-19): the old floating pill covered the Photos screen's
-    /// Proceed button. The task bar now sits under the TabView, so Proceed must be
-    /// tappable and end above the bar's top edge.
+    /// Proceed button. The task row is now the top row of each screen's bottom toolbar
+    /// (above the tab bar, above Back · Continue), so Continue must be tappable and
+    /// start below the task row.
     func testTaskBarNeverCoversPickerProceed() throws {
         app.terminate()
         app.launchArguments += ["-uiTestingTaskBar"]
@@ -596,7 +595,7 @@ extension SellingFlowTests {
 
         let bar = app.descendants(matching: .any).matching(identifier: "appTaskBar").firstMatch
         XCTAssert(bar.waitForExistence(timeout: 10), "The fake task should show the task bar")
-        XCTAssertLessThanOrEqual(app.tabBars.firstMatch.frame.maxY, bar.frame.minY + 1, "Tab bar ends above the task bar")
+        XCTAssertLessThanOrEqual(bar.frame.maxY, app.tabBars.firstMatch.frame.minY + 1, "Task bar sits above the tab bar")
         let shotTab = XCTAttachment(screenshot: app.screenshot())
         shotTab.name = "task-bar-tab"; shotTab.lifetime = .keepAlways; add(shotTab)
 
@@ -611,7 +610,7 @@ extension SellingFlowTests {
         XCTAssert(proceed.waitForExistence(timeout: 5))
         XCTAssert(bar.exists, "The task bar stays on the Photos screen")
         XCTAssert(proceed.isHittable, "Proceed must not be covered by the task bar")
-        XCTAssertLessThanOrEqual(proceed.frame.maxY, bar.frame.minY + 1, "Proceed ends above the task bar")
+        XCTAssertLessThanOrEqual(bar.frame.maxY, proceed.frame.minY + 1, "Task row sits above Continue")
         let shotPicker = XCTAttachment(screenshot: app.screenshot())
         shotPicker.name = "task-bar-picker"; shotPicker.lifetime = .keepAlways; add(shotPicker)
     }

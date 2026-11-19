@@ -34,13 +34,10 @@ struct MainView: View {
     }
 
     var body: some View {
-        // The task bar sits UNDER the TabView, not over it: while a task runs the
-        // TabView is shorter, so no tab bar, toolbar or button can end up beneath
-        // the bar (see TaskBarView.swift).
-        VStack(spacing: 0) {
-            tabContent
-            AppTaskBarHost()
-        }
+        // The task bar is the top row of each screen's bottom toolbar (TaskBarView.swift):
+        // the four tab stacks get `.appTaskBarInset()` (row above the tab bar); every
+        // Sell-flow screen draws it inside its own `.bottomActionBar`.
+        tabContent
         // Cross-posting can't run while the app is closed (iOS suspends the web view),
         // so leaving mid-queue pauses it. These two hooks finish the listing in flight,
         // line up a "paused" notice, and on return offer to resume what's left.
@@ -82,10 +79,12 @@ struct MainView: View {
     @ViewBuilder private var tabContent: some View {
         TabView(selection: $uploadManager.selectedTab) {
             NavigationStack { HomeView() }
+                .appTaskBarInset()
                 .tabItem { Label("Home", systemImage: "house.fill") }
                 .tag(0)
 
             NavigationStack { SearchView() }
+                .appTaskBarInset()
                 .tabItem { Label("Search", systemImage: "magnifyingglass") }
                 .tag(1)
 
@@ -94,10 +93,12 @@ struct MainView: View {
                 .tag(2)
 
             NavigationStack { InboxView() }
+                .appTaskBarInset()
                 .tabItem { Label("Inbox", systemImage: "tray.fill") }
                 .tag(3)
 
             NavigationStack { ProfileView() }
+                .appTaskBarInset()
                 .tabItem { Label("Profile", systemImage: "person.crop.circle.fill") }
                 .tag(4)
         }
@@ -238,7 +239,7 @@ struct MainView: View {
         }
         // Mercari cross-post job (Q1/Q2): mounted invisibly so its WebView keeps running
         // headlessly and its fullScreenCover is available — the visible pill is now the
-        // single shared AppTaskQueue task bar (AppTaskBarHost, under the TabView), registered by
+        // single shared AppTaskQueue task row (TaskBarView.swift), registered by
         // UploadManager.checkAndStartNextWebJob.
         .background(
             Group {

@@ -32,6 +32,10 @@ struct DraftsView: View {
     @ObservedObject var photoCollection: PhotoCollection
     /// "+" on a draft: the host pushes a picker for that draft on top of this screen.
     let onAddPhotos: (UUID) -> Void
+    /// Pencil on a draft: the host pushes the Edit screen (`CameraRoute.edit`), so the
+    /// Sell flow's bottom bar stays on screen with Cancel · Save.
+    let onEdit: (UUID) -> Void
+    @Environment(\.dismiss) private var dismiss
 
     @State private var isSelectMode = false
     /// Selected photos as "draftID|assetID". A draft is "fully selected" when every one
@@ -46,7 +50,6 @@ struct DraftsView: View {
     @State private var showMoveTarget = false
     @State private var showDeleteConfirm = false
     @State private var skipAIMessage: String?
-    @State private var editingDraft: Item?
     @State private var choosingPhotosFor: Item?
 
     /// Every unpublished draft with photos. `deletedDraftIDs` drops a row the instant a
@@ -90,12 +93,11 @@ struct DraftsView: View {
                 draftList
             }
         }
-        .safeAreaInset(edge: .bottom) { bottomBar }
+        .bottomActionBar { bottomLeading } trailing: { processButton }
         .navigationTitle("Drafts")
         .navigationBarTitleDisplayMode(.inline)
-        // Selection mode is left via Cancel only — the back chevron would otherwise
-        // crowd Select All and pop the screen mid-selection.
-        .navigationBarBackButtonHidden(isSelectMode)
+        // Back lives in the bottom bar (and turns into Cancel while selecting).
+        .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .tabBar)
         .toolbar { toolbarContent }
         .toolbar {
@@ -146,10 +148,6 @@ struct DraftsView: View {
                 moveSelectedPhotos(to: target)
             }
         }
-        .sheet(item: $editingDraft) { draft in
-            DraftEditSheet(item: draft)
-                .environmentObject(uploadManager)
-        }
         .sheet(item: $choosingPhotosFor) { draft in
             DraftPhotoChooserSheet(item: draft)
                 .environmentObject(uploadManager)
@@ -190,7 +188,7 @@ struct DraftsView: View {
                         onToggleDraft: { toggleDraft(draft) },
                         onTogglePhoto: { assetId in togglePhoto(draft, assetId: assetId) },
                         onAddPhotos: { onAddPhotos(draft.id) },
-                        onEdit: { editingDraft = draft },
+                        onEdit: { onEdit(draft.id) },
                         onChoosePhotos: { choosingPhotosFor = draft }
                     )
                     .id(draft.id)
@@ -241,6 +239,9 @@ struct DraftsView: View {
 
     // MARK: - Toolbar
 
+    /// Top bar: (Select) · title · (⋯), user layout 2026-11-19. Select turns into Select
+    /// All / Deselect All; ⋯ holds the import actions, or the selection actions once
+    /// anything is selected.
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .navigationBarLeading) {
@@ -253,11 +254,15 @@ struct DraftsView: View {
                     Button("Deselect All") { selectedPhotos.removeAll() }
                         .accessibilityIdentifier("draftHistoryDeselectAllButton")
                 }
+            } else {
+                Button("Select") { isSelectMode = true }
+                    .disabled(drafts.isEmpty)
+                    .accessibilityIdentifier("draftHistorySelectButton")
             }
         }
         ToolbarItem(placement: .navigationBarTrailing) {
             if isSelectMode {
-                selectionActionsMenu
+                if !selectedPhotos.isEmpty { selectionActionsMenu }
             } else {
                 Menu {
                     Button {
@@ -272,20 +277,9 @@ struct DraftsView: View {
                         Label("Desktop Drafts", systemImage: "desktopcomputer")
                     }
                 } label: {
-                    Image(systemName: "tray.and.arrow.down")
+                    Image(systemName: "ellipsis.circle")
                 }
                 .accessibilityIdentifier("draftsImportMenu")
-            }
-        }
-        // Declared last so it is the outermost (far-right) item.
-        ToolbarItem(placement: .navigationBarTrailing) {
-            if isSelectMode {
-                Button("Cancel") { exitSelectMode() }
-                    .accessibilityIdentifier("draftHistoryCancelButton")
-            } else {
-                Button("Select") { isSelectMode = true }
-                    .disabled(drafts.isEmpty)
-                    .accessibilityIdentifier("draftHistorySelectButton")
             }
         }
     }
@@ -331,84 +325,33 @@ struct DraftsView: View {
 
     // MARK: - Bottom bar
 
-    @ViewBuilder
-    private var bottomBar: some View {
-        HStack(spacing: 12) {
-            if isSelectMode {
-                Text(selectionSummary)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer()
-                Button("Move to…") { showMoveTarget = true }
-                    .font(.subheadline.weight(.semibold))
-                    .disabled(selectedPhotos.isEmpty)
-                Button("Delete", role: .destructive) { showDeleteConfirm = true }
-                    .font(.subheadline.weight(.semibold))
-                    .disabled(selectedPhotos.isEmpty)
-            } else {
-                uploadStatus
-                Spacer()
-                processButton
-            }
+    /// ‹ Back, or a red Cancel that leaves select mode. The bar never hides.
+    @ViewBuilder private var bottomLeading: some View {
+        if isSelectMode {
+            Button("Cancel") { exitSelectMode() }
+                .buttonStyle(BottomBarButtonStyle(kind: .destructive))
+                .accessibilityIdentifier("draftHistoryCancelButton")
+        } else {
+            BackBarButton { dismiss() }
+                .accessibilityIdentifier("draftsBackButton")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.bar)
-        .overlay(Divider(), alignment: .top)
-    }
-
-    private var uploadStatus: some View {
-        HStack(spacing: 6) {
-            Text("\(drafts.count) draft\(drafts.count == 1 ? "" : "s")")
-            if uploadManager.isUploadingPhotos {
-                Image(systemName: "icloud.and.arrow.up")
-                ProgressView().scaleEffect(0.65).frame(width: 14, height: 14)
-            } else if !drafts.isEmpty {
-                Image(systemName: "checkmark.icloud.fill").foregroundStyle(.green)
-            }
-        }
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
     }
 
     private var processButton: some View {
         let processing = uploadManager.isProcessing
-        return Button {
+        return PrimaryBarButton(isBusy: processing) {
             // Start AI right away — Gemini reads the on-device photos, so it never waits
             // for the Storage upload; publish re-uploads anything that didn't finish.
             guard !processing, !drafts.isEmpty else { return }
             focusedField = nil
             uploadManager.processDrafts(drafts: drafts, modelContext: modelContext)
             showProcessFullScreen = true
-        } label: {
-            HStack(spacing: 6) {
-                Text(processing ? "Processing…" : "Process")
-                    .fontWeight(.semibold)
-                if !processing {
-                    Image(systemName: "chevron.right").font(.subheadline.weight(.semibold))
-                }
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 10)
         }
-        .buttonStyle(.borderedProminent)
-        .buttonBorderShape(.capsule)
-        .disabled(processing || drafts.isEmpty)
+        .disabled(processing || drafts.isEmpty || isSelectMode)
         .accessibilityIdentifier("draftsProcessButton")
     }
 
     // MARK: - Selection
-
-    private var selectionSummary: String {
-        let photos = selectedPhotos.count
-        let whole = fullySelectedDrafts.count
-        if photos == 0 { return "Select photos or drafts" }
-        if whole > 0 && fullySelectedDrafts.reduce(0, { $0 + $1.sourceAssetIdentifiers.count }) == photos {
-            return "\(whole) draft\(whole == 1 ? "" : "s") selected"
-        }
-        return "\(photos) photo\(photos == 1 ? "" : "s") selected"
-    }
 
     private var deleteSummary: String {
         let whole = fullySelectedDrafts.count

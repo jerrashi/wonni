@@ -273,19 +273,6 @@ struct CustomPhotoPickerView: View {
             .navigationBarBackButtonHidden(true)
             .toolbar(.hidden, for: .tabBar)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    // Pops this screen. Where that lands (camera or drafts drawer) is
-                    // whatever is under it on the path, so the label is just "Back".
-                    Button {
-                        dismiss()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                            Text("Back")
-                        }
-                    }
-                    .accessibilityIdentifier("pickerBackButton")
-                }
                 // "Hide previously selected" lives up here (2026-10-10); the row it used
                 // to take above the grid is gone. The "paste a list" button left this
                 // screen — the camera and the Drafts screen both have it.
@@ -301,29 +288,22 @@ struct CustomPhotoPickerView: View {
                         .accessibilityIdentifier("pickerHideUsedToggle")
                     }
                 }
-                // Primary action at the bottom (iOS 26 convention, agreed 2026-10-10).
-                ToolbarItem(placement: .bottomBar) {
-                    let hasActiveDraft = !(activeDraft?.sourceAssetIdentifiers.isEmpty ?? true)
-                    let canProceed = hasActiveDraft || !committedDrafts.isEmpty
-                    HStack {
-                        Spacer()
-                        Button {
-                            if hasActiveDraft {
-                                uploadManager.commitActiveDraft(modelContext: modelContext)
-                            }
-                            onProceed()
-                        } label: {
-                            HStack(spacing: 6) {
-                                Text("Proceed").fontWeight(.semibold)
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 20))
-                                    .foregroundColor(canProceed ? .green : .secondary)
-                            }
-                        }
-                        .disabled(!canProceed)
-                        .accessibilityIdentifier("pickerProceedButton")
+            }
+            // Bottom toolbar: ‹ Back · Continue only (2026-11-19). Back pops this screen;
+            // where that lands (camera or drafts) is whatever is under it on the path.
+            .bottomActionBar {
+                BackBarButton { dismiss() }
+                    .accessibilityIdentifier("pickerBackButton")
+            } trailing: {
+                let hasActiveDraft = !(activeDraft?.sourceAssetIdentifiers.isEmpty ?? true)
+                PrimaryBarButton {
+                    if hasActiveDraft {
+                        uploadManager.commitActiveDraft(modelContext: modelContext)
                     }
+                    onProceed()
                 }
+                .disabled(!(hasActiveDraft || !committedDrafts.isEmpty))
+                .accessibilityIdentifier("pickerProceedButton")
             }
             // Whenever this screen is on top — first push, or a pop back onto it from
             // the drafts drawer — its draft is the one the carousel and grid edit.
@@ -460,8 +440,13 @@ struct VisionTitleSuggestionChip: View {
     }
 }
 
+/// The Edit screen for one draft. Pushed inside the Sell flow (`embedded`, via
+/// `DraftEditRoute`) so the bottom bar stays with Cancel · Save; elsewhere it is still a
+/// sheet with its own NavigationStack and the same bottom bar. Nothing in the top bar
+/// (user layout 2026-11-19); Templates is a row at the end of the form.
 struct DraftEditSheet: View {
     let item: Item
+    var embedded: Bool = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @StateObject private var settingsRepo = SellingSettingsRepository.shared
@@ -501,7 +486,15 @@ struct DraftEditSheet: View {
     @State private var showVariantsEditor = false
 
     var body: some View {
-        NavigationStack {
+        if embedded {
+            content
+        } else {
+            NavigationStack { content }
+        }
+    }
+
+    private var content: some View {
+        Group {
             Form {
                 Section {
                     VStack(alignment: .leading, spacing: 10) {
@@ -749,28 +742,30 @@ struct DraftEditSheet: View {
                     }
                     .padding(.vertical, 4)
                 }
-            }
-            .navigationTitle("Edit Draft")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .bottomBar) {
+
+                Section {
                     Button {
                         showTemplatePicker = true
                     } label: {
-                        Label("Templates", systemImage: "doc.on.doc")
-                            .font(.caption.weight(.semibold))
+                        Label("Apply a Template…", systemImage: "doc.on.doc")
                     }
+                    .accessibilityIdentifier("draftEditTemplatesButton")
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") {
-                        saveToDraft()
-                        dismiss()
-                    }
-                    .fontWeight(.semibold)
+            }
+            .navigationTitle("Edit")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarBackButtonHidden(true)
+            .toolbar(.hidden, for: .tabBar)
+            .bottomActionBar {
+                Button("Cancel") { dismiss() }
+                    .buttonStyle(BottomBarButtonStyle(kind: .secondary))
+                    .accessibilityIdentifier("draftEditCancelButton")
+            } trailing: {
+                PrimaryBarButton(title: "Save") {
+                    saveToDraft()
+                    dismiss()
                 }
+                .accessibilityIdentifier("draftEditSaveButton")
             }
             .sheet(isPresented: $showTemplatePicker) {
                 TemplatePickerSheet { template in
@@ -1050,24 +1045,32 @@ struct ProcessResultsOverviewView: View {
             })
             .onAppear { selectedIDs = Set(results.map { $0.id }) }
 
-            // ── Bottom action bar ────────────────────────────────────────
-            // The Mercari autofill pill lives in MainView, underneath this sheet — surface
-            // its activity here so the user isn't staring at a seemingly frozen screen.
-            if uploadManager.globalMercariJob != nil {
-                HStack(spacing: 10) {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                    Text("Posting to Mercari in the background…")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 8)
-                .background(Color.purple.opacity(0.08))
+        }
+        .navigationTitle("Review")
+        .navigationBarTitleDisplayMode(.inline)
+        // Bottom toolbar: ‹ Back · Continue (2026-11-19). Back returns to the camera with
+        // drafts saved (spec N4); safe mid-publish since the continuation lives on
+        // UploadManager. Continue opens the publish sheet. The old "Posting to Mercari
+        // in the background…" strip is gone: the task row in this bar shows it.
+        .bottomActionBar {
+            BackBarButton {
+                uploadManager.showResultsOverview = false
+                uploadManager.returnToCameraRoot = true
             }
-            Divider()
-            HStack(spacing: 16) {
+            .accessibilityIdentifier("reviewBackButton")
+        } trailing: {
+            PrimaryBarButton(isBusy: uploadManager.isUploadingPhotos || uploadManager.isPublishing) {
+                focusedField = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    uploadManager.publishConfirmationSheetVisible = true
+                    showPublishConfirmation = true
+                }
+            }
+            .disabled(results.isEmpty || uploadManager.isUploadingPhotos || uploadManager.isPublishing)
+            .accessibilityIdentifier("reviewContinueButton")
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
                 Button(selectedIDs.count == results.count ? "Deselect All" : "Select All") {
                     if selectedIDs.count == results.count {
                         selectedIDs.removeAll()
@@ -1075,59 +1078,8 @@ struct ProcessResultsOverviewView: View {
                         selectedIDs = Set(results.map { $0.id })
                     }
                 }
-                .font(.subheadline)
-
-                Spacer()
-
-                Button {
-                    focusedField = nil
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        uploadManager.publishConfirmationSheetVisible = true
-                        showPublishConfirmation = true
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        let busy = uploadManager.isUploadingPhotos || uploadManager.isPublishing
-                        let countLabel: String = selectedIDs.isEmpty ? "All" : "\(selectedIDs.count)"
-                        let buttonLabel: String = uploadManager.isPublishing ? "Publishing…" : uploadManager.isUploadingPhotos ? "Uploading Photos…" : "Publish \(countLabel)"
-                        if busy {
-                            ProgressView()
-                                .tint(.white)
-                                .scaleEffect(0.8)
-                        }
-                        Text(buttonLabel)
-                        .fontWeight(.semibold)
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 10)
-                    .background(
-                        (uploadManager.isUploadingPhotos || uploadManager.isPublishing) ? Color.secondary : Color.accentColor,
-                        in: RoundedRectangle(cornerRadius: 10)
-                    )
-                }
-                .disabled(results.isEmpty || uploadManager.isUploadingPhotos || uploadManager.isPublishing)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .background(.bar)
-        }
-        .navigationTitle("Review & Publish")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            // Spec N4: full-screen view with an explicit way back — returns to the
-            // camera with drafts saved. Safe even mid-publish: the continuation lives
-            // on UploadManager (Phase 3) and the queue pill re-opens this view.
-            ToolbarItem(placement: .navigationBarLeading) {
-                Button {
-                    uploadManager.showResultsOverview = false
-                    uploadManager.returnToCameraRoot = true
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                        Text("Back")
-                    }
-                }
+                .disabled(results.isEmpty)
+                .accessibilityIdentifier("reviewSelectAllButton")
             }
             ToolbarItemGroup(placement: .keyboard) {
                 let atFirst: Bool = focusedIndex == nil || focusedIndex == 0
@@ -2145,3 +2097,21 @@ struct PublishedRow: View {
 }
 
 
+
+/// `CameraRoute.edit` destination: looks the draft up by id so the route stays a plain
+/// value on the Sell tab's path.
+struct DraftEditRoute: View {
+    @Query private var items: [Item]
+
+    init(draftID: UUID) {
+        _items = Query(filter: #Predicate<Item> { $0.id == draftID })
+    }
+
+    var body: some View {
+        if let item = items.first {
+            DraftEditSheet(item: item, embedded: true)
+        } else {
+            ContentUnavailableView("Draft not found", systemImage: "doc.questionmark")
+        }
+    }
+}

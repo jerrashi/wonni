@@ -19,6 +19,9 @@ enum CameraRoute: Hashable {
     /// The one drafts screen (`DraftsView`): photo strips with "+", inline title and
     /// price, Select mode, Process. Both the carousels' stack icon and Proceed land here.
     case drafts
+    /// The Edit screen for one draft (the pencil on Drafts). A push, not a sheet, so the
+    /// bottom bar stays with Cancel · Save in Back · Continue's places (2026-11-19).
+    case edit(UUID)
 }
 
 struct CameraView: View {
@@ -99,9 +102,9 @@ struct CameraView: View {
                     )
                 }
                 cameraButtonsView()
-                if hasAnyContent { proceedBar }
+                    .padding(.bottom, 4)
+                proceedBar
             }
-            .padding(.bottom, 12)
             .frame(maxWidth: .infinity)
             .background(Color.black)
         }
@@ -186,7 +189,11 @@ struct CameraView: View {
                 // "<" from it lands back here. This screen stays in the path underneath.
                 DraftsView(photoCollection: model.photoCollection, onAddPhotos: { draftID in
                     path.append(.picker(draftID))
+                }, onEdit: { draftID in
+                    path.append(.edit(draftID))
                 })
+            case .edit(let draftID):
+                DraftEditRoute(draftID: draftID)
             }
         }
         .onChange(of: uploadManager.shouldReturnToRoot) { _, should in
@@ -257,29 +264,8 @@ struct CameraView: View {
     // MARK: - Top bar
 
     private func topBarView(safeTop: CGFloat) -> some View {
+        // Back moved to the bottom bar (2026-11-19); the top keeps only List.
         HStack(alignment: .center) {
-            Button {
-                // Commit active draft if it has photos (no dialog — drafts save silently).
-                // An empty active draft (no photos taken yet) is left as-is; it will be
-                // cleaned up automatically at session end if never committed.
-                if hasActiveDraft {
-                    uploadManager.commitActiveDraft(modelContext: modelContext)
-                }
-                uploadManager.selectedTab = 0
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 16, weight: .semibold))
-                    Text("Back")
-                        .font(.body.weight(.medium))
-                }
-                .foregroundColor(.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(.black.opacity(0.45))
-                .clipShape(Capsule())
-            }
-
             Spacer()
 
             Button {
@@ -303,36 +289,32 @@ struct CameraView: View {
         .padding(.top, safeTop + 8)
     }
 
-    // MARK: - Proceed (bottom bar)
+    // MARK: - Bottom bar
 
-    /// Primary action lives at the bottom (2026-10-10, iOS 26 convention; the user
-    /// chose to keep the flip-camera button in the shutter row and give Proceed a row
-    /// of its own). Commits the active draft, then pushes the Drafts screen.
+    /// The Sell flow's bottom toolbar (TaskBarView.swift): ‹ Back leaves the Sell tab,
+    /// Continue commits the active draft and pushes Drafts. Flip camera stays in the
+    /// shutter row. Dark-schemed so the bar material reads on the black camera.
     private var proceedBar: some View {
-        HStack {
-            Spacer()
-            Button {
+        BottomActionBar {
+            BackBarButton {
+                // Commit the active draft if it has photos (drafts save silently).
+                if hasActiveDraft {
+                    uploadManager.commitActiveDraft(modelContext: modelContext)
+                }
+                uploadManager.selectedTab = 0
+            }
+            .accessibilityIdentifier("cameraBackButton")
+        } trailing: {
+            PrimaryBarButton {
                 if hasActiveDraft {
                     uploadManager.commitActiveDraft(modelContext: modelContext)
                 }
                 path.append(.drafts)
-            } label: {
-                HStack(spacing: 6) {
-                    Text("Proceed")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.white)
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 22))
-                        .foregroundColor(.green)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(.white.opacity(0.14))
-                .clipShape(Capsule())
             }
+            .disabled(!hasAnyContent)
             .accessibilityIdentifier("cameraProceedButton")
         }
-        .padding(.horizontal, 20)
+        .environment(\.colorScheme, .dark)
     }
 
     // MARK: - Bottom camera buttons
