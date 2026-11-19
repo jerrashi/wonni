@@ -664,3 +664,182 @@ test("regression: a failed take-home refetch never undoes the status move that a
   assert.deepEqual(result, { success: true });
   assert.equal(db.peek("sales", "s1").status, "returned");
 });
+
+// ── listings/{id} mirror (the iOS app's Sold Out section reads this doc) ─────
+
+function appListing(overrides = {}) {
+  return { userId: UID, status: "active", quantity: 3, ...overrides };
+}
+
+test("regression: mark sold out moves the app's listing to sold with quantity 0", async () => {
+  // Bug 2026-11-18: only products/{id} was written, so the listing stayed in
+  // the app's active list at its old quantity.
+  const db = new FakeFirestore({ products: { p1: plainProduct() }, listings: { p1: appListing() } });
+  await applyQuantityDelta(db, "p1", UID, null, 0, { zeroAll: true });
+  const listing = db.peek("listings", "p1");
+  assert.equal(listing.status, "sold");
+  assert.equal(listing.quantity, 0);
+  assert.ok(listing.soldAt instanceof Date);
+});
+
+test("listing mirror: a sale that leaves stock updates quantity and stays active", async () => {
+  const db = new FakeFirestore({ products: { p1: plainProduct() }, listings: { p1: appListing() } });
+  await applyQuantityDelta(db, "p1", UID, null, -1);
+  const listing = db.peek("listings", "p1");
+  assert.equal(listing.status, "active");
+  assert.equal(listing.quantity, 2);
+  assert.equal(listing.soldAt, undefined);
+});
+
+test("listing mirror: the last unit sold moves it to sold", async () => {
+  const db = new FakeFirestore({
+    products: { p1: plainProduct({ quantity: 1 }) },
+    listings: { p1: appListing({ quantity: 1 }) },
+  });
+  await applyQuantityDelta(db, "p1", UID, null, -1);
+  assert.equal(db.peek("listings", "p1").status, "sold");
+});
+
+test("listing mirror: restock returns a sold listing to active and clears soldAt", async () => {
+  const db = new FakeFirestore({
+    products: { p1: plainProduct({ quantity: 0, saleStatus: "sold" }) },
+    listings: { p1: appListing({ status: "sold", quantity: 0, soldAt: new Date(0) }) },
+  });
+  await applyQuantityDelta(db, "p1", UID, null, 0, { force: 4 });
+  const listing = db.peek("listings", "p1");
+  assert.equal(listing.status, "active");
+  assert.equal(listing.quantity, 4);
+  assert.equal("soldAt" in listing, false);
+});
+
+test("listing mirror: per-variant stock mirrors the total left across active variants", async () => {
+  const db = new FakeFirestore({ products: { p1: variantProduct() }, listings: { p1: appListing({ quantity: 6 }) } });
+  await applyQuantityDelta(db, "p1", UID, "TEE-S", -1);
+  const listing = db.peek("listings", "p1");
+  assert.equal(listing.quantity, 5);
+  assert.equal(listing.status, "active");
+});
+
+test("listing mirror: a draft keeps its draft status", async () => {
+  const db = new FakeFirestore({ products: { p1: plainProduct() }, listings: { p1: appListing({ status: "draft" }) } });
+  await applyQuantityDelta(db, "p1", UID, null, 0, { zeroAll: true });
+  const listing = db.peek("listings", "p1");
+  assert.equal(listing.status, "draft");
+  assert.equal(listing.quantity, 0);
+});
+
+test("listing mirror: a product with no listing doc still works (web-only product)", async () => {
+  const db = new FakeFirestore({ products: { p1: plainProduct() } });
+  const r = await applyQuantityDelta(db, "p1", UID, null, 0, { zeroAll: true });
+  assert.equal(r.soldOut, true);
+  assert.equal(db.peek("listings", "p1"), undefined);
+});
+
+test("listing mirror: never writes a listing doc owned by someone else", async () => {
+  const db = new FakeFirestore({
+    products: { p1: plainProduct() },
+    listings: { p1: appListing({ userId: "someone_else" }) },
+  });
+  await applyQuantityDelta(db, "p1", UID, null, 0, { zeroAll: true });
+  const listing = db.peek("listings", "p1");
+  assert.equal(listing.status, "active");
+  assert.equal(listing.quantity, 3);
+});
+
+// ── eBay push during mark-sold-out (2026-11-19) ──────────────────────────────
+// Live logs 2026-11-17/18: both mark-sold-out runs hit eBay 25002 "You are not
+// allowed to revise an ended item" (the items had sold on Mercari and the eBay
+// listings were already ended), the failure was swallowed, and Wonni kept
+// showing eBay as active.
+
+const ENDED_BODY = {
+  responses: [{
+    statusCode: 400, sku: "p1", offerId: "311390543011",
+    errors: [{ errorId: 25002, message: 'A user error has occurred. You are not allowed to revise an ended item "137841529712".' }],
+  }],
+};
+
+function ebayProduct(overrides = {}) {
+  return plainProduct({
+    quantity: 0,
+    ebayOfferId: "311390543011",
+    ebayListingId: "137841529712",
+    crossPostStatus: { ebay: "active", mercari: "active" },
+    crossPostListingIds: { ebay: "137841529712", mercari: "m1" },
+    ...overrides,
+  });
+}
+
+function withEbay(fn) {
+  _internal.setEbayRequest(fn);
+  return () => _internal.setEbayRequest(null);
+}
+
+test("regression: an ended eBay listing counts as already sold out and stops showing as live", async () => {
+  const restore = withEbay(async () => {
+    const e = new Error("eBay API error (400)");
+    e.body = ENDED_BODY;
+    throw e;
+  });
+  try {
+    const product = ebayProduct();
+    const db = new FakeFirestore({ products: { p1: product } });
+    const r = await cascade(db, UID, product, "p1", { variantSku: null, newQuantity: 0, soldOut: true, soldOnPlatform: null });
+    assert.equal(r.platforms.ebay, "ended");
+    assert.deepEqual(r.errors, {});
+    const stored = db.peek("products", "p1");
+    assert.equal(stored.crossPostStatus.ebay, undefined);
+    assert.equal(stored.crossPostListingIds.ebay, undefined);
+    assert.equal(stored.ebayListingId, undefined);
+    assert.equal(stored.ebayOfferId, "311390543011", "offer pointer kept for a re-post");
+    assert.equal(stored.crossPostStatus.mercari, "active", "other platforms untouched");
+  } finally { restore(); }
+});
+
+test("regression: a per-item bulk error inside an HTTP 200 is a failure, not 'updated'", async () => {
+  const restore = withEbay(async () => ({
+    responses: [{ statusCode: 500, errors: [{ errorId: 25001, message: "System error" }] }],
+  }));
+  try {
+    const product = ebayProduct();
+    const db = new FakeFirestore({ products: { p1: product } });
+    const r = await cascade(db, UID, product, "p1", { variantSku: null, newQuantity: 0, soldOut: true, soldOnPlatform: null });
+    assert.equal(r.platforms.ebay, "failed");
+    assert.equal(r.errors.ebay, "System error");
+    assert.equal(db.peek("products", "p1").crossPostStatus.ebay, "active", "a real failure keeps the listing live");
+  } finally { restore(); }
+});
+
+test("cascade: skipPlatforms leaves eBay and Mercari alone", async () => {
+  let called = false;
+  const restore = withEbay(async () => { called = true; return { responses: [] }; });
+  try {
+    const product = ebayProduct();
+    const db = new FakeFirestore({ products: { p1: product } });
+    const r = await cascade(db, UID, product, "p1", {
+      variantSku: null, newQuantity: 0, soldOut: true, soldOnPlatform: null, skipPlatforms: ["ebay", "mercari"],
+    });
+    assert.equal(called, false);
+    assert.equal(r.platforms.ebay, "skipped");
+    assert.equal(r.platforms.mercari, "skipped");
+    assert.equal(db.peek("products", "p1").pendingMercariDeactivation, undefined);
+  } finally { restore(); }
+});
+
+test("regression: mark-sold-out on a per-variant product zeroes every variant's eBay offer", async () => {
+  // Before: variantSku null fell through to a productId SKU lookup that doesn't
+  // exist for a multi-variant listing, so eBay was silently skipped.
+  const sent = [];
+  const restore = withEbay(async (_uid, _m, _p, body) => { sent.push(...body.requests); return { responses: [] }; });
+  try {
+    const product = plainProduct({
+      hasVariants: true, quantityVariesByVariant: true,
+      variants: [
+        { id: "vS", sku: "TEE-S", quantity: 0, active: true, ebayOfferId: "o1", ebayVariantSku: "p1vS" },
+        { id: "vM", sku: "TEE-M", quantity: 0, active: true, ebayOfferId: "o2", ebayVariantSku: "p1vM" },
+      ],
+    });
+    assert.equal(await _internal.pushEbayQuantity(UID, product, "p1", null, 0), "updated");
+    assert.deepEqual(sent.map((r) => [r.offers[0].offerId, r.offers[0].availableQuantity]), [["o1", 0], ["o2", 0]]);
+  } finally { restore(); }
+});

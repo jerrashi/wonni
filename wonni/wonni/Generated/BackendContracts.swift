@@ -6935,9 +6935,11 @@ extension ListingFields {
 // MARK: - MarkSoldOutAndCascadeRequest
 struct MarkSoldOutAndCascadeRequest: Codable, Equatable, Sendable {
     let productId: String
+    let skipPlatforms: [SkipPlatform]?
 
     enum CodingKeys: String, CodingKey {
         case productId = "productId"
+        case skipPlatforms = "skipPlatforms"
     }
 }
 
@@ -6960,10 +6962,12 @@ extension MarkSoldOutAndCascadeRequest {
     }
 
     func with(
-        productId: String? = nil
+        productId: String? = nil,
+        skipPlatforms: [SkipPlatform]?? = nil
     ) -> MarkSoldOutAndCascadeRequest {
         return MarkSoldOutAndCascadeRequest(
-            productId: productId ?? self.productId
+            productId: productId ?? self.productId,
+            skipPlatforms: skipPlatforms ?? self.skipPlatforms
         )
     }
 
@@ -6976,6 +6980,13 @@ extension MarkSoldOutAndCascadeRequest {
     }
 }
 
+enum SkipPlatform: String, Codable, Equatable, Sendable {
+    case ebay = "ebay"
+    case etsy = "etsy"
+    case mercari = "mercari"
+    case tiktok = "tiktok"
+}
+
 //
 // Hashable or Equatable:
 // The compiler will not be able to synthesize the implementation of Hashable or Equatable
@@ -6984,9 +6995,13 @@ extension MarkSoldOutAndCascadeRequest {
 
 // MARK: - MarkSoldOutAndCascadeResponse
 struct MarkSoldOutAndCascadeResponse: Codable, Equatable, Sendable {
+    let errors: [String: String]?
+    let platforms: [String: String]?
     let success: Bool
 
     enum CodingKeys: String, CodingKey {
+        case errors = "errors"
+        case platforms = "platforms"
         case success = "success"
     }
 }
@@ -7010,9 +7025,13 @@ extension MarkSoldOutAndCascadeResponse {
     }
 
     func with(
+        errors: [String: String]?? = nil,
+        platforms: [String: String]?? = nil,
         success: Bool? = nil
     ) -> MarkSoldOutAndCascadeResponse {
         return MarkSoldOutAndCascadeResponse(
+            errors: errors ?? self.errors,
+            platforms: platforms ?? self.platforms,
             success: success ?? self.success
         )
     }

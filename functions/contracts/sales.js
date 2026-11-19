@@ -266,8 +266,18 @@ module.exports = {
     {
       name: "markSoldOutAndCascade",
       summary: "Force quantity 0 + status sold, cascade deactivation everywhere.",
-      request: z.object({ productId: ProductIdSchema }),
-      response: z.object({ success: z.literal(true) }),
+      request: z.object({
+        productId: ProductIdSchema,
+        /** Platforms the seller already marked sold out by hand: left untouched. */
+        skipPlatforms: z.array(z.enum(["ebay", "etsy", "tiktok", "mercari"])).optional(),
+      }),
+      response: z.object({
+        success: z.literal(true),
+        /** Per platform: updated | skipped | failed | ended (eBay listing was already gone) | pending-manual. */
+        platforms: z.record(z.string(), z.string()).optional(),
+        /** Why a platform failed, keyed like `platforms`. */
+        errors: z.record(z.string(), z.string()).optional(),
+      }),
     },
     {
       name: "syncSales",

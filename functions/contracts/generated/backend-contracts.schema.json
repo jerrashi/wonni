@@ -812,6 +812,18 @@
         "productId": {
           "type": "string",
           "minLength": 1
+        },
+        "skipPlatforms": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "ebay",
+              "etsy",
+              "tiktok",
+              "mercari"
+            ]
+          }
         }
       },
       "required": [
@@ -824,6 +836,24 @@
         "success": {
           "type": "boolean",
           "const": true
+        },
+        "platforms": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "errors": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "required": [

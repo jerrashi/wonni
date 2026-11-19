@@ -538,6 +538,27 @@ differ; the "reconciled" lines say what changed. Nothing here is built yet.
   not worth a per-run control), and a run under Delete asks once per run:
   "Delete out-of-stock listings on Mercari?".
 
+- **Reworked 2026-11-18 (device run pending).** The Mercari step no longer searches the
+  active-listings tab. `MercariListingStateAutomator` opens `/us/item/{id}/`, reads the live
+  status and applies `SoldOutPlan.mercariDecision`: active → the preference; inactive →
+  nothing (Deactivate) or delete (Delete); sold → nothing; "no longer for sale" → nothing
+  (Deactivate) or delete if the edit page still exists (Delete); unreadable → fail, never act.
+  The Deactivate / Delete labels are assumed, not captured from Mercari; a miss fails with
+  the buttons found on the page. `applyQuantityDelta` now mirrors stock to `listings/{id}`
+  (quantity, active <-> sold, soldAt), which is what the app's Sold Out section reads.
+- **Skip + eBay fixes 2026-11-19 (device run pending).** One confirm sheet for every
+  entry point (`SoldOutConfirmSheet`, via `SoldOutRunner.requestMarkSoldOut`): a toggle per
+  platform the selection is on, all on each time; off = `skipPlatforms` on
+  `markSoldOutAndCascade` (the cascade leaves that platform alone, no Mercari flags) and a
+  skipped Mercari step. The progress list has Skip on the Mercari step (queued, running,
+  failed — a failed one re-runs with Mercari skipped, so stock goes back to 0) and on
+  API platforms the server reported failed. `markSoldOutAndCascade` now returns
+  `{platforms, errors}`. eBay: per-item errors in a `bulk_update_price_quantity` reply were
+  ignored (an HTTP 200/400 with `responses[].statusCode` 400 counted as updated); an ended
+  listing (25002 "not allowed to revise an ended item", seen live 2026-11-17/18 on two items
+  sold on Mercari) is now `ended`: live-listing fields cleared, offer pointers kept, counts
+  as done. A per-variant product (no shared pool) used to skip eBay entirely on
+  mark-sold-out; every variant offer now goes to 0.
 - **Built 2026-11-02 (iOS; device run pending).** `Data/SoldOutRun.swift` (rules +
   `SoldOutRunStore`, tests `SoldOutPlanTests`), `Data/SoldOutRunner.swift` (the
   loop: `markSoldOutAndCascade` → `MercariListingStateAutomator` with 60 s timeout

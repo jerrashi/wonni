@@ -88,7 +88,18 @@ class FakeDoc {
   async update(patch) {
     const cur = this._parentCollection.store.get(this.id);
     if (!cur) throw new Error(`update() on missing doc ${this._parentCollection.name}/${this.id}`);
-    applyPatch(cur, patch);
+    // Real update() reads "a.b" as a nested field path (map keys only — the code
+    // never writes numeric array paths). Walk those; plain keys merge as before.
+    for (const [k, v] of Object.entries(patch)) {
+      if (!k.includes(".")) { applyPatch(cur, { [k]: v }); continue; }
+      const parts = k.split(".");
+      let node = cur;
+      for (const part of parts.slice(0, -1)) {
+        if (node[part] == null || typeof node[part] !== "object") node[part] = {};
+        node = node[part];
+      }
+      applyPatch(node, { [parts[parts.length - 1]]: v });
+    }
   }
 }
 

@@ -62,6 +62,26 @@ function resolveStock(product, variantSku) {
 }
 
 /**
+ * The iOS app lists stock from `listings/{id}` (its Sold Out section queries
+ * `status == "sold"`), while every stock change lands on `products/{id}`. This
+ * is the patch that keeps the listing in step. Null when there is no listing to
+ * touch. Drafts keep their status: only active <-> sold moves.
+ */
+function listingStockPatch(listing, uid, remaining) {
+  if (!listing || listing.userId !== uid) return null;
+  const { FieldValue } = admin.firestore;
+  const patch = { quantity: remaining, updatedAt: FieldValue.serverTimestamp() };
+  if (remaining <= 0 && listing.status === "active") {
+    patch.status = "sold";
+    patch.soldAt = FieldValue.serverTimestamp();
+  } else if (remaining > 0 && listing.status === "sold") {
+    patch.status = "active";
+    patch.soldAt = FieldValue.delete();
+  }
+  return patch;
+}
+
+/**
  * Apply a signed delta to the right stock bucket, read-modify-write the whole
  * `variants` array (NEVER a dotted `variants.0.x` path — that clobbers the
  * array into a map). Runs in a transaction. Returns
@@ -74,6 +94,14 @@ async function applyQuantityDelta(db, productId, uid, variantSku, delta, { force
     if (!snap.exists) throw new HttpsError("not-found", "Product not found.");
     const product = snap.data();
     if (product.userId !== uid) throw new HttpsError("permission-denied", "Not your product.");
+
+    // Read before any write: Firestore transactions require it.
+    const listingRef = db.collection("listings").doc(productId);
+    const listingSnap = await tx.get(listingRef);
+    const mirrorToListing = (remaining) => {
+      const patch = listingStockPatch(listingSnap.exists ? listingSnap.data() : null, uid, remaining);
+      if (patch) tx.update(listingRef, patch);
+    };
 
     const variants = Array.isArray(product.variants) ? product.variants : [];
     const isVariantProduct = product.hasVariants === true || variants.length > 0;
@@ -94,6 +122,7 @@ async function applyQuantityDelta(db, productId, uid, variantSku, delta, { force
       }
       update.saleStatus = "sold";
       tx.update(ref, update);
+      mirrorToListing(0);
       return { previousQuantity: null, newQuantity: 0, soldOut: true, variantSku, product: { ...product, ...update } };
     }
 
@@ -106,6 +135,7 @@ async function applyQuantityDelta(db, productId, uid, variantSku, delta, { force
     const previousQuantity = qty;
     const newQuantity = force != null ? Math.max(0, force) : Math.max(0, qty + delta);
     const soldOut = newQuantity <= 0;
+    let remaining = newQuantity;
 
     if (scope === "variant") {
       const nextVariants = variants.map((v, i) =>
@@ -116,35 +146,76 @@ async function applyQuantityDelta(db, productId, uid, variantSku, delta, { force
       const anyLeft = nextVariants.some((v) => v.active !== false && Number(v.quantity) > 0);
       if (!anyLeft) update.saleStatus = "sold";
       else if (product.saleStatus === "sold") update.saleStatus = "active";
+      remaining = nextVariants
+        .filter((v) => v.active !== false)
+        .reduce((sum, v) => sum + Math.max(0, Number(v.quantity) || 0), 0);
     } else {
       update.quantity = newQuantity;
       update.saleStatus = soldOut ? "sold" : "active";
     }
 
     tx.update(ref, update);
+    mirrorToListing(remaining);
     return { previousQuantity, newQuantity, soldOut, variantSku, product: { ...product, ...update } };
   });
 }
 
 // ── per-platform quantity push ─────────────────────────────────────────────
 
+/** eBay refused because the listing has already ended (sold, ended by hand, or
+ *  closed by eBay at quantity 0). Seen live 2026-11-17/18 on mark-sold-out:
+ *  errorId 25002 "You are not allowed to revise an ended item". */
+class EbayListingEndedError extends Error {}
+
+/** eBay transport; tests swap it via _internal.setEbayRequest. */
+let ebayCall = ebayRequest;
+
+function isEndedItemError(e) {
+  return Number(e?.errorId) === 25002 && /ended item/i.test(String(e?.message || ""));
+}
+
+/**
+ * `bulk_update_price_quantity`, with its per-item results checked. eBay answers a
+ * bulk call 200 (or 207 / 400) with `responses[i].statusCode` + `errors` per item,
+ * so an HTTP success alone said nothing: a failed item used to count as "updated".
+ * Throws EbayListingEndedError when every failing item is an ended listing.
+ */
+async function ebayBulkQuantity(uid, requests) {
+  for (const batch of chunk(requests)) {
+    let body;
+    try {
+      body = await ebayCall(uid, "POST", "/sell/inventory/v1/bulk_update_price_quantity", { requests: batch });
+    } catch (e) {
+      if (!Array.isArray(e?.body?.responses)) throw e;
+      body = e.body;
+    }
+    const failed = (body?.responses || []).filter((r) => Number(r?.statusCode) >= 400);
+    if (!failed.length) continue;
+    const errors = failed.flatMap((r) => (Array.isArray(r.errors) ? r.errors : []));
+    if (errors.length && errors.every(isEndedItemError)) {
+      throw new EbayListingEndedError(errors[0].message);
+    }
+    throw new Error(errors[0]?.message || `eBay refused ${failed.length} quantity update(s)`);
+  }
+}
+
 async function pushEbayQuantity(uid, product, productId, variantSku, newQty) {
   const qty = Math.max(0, newQty);
+  const variants = Array.isArray(product.variants) ? product.variants : [];
 
-  // Shared stock pool (`quantityVariesByVariant === false`): every variant's
-  // eBay offer represents the SAME pool, so every one of them needs the new
-  // number, not just the SKU that happens to have sold — otherwise a sold-out
-  // shared pool would still show other variants as in stock on eBay.
-  // `bulk_update_price_quantity` takes up to 25 requests in one call.
-  if (isSharedPool(product) && Array.isArray(product.variants) && product.variants.length) {
-    const requests = product.variants
+  // Every variant's eBay offer gets the new number when
+  //  - the stock is one shared pool (`quantityVariesByVariant === false`): every
+  //    offer represents the SAME pool, otherwise a sold-out pool would still show
+  //    other variants in stock on eBay; or
+  //  - no variant was named on a variant product: only mark-sold-out does that
+  //    (zeroAll), and it used to fall through to a productId SKU lookup that does
+  //    not exist for a multi-variant listing, so eBay was silently skipped.
+  if (variants.length && (isSharedPool(product) || variantSku == null)) {
+    const requests = variants
       .filter((v) => v.ebayOfferId)
       .map((v) => ({ sku: v.ebayVariantSku, offers: [{ offerId: v.ebayOfferId, availableQuantity: qty }] }));
     if (!requests.length) return "skipped";
-    // eBay takes 25 per call; a 250-variant listing is 10 calls.
-    for (const batch of chunk(requests)) {
-      await ebayRequest(uid, "POST", "/sell/inventory/v1/bulk_update_price_quantity", { requests: batch });
-    }
+    await ebayBulkQuantity(uid, requests);
     return "updated";
   }
 
@@ -154,28 +225,43 @@ async function pushEbayQuantity(uid, product, productId, variantSku, newQty) {
   let ebaySku = productId;
   let offerId = product.ebayOfferId || null;
 
-  if (variantSku && Array.isArray(product.variants)) {
-    const idx = product.variants.findIndex((x) => x && x.sku === variantSku);
+  if (variantSku && variants.length) {
+    const idx = variants.findIndex((x) => x && x.sku === variantSku);
     if (idx !== -1) {
-      const v = product.variants[idx];
+      const v = variants[idx];
       ebaySku = v.ebayVariantSku || variantSkuFor(productId, v, idx);
       offerId = v.ebayOfferId || offerId;
     }
   }
 
   if (offerId) {
-    await ebayRequest(uid, "POST", "/sell/inventory/v1/bulk_update_price_quantity", {
-      requests: [{ sku: ebaySku, offers: [{ offerId, availableQuantity: qty }] }],
-    });
+    await ebayBulkQuantity(uid, [{ sku: ebaySku, offers: [{ offerId, availableQuantity: qty }] }]);
     return "updated";
   }
 
   // No stored offer pointer — fall back to the inventory-item availability PUT.
-  const item = await ebayRequest(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(ebaySku)}`).catch(() => null);
+  const item = await ebayCall(uid, "GET", `/sell/inventory/v1/inventory_item/${encodeURIComponent(ebaySku)}`).catch(() => null);
   if (!item) return "skipped";
   item.availability = { ...(item.availability || {}), shipToLocationAvailability: { quantity: qty } };
-  await ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(ebaySku)}`, item);
+  await ebayCall(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(ebaySku)}`, item);
   return "updated";
+}
+
+/**
+ * The eBay listing is gone: clear the live-listing fields the way ebayDeleteListing
+ * does and KEEP the offer pointers (`ebayOfferId`, group key, variant offer ids), so
+ * a re-post re-publishes the same offer. Dotted map paths via update() — a merge
+ * set() can't delete one key of a map.
+ */
+async function clearEndedEbayListing(db, productId) {
+  const del = admin.firestore.FieldValue.delete();
+  await db.collection("products").doc(productId).update({
+    "crossPostStatus.ebay": del,
+    "crossPostListingIds.ebay": del,
+    "crossPostUrls.ebay": del,
+    ebayListingId: del,
+    ebayListingUrl: del,
+  });
 }
 
 async function pushEtsyQuantity(uid, product, newQty) {
@@ -294,14 +380,19 @@ function applyMercariFlags(product, productUpdate, { variantSku, soldOut, soldOn
  * the Mercari manual-action flags. Best-effort: a platform failure is recorded,
  * never thrown — the sale is already persisted.
  */
-async function cascade(db, uid, product, productId, { variantSku, newQuantity, soldOut, soldOnPlatform }) {
+async function cascade(db, uid, product, productId, { variantSku, newQuantity, soldOut, soldOnPlatform, skipPlatforms = [] }) {
   const platforms = {};
+  /** Why a platform "failed", for the client's progress list. */
+  const errors = {};
   const productUpdate = {};
+  // Platforms the seller chose to leave alone (mark-sold-out sheet: already
+  // marked sold out there by hand).
+  const skip = new Set(skipPlatforms);
 
   // API platforms (eBay/Etsy/TikTok): push the new quantity — UNLESS the sale
   // came from that platform, which already decremented itself.
   for (const p of ["ebay", "etsy", "tiktok"]) {
-    if (p === soldOnPlatform) { platforms[p] = "skipped"; continue; }
+    if (p === soldOnPlatform || skip.has(p)) { platforms[p] = "skipped"; continue; }
     if (product.crossPostStatus?.[p] !== "active") { platforms[p] = "skipped"; continue; }
     try {
       if (p === "ebay") {
@@ -313,14 +404,26 @@ async function cascade(db, uid, product, productId, { variantSku, newQuantity, s
         platforms.tiktok = "pending-manual";
       }
     } catch (e) {
+      if (p === "ebay" && e instanceof EbayListingEndedError) {
+        // Already off eBay — that is what a quantity of 0 was for. Wonni stops
+        // calling it live so the next cascade doesn't hit the same wall.
+        console.warn(`[cascade] ebay listing already ended for ${productId}: ${e.message}`);
+        platforms.ebay = "ended";
+        await clearEndedEbayListing(db, productId).catch((err) =>
+          console.error(`[cascade] clearing ended eBay listing failed for ${productId}:`, err.message));
+        continue;
+      }
       console.error(`[cascade] ${p} failed for ${productId}:`, e.message);
       platforms[p] = "failed";
+      errors[p] = String(e.message || "Failed").slice(0, 300);
     }
   }
 
   // Mercari has no API — resolved by a client-side headless flow. Set the
   // per-variation / per-product flags it reads.
-  platforms.mercari = applyMercariFlags(product, productUpdate, { variantSku, soldOut, soldOnPlatform });
+  platforms.mercari = skip.has("mercari")
+    ? "skipped"
+    : applyMercariFlags(product, productUpdate, { variantSku, soldOut, soldOnPlatform });
 
   if (Object.keys(productUpdate).length) {
     productUpdate.updatedAt = admin.firestore.FieldValue.serverTimestamp();
@@ -333,6 +436,7 @@ async function cascade(db, uid, product, productId, { variantSku, newQuantity, s
     newQuantity: newQuantity ?? null,
     soldOut,
     platforms,
+    errors,
   };
 }
 
@@ -612,13 +716,16 @@ exports.markSoldOutAndCascade = onCall({ secrets: EBAY_SECRETS }, validated("mar
   const db = admin.firestore();
   // zeroAll — unambiguous even for a variant product (every active variant → 0).
   const applied = await applyQuantityDelta(db, data.productId, uid, null, 0, { zeroAll: true });
-  await cascade(db, uid, applied.product, data.productId, {
+  const result = await cascade(db, uid, applied.product, data.productId, {
     variantSku: null,
     newQuantity: 0,
     soldOut: true,
     soldOnPlatform: null,
+    skipPlatforms: data.skipPlatforms ?? [],
   });
-  return { success: true };
+  // Per-platform outcome for the app's progress list: "failed" + errors[p] is a
+  // real failure; "ended" means the eBay listing was already gone (counts as done).
+  return { success: true, platforms: result.platforms, errors: result.errors };
 }));
 
 // Manual Wonni-side quantity edit (not a sale) → push to eBay only. See
@@ -743,6 +850,7 @@ exports._internal = {
   resolveSaleId,
   applyQuantityDelta, cascade, resolveStock, toTimestamp, recordSaleCore,
   loadOwnedProduct, shouldAdvanceStatus, applyMercariFlags, updateSaleStatusCore,
-  reassignSaleStageCore,
+  reassignSaleStageCore, pushEbayQuantity,
+  setEbayRequest: (fn) => { ebayCall = fn || ebayRequest; },
 };
 exports.EBAY_SECRETS = EBAY_SECRETS;

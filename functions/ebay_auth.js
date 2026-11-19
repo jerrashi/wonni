@@ -276,6 +276,8 @@ async function ebayRequest(uid, method, path, body, opts = {}) {
     try {
       const parsed = JSON.parse(text);
       if (Array.isArray(parsed?.errors)) err.ebayErrors = parsed.errors;
+      // Bulk endpoints put per-item errors under responses[].errors instead.
+      err.body = parsed;
     } catch {
       /* non-JSON error body — leave err.ebayErrors undefined */
     }
