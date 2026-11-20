@@ -946,6 +946,17 @@ struct ProcessResultsOverviewView: View {
     // that failed, kept here (orange) for the retry. Failed AI drafts stay so they can
     // be filled in by hand (the "Couldn't identify" row state).
 
+    /// Nothing left to review: leave instead of sitting on an empty list. Deferred one
+    /// tick so the row's delete animation and the path change don't land in the same
+    /// frame (the deleted draft is already marked in `deletedDraftIDs`).
+    private func leaveIfEmpty() {
+        guard results.isEmpty else { return }
+        let othersRemain = allItems.contains { !uploadManager.deletedDraftIDs.contains($0.id) }
+        DispatchQueue.main.async {
+            SellRouter.shared.leaveEmptyReview(otherDraftsRemain: othersRemain, modelContext: modelContext)
+        }
+    }
+
     private var toPublish: [Item] {
         selectedIDs.isEmpty ? results : results.filter { selectedIDs.contains($0.id) }
     }
@@ -971,9 +982,11 @@ struct ProcessResultsOverviewView: View {
                     .listRowBackground(item.pendingPublish ? Color.orange.opacity(0.10) : nil)
                 }
                 .onDelete { offsets in
-                    for i in offsets {
-                        uploadManager.deleteDraftLocallyAndCloud(draft: results[i], modelContext: modelContext)
+                    let doomed = offsets.map { results[$0] }
+                    for draft in doomed {
+                        uploadManager.deleteDraftLocallyAndCloud(draft: draft, modelContext: modelContext)
                     }
+                    leaveIfEmpty()
                 }
             }
             .listStyle(.plain)

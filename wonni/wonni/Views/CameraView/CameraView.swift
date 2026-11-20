@@ -55,6 +55,17 @@ final class SellRouter: ObservableObject {
     func openReview() { show([.drafts, .review]) }
     func openProcessing() { show([.drafts, .processing]) }
 
+    /// Review's last draft was deleted (user 2026-11-20: Back used to land on a blank
+    /// Drafts screen). With other drafts still waiting, go to Drafts; with none left,
+    /// start over on the photo picker, with the camera underneath it.
+    func leaveEmptyReview(otherDraftsRemain: Bool, modelContext: ModelContext) {
+        if otherDraftsRemain {
+            path = [.drafts]
+        } else {
+            path = [.picker(UploadManager.shared.ensureActiveDraft(modelContext: modelContext))]
+        }
+    }
+
     /// After Publish: back to the camera underneath, and over to Profile where the new
     /// listings appear. The task row tracks the publish and any cross-posts.
     func finishPublish() {
