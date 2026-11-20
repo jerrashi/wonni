@@ -689,3 +689,149 @@ enum DraftAIProcessingPolicy {
         ))
     }
 }
+
+// MARK: - Pending draft edits (2026-11-20)
+
+/// Everything the Edit screen (`DraftEditSheet`) lets the seller change on a draft, as
+/// the strings and toggles the form shows. A plain value so it can be saved as a
+/// `PendingDraftEdit` while the screen is open and compared against the draft.
+/// Photos are not in here: they are files on disk plus uploads, and every photo change
+/// (add, reorder, template photos) still writes to the draft straight away.
+struct DraftEditFields: Codable, Equatable {
+    var title = ""
+    var priceText = ""
+    var paidText = ""
+    var quantityText = "1"
+    var description = ""
+    var personalNote = ""
+    var buyerPaysShipping = true
+    var handlingFee = ""
+    var estimatedDays = ""
+    var condition: ItemCondition = .good
+    var tagsText = ""
+    /// nil = the account's default (see Item.facebookOfferShipping).
+    var facebookOfferShipping: Bool?
+    var facebookHideFromFriends: Bool?
+    /// nil until touched (the toggle shows the account value).
+    var mercariSmartPricing: Bool?
+    var weightText = ""
+    var lengthText = ""
+    var widthText = ""
+    var heightText = ""
+    /// nil = inherit the account's default handling time at publish time.
+    var handlingTimeDays: Int?
+
+    init() {}
+
+    /// The form as it reads when opened on `item` with nothing typed yet.
+    init(item: Item) {
+        title = item.userEditedTitle ?? item.aiSuggestedTitle ?? ""
+        priceText = item.userEditedPrice.map { String(format: "%.2f", $0) } ?? ""
+        paidText = item.sourcePrice.map { String(format: "%.2f", $0) } ?? ""
+        quantityText = String(max(1, item.quantity ?? 1))
+        description = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
+        personalNote = item.personalNote ?? ""
+        condition = item.condition.flatMap(ItemCondition.init(rawValue:)) ?? .good
+        buyerPaysShipping = item.buyerPaysShipping
+        handlingFee = item.handlingFee > 0 ? String(format: "%.2f", item.handlingFee) : ""
+        estimatedDays = "\(item.estimatedShippingDays)"
+        handlingTimeDays = item.handlingTimeDays
+        tagsText = item.tags.joined(separator: ", ")
+        facebookOfferShipping = item.facebookOfferShipping
+        facebookHideFromFriends = item.facebookHideFromFriends
+        mercariSmartPricing = item.mercariSmartPricing
+        weightText = item.weightLbs.map { String(format: "%.2f", $0) } ?? ""
+        lengthText = item.lengthIn.map { String(format: "%.2f", $0) } ?? ""
+        widthText = item.widthIn.map { String(format: "%.2f", $0) } ?? ""
+        heightText = item.heightIn.map { String(format: "%.2f", $0) } ?? ""
+    }
+
+    private static func number(_ text: String) -> Double? {
+        Double(text.filter { $0.isNumber || $0 == "." })
+    }
+
+    /// Writes the form into the draft (Save). Editing an AI-changed title/description
+    /// counts as taking ownership, same as the inline edits on Review: a real change
+    /// retires the AI word-diff.
+    func apply(to item: Item) {
+        if item.originalUserTitleBeforeAI != nil,
+           title != (item.userEditedTitle ?? item.aiSuggestedTitle ?? "") {
+            item.originalUserTitleBeforeAI = nil
+        }
+        if item.originalUserDescriptionBeforeAI != nil,
+           description != (item.userEditedDescription ?? item.aiSuggestedDescription ?? "") {
+            item.originalUserDescriptionBeforeAI = nil
+        }
+        item.userEditedTitle = title.isEmpty ? nil : title
+        item.userEditedPrice = Self.number(priceText)
+        item.sourcePrice = Self.number(paidText)
+        let quantity = Int(quantityText.filter(\.isNumber)) ?? 1
+        item.quantity = quantity > 1 ? quantity : nil   // nil = 1 everywhere else
+        item.userEditedDescription = description.isEmpty ? nil : description
+        item.personalNote = personalNote.isEmpty ? nil : personalNote
+        item.condition = condition.rawValue
+        item.buyerPaysShipping = buyerPaysShipping
+        item.handlingFee = Self.number(handlingFee) ?? 0
+        item.estimatedShippingDays = Int(estimatedDays) ?? 3
+        item.handlingTimeDays = handlingTimeDays
+        item.facebookOfferShipping = facebookOfferShipping
+        item.facebookHideFromFriends = facebookHideFromFriends
+        item.mercariSmartPricing = mercariSmartPricing
+        item.tags = tagsText.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        item.weightLbs = Self.number(weightText)
+        item.lengthIn = Self.number(lengthText)
+        item.widthIn = Self.number(widthText)
+        item.heightIn = Self.number(heightText)
+    }
+}
+
+/// The Edit screen's unsaved changes for one draft (user decision 2026-11-20): every
+/// keystroke lands here, never on the draft. Save copies it into the draft and deletes
+/// it; Cancel deletes it. If the app closes with the screen open, the row survives and
+/// the Sell tab reopens that Edit screen with the changes loaded (`SellResume`).
+@Model
+final class PendingDraftEdit {
+    @Attribute(.unique) var draftID: UUID
+    var fieldsData: Data
+    var updatedAt: Date
+
+    init(draftID: UUID, fields: DraftEditFields) {
+        self.draftID = draftID
+        self.fieldsData = (try? JSONEncoder().encode(fields)) ?? Data()
+        self.updatedAt = Date()
+    }
+
+    var fields: DraftEditFields? {
+        try? JSONDecoder().decode(DraftEditFields.self, from: fieldsData)
+    }
+
+    /// Upserts the pending copy, or removes it when the form matches the draft again
+    /// (so opening Edit and changing nothing leaves nothing to resume).
+    static func record(_ fields: DraftEditFields, for item: Item, in context: ModelContext) {
+        let existing = find(item.id, in: context)
+        if fields == DraftEditFields(item: item) {
+            if let existing { context.delete(existing) }
+        } else if let existing {
+            existing.fieldsData = (try? JSONEncoder().encode(fields)) ?? existing.fieldsData
+            existing.updatedAt = Date()
+        } else {
+            context.insert(PendingDraftEdit(draftID: item.id, fields: fields))
+        }
+        try? context.save()
+    }
+
+    static func find(_ draftID: UUID, in context: ModelContext) -> PendingDraftEdit? {
+        var descriptor = FetchDescriptor<PendingDraftEdit>(predicate: #Predicate { $0.draftID == draftID })
+        descriptor.fetchLimit = 1
+        return try? context.fetch(descriptor).first
+    }
+
+    static func discard(_ draftID: UUID, in context: ModelContext) {
+        if let existing = find(draftID, in: context) {
+            context.delete(existing)
+            try? context.save()
+        }
+    }
+}

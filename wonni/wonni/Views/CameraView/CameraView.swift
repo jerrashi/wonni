@@ -12,16 +12,136 @@ import SwiftData
 /// "+" either popped the drawer or swapped it for a new picker in place, so "<" from
 /// that picker went to the camera instead of the drawer, and the in-place swap
 /// crashed on the user's phone.
+///
+/// Since 2026-11-20 the whole Sell flow is this one stack: Camera → Photos → Drafts →
+/// Processing → Review → Publish, with Edit pushed from Drafts or Review. Before that,
+/// Processing and Review were full-screen covers and Publish and Edit-from-Review were
+/// sheets, each with its own bar; Review's Back jumped to the camera and opening it
+/// needed a 0.5 s delay so two covers never presented in one frame.
 enum CameraRoute: Hashable {
     /// The photo picker editing one draft. A new listing gets an empty draft created
     /// just before the push; it is deleted again if the picker is popped with no photos.
     case picker(UUID)
     /// The one drafts screen (`DraftsView`): photo strips with "+", inline title and
-    /// price, Select mode, Process. Both the carousels' stack icon and Proceed land here.
+    /// price, Select mode. Both the carousels' stack icon and Continue land here.
     case drafts
-    /// The Edit screen for one draft (the pencil on Drafts). A push, not a sheet, so the
-    /// bottom bar stays with Cancel · Save in Back · Continue's places (2026-11-19).
+    /// The Edit screen for one draft (the pencil on Drafts or Review). Unsaved changes
+    /// live in a `PendingDraftEdit` until Save, so the screen can be left and resumed.
     case edit(UUID)
+    /// AI processing progress. Back leaves (processing keeps going in the task row);
+    /// Continue opens Review once every draft is done.
+    case processing
+    /// Review: the processed drafts, inline title / price / description.
+    case review
+    /// The platform picker for the drafts chosen on Review (`CrossPostSheet`, embedded).
+    case publish([UUID])
+}
+
+/// Owns the Sell tab's path, so anything can open a step of the flow (the task row,
+/// the failed-publish alert, app launch) by setting it instead of presenting a cover.
+@MainActor
+final class SellRouter: ObservableObject {
+    static let shared = SellRouter()
+    @Published var path: [CameraRoute] = []
+    /// The launch-time restore runs once per process (see `restoreIfNeeded`).
+    private var didRestore = false
+
+    /// Switches to the Sell tab showing `path`.
+    func show(_ path: [CameraRoute]) {
+        self.path = path
+        UploadManager.shared.selectedTab = 2
+    }
+
+    func openReview() { show([.drafts, .review]) }
+    func openProcessing() { show([.drafts, .processing]) }
+
+    /// After Publish: back to the camera underneath, and over to Profile where the new
+    /// listings appear. The task row tracks the publish and any cross-posts.
+    func finishPublish() {
+        path.removeAll()
+        UploadManager.shared.selectedTab = 4
+    }
+
+    /// Rebuilds where the seller was from the saved drafts, the first time the Sell tab
+    /// appears after launch. Never touches a path the seller already navigated.
+    func restoreIfNeeded(modelContext: ModelContext) {
+        guard !didRestore else { return }
+        didRestore = true
+        guard path.isEmpty else { return }
+        let items = (try? modelContext.fetch(FetchDescriptor<Item>(predicate: #Predicate { $0.isDraft == true }))) ?? []
+        let pending = (try? modelContext.fetch(FetchDescriptor<PendingDraftEdit>(
+            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+        ))) ?? []
+        let um = UploadManager.shared
+        path = SellResume.initialPath(
+            drafts: items.map { SellDraftState($0, failedIDs: um.processingFailedIDs, publishingIDs: um.publishingIDs) },
+            pendingEditDraftID: pending.first?.draftID
+        )
+    }
+}
+
+/// What the resume rule needs to know about one draft. A plain value so the rule is
+/// testable without SwiftData.
+struct SellDraftState: Equatable {
+    let id: UUID
+    let isDraft: Bool
+    let isPublished: Bool
+    let isProcessed: Bool
+    let failedProcessing: Bool
+    let pendingPublish: Bool
+    let isPublishing: Bool
+
+    init(id: UUID, isDraft: Bool = true, isPublished: Bool = false, isProcessed: Bool = false,
+         failedProcessing: Bool = false, pendingPublish: Bool = false, isPublishing: Bool = false) {
+        self.id = id
+        self.isDraft = isDraft
+        self.isPublished = isPublished
+        self.isProcessed = isProcessed
+        self.failedProcessing = failedProcessing
+        self.pendingPublish = pendingPublish
+        self.isPublishing = isPublishing
+    }
+
+    init(_ item: Item, failedIDs: Set<UUID>, publishingIDs: Set<UUID>) {
+        self.init(
+            id: item.id,
+            isDraft: item.isDraft,
+            isPublished: item.publishedAt != nil,
+            isProcessed: item.processedAt != nil,
+            failedProcessing: failedIDs.contains(item.id),
+            pendingPublish: item.pendingPublish,
+            isPublishing: publishingIDs.contains(item.id)
+        )
+    }
+
+    /// Belongs on Review: an unpublished draft that has been through processing (or
+    /// skipped it, or failed it this session and needs typing in), or a publish that
+    /// failed and waits for a retry. Not one whose publish is running right now, so it
+    /// can't be published twice.
+    var isReviewable: Bool {
+        isDraft && !isPublished && !isPublishing && (isProcessed || failedProcessing || pendingPublish)
+    }
+}
+
+/// Where the Sell tab opens after a restart (user decisions 2026-11-20): on Review when
+/// processed drafts are waiting, with Drafts and the camera underneath; on an Edit screen
+/// that was open when the app closed, with its unsaved changes; otherwise the camera.
+enum SellResume {
+    static func initialPath(drafts: [SellDraftState], pendingEditDraftID: UUID?) -> [CameraRoute] {
+        var path: [CameraRoute] = []
+        if drafts.contains(where: \.isReviewable) {
+            path = [.drafts, .review]
+        }
+        if let id = pendingEditDraftID,
+           let draft = drafts.first(where: { $0.id == id }),
+           draft.isDraft, !draft.isPublished {
+            if path.isEmpty { path = [.drafts] }
+            // Edit opened from Review sits on top of it; from Drafts, on top of Drafts.
+            if !draft.isReviewable { path = [.drafts] }
+            path.append(.edit(id))
+        }
+        return path
+    }
 }
 
 struct CameraView: View {
@@ -191,9 +311,20 @@ struct CameraView: View {
                     path.append(.picker(draftID))
                 }, onEdit: { draftID in
                     path.append(.edit(draftID))
+                }, onProcessing: {
+                    path.append(.processing)
                 })
             case .edit(let draftID):
                 DraftEditRoute(draftID: draftID)
+            case .processing:
+                ProcessProgressView(onContinue: { SellRouter.shared.openReview() })
+            case .review:
+                ProcessResultsOverviewView(
+                    onEdit: { path.append(.edit($0)) },
+                    onContinue: { path.append(.publish($0)) }
+                )
+            case .publish(let draftIDs):
+                PublishStepView(draftIDs: draftIDs)
             }
         }
         .onChange(of: uploadManager.shouldReturnToRoot) { _, should in
@@ -210,14 +341,6 @@ struct CameraView: View {
             if should { openDraftsOverviewIfRequested() }
         }
         .onAppear { openDraftsOverviewIfRequested() }
-        // Review & Publish's Back button (spec N4): dismisses the full-screen results
-        // view and pops this stack back to the camera, drafts intact.
-        .onChange(of: uploadManager.returnToCameraRoot) { _, should in
-            if should {
-                path.removeAll()
-                uploadManager.returnToCameraRoot = false
-            }
-        }
     }
 
     /// Pushes the picker for the draft the camera is building, creating an empty one
@@ -255,7 +378,7 @@ struct CameraView: View {
         // The flag is set from inside a sheet (BulkTextDraftsSheet) that is dismissing
         // at this exact moment — defer the push past its dismiss animation so SwiftUI
         // doesn't get a sheet dismissal and a navigation push in the same frame (same
-        // pattern as ProcessProgressView's onMinimize).
+        // reason the Sell flow avoids presenting covers at all).
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
             path.append(.drafts)
         }

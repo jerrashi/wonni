@@ -173,21 +173,34 @@ struct BottomActionBar<Leading: View, Trailing: View>: View {
 }
 
 /// Capsule buttons for `BottomActionBar`. `.primary` is the screen's one forward action.
+/// iOS 26: Liquid Glass (user 2026-11-20), tinted with the accent color for `.primary`,
+/// matching the system's own glass toolbar buttons in the top bar. Earlier iOS keeps
+/// the filled capsules.
 struct BottomBarButtonStyle: ButtonStyle {
     enum Kind { case secondary, primary, destructive }
     var kind: Kind = .secondary
     @Environment(\.isEnabled) private var isEnabled
 
+    @ViewBuilder
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let label = configuration.label
             .font(.body.weight(kind == .primary ? .semibold : .regular))
             .foregroundStyle(foreground)
             .lineLimit(1)
             .padding(.horizontal, 18)
             .frame(minHeight: 40)
-            .background(Capsule().fill(background))
-            .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.45)
-            .contentShape(Capsule())
+        if #available(iOS 26.0, *) {
+            label
+                .glassEffect(kind == .primary ? .regular.tint(.accentColor).interactive() : .regular.interactive(),
+                             in: Capsule())
+                .opacity(isEnabled ? 1 : 0.45)
+                .contentShape(Capsule())
+        } else {
+            label
+                .background(Capsule().fill(background))
+                .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.45)
+                .contentShape(Capsule())
+        }
     }
 
     private var foreground: Color {

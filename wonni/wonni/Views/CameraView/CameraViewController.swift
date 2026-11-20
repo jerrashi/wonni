@@ -3,17 +3,20 @@ See the License.txt file for this sample’s licensing information.
 */
 
 import SwiftUI
+import SwiftData
 
 struct CameraViewController: View {
-    /// The Sell tab's whole navigation state. Lives here, not in MainView, so the
-    /// stack and the only view that mutates it are declared together.
-    @State private var path: [CameraRoute] = []
+    /// The Sell tab's whole navigation state lives on `SellRouter`, so the task row, the
+    /// failed-publish alert and the launch-time restore can open a step of the flow.
+    @ObservedObject private var router = SellRouter.shared
+    @Environment(\.modelContext) private var modelContext
 
     var body: some View {
-        NavigationStack(path: $path) {
-            CameraView(path: $path)
+        NavigationStack(path: $router.path) {
+            CameraView(path: $router.path)
                 .onAppear {
                     applyCustomAppearance()
+                    router.restoreIfNeeded(modelContext: modelContext)
                 }
         }
     }

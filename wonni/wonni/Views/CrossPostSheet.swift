@@ -122,6 +122,10 @@ struct CrossPostOptions: Equatable {
 struct CrossPostSheet: View {
     let candidates: [CrossPostCandidate]
     let mode: CrossPostSheetMode
+    /// true = the Sell stack's Publish step (`PublishStepView`): no NavigationStack of its
+    /// own, title "Publish", ‹ Back · Publish in the shared bottom bar, and the caller
+    /// navigates after confirming. false = a sheet with Cancel / Post (Profile).
+    var embedded: Bool = false
     let onConfirm: (Set<String>, CrossPostOptions) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -147,53 +151,75 @@ struct CrossPostSheet: View {
     private var isPublish: Bool { mode == .publish }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                candidatesSection
-                platformsSection
-            }
-            .navigationTitle(isPublish ? "Publish Listings" : "Cross-Post")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+        if embedded {
+            form
+                .navigationTitle("Publish")
+                .navigationBarTitleDisplayMode(.inline)
+                .navigationBarBackButtonHidden(true)
+                .toolbar(.hidden, for: .tabBar)
+                .bottomActionBar {
+                    BackBarButton { dismiss() }
+                        .accessibilityIdentifier("publishBackButton")
+                } trailing: {
+                    PrimaryBarButton(title: "Publish", isBusy: isLoadingIntegrations) { confirmTapped() }
+                        .disabled(isLoadingIntegrations || candidates.isEmpty)
+                        .accessibilityIdentifier("crossPostConfirmButton")
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    if isLoadingIntegrations {
-                        ProgressView()
-                    } else {
-                        Button(isPublish ? "Publish" : "Post") {
-                            if selectedPlatforms.isEmpty {
-                                showEmptyPlatformsConfirm = true
+        } else {
+            NavigationStack {
+                form
+                    .navigationTitle(isPublish ? "Publish" : "Cross-Post")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") { dismiss() }
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            if isLoadingIntegrations {
+                                ProgressView()
                             } else {
-                                confirm()
+                                Button(isPublish ? "Publish" : "Post") { confirmTapped() }
+                                    .fontWeight(.bold)
+                                    .disabled(!CrossPostPlan.canConfirm(selectedPlatforms, mode: mode))
+                                    .accessibilityIdentifier("crossPostConfirmButton")
                             }
                         }
-                        .fontWeight(.bold)
-                        .disabled(!CrossPostPlan.canConfirm(selectedPlatforms, mode: mode))
-                        .accessibilityIdentifier("crossPostConfirmButton")
                     }
+            }
+        }
+    }
+
+    private var form: some View {
+        Form {
+            candidatesSection
+            platformsSection
+        }
+        .task { await loadDefaults() }
+        .sheet(isPresented: $showAddressSetupSheet) {
+            AddressSetupSheet {
+                if !platformToEnableAfterAddressSetup.isEmpty {
+                    selectedPlatforms.insert(platformToEnableAfterAddressSetup)
+                    platformToEnableAfterAddressSetup = ""
                 }
             }
-            .task { await loadDefaults() }
-            .sheet(isPresented: $showAddressSetupSheet) {
-                AddressSetupSheet {
-                    if !platformToEnableAfterAddressSetup.isEmpty {
-                        selectedPlatforms.insert(platformToEnableAfterAddressSetup)
-                        platformToEnableAfterAddressSetup = ""
-                    }
-                }
-            }
-            // Publish mode only: Wonni is still a real destination, so confirm it.
-            // Cross-post mode never gets here — the button is disabled when empty.
-            .confirmationDialog(
-                "Publish to Wonni only? No cross-post platforms are selected.",
-                isPresented: $showEmptyPlatformsConfirm,
-                titleVisibility: .visible
-            ) {
-                Button("Publish to Wonni Only") { confirm() }
-                Button("Cancel", role: .cancel) {}
-            }
+        }
+        // Publish mode only: Wonni is still a real destination, so confirm it.
+        // Cross-post mode never gets here — the button is disabled when empty.
+        .confirmationDialog(
+            "Publish to Wonni only? No cross-post platforms are selected.",
+            isPresented: $showEmptyPlatformsConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Publish to Wonni Only") { confirm() }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private func confirmTapped() {
+        if selectedPlatforms.isEmpty {
+            showEmptyPlatformsConfirm = true
+        } else {
+            confirm()
         }
     }
 
@@ -381,6 +407,7 @@ struct CrossPostSheet: View {
         CrossPostDefaults.remember(selectedPlatforms)
         let options = CrossPostOptions(mercariSmartPricing: selectedPlatforms.contains("mercari") ? smartPricing : nil)
         onConfirm(selectedPlatforms, options)
-        dismiss()
+        // Embedded, the caller has already navigated (Publish step → Profile).
+        if !embedded { dismiss() }
     }
 }

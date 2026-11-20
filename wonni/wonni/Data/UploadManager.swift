@@ -31,10 +31,6 @@ class UploadManager: ObservableObject {
     // ── Tab / Navigation ────────────────────────────────────────────────────
     @Published var selectedTab = 0
     @Published var shouldReturnToRoot = false
-    /// One-shot: pops the camera tab's NavigationStack back to the camera itself
-    /// (drafts stay saved). Set by Review & Publish's Back button; observed and
-    /// reset by CameraView.
-    @Published var returnToCameraRoot = false
     /// One-shot: pushes the camera tab's NavigationStack straight to the drafts
     /// overview. Set by BulkTextDraftsSheet's "Open drafts" when it was opened from
     /// Profile › Import (i.e. not already on the camera stack); observed and reset by
@@ -111,8 +107,6 @@ class UploadManager: ObservableObject {
     }
     private var _processCurrentIndex = 0
     @Published var processTotalCount = 0
-    @Published var showProcessResults = false
-    @Published var showResultsOverview = false
     @Published var processedItemIDs: [UUID] = []
     @Published var processingFailedIDs: Set<UUID> = []
     @Published var processQueuedIDs: [UUID] = []
@@ -149,8 +143,7 @@ class UploadManager: ObservableObject {
     @Published var crossPostStatusPending = false
     /// Owned here (not as local @State on ProcessResultsOverviewView) because the eBay/Etsy
     /// API cross-post Task that sets this can complete well after that view has already been
-    /// dismissed (showResultsOverview = false runs immediately once publish succeeds and
-    /// there's no web-autofill queue to wait on — the common case for an API-only publish).
+    /// left (the Publish step goes to Profile the moment Publish is tapped).
     /// A local @State there would silently discard the error into a torn-down view. Surfaced
     /// from CrossPostStatusView, which is reliably the next screen shown after any publish.
     @Published var crossPostError: String? = nil
@@ -164,6 +157,16 @@ class UploadManager: ObservableObject {
     }
     private var _publishStatuses: [UUID: DraftUploadStatus] = [:]
     @Published var publishTotalCount = 0
+    /// Drafts whose publish is running right now. Review leaves them out so the same
+    /// draft can't be published twice (see SellDraftState.isReviewable).
+    var publishingIDs: Set<UUID> {
+        Set(publishStatuses.compactMap { id, status in
+            switch status {
+            case .pending, .uploading: return id
+            case .done, .failed: return nil
+            }
+        })
+    }
     var publishCurrentIndex: Int {
         get { _publishCurrentIndex }
         set { _publishCurrentIndex = newValue; scheduleThrottledChangeNotify() }
@@ -213,21 +216,15 @@ class UploadManager: ObservableObject {
     /// setting). Set by CreateListingView right before `beginPublish`; a draft's own
     /// `mercariSmartPricing` wins over it.
     var pendingMercariSmartPricing: Bool?
-    /// Post-publish continuation gating. The continuation (API cross-post triggers, web
-    /// autofill jobs, sheet transitions) may only run once BOTH the publish task has
-    /// finished AND the confirmation sheet is fully dismissed — mutating sheet state while
-    /// another sheet is mid-dismissal makes UIKit drop the transition and strands the
-    /// modal on screen with its binding out of sync.
+    /// Set when the publish task finishes; the continuation (API cross-post triggers, web
+    /// autofill jobs) runs once. It used to also wait for the publish confirmation SHEET
+    /// to finish dismissing; Publish is a pushed step now (2026-11-20), so there is no
+    /// presentation to race.
     private var pendingPublishContinuation = false
-    /// Set true by ProcessResultsOverviewView when it presents the publish confirmation
-    /// sheet, false in that sheet's onDismiss (which then calls
-    /// runPublishContinuationIfReady). Plain var — only read inside guards, never drives UI.
-    var publishConfirmationSheetVisible = false
 
     // ── Legacy / Pill visibility ─────────────────────────────────────────────
     @Published var isPillVisible = false
     @Published var isProcessPillVisible = false
-    @Published var showProgressSheet = false
 
     // ── Global Mercari cross-post job (runs headlessly; surfaced via AppTaskQueue's
     // one shared pill — Q1/Q2 — rather than its own pill) ──
@@ -839,10 +836,11 @@ class UploadManager: ObservableObject {
         processTask?.cancel()
         isProcessing = true
         isProcessPillVisible = true
-        showProcessResults = false
         processProgress = 0
         processCurrentIndex = 0
         processTotalCount = drafts.count
+        // A previous run's "Ready to review" row gives way to this run's.
+        AppTaskQueue.shared.complete(id: processingTaskId)
         processingTaskId = UUID()
         AppTaskQueue.shared.begin(
             id: processingTaskId,
@@ -850,7 +848,7 @@ class UploadManager: ObservableObject {
             detail: "0 of \(drafts.count)",
             progress: 0,
             accentColor: Color(red: 0.1, green: 0, blue: 0.35),
-            onTap: { [weak self] in self?.showProgressSheet = true }
+            onTap: { SellRouter.shared.openProcessing() }
         )
         processStatuses = [:]
         processedItemIDs = []
@@ -1014,12 +1012,25 @@ class UploadManager: ObservableObject {
             }
 
             isProcessing = false
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
             isProcessPillVisible = false
-            AppTaskQueue.shared.complete(id: processingTaskId)
-            showProgressSheet = false
-            showProcessResults = true
+            // Nothing pops up when processing ends (2026-11-20): the task row turns into
+            // "Ready to review" until Review is opened, from the row, from Processing's
+            // Continue, or by the Sell tab resuming there.
+            let ready = processedItemIDs.count + processingFailedIDs.count
+            AppTaskQueue.shared.update(
+                id: processingTaskId,
+                label: "Ready to review",
+                detail: "\(ready) draft\(ready == 1 ? "" : "s")",
+                progress: 1,
+                onTap: { SellRouter.shared.openReview() }
+            )
         }
+    }
+
+    /// Review is on screen: the "Ready to review" task row has done its job.
+    func reviewDidAppear() {
+        guard !isProcessing else { return }
+        AppTaskQueue.shared.complete(id: processingTaskId)
     }
 
     /// The drafts overview's "Skip AI" action: marks drafts that already have everything
@@ -1514,24 +1525,18 @@ class UploadManager: ObservableObject {
                     progress: 1,
                     isError: true
                 )
-            } else {
-                // All succeeded — pill completes normally (moved to recentlyCompleted)
-                showProcessResults = false
-                // Transition to CrossPostStatusView is handled by ProcessResultsOverviewView
-                // via the onComplete callback (runPublishContinuationIfReady). shouldReturnToRoot
-                // is set when the user taps Done in CrossPostStatusView (onDone closure).
             }
+            // All succeeded: the pill completes normally (moved to recentlyCompleted).
         }
     }
 
     // MARK: – Publish continuation
 
-    /// Runs post-publish work (deferred API cross-posts, web autofill jobs, sheet
-    /// transitions) once publishing has finished AND the confirmation sheet is fully
-    /// dismissed, whichever happens last. Called from publishDrafts' completion (via
-    /// beginPublish) and from the confirmation sheet's onDismiss.
+    /// Runs post-publish work (deferred API cross-posts, web autofill jobs) once
+    /// publishing has finished. Called from publishDrafts' completion (via beginPublish
+    /// and retryFailedPublish).
     func runPublishContinuationIfReady(modelContext: ModelContext) {
-        guard pendingPublishContinuation, !publishConfirmationSheetVisible else { return }
+        guard pendingPublishContinuation else { return }
         pendingPublishContinuation = false
         // Total publish failure: none of the listings were written to Firestore, so
         // cross-posting them (API or web autofill) would only produce confusing secondary
@@ -1617,8 +1622,9 @@ class UploadManager: ObservableObject {
         if !webAutofillQueue.isEmpty {
             checkAndStartNextWebJob(modelContext: modelContext)
         }
-        showResultsOverview = false
-        shouldReturnToRoot = true
+        // No navigation here: the Publish step already took the seller to Profile the
+        // moment they tapped Publish (SellRouter.finishPublish). Moving them again now,
+        // seconds later, would pull them off whatever tab they had gone to since.
     }
 
     /// Maps raw cross-post trigger errors to actionable user-facing messages.
@@ -1909,8 +1915,6 @@ class UploadManager: ObservableObject {
         AppTaskQueue.shared.complete(id: processingTaskId)
         isProcessing = false
         isPublishing = false
-        showProcessResults = false
-        showResultsOverview = false
         sessionCrossPostItems = []
         showCrossPostStatus = false
         publishError = nil

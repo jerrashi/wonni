@@ -6,11 +6,12 @@
 import SwiftUI
 import SwiftData
 
-/// Full-screen view that shows Gemini processing progress for each draft.
-/// Present as a fullScreenCover from BulkListingOverviewView.
-/// Pass onMinimize to navigate home; the view auto-dismisses when results are ready.
+/// AI processing progress for each draft: a step of the Sell stack (`CameraRoute.processing`),
+/// pushed by Drafts › Continue or opened from the task row. ‹ Back leaves while the run
+/// keeps going in the task row; Continue opens Review once every draft is done. It used
+/// to be a full-screen cover with its own Minimize / Close button (until 2026-11-20).
 struct ProcessProgressView: View {
-    var onMinimize: (() -> Void)? = nil
+    let onContinue: () -> Void
 
     @EnvironmentObject private var uploadManager: UploadManager
     @Environment(\.dismiss) private var dismiss
@@ -115,42 +116,18 @@ struct ProcessProgressView: View {
                 .padding(.vertical, 16)
             }
 
-            Spacer(minLength: 0)
-
-            Divider()
-
-            // ── Minimize button ───────────────────────────────────────────────
-            Button {
-                if let minimizeAction = onMinimize {
-                    minimizeAction()
-                } else {
-                    dismiss()
-                }
-            } label: {
-                VStack(spacing: 6) {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 22, weight: .semibold))
-                    Text(allDone ? "Close" : "Minimize")
-                        .font(.subheadline.weight(.medium))
-                }
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 20)
-            }
-            .contentShape(Rectangle())
         }
         .navigationTitle("Processing")
         .navigationBarTitleDisplayMode(.inline)
-        .onChange(of: uploadManager.showProcessResults) { _, show in
-            if show {
-                if let minimizeAction = onMinimize {
-                    // Dismiss the fullScreenCover so the global results sheet
-                    // can appear cleanly without a competing presentation.
-                    minimizeAction()
-                } else {
-                    dismiss()
-                }
-            }
+        .navigationBarBackButtonHidden(true)
+        .toolbar(.hidden, for: .tabBar)
+        .bottomActionBar {
+            BackBarButton { dismiss() }
+                .accessibilityIdentifier("processingBackButton")
+        } trailing: {
+            PrimaryBarButton(isBusy: uploadManager.isProcessing) { onContinue() }
+                .disabled(!allDone || uploadManager.isProcessing)
+                .accessibilityIdentifier("processingContinueButton")
         }
     }
 

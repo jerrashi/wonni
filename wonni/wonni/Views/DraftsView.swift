@@ -35,6 +35,8 @@ struct DraftsView: View {
     /// Pencil on a draft: the host pushes the Edit screen (`CameraRoute.edit`), so the
     /// Sell flow's bottom bar stays on screen with Cancel · Save.
     let onEdit: (UUID) -> Void
+    /// Continue: the host pushes the Processing step (`CameraRoute.processing`).
+    let onProcessing: () -> Void
     @Environment(\.dismiss) private var dismiss
 
     @State private var isSelectMode = false
@@ -43,7 +45,6 @@ struct DraftsView: View {
     @State private var selectedPhotos = Set<String>()
     @FocusState private var focusedField: DraftFocusField?
     @State private var lastFocusMoveDelta = 1
-    @State private var showProcessFullScreen = false
     @State private var showDraftBulkEdit = false
     @State private var showDesktopDrafts = false
     @State private var showBulkTextDrafts = false
@@ -116,19 +117,6 @@ struct DraftsView: View {
             try? modelContext.save()
         }
         .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isSelectMode)
-        .fullScreenCover(isPresented: $showProcessFullScreen) {
-            NavigationStack {
-                ProcessProgressView(onMinimize: {
-                    showProcessFullScreen = false
-                    // Defer the tab switch past the cover dismiss animation so SwiftUI
-                    // doesn't get two presentation changes in one frame.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        uploadManager.selectedTab = 0
-                    }
-                })
-            }
-            .environmentObject(uploadManager)
-        }
         .sheet(isPresented: $showDraftBulkEdit) {
             DraftBulkEditSheet(items: fullySelectedDrafts) { exitSelectMode() }
                 .environmentObject(uploadManager)
@@ -226,7 +214,7 @@ struct DraftsView: View {
                 Text("Processing \(uploadManager.processCurrentIndex) of \(uploadManager.processTotalCount)…")
                     .font(.caption2).foregroundStyle(.secondary)
                 Spacer()
-                Button("View") { showProcessFullScreen = true }
+                Button("View") { onProcessing() }
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.purple)
             }
@@ -337,17 +325,21 @@ struct DraftsView: View {
         }
     }
 
+    /// Continue starts processing and pushes the Processing step. While a run is going,
+    /// it just opens that step again.
     private var processButton: some View {
         let processing = uploadManager.isProcessing
         return PrimaryBarButton(isBusy: processing) {
-            // Start AI right away — Gemini reads the on-device photos, so it never waits
-            // for the Storage upload; publish re-uploads anything that didn't finish.
-            guard !processing, !drafts.isEmpty else { return }
             focusedField = nil
-            uploadManager.processDrafts(drafts: drafts, modelContext: modelContext)
-            showProcessFullScreen = true
+            if !processing {
+                guard !drafts.isEmpty else { return }
+                // Start AI right away — Gemini reads the on-device photos, so it never waits
+                // for the Storage upload; publish re-uploads anything that didn't finish.
+                uploadManager.processDrafts(drafts: drafts, modelContext: modelContext)
+            }
+            onProcessing()
         }
-        .disabled(processing || drafts.isEmpty || isSelectMode)
+        .disabled((!processing && drafts.isEmpty) || isSelectMode)
         .accessibilityIdentifier("draftsProcessButton")
     }
 

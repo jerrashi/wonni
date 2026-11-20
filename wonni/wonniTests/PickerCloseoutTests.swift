@@ -68,3 +68,123 @@ final class PickerCloseoutTests: XCTestCase {
         XCTAssertTrue(manager.deletedDraftIDs.contains(id))
     }
 }
+
+// MARK: - Sell flow resume + pending edits (2026-11-20)
+
+/// Where the Sell tab opens after a restart (`SellResume`): Review when processed drafts
+/// wait, an Edit screen left open on top of where it came from, else the camera.
+final class SellResumeTests: XCTestCase {
+    private let a = UUID(), b = UUID()
+
+    func test_nothingWaiting_opensTheCamera() {
+        let path = SellResume.initialPath(drafts: [SellDraftState(id: a)], pendingEditDraftID: nil)
+        XCTAssertEqual(path, [])
+    }
+
+    func test_processedDraftWaiting_opensReviewOverDrafts() {
+        let path = SellResume.initialPath(drafts: [SellDraftState(id: a, isProcessed: true)], pendingEditDraftID: nil)
+        XCTAssertEqual(path, [.drafts, .review])
+    }
+
+    func test_failedPublishWaiting_opensReview() {
+        let path = SellResume.initialPath(drafts: [SellDraftState(id: a, pendingPublish: true)], pendingEditDraftID: nil)
+        XCTAssertEqual(path, [.drafts, .review])
+    }
+
+    func test_publishedOrPublishingDrafts_areNotReviewable() {
+        XCTAssertFalse(SellDraftState(id: a, isPublished: true, isProcessed: true).isReviewable)
+        XCTAssertFalse(SellDraftState(id: a, isProcessed: true, isPublishing: true).isReviewable,
+                       "A draft mid-publish must not be publishable again from Review")
+        XCTAssertFalse(SellDraftState(id: a, isDraft: false, isProcessed: true).isReviewable)
+    }
+
+    func test_pendingEditOnProcessedDraft_reopensEditOverReview() {
+        let path = SellResume.initialPath(drafts: [SellDraftState(id: a, isProcessed: true)], pendingEditDraftID: a)
+        XCTAssertEqual(path, [.drafts, .review, .edit(a)])
+    }
+
+    func test_pendingEditOnUnprocessedDraft_reopensEditOverDrafts() {
+        let path = SellResume.initialPath(
+            drafts: [SellDraftState(id: a), SellDraftState(id: b, isProcessed: true)],
+            pendingEditDraftID: a
+        )
+        XCTAssertEqual(path, [.drafts, .edit(a)])
+    }
+
+    func test_pendingEditForAGoneOrPublishedDraft_isIgnored() {
+        XCTAssertEqual(SellResume.initialPath(drafts: [], pendingEditDraftID: a), [])
+        XCTAssertEqual(SellResume.initialPath(drafts: [SellDraftState(id: a, isPublished: true)], pendingEditDraftID: a), [])
+    }
+}
+
+/// The Edit screen writes every change to a `PendingDraftEdit`, never the draft, until Save.
+@MainActor
+final class PendingDraftEditTests: XCTestCase {
+    private var container: ModelContainer!
+    private var context: ModelContext { container.mainContext }
+
+    override func setUpWithError() throws {
+        container = try ModelContainer(
+            for: Item.self, PendingDraftEdit.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+    }
+
+    private func makeDraft() -> Item {
+        let item = Item(sourceAssetIdentifiers: ["asset-1"])
+        item.aiSuggestedTitle = "Game Boy Color"
+        item.userEditedPrice = 75
+        context.insert(item)
+        try? context.save()
+        return item
+    }
+
+    func test_formRoundTrip_changesNothing() {
+        let item = makeDraft()
+        let before = DraftEditFields(item: item)
+        before.apply(to: item)
+        XCTAssertEqual(DraftEditFields(item: item), before)
+    }
+
+    func test_record_keepsTheDraftUntouched() {
+        let item = makeDraft()
+        var fields = DraftEditFields(item: item)
+        fields.title = "Game Boy Color, teal"
+        fields.priceText = "80.00"
+        PendingDraftEdit.record(fields, for: item, in: context)
+
+        XCTAssertEqual(item.userEditedTitle, nil, "Typing must not write to the draft")
+        XCTAssertEqual(item.userEditedPrice, 75)
+        XCTAssertEqual(PendingDraftEdit.find(item.id, in: context)?.fields, fields)
+    }
+
+    func test_recordingTheDraftsOwnValues_removesThePendingCopy() {
+        let item = makeDraft()
+        var fields = DraftEditFields(item: item)
+        fields.title = "changed"
+        PendingDraftEdit.record(fields, for: item, in: context)
+        fields.title = "Game Boy Color"
+        PendingDraftEdit.record(fields, for: item, in: context)
+        XCTAssertNil(PendingDraftEdit.find(item.id, in: context), "Nothing left to resume")
+    }
+
+    func test_saveApplies_andCancelDiscards() {
+        let item = makeDraft()
+        var fields = DraftEditFields(item: item)
+        fields.title = "Saved title"
+        PendingDraftEdit.record(fields, for: item, in: context)
+
+        // Save
+        PendingDraftEdit.find(item.id, in: context)?.fields?.apply(to: item)
+        PendingDraftEdit.discard(item.id, in: context)
+        XCTAssertEqual(item.userEditedTitle, "Saved title")
+        XCTAssertNil(PendingDraftEdit.find(item.id, in: context))
+
+        // Cancel
+        fields.title = "Thrown away"
+        PendingDraftEdit.record(fields, for: item, in: context)
+        PendingDraftEdit.discard(item.id, in: context)
+        XCTAssertEqual(item.userEditedTitle, "Saved title")
+        XCTAssertNil(PendingDraftEdit.find(item.id, in: context))
+    }
+}

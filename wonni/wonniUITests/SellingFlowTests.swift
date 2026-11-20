@@ -129,22 +129,19 @@ final class SellingFlowTests: XCTestCase {
         XCTAssert(processButton.exists, "Process button should exist")
         processButton.tap()
 
-        // 7. Wait for ProcessProgressView sheet to appear
-        let processingTitle = app.staticTexts["Processing"]
-        XCTAssert(processingTitle.waitForExistence(timeout: 5), "Processing view should appear")
+        // 7. Processing is pushed onto the Sell stack (a cover until 2026-11-20).
+        let processingTitle = app.navigationBars["Processing"]
+        XCTAssert(processingTitle.waitForExistence(timeout: 5), "Processing step should appear")
 
-        // 8. Wait for AI processing to complete (longer timeout for API calls)
-        let processCompleteText = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Complete' OR label CONTAINS 'processed'")).firstMatch
-        XCTAssert(processCompleteText.waitForExistence(timeout: 60), "AI processing should complete within 60s")
+        // 8-10. Nothing auto-advances any more: Continue enables once every draft is done
+        // and opens Review.
+        let processingContinue = app.buttons["processingContinueButton"]
+        XCTAssert(processingContinue.waitForExistence(timeout: 5), "Processing has Continue in its bottom bar")
+        let enabled = NSPredicate(format: "isEnabled == true")
+        expectation(for: enabled, evaluatedWith: processingContinue)
+        waitForExpectations(timeout: 60)
+        processingContinue.tap()
 
-        // 9. The processing sheet auto-dismisses itself (UploadManager.processDrafts sets
-        // showProcessResults = true ~1.2s after processing finishes) — no manual dismiss
-        // needed. A prior version of this test tapped a "Close" button here, but that raced
-        // the auto-dismiss: `.exists` could pass and the button still vanish before `.tap()`
-        // landed, failing the whole test on an XCUIElement AX-action error rather than a
-        // real assertion (found 2026-09-15, CI run 35007555834).
-
-        // 10. Wait for ProcessResultsOverviewView (Review & Publish sheet) to appear
         let reviewTitle = app.navigationBars["Review"]
         XCTAssert(reviewTitle.waitForExistence(timeout: 10), "Review screen should appear")
 
@@ -155,9 +152,9 @@ final class SellingFlowTests: XCTestCase {
         // 12. Tap Continue
         publishButton.tap()
 
-        // 13. Wait for PublishConfirmationSheet with platform toggles
-        let publishConfirmTitle = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Publish'")).firstMatch
-        XCTAssert(publishConfirmTitle.waitForExistence(timeout: 5), "Publish confirmation sheet should appear")
+        // 13. The Publish step (pushed, not a sheet) with platform toggles
+        let publishConfirmTitle = app.navigationBars["Publish"]
+        XCTAssert(publishConfirmTitle.waitForExistence(timeout: 5), "Publish step should appear")
 
         // 14. Verify platform toggles exist and respond
         let mercariToggle = app.switches.matching(NSPredicate(format: "label CONTAINS 'Mercari'")).firstMatch
@@ -173,7 +170,7 @@ final class SellingFlowTests: XCTestCase {
         XCTAssertEqual(switchIsOn(mercariToggle), true, "Mercari toggle should be ON after tapping")
 
         // 17. Tap Publish button in confirmation sheet
-        let confirmPublishButton = app.buttons.matching(NSPredicate(format: "label == 'Publish'")).firstMatch
+        let confirmPublishButton = app.buttons["crossPostConfirmButton"]
         XCTAssert(confirmPublishButton.exists, "Publish confirmation button should exist")
         confirmPublishButton.tap()
 
@@ -566,7 +563,7 @@ extension SellingFlowTests {
         XCTAssert(selectButton.waitForExistence(timeout: 10), "Back from the draft's picker should land on the drawer")
         XCTAssertEqual(app.state, .runningForeground)
 
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["draftsBackButton"].tap()
         XCTAssert(backButton.waitForExistence(timeout: 10), "Back from the drawer should land on the first picker")
         backButton.tap()
         XCTAssert(galleryButton.waitForExistence(timeout: 10), "Back from the first picker should land on the camera")
@@ -674,5 +671,64 @@ extension SellingFlowTests {
         XCTAssert(cameraProceed.waitForExistence(timeout: 5), "Camera should show Proceed at the bottom")
         let shot2 = XCTAttachment(screenshot: app.screenshot())
         shot2.name = "camera-bottom-bar"; shot2.lifetime = .keepAlways; add(shot2)
+    }
+}
+
+extension SellingFlowTests {
+    /// The Sell flow is one stack (2026-11-20): Drafts → Processing → Review → Publish,
+    /// every step with ‹ Back · Continue at the bottom, and Back always one step back.
+    /// Runs without the backend: unsigned-in AI processing fails fast, which still
+    /// finishes the run (failed drafts go to Review to be filled in by hand).
+    func testSellFlowIsOneStackWithBackOneStepAtATime() throws {
+        let photosInterruption = addUIInterruptionMonitor(withDescription: "Photos permission") { alert in
+            let allowButtons = alert.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'Allow' OR label CONTAINS 'OK'")
+            )
+            if allowButtons.count > 0 { allowButtons.firstMatch.tap(); return true }
+            return false
+        }
+        defer { removeUIInterruptionMonitor(photosInterruption) }
+
+        app.tabBars.buttons["Sell"].tap()
+        let galleryButton = app.buttons["cameraGalleryButton"]
+        XCTAssert(galleryButton.waitForExistence(timeout: 5))
+        galleryButton.tap()
+        app.tap()
+        waitForPhotoGridItem(reopeningVia: galleryButton).tap()
+
+        let pickerContinue = app.buttons["pickerProceedButton"]
+        XCTAssert(pickerContinue.waitForExistence(timeout: 5))
+        pickerContinue.tap()
+
+        // Drafts → Processing
+        let draftsContinue = app.buttons["draftsProcessButton"]
+        XCTAssert(draftsContinue.waitForExistence(timeout: 10), "Drafts should be pushed")
+        draftsContinue.tap()
+        XCTAssert(app.navigationBars["Processing"].waitForExistence(timeout: 5), "Processing is a pushed step")
+        XCTAssert(app.buttons["processingBackButton"].exists, "Processing has ‹ Back in the bottom bar")
+
+        // Processing → Review once the run ends
+        let processingContinue = app.buttons["processingContinueButton"]
+        expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: processingContinue)
+        waitForExpectations(timeout: 90)
+        processingContinue.tap()
+        XCTAssert(app.navigationBars["Review"].waitForExistence(timeout: 10), "Continue opens Review")
+
+        // Review → Publish, and Back from Publish lands on Review
+        let reviewContinue = app.buttons["reviewContinueButton"]
+        XCTAssert(reviewContinue.waitForExistence(timeout: 5))
+        if reviewContinue.isEnabled {
+            reviewContinue.tap()
+            XCTAssert(app.navigationBars["Publish"].waitForExistence(timeout: 5), "Publish is a pushed step")
+            XCTAssert(app.buttons["crossPostConfirmButton"].exists, "Publish sits where Continue does")
+            app.buttons["publishBackButton"].tap()
+            XCTAssert(app.navigationBars["Review"].waitForExistence(timeout: 5), "Back from Publish lands on Review")
+        }
+
+        // Back from Review lands on Drafts (it used to jump to the camera).
+        app.buttons["reviewBackButton"].tap()
+        XCTAssert(app.buttons["draftHistorySelectButton"].waitForExistence(timeout: 5),
+                  "Back from Review should land on Drafts")
+        XCTAssertEqual(app.state, .runningForeground)
     }
 }

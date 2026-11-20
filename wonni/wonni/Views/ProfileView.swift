@@ -143,7 +143,7 @@ struct ProfileView: View {
                     }
                 }
             }
-            .sheet(item: $sellSimilarDraftItem) { item in
+            .fullScreenCover(item: $sellSimilarDraftItem) { item in
                 DraftEditSheet(item: item)
             }
             .sheet(isPresented: $showImportSheet) {

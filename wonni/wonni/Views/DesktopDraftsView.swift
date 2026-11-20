@@ -53,7 +53,7 @@ struct DesktopDraftsView: View {
         .navigationTitle("Desktop Drafts")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
-        .sheet(item: $adoptedItem) { item in
+        .fullScreenCover(item: $adoptedItem) { item in
             DraftEditSheet(item: item)
         }
         .onChange(of: adoptedItem) { _, newValue in

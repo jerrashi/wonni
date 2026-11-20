@@ -76,6 +76,6 @@ struct WonniApp: App {
                     bulkImportManager.pendingDeepLinkImportUrl = productUrl
                 }
         }
-        .modelContainer(for: [Item.self, Listing.self, Expense.self, Mileage.self])
+        .modelContainer(for: [Item.self, Listing.self, Expense.self, Mileage.self, PendingDraftEdit.self])
     }
 }

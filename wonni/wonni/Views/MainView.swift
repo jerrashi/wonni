@@ -144,10 +144,6 @@ struct MainView: View {
         } message: { summary in
             Text(summary.message)
         }
-        .sheet(isPresented: $uploadManager.showProgressSheet) {
-            NavigationStack { ProcessProgressView() }
-                .environmentObject(uploadManager)
-        }
         .sheet(isPresented: $bulkImportManager.showProgressSheet) {
             NavigationStack { BulkImportProgressView() }
                 .environmentObject(bulkImportManager)
@@ -185,22 +181,19 @@ struct MainView: View {
         )) {
             ImportListingSheet(initialUrlString: bulkImportManager.pendingDeepLinkImportUrl ?? "")
         }
-        // When AI processing finishes, show the publish overview globally.
-        // The 0.5 s delay lets any open cover/sheet (ProcessProgressView fullScreenCover
-        // or pill sheet) finish its dismiss animation before the results view appears —
-        // presenting two covers simultaneously in the same frame corrupts the nav stack.
-        .onChange(of: uploadManager.showProcessResults) { _, show in
-            if show {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    uploadManager.showResultsOverview = true
-                }
+        // Publish failed for every listing. Shown here, not on Review, because the
+        // Publish step has already taken the seller to Profile by the time it is known.
+        .alert("Publish Failed", isPresented: Binding(
+            get: { uploadManager.publishError != nil },
+            set: { if !$0 { uploadManager.publishError = nil } }
+        )) {
+            Button("Review") {
+                uploadManager.publishError = nil
+                SellRouter.shared.openReview()
             }
-        }
-        // Close the results view when publishing completes and the app returns to root.
-        .onChange(of: uploadManager.shouldReturnToRoot) { _, should in
-            if should {
-                uploadManager.showResultsOverview = false
-            }
+            Button("OK", role: .cancel) { uploadManager.publishError = nil }
+        } message: {
+            Text(uploadManager.publishError ?? "")
         }
         // Failed-publish modal alert: shown once per launch when the sell tab is first
         // entered and sweepFailedPublishDrafts found pendingPublish=true items.
@@ -216,26 +209,15 @@ struct MainView: View {
             )
         ) {
             Button("Retry") {
-                let draftsToRetry = uploadManager.failedPublishDrafts
                 uploadManager.failedPublishDrafts = []
-                // Navigate to ProcessResultsOverviewView — all isDraft=true items appear
-                // there, with pendingPublish=true items highlighted in orange
-                uploadManager.showResultsOverview = true
-                _ = draftsToRetry // keep reference alive through the closure
+                // Review lists pendingPublish drafts, highlighted in orange.
+                SellRouter.shared.openReview()
             }
             Button("Dismiss", role: .cancel) {
                 uploadManager.failedPublishDrafts = []
             }
         } message: {
             Text("Your drafts were saved and are ready to retry. They won't appear in your draft list until you retry or delete them.")
-        }
-        // Full screen (spec N4), not a sheet: Review & Publish is a primary flow step.
-        // Its Back button pops the camera tab to the camera itself (drafts saved) via
-        // uploadManager.returnToCameraRoot; leaving mid-publish is safe because the
-        // continuation lives on UploadManager (Phase 3), reachable again from the pill.
-        .fullScreenCover(isPresented: $uploadManager.showResultsOverview) {
-            NavigationStack { ProcessResultsOverviewView() }
-                .environmentObject(uploadManager)
         }
         // Mercari cross-post job (Q1/Q2): mounted invisibly so its WebView keeps running
         // headlessly and its fullScreenCover is available — the visible pill is now the

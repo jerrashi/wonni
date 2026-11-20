@@ -452,34 +452,15 @@ struct DraftEditSheet: View {
     @StateObject private var settingsRepo = SellingSettingsRepository.shared
 
     @State private var cache = CachedImageManager()
-    @State private var title: String = ""
-    @State private var priceText: String = ""
-    @State private var paidText: String = ""
-    @State private var quantityText: String = "1"
-    @State private var description: String = ""
-    @State private var personalNote: String = ""
-    @State private var buyerPaysShipping: Bool = true
-    @State private var handlingFee: String = ""
-    @State private var estimatedDays: String = ""
-    @State private var selectedCondition: ItemCondition = .good
-    @State private var tagsText: String = ""
-    // Facebook overrides: nil = account default (see Item.facebookOfferShipping).
-    @State private var facebookOfferShipping: Bool?
-    @State private var facebookHideFromFriends: Bool?
-    // Mercari Smart Pricing: nil until touched (the toggle shows the account value).
-    @State private var mercariSmartPricing: Bool?
+    /// The whole form. Every change is saved as a `PendingDraftEdit`, never to the draft;
+    /// Save applies it, Cancel discards it (user decision 2026-11-20).
+    @State private var fields = DraftEditFields()
+    /// Stops the initial load from being recorded as an edit.
+    @State private var isLoaded = false
     @AppStorage("mercariKeepSmartPricing") private var accountSmartPricing = false
 
     @State private var showPhotoEditModal = false
     @State private var selectedItems: [PhotosPickerItem] = []
-
-    // Shipping & Dimensions state
-    @State private var weightText: String = ""
-    @State private var lengthText: String = ""
-    @State private var widthText: String = ""
-    @State private var heightText: String = ""
-    /// nil = inherit the account's default handling time at publish time.
-    @State private var handlingTimeDaysOverride: Int? = nil
 
     @State private var showTemplatePicker = false
     @State private var isApplyingTemplate = false
@@ -489,6 +470,8 @@ struct DraftEditSheet: View {
         if embedded {
             content
         } else {
+            // Outside the Sell stack (Profile's sell-similar, Desktop Drafts) Edit is a
+            // full-screen cover: no swipe-down, so leaving is always Cancel or Save.
             NavigationStack { content }
         }
     }
@@ -553,15 +536,15 @@ struct DraftEditSheet: View {
                 }
 
                 Section("Title & Price") {
-                    TextField("Title", text: $title)
+                    TextField("Title", text: $fields.title)
                         .font(.body.weight(.medium))
-                        .onChange(of: title) { _, v in
-                            if v.count > 140 { title = String(v.prefix(140)) }
+                        .onChange(of: fields.title) { _, v in
+                            if v.count > 140 { fields.title = String(v.prefix(140)) }
                         }
-                    TitleCharCountView(count: title.count, showPlatformMessage: false)
+                    TitleCharCountView(count: fields.title.count, showPlatformMessage: false)
                     HStack {
                         Text("$")
-                        TextField("0.00", text: $priceText)
+                        TextField("0.00", text: $fields.priceText)
                             .keyboardType(.decimalPad)
                     }
                     // What the seller paid (cost). Filled by a pasted product link; shown
@@ -570,7 +553,7 @@ struct DraftEditSheet: View {
                         Text("Paid")
                         Spacer()
                         Text("$").foregroundStyle(.secondary)
-                        TextField("0.00", text: $paidText)
+                        TextField("0.00", text: $fields.paidText)
                             .keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing)
                             .frame(maxWidth: 110)
@@ -579,13 +562,13 @@ struct DraftEditSheet: View {
                     // Typed AND stepped: 100 units is a number to type, not 99 taps.
                     HStack {
                         Text("Quantity")
-                        TextField("1", text: $quantityText)
+                        TextField("1", text: $fields.quantityText)
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.trailing)
                             .accessibilityIdentifier("draftEditQuantityField")
                         Stepper("", value: Binding(
-                            get: { max(1, Int(quantityText.filter(\.isNumber)) ?? 1) },
-                            set: { quantityText = String($0) }
+                            get: { max(1, Int(fields.quantityText.filter(\.isNumber)) ?? 1) },
+                            set: { fields.quantityText = String($0) }
                         ), in: 1...9999)
                         .labelsHidden()
                         .accessibilityIdentifier("draftEditQuantityStepper")
@@ -593,7 +576,7 @@ struct DraftEditSheet: View {
                 }
 
                 Section("Description") {
-                    TextEditor(text: $description)
+                    TextEditor(text: $fields.description)
                         .frame(minHeight: 80)
                 }
 
@@ -619,7 +602,7 @@ struct DraftEditSheet: View {
                 }
 
                 Section("Condition") {
-                    Picker("Condition", selection: $selectedCondition) {
+                    Picker("Condition", selection: $fields.condition) {
                         ForEach(ItemCondition.allCases, id: \.self) { c in
                             Text(c.displayName).tag(c)
                         }
@@ -627,20 +610,20 @@ struct DraftEditSheet: View {
                 }
 
                 Section("Tags") {
-                    TextField("e.g. photocard, kpop, sealed", text: $tagsText)
+                    TextField("e.g. photocard, kpop, sealed", text: $fields.tagsText)
                 }
 
                 Section("Note (hidden from buyer)") {
-                    TextField("e.g. stored in basement", text: $personalNote)
+                    TextField("e.g. stored in basement", text: $fields.personalNote)
                 }
 
                 Section {
-                    Picker("Offer shipping", selection: $facebookOfferShipping) {
+                    Picker("Offer shipping", selection: $fields.facebookOfferShipping) {
                         Text("Default").tag(Bool?.none)
                         Text("On").tag(Bool?.some(true))
                         Text("Off").tag(Bool?.some(false))
                     }
-                    Picker("Hide from friends", selection: $facebookHideFromFriends) {
+                    Picker("Hide from friends", selection: $fields.facebookHideFromFriends) {
                         Text("Default").tag(Bool?.none)
                         Text("On").tag(Bool?.some(true))
                         Text("Off").tag(Bool?.some(false))
@@ -653,26 +636,26 @@ struct DraftEditSheet: View {
 
                 Section {
                     Toggle("Smart Pricing", isOn: Binding(
-                        get: { mercariSmartPricing ?? accountSmartPricing },
-                        set: { mercariSmartPricing = $0 }
+                        get: { fields.mercariSmartPricing ?? accountSmartPricing },
+                        set: { fields.mercariSmartPricing = $0 }
                     ))
                     .accessibilityIdentifier("draftEditSmartPricingToggle")
                 } header: {
                     Text("Mercari")
                 } footer: {
-                    Text(mercariSmartPricing == nil
+                    Text(fields.mercariSmartPricing == nil
                          ? "Follows the Post menu's Smart Pricing toggle. Listings under $10 are always off."
                          : "Set here, this draft keeps its own value when you publish, whatever the Post menu's toggle says. Listings under $10 are always off.")
                 }
 
                 Section("Shipping & Dimensions") {
-                    Toggle("Buyer pays shipping", isOn: $buyerPaysShipping)
-                    if !buyerPaysShipping {
+                    Toggle("Buyer pays shipping", isOn: $fields.buyerPaysShipping)
+                    if !fields.buyerPaysShipping {
                         HStack {
                             Text("Handling fee")
                             Spacer()
                             Text("$")
-                            TextField("0.00", text: $handlingFee)
+                            TextField("0.00", text: $fields.handlingFee)
                                 .keyboardType(.decimalPad)
                                 .multilineTextAlignment(.trailing)
                                 .frame(width: 80)
@@ -681,21 +664,21 @@ struct DraftEditSheet: View {
                     HStack {
                         Text("Est. shipping days")
                         Spacer()
-                        TextField("3", text: $estimatedDays)
+                        TextField("3", text: $fields.estimatedDays)
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 60)
                     }
 
                     VStack(alignment: .leading, spacing: 4) {
-                        Picker("Handling Time", selection: $handlingTimeDaysOverride) {
+                        Picker("Handling Time", selection: $fields.handlingTimeDays) {
                             Text("Default (\(HandlingTimeOptions.label(for: settingsRepo.settings?.handlingTimeDays ?? 1)))").tag(Int?.none)
                             ForEach(HandlingTimeOptions.days, id: \.self) { days in
                                 Text(HandlingTimeOptions.label(for: days)).tag(Int?.some(days))
                             }
                         }
                         .pickerStyle(.menu)
-                        if handlingTimeDaysOverride == nil {
+                        if fields.handlingTimeDays == nil {
                             Text("Uses your default shipping time — change it in Settings.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -705,7 +688,7 @@ struct DraftEditSheet: View {
                     HStack {
                         Text("Weight (lbs)")
                         Spacer()
-                        TextField("lbs", text: $weightText)
+                        TextField("lbs", text: $fields.weightText)
                             .keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 80)
@@ -719,21 +702,21 @@ struct DraftEditSheet: View {
                         HStack(spacing: 12) {
                             HStack {
                                 Text("L:")
-                                TextField("Length", text: $lengthText)
+                                TextField("Length", text: $fields.lengthText)
                                     .keyboardType(.decimalPad)
                                     .textFieldStyle(.roundedBorder)
                                     .multilineTextAlignment(.center)
                             }
                             HStack {
                                 Text("W:")
-                                TextField("Width", text: $widthText)
+                                TextField("Width", text: $fields.widthText)
                                     .keyboardType(.decimalPad)
                                     .textFieldStyle(.roundedBorder)
                                     .multilineTextAlignment(.center)
                             }
                             HStack {
                                 Text("H:")
-                                TextField("Height", text: $heightText)
+                                TextField("Height", text: $fields.heightText)
                                     .keyboardType(.decimalPad)
                                     .textFieldStyle(.roundedBorder)
                                     .multilineTextAlignment(.center)
@@ -757,15 +740,22 @@ struct DraftEditSheet: View {
             .navigationBarBackButtonHidden(true)
             .toolbar(.hidden, for: .tabBar)
             .bottomActionBar {
-                Button("Cancel") { dismiss() }
-                    .buttonStyle(BottomBarButtonStyle(kind: .secondary))
-                    .accessibilityIdentifier("draftEditCancelButton")
+                Button("Cancel") {
+                    PendingDraftEdit.discard(item.id, in: modelContext)
+                    dismiss()
+                }
+                .buttonStyle(BottomBarButtonStyle(kind: .secondary))
+                .accessibilityIdentifier("draftEditCancelButton")
             } trailing: {
                 PrimaryBarButton(title: "Save") {
                     saveToDraft()
                     dismiss()
                 }
                 .accessibilityIdentifier("draftEditSaveButton")
+            }
+            .onChange(of: fields) { _, newValue in
+                guard isLoaded else { return }
+                PendingDraftEdit.record(newValue, for: item, in: modelContext)
             }
             .sheet(isPresented: $showTemplatePicker) {
                 TemplatePickerSheet { template in
@@ -775,12 +765,16 @@ struct DraftEditSheet: View {
             .fullScreenCover(isPresented: $showPhotoEditModal) {
                 DraftPhotoEditModal(item: item)
             }
-            .onAppear { loadFromDraft() }
+            .onAppear { if !isLoaded { loadForm() } }
             .task {
                 // Pull first (in case this draft was edited on web since last opened
-                // here), then reload the form fields so they reflect whatever's newest.
+                // here), then reload the form so it reflects whatever's newest — unless
+                // the seller has unsaved changes, which always win.
                 await UploadManager.shared.pullProductIfNewer(item, modelContext: modelContext)
-                loadFromDraft()
+                if PendingDraftEdit.find(item.id, in: modelContext) == nil {
+                    isLoaded = false
+                    loadForm()
+                }
                 await SellingSettingsRepository.shared.loadSettings()
             }
         }
@@ -788,15 +782,15 @@ struct DraftEditSheet: View {
 
 
     private func applyTemplateToDraft(_ template: ListingTemplate) {
-        if let t = template.title, !t.isEmpty { title = t }
-        if let d = template.customDescription, !d.isEmpty { description = d }
-        if let c = template.condition, let cond = ItemCondition(rawValue: c) { selectedCondition = cond }
-        if let free = template.isFreeShipping { buyerPaysShipping = !free }
-        if let w = template.weightLbs { weightText = String(format: "%.2f", w) }
+        if let t = template.title, !t.isEmpty { fields.title = t }
+        if let d = template.customDescription, !d.isEmpty { fields.description = d }
+        if let c = template.condition, let cond = ItemCondition(rawValue: c) { fields.condition = cond }
+        if let free = template.isFreeShipping { fields.buyerPaysShipping = !free }
+        if let w = template.weightLbs { fields.weightText = String(format: "%.2f", w) }
         if let dims = template.packageDimensions {
-            lengthText = String(format: "%.2f", dims.lengthIn)
-            widthText = String(format: "%.2f", dims.widthIn)
-            heightText = String(format: "%.2f", dims.heightIn)
+            fields.lengthText = String(format: "%.2f", dims.lengthIn)
+            fields.widthText = String(format: "%.2f", dims.widthIn)
+            fields.heightText = String(format: "%.2f", dims.heightIn)
         }
         guard !template.photoPaths.isEmpty else { return }
         isApplyingTemplate = true
@@ -813,77 +807,21 @@ struct DraftEditSheet: View {
         }
     }
 
-    private func loadFromDraft() {
-        title = item.userEditedTitle ?? item.aiSuggestedTitle ?? ""
-        if let p = item.userEditedPrice {
-            priceText = String(format: "%.2f", p)
-        }
-        if let paid = item.sourcePrice {
-            paidText = String(format: "%.2f", paid)
-        }
-        quantityText = String(max(1, item.quantity ?? 1))
-        description = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
-        personalNote = item.personalNote ?? ""
-        if let c = item.condition, let parsed = ItemCondition(rawValue: c) {
-            selectedCondition = parsed
-        } else {
-            selectedCondition = .good
-        }
-        buyerPaysShipping = item.buyerPaysShipping
-        handlingFee = item.handlingFee > 0 ? String(format: "%.2f", item.handlingFee) : ""
-        estimatedDays = "\(item.estimatedShippingDays)"
-        handlingTimeDaysOverride = item.handlingTimeDays
-        tagsText = item.tags.joined(separator: ", ")
-        facebookOfferShipping = item.facebookOfferShipping
-        mercariSmartPricing = item.mercariSmartPricing
-        facebookHideFromFriends = item.facebookHideFromFriends
-        
-        // Dimensions & Weight
-        if let w = item.weightLbs { weightText = String(format: "%.2f", w) } else { weightText = "" }
-        if let l = item.lengthIn { lengthText = String(format: "%.2f", l) } else { lengthText = "" }
-        if let w = item.widthIn { widthText = String(format: "%.2f", w) } else { widthText = "" }
-        if let h = item.heightIn { heightText = String(format: "%.2f", h) } else { heightText = "" }
+    /// Opens on the unsaved changes when there are some (the app closed with this screen
+    /// open, or the seller left and came back), else on the draft itself.
+    private func loadForm() {
+        fields = PendingDraftEdit.find(item.id, in: modelContext)?.fields ?? DraftEditFields(item: item)
+        // Set after this update so the assignment above isn't recorded as an edit.
+        DispatchQueue.main.async { isLoaded = true }
     }
 
     private func saveToDraft() {
-        // Editing an AI-changed title/description here counts as taking ownership,
-        // same as inline edits in ResultDraftRow: a real change retires the AI diff
-        // (Review & Publish then shows a normal field, not the word-diff).
-        if item.originalUserTitleBeforeAI != nil,
-           title != (item.userEditedTitle ?? item.aiSuggestedTitle ?? "") {
-            item.originalUserTitleBeforeAI = nil
-        }
-        if item.originalUserDescriptionBeforeAI != nil,
-           description != (item.userEditedDescription ?? item.aiSuggestedDescription ?? "") {
-            item.originalUserDescriptionBeforeAI = nil
-        }
-        item.userEditedTitle = title.isEmpty ? nil : title
-        item.userEditedPrice = Double(priceText.filter { $0.isNumber || $0 == "." })
-        item.sourcePrice = Double(paidText.filter { $0.isNumber || $0 == "." })
-        let quantity = Int(quantityText.filter(\.isNumber)) ?? 1
-        item.quantity = quantity > 1 ? quantity : nil   // nil = 1 everywhere else
-        item.userEditedDescription = description.isEmpty ? nil : description
-        item.personalNote = personalNote.isEmpty ? nil : personalNote
-        item.condition = selectedCondition.rawValue
-        item.buyerPaysShipping = buyerPaysShipping
-        item.handlingFee = Double(handlingFee.filter { $0.isNumber || $0 == "." }) ?? 0
-        item.estimatedShippingDays = Int(estimatedDays) ?? 3
-        item.handlingTimeDays = handlingTimeDaysOverride
-        item.facebookOfferShipping = facebookOfferShipping
-        item.facebookHideFromFriends = facebookHideFromFriends
-        item.mercariSmartPricing = mercariSmartPricing
-        item.tags = tagsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        
-        // Dimensions & Weight
-        item.weightLbs = Double(weightText.filter { $0.isNumber || $0 == "." })
-        item.lengthIn = Double(lengthText.filter { $0.isNumber || $0 == "." })
-        item.widthIn = Double(widthText.filter { $0.isNumber || $0 == "." })
-        item.heightIn = Double(heightText.filter { $0.isNumber || $0 == "." })
-
+        fields.apply(to: item)
+        PendingDraftEdit.discard(item.id, in: modelContext)
         try? modelContext.save()
         UploadManager.shared.syncProductData(item)
     }
-    }
+}
 
 
 // MARK: - DescriptionEditorSheet
@@ -968,15 +906,21 @@ enum DraftFocusSubfield: Hashable { case title, price, description }
 // MARK: - ProcessResultsOverviewView
 
 
+/// Review: a step of the Sell stack (`CameraRoute.review`). ‹ Back pops to Drafts;
+/// Continue pushes Publish with the selected drafts; a row's pencil pushes Edit.
 struct ProcessResultsOverviewView: View {
+    let onEdit: (UUID) -> Void
+    let onContinue: ([UUID]) -> Void
+
     @Environment(\.modelContext) private var modelContext
-    @Query(filter: #Predicate<Item> { $0.isDraft == true })
+    @Environment(\.dismiss) private var dismiss
+    @Query(filter: #Predicate<Item> { $0.isDraft == true }, sort: \Item.createdAt, order: .reverse)
     private var allItems: [Item]
     @EnvironmentObject private var uploadManager: UploadManager
 
     @State private var cache = CachedImageManager()
     @State private var selectedIDs: Set<UUID> = []
-    @State private var showingEditSheet: Item? = nil
+    @State private var didSelectInitial = false
     @FocusState private var focusedField: DraftFocusField?
     /// Measured height of the List container, used to compute per-item description size.
     @State private var listHeight: CGFloat = 0
@@ -984,31 +928,23 @@ struct ProcessResultsOverviewView: View {
     /// ResultDraftRow.onDescriptionAutoAdvance) keeps going the same way the user was already moving.
     @State private var lastFocusMoveDelta = 1
 
-    @State private var showPublishConfirmation = false
-    // The post-publish continuation (deferred API triggers, web autofill job building,
-    // its gating flags) lives on UploadManager — see its "Publish continuation" section.
-    // It was @State here once, and dismissing this sheet mid-publish discarded it.
-
-    // Only show the items that went through AI processing
+    /// Every draft that belongs on Review, read from the drafts' saved state
+    /// (`SellDraftState.isReviewable`) so the screen is the same after a restart.
+    /// Until 2026-11-20 it was limited to this session's in-memory processed IDs, which
+    /// left it empty after a relaunch (the failed-publish Retry landed on nothing).
     private var results: [Item] {
-        let processedSet = Set(uploadManager.processedItemIDs)
-        // See UploadManager.deletedDraftIDs — deletion is deferred a tick, so this filter is
-        // what actually drops the row from the List immediately.
-        // publishedAt != nil means this item already published successfully and is only
-        // still in SwiftData because a queued web cross-post job needs its photos — drop it
-        // from the reviewable/swipeable list the moment that happens, instead of leaving a
-        // live listing looking like an ordinary draft (see deleteDraftLocallyAndCloud).
-        // pendingPublish=true items ARE kept here intentionally — they are failed-to-publish
-        // drafts that the user is retrying. They appear with an orange highlight below.
-        // Items where Gemini itself failed (processingFailedIDs) must ALSO show here, not
-        // just successes — ResultDraftRow already renders a dedicated "Couldn't identify —
-        // enter details manually" state for isGeminiFailed, but excluding them from `results`
-        // made that state unreachable: if every draft failed AI (e.g. Gemini outage), this
-        // screen rendered a totally empty list instead of the failed drafts to fix up by hand
-        // (found 2026-09-15).
-        let failedSet = Set(uploadManager.processingFailedIDs)
-        return allItems.filter { (processedSet.contains($0.id) || failedSet.contains($0.id)) && !uploadManager.deletedDraftIDs.contains($0.id) && $0.publishedAt == nil }
+        let failed = uploadManager.processingFailedIDs
+        let publishing = uploadManager.publishingIDs
+        return allItems.filter {
+            SellDraftState($0, failedIDs: failed, publishingIDs: publishing).isReviewable
+                && !uploadManager.deletedDraftIDs.contains($0.id)
+        }
     }
+
+    // publishedAt != nil: already live, only still local because a queued web
+    // cross-post job needs its photos — never reviewable. pendingPublish: a publish
+    // that failed, kept here (orange) for the retry. Failed AI drafts stay so they can
+    // be filled in by hand (the "Couldn't identify" row state).
 
     private var toPublish: [Item] {
         selectedIDs.isEmpty ? results : results.filter { selectedIDs.contains($0.id) }
@@ -1026,7 +962,8 @@ struct ProcessResultsOverviewView: View {
                         focusedField: $focusedField,
                         isGeminiFailed: uploadManager.processingFailedIDs.contains(item.id),
                         descriptionLineLimit: descriptionLineLimit,
-                        onDescriptionAutoAdvance: { moveFocus(by: lastFocusMoveDelta) }
+                        onDescriptionAutoAdvance: { moveFocus(by: lastFocusMoveDelta) },
+                        onEdit: { onEdit(item.id) }
                     )
                     .equatable()
                     // Orange tint for items that previously failed to publish
@@ -1043,28 +980,29 @@ struct ProcessResultsOverviewView: View {
             .background(GeometryReader { geo in
                 Color.clear.onAppear { listHeight = geo.size.height }
             })
-            .onAppear { selectedIDs = Set(results.map { $0.id }) }
+            .onAppear {
+                // Once: coming back from Edit or Publish keeps the seller's selection.
+                if !didSelectInitial {
+                    selectedIDs = Set(results.map { $0.id })
+                    didSelectInitial = true
+                }
+                uploadManager.reviewDidAppear()
+            }
 
         }
         .navigationTitle("Review")
         .navigationBarTitleDisplayMode(.inline)
-        // Bottom toolbar: ‹ Back · Continue (2026-11-19). Back returns to the camera with
-        // drafts saved (spec N4); safe mid-publish since the continuation lives on
-        // UploadManager. Continue opens the publish sheet. The old "Posting to Mercari
-        // in the background…" strip is gone: the task row in this bar shows it.
+        .navigationBarBackButtonHidden(true)
+        .toolbar(.hidden, for: .tabBar)
+        // ‹ Back pops to Drafts. Continue pushes Publish with the selected drafts. The
+        // task row in this bar shows uploads and cross-posts still running.
         .bottomActionBar {
-            BackBarButton {
-                uploadManager.showResultsOverview = false
-                uploadManager.returnToCameraRoot = true
-            }
-            .accessibilityIdentifier("reviewBackButton")
+            BackBarButton { dismiss() }
+                .accessibilityIdentifier("reviewBackButton")
         } trailing: {
             PrimaryBarButton(isBusy: uploadManager.isUploadingPhotos || uploadManager.isPublishing) {
                 focusedField = nil
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    uploadManager.publishConfirmationSheetVisible = true
-                    showPublishConfirmation = true
-                }
+                onContinue(toPublish.map(\.id))
             }
             .disabled(results.isEmpty || uploadManager.isUploadingPhotos || uploadManager.isPublishing)
             .accessibilityIdentifier("reviewContinueButton")
@@ -1095,87 +1033,6 @@ struct ProcessResultsOverviewView: View {
                 }
             }
         }
-        .alert("Publish Failed", isPresented: Binding(
-            get: { uploadManager.publishError != nil },
-            set: { if !$0 { uploadManager.publishError = nil } }
-        )) {
-            Button("OK", role: .cancel) { uploadManager.publishError = nil }
-        } message: {
-            Text(uploadManager.publishError ?? "")
-        }
-        // The eBay/Etsy cross-post error (crossPostError) is NOT surfaced here — see
-        // UploadManager.crossPostError. The API-trigger Task that sets it typically completes
-        // after this view has already been dismissed (showResultsOverview = false runs
-        // immediately once publish succeeds and there's no web-autofill queue to wait on), so
-        // a local alert here would silently discard it. It's shown from CrossPostStatusView
-        // instead, which is reliably the next screen the user lands on either way.
-        .sheet(isPresented: $showPublishConfirmation, onDismiss: {
-            // Fires once the sheet is FULLY gone — only now is it safe to run the
-            // post-publish continuation that mutates other sheet state.
-            uploadManager.publishConfirmationSheetVisible = false
-            uploadManager.runPublishContinuationIfReady(modelContext: modelContext)
-            // If beginPublish was called (i.e. user didn't cancel), close the results
-            // overview; the publish pill shows progress and the continuation returns the
-            // user to their listings. (CrossPostStatusView no longer opens by itself.)
-            if uploadManager.isPublishing || !uploadManager.publishStatuses.isEmpty {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    uploadManager.showResultsOverview = false
-                }
-            }
-        }) {
-            publishConfirmationSheetContent
-        }
-    }
-    
-    @ViewBuilder private var publishConfirmationSheetContent: some View {
-        CrossPostSheet(candidates: toPublish.map(CrossPostCandidate.init(draft:)), mode: .publish) { selectedPlatforms, options in
-            // Web autofill jobs are BUILT in UploadManager.runPublishContinuationIfReady,
-            // after publish completes — at this point firestoreListingId can be nil and the
-            // Storage photo uploads unfinished, so a job snapshotted now would carry empty
-            // paths / no listing ID (the old fragility: jobs held the live draft instead and
-            // broke whenever the draft was deleted or its photos still uploading). Here we
-            // only record what to build; beginPublish stores it all on the manager.
-            let webPlatforms = selectedPlatforms.filter { $0 == "mercari" || $0 == "facebook" }.sorted()
-            // Capture per-listing cross-post info now (before the drafts are deleted) so the
-            // post-publish status overview can show per-platform status and offer retries.
-            let attemptedPlatforms = Array(selectedPlatforms).sorted()
-            // Always populate so CrossPostStatusView (global sheet) can show at minimum
-            // "Wonni - posted" even when no cross-posting was selected.
-            uploadManager.sessionCrossPostItems = toPublish.compactMap { item in
-                guard let listingId = item.firestoreListingId else { return nil }
-                return CrossPostSessionItem(
-                    id: listingId,
-                    draftId: item.id,
-                    title: item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled",
-                    description: item.userEditedDescription ?? item.aiSuggestedDescription ?? "",
-                    price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
-                    coverPhotoPath: item.orderedFirebasePhotoPaths.first,
-                    photoPaths: item.orderedFirebasePhotoPaths,
-                    platforms: attemptedPlatforms,
-                    buyerPaysShipping: item.buyerPaysShipping,
-                    condition: item.condition ?? ItemCondition.good.rawValue
-                )
-            }
-            if !attemptedPlatforms.isEmpty {
-                uploadManager.crossPostStatusPending = true
-            }
-            // API cross-posts are deferred to the publish completion (the continuation)
-            // so the Firestore write completes before the Cloud Function reads the listing.
-            let apiPlatforms = selectedPlatforms.filter { $0 == "ebay" || $0 == "etsy" }
-            let apiTriggers: [UploadManager.PendingAPITrigger] = apiPlatforms.isEmpty ? [] : toPublish.compactMap { item in
-                guard let listingId = item.firestoreListingId else { return nil }
-                let title = item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled"
-                return UploadManager.PendingAPITrigger(listingId: listingId, title: title, platforms: Array(apiPlatforms))
-            }
-            uploadManager.pendingMercariSmartPricing = options.mercariSmartPricing
-            uploadManager.beginPublish(
-                drafts: toPublish,
-                webPlatforms: webPlatforms,
-                apiTriggers: apiTriggers,
-                modelContext: modelContext
-            )
-        }
-        .presentationDetents([.large])
     }
 
     private func toggleSelection(_ item: Item) {
@@ -1222,6 +1079,88 @@ struct ProcessResultsOverviewView: View {
         default: field = .description
         }
         focusedField = DraftFocusField(itemID: results[row].id, field: field)
+    }
+}
+
+// MARK: - Publish step
+
+/// Publish: the last step of the Sell stack (`CameraRoute.publish`), the platform picker
+/// for the drafts chosen on Review. It was a sheet over Review until 2026-11-20; now it
+/// has the same bottom bar as every Sell screen, ‹ Back and Publish.
+struct PublishStepView: View {
+    let draftIDs: [UUID]
+
+    @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var uploadManager: UploadManager
+    @Query(filter: #Predicate<Item> { $0.isDraft == true }) private var allItems: [Item]
+
+    /// In Review's order; drafts deleted or published since are dropped.
+    private var toPublish: [Item] {
+        draftIDs.compactMap { id in
+            allItems.first { $0.id == id && $0.publishedAt == nil && !uploadManager.deletedDraftIDs.contains(id) }
+        }
+    }
+
+    var body: some View {
+        CrossPostSheet(
+            candidates: toPublish.map(CrossPostCandidate.init(draft:)),
+            mode: .publish,
+            embedded: true
+        ) { selectedPlatforms, options in
+            publish(selectedPlatforms, options)
+            // Straight to Profile; the task row tracks the publish and cross-posts.
+            SellRouter.shared.finishPublish()
+        }
+    }
+
+    private func publish(_ selectedPlatforms: Set<String>, _ options: CrossPostOptions) {
+        let toPublish = toPublish
+        guard !toPublish.isEmpty else { return }
+        // Web autofill jobs are BUILT in UploadManager.runPublishContinuationIfReady,
+        // after publish completes — at this point firestoreListingId can be nil and the
+        // Storage photo uploads unfinished, so a job snapshotted now would carry empty
+        // paths / no listing ID (the old fragility: jobs held the live draft instead and
+        // broke whenever the draft was deleted or its photos still uploading). Here we
+        // only record what to build; beginPublish stores it all on the manager.
+        let webPlatforms = selectedPlatforms.filter { $0 == "mercari" || $0 == "facebook" }.sorted()
+        // Capture per-listing cross-post info now (before the drafts are deleted) so the
+        // post-publish status overview can show per-platform status and offer retries.
+        let attemptedPlatforms = Array(selectedPlatforms).sorted()
+        // Always populate so CrossPostStatusView (global sheet) can show at minimum
+        // "Wonni - posted" even when no cross-posting was selected.
+        uploadManager.sessionCrossPostItems = toPublish.compactMap { item in
+            guard let listingId = item.firestoreListingId else { return nil }
+            return CrossPostSessionItem(
+                id: listingId,
+                draftId: item.id,
+                title: item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled",
+                description: item.userEditedDescription ?? item.aiSuggestedDescription ?? "",
+                price: item.userEditedPrice ?? item.aiSuggestedPrice ?? 0.0,
+                coverPhotoPath: item.orderedFirebasePhotoPaths.first,
+                photoPaths: item.orderedFirebasePhotoPaths,
+                platforms: attemptedPlatforms,
+                buyerPaysShipping: item.buyerPaysShipping,
+                condition: item.condition ?? ItemCondition.good.rawValue
+            )
+        }
+        if !attemptedPlatforms.isEmpty {
+            uploadManager.crossPostStatusPending = true
+        }
+        // API cross-posts are deferred to the publish completion (the continuation)
+        // so the Firestore write completes before the Cloud Function reads the listing.
+        let apiPlatforms = selectedPlatforms.filter { $0 == "ebay" || $0 == "etsy" }
+        let apiTriggers: [UploadManager.PendingAPITrigger] = apiPlatforms.isEmpty ? [] : toPublish.compactMap { item in
+            guard let listingId = item.firestoreListingId else { return nil }
+            let title = item.userEditedTitle ?? item.aiSuggestedTitle ?? "Untitled"
+            return UploadManager.PendingAPITrigger(listingId: listingId, title: title, platforms: Array(apiPlatforms))
+        }
+        uploadManager.pendingMercariSmartPricing = options.mercariSmartPricing
+        uploadManager.beginPublish(
+            drafts: toPublish,
+            webPlatforms: webPlatforms,
+            apiTriggers: apiTriggers,
+            modelContext: modelContext
+        )
     }
 }
 
@@ -1605,6 +1544,9 @@ struct ResultDraftRow: View, Equatable {
     /// up/down arrows continue on to the next field instead of stopping dead at description,
     /// which (unlike title/price) isn't a real focusable text field.
     var onDescriptionAutoAdvance: (() -> Void)? = nil
+    /// The pencil. Review pushes the Edit screen onto the Sell stack; without a handler
+    /// the row falls back to presenting Edit as a sheet.
+    var onEdit: (() -> Void)? = nil
 
     // ProcessResultsOverviewView.body re-evaluates on every uploadManager @Published change
     // (isUploadingPhotos, isPublishing, processingFailedIDs are all read there directly) —
@@ -1717,7 +1659,7 @@ struct ResultDraftRow: View, Equatable {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                Button { showEditSheet = true } label: {
+                Button { if let onEdit { onEdit() } else { showEditSheet = true } } label: {
                     Image(systemName: "square.and.pencil")
                         .font(.title3)
                         .foregroundStyle(.secondary)
@@ -1877,7 +1819,7 @@ struct ResultDraftRow: View, Equatable {
             endEditingAITitleIfNeeded()
             saveLocalStateToModel()
         }
-        .sheet(isPresented: $showEditSheet) {
+        .fullScreenCover(isPresented: $showEditSheet) {
             DraftEditSheet(item: item)
         }
     }

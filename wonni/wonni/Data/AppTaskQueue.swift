@@ -52,8 +52,9 @@ final class AppTaskQueue: ObservableObject {
                              onTap: onTap, onCancel: onCancel))
     }
 
-    func update(id: UUID, label: String? = nil, detail: String? = nil, progress: Double? = nil, isError: Bool? = nil) {
+    func update(id: UUID, label: String? = nil, detail: String? = nil, progress: Double? = nil, isError: Bool? = nil, onTap: (() -> Void)? = nil) {
         guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
+        if let t = onTap { tasks[idx].onTap = t }
         if let l = label { tasks[idx].label = l }
         if let d = detail { tasks[idx].detail = d }
         if let p = progress { tasks[idx].progress = p }
