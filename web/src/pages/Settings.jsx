@@ -216,8 +216,11 @@ export default function Settings() {
       // own developer console (AliExpress Open Platform / TikTok Shop
       // Partner Center) — updating this string alone does nothing until
       // that registration is also updated to the new /web/oauth/* path.
-      aliexpress: "https://oauth.aliexpress.com/authorize?" + new URLSearchParams({
+      // IOP authorize (api-sg): its codes are what /rest/auth/token/create
+      // accepts. The old oauth.aliexpress.com page is the legacy TOP flow.
+      aliexpress: "https://api-sg.aliexpress.com/oauth/authorize?" + new URLSearchParams({
         response_type: "code",
+        force_auth: "true",
         client_id: ALIEXPRESS_APP_KEY,
         redirect_uri: "https://wonni-app.web.app/web/oauth/aliexpress",
         state,
