@@ -1610,7 +1610,7 @@ function ImageStrip({ images, activeIndex, onHover, onDrop, onEdit, savingMedia,
             alignItems: "center",
             justifyContent: "center",
             border: "2px dashed var(--border)",
-            background: "rgba(255, 255, 255, 0.03)",
+            background: "var(--fill)",
             cursor: savingMedia ? "not-allowed" : "pointer",
             width: 72,
             height: 72,
@@ -2059,7 +2059,7 @@ function ManageVariationsModal({ options, onChange, onClose, error, initialView 
             </>
           )}
           {error && (
-            <p className="detail-copy" style={{ fontSize: 12, color: "var(--danger, #d33)", marginTop: 8 }}>
+            <p className="detail-copy" style={{ fontSize: 12, color: "var(--danger)", marginTop: 8 }}>
               {error}
             </p>
           )}
@@ -2130,7 +2130,7 @@ function SelectPhotoModal({ images, optionName, value, onClose, onSave }) {
                     onClick={() => toggle(img.id)}
                     style={{
                       position: "relative", padding: 0, cursor: "pointer", background: "none",
-                      border: isSelected ? "2px solid var(--accent, #ff6b35)" : "2px solid transparent",
+                      border: isSelected ? "2px solid var(--accent)" : "2px solid transparent",
                       borderRadius: 8, overflow: "hidden",
                     }}
                   >
@@ -2138,7 +2138,7 @@ function SelectPhotoModal({ images, optionName, value, onClose, onSave }) {
                     {isSelected && (
                       <span
                         style={{
-                          position: "absolute", top: 4, right: 4, background: "var(--accent, #ff6b35)",
+                          position: "absolute", top: 4, right: 4, background: "var(--accent)",
                           color: "#fff", borderRadius: "50%", width: 18, height: 18, fontSize: 12,
                           display: "flex", alignItems: "center", justifyContent: "center",
                         }}
@@ -2276,7 +2276,7 @@ function MercariVariantTemplate({
                   style={{
                     display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 999,
                     fontSize: 12, cursor: "grab", userSelect: "none",
-                    background: isOption ? "#ff6b35" : "var(--surface-hover)",
+                    background: isOption ? "var(--primary)" : "var(--surface-hover)",
                     color: isOption ? "#fff" : "var(--text)",
                     border: index === tokenDropTarget ? "2px dashed var(--primary)" : "1px solid transparent",
                     opacity: index === dragTokenIndex ? 0.5 : 1,
@@ -2330,7 +2330,7 @@ function MercariVariantTemplate({
                 style={{
                   position: "relative", width: 72, height: 72, borderRadius: 8, cursor: "grab",
                   display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center",
-                  background: isSlot ? "#22c55e" : "#ff6b35", color: "#fff", fontSize: 11, fontWeight: 600,
+                  background: isSlot ? "var(--success)" : "var(--primary)", color: "#fff", fontSize: 11, fontWeight: 600,
                   border: index === tileDropTarget ? "2px dashed var(--primary)" : "2px solid transparent",
                   opacity: index === dragTileIndex ? 0.5 : 1, overflow: "hidden",
                 }}
@@ -2451,7 +2451,7 @@ function VariantMercariTile({
 
       {status === "active" ? (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-          <a href={variant.mercariUrl || "#"} target="_blank" rel="noreferrer" style={{ color: "#22c55e", fontSize: 11 }}>
+          <a href={variant.mercariUrl || "#"} target="_blank" rel="noreferrer" style={{ color: "var(--success)", fontSize: 11 }}>
             ✓ Live
           </a>
           <button className="btn btn-ghost" style={{ fontSize: 10, padding: "1px 6px" }} onClick={() => onSync(variant)}>
@@ -3084,7 +3084,7 @@ export function ActionToast({ message, actions = [], onDismiss, autoDismissMs = 
         <button
           key={a.label}
           className="btn btn-ghost"
-          style={{ padding: "4px 10px", fontSize: 12, background: a.primary ? "#ff6b35" : undefined, color: a.primary ? "white" : undefined }}
+          style={{ padding: "4px 10px", fontSize: 12, background: a.primary ? "var(--primary)" : undefined, color: a.primary ? "white" : undefined }}
           onClick={() => { a.onClick(); onDismiss(); }}
         >
           {a.label}
@@ -5177,20 +5177,17 @@ function ProductDetail() {
 
   return (
     <Layout>
-      <div className="page-header">
-        <div>
-          <button className="btn btn-ghost" style={{ marginBottom: 12 }} onClick={() => navigate(-1)}>
-            ← Back
-          </button>
-          <h1>{product?.title ?? "Product detail"}</h1>
-          <div style={{ marginTop: 6, fontSize: 13, color: "var(--muted)" }}>
-            {product?.artistName ? `${product.artistName} · ` : ""}
-            {badgeLabel(product?.source)}
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {saving && <span style={{ fontSize: 12, color: "var(--muted)" }}>Saving…</span>}
-          {!saving && lastSaveTime && <span style={{ fontSize: 12, color: "var(--muted)" }}>Saved</span>}
+      {/* iOS top bar: ‹ Back leading · save status + actions trailing. Edits
+          autosave (writeFieldsNow, 1 s debounce), so there is no Save button. */}
+      <div className="page-toolbar">
+        <button className="btn btn-plain back-button" onClick={() => navigate(-1)}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
+          Back
+        </button>
+        <span className="spacer" />
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {saving && <span className="page-subtitle">Saving…</span>}
+          {!saving && lastSaveTime && <span className="page-subtitle">Saved</span>}
           {product && (
             <button
               ref={postButtonRef}
@@ -5199,7 +5196,7 @@ function ProductDetail() {
               title={listingPriceValid ? undefined : "Set a listing price first"}
               onClick={() => { if (requireListingPrice()) setShowPostModal(true); }}
             >
-              📤 Post
+              Post
             </button>
           )}
           {/* Mercari viewing/sync button - shown only when live on Mercari */}
@@ -5210,7 +5207,7 @@ function ProductDetail() {
               disabled={syncingMercari || mercariStatus === "updating" || hasPendingMediaJobs}
               title="Sync title, description, price, and photos to Mercari listing"
             >
-              {mercariStatus === "updating" ? "⏳ Syncing…" : "🔄 Sync"}
+              {mercariStatus === "updating" ? "Syncing…" : "Sync to Mercari"}
             </button>
           )}
           {/* Overflow menu (Mercari sales now come in through Sales › Refresh) */}
@@ -5239,6 +5236,16 @@ function ProductDetail() {
               }
             ]}
           />
+        </div>
+      </div>
+
+      <div className="page-header">
+        <div style={{ minWidth: 0 }}>
+          <h1>{product?.title ?? "Product detail"}</h1>
+          <div className="page-subtitle" style={{ marginTop: 4 }}>
+            {product?.artistName ? `${product.artistName} · ` : ""}
+            {badgeLabel(product?.source)}
+          </div>
         </div>
       </div>
 
@@ -5309,13 +5316,13 @@ function ProductDetail() {
       )}
 
       {ebaySyncMessage && (
-        <div style={{ marginBottom: 12, fontSize: 12, color: "var(--info, #6366f1)", textAlign: "right" }}>
+        <div style={{ marginBottom: 12, fontSize: 12, color: "var(--info, var(--accent))", textAlign: "right" }}>
           {ebaySyncMessage}
         </div>
       )}
 
       {ebayPullSyncDiff && (
-        <div id="ebay-diff-card" className="card" style={{ marginBottom: 12, padding: 14, border: "1px solid var(--accent, #6366f1)", borderRadius: 8, background: "var(--surface)" }}>
+        <div id="ebay-diff-card" className="card" style={{ marginBottom: 12, padding: 14, border: "1px solid var(--accent)", borderRadius: 8, background: "var(--surface)" }}>
           <div style={{ fontWeight: 600, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
             <span>📦 eBay Listing Changes Detected</span>
           </div>
@@ -5339,8 +5346,8 @@ function ProductDetail() {
                     {ebayPullSyncDiff.diff.map((d, i) => (
                       <tr key={i} style={{ borderBottom: "1px solid var(--surface-hover)" }}>
                         <td style={{ padding: "6px 8px", fontWeight: 600 }}>{d.field}</td>
-                        <td style={{ padding: "6px 8px", color: "var(--danger, #ef4444)" }}>{String(formatDiffValue(d.field, d.wonni))}</td>
-                        <td style={{ padding: "6px 8px", color: "var(--success, #22c55e)", fontWeight: 600 }}>{String(formatDiffValue(d.field, d.external))}</td>
+                        <td style={{ padding: "6px 8px", color: "var(--danger, var(--danger))" }}>{String(formatDiffValue(d.field, d.wonni))}</td>
+                        <td style={{ padding: "6px 8px", color: "var(--success, var(--success))", fontWeight: 600 }}>{String(formatDiffValue(d.field, d.external))}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -5370,13 +5377,13 @@ function ProductDetail() {
       )}
 
       {etsySyncMessage && (
-        <div style={{ marginBottom: 12, fontSize: 12, color: "var(--info, #6366f1)", textAlign: "right" }}>
+        <div style={{ marginBottom: 12, fontSize: 12, color: "var(--info, var(--accent))", textAlign: "right" }}>
           {etsySyncMessage}
         </div>
       )}
 
       {etsyPullSyncDiff && (
-        <div id="etsy-diff-card" className="card" style={{ marginBottom: 12, padding: 14, border: "1px solid #f97316", borderRadius: 8, background: "var(--surface)" }}>
+        <div id="etsy-diff-card" className="card" style={{ marginBottom: 12, padding: 14, border: "1px solid var(--warning)", borderRadius: 8, background: "var(--surface)" }}>
           <div style={{ fontWeight: 600, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
             <span>🎨 Etsy Listing Changes Detected</span>
           </div>
@@ -5400,8 +5407,8 @@ function ProductDetail() {
                     {etsyPullSyncDiff.diff.map((d, i) => (
                       <tr key={i} style={{ borderBottom: "1px solid var(--surface-hover)" }}>
                         <td style={{ padding: "6px 8px", fontWeight: 600 }}>{d.field}</td>
-                        <td style={{ padding: "6px 8px", color: "var(--danger, #ef4444)" }}>{String(formatDiffValue(d.field, d.wonni))}</td>
-                        <td style={{ padding: "6px 8px", color: "var(--success, #22c55e)", fontWeight: 600 }}>{String(formatDiffValue(d.field, d.external))}</td>
+                        <td style={{ padding: "6px 8px", color: "var(--danger, var(--danger))" }}>{String(formatDiffValue(d.field, d.wonni))}</td>
+                        <td style={{ padding: "6px 8px", color: "var(--success, var(--success))", fontWeight: 600 }}>{String(formatDiffValue(d.field, d.external))}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -5412,7 +5419,7 @@ function ProductDetail() {
                   className="btn btn-primary"
                   onClick={importEtsyPullSyncChanges}
                   disabled={importingEtsyChanges}
-                  style={{ fontSize: 11, background: "#f97316", borderColor: "#f97316" }}
+                  style={{ fontSize: 11, background: "var(--warning)", borderColor: "var(--warning)" }}
                 >
                   {importingEtsyChanges ? "⏳ Applying…" : "✓ Accept edits from Etsy"}
                 </button>
@@ -5696,7 +5703,7 @@ function ProductDetail() {
                           justifyContent: "center",
                           borderRadius: 8,
                           border: "2px dashed var(--border)",
-                          background: "rgba(255, 255, 255, 0.03)",
+                          background: "var(--fill)",
                           cursor: savingMedia ? "not-allowed" : "pointer",
                           transition: "all 0.15s ease",
                         }} title="Add photos to listing">
@@ -5767,7 +5774,7 @@ function ProductDetail() {
                     {mediaError && <div style={{ color: "var(--danger)", fontSize: 12, marginTop: 12 }}>{mediaError}</div>}
                     {savingMedia && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 12 }}>Saving…</div>}
                     {activeMediaJobs.length > 0 && (
-                      <div style={{ fontSize: 12, color: "#ff6b35", marginTop: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                      <div style={{ fontSize: 12, color: "var(--warning)", marginTop: 12, display: "flex", alignItems: "center", gap: 6 }}>
                         <span style={{ display: "inline-block", animation: "spin 1s linear infinite" }}>⏳</span>
                         {activeMediaJobs.some((j) => j.status === "error")
                           ? "A change failed to save"
@@ -5855,15 +5862,15 @@ function ProductDetail() {
                 <div className="modal-field" style={{ marginBottom: 12 }}>
                   <label>Title</label>
                   {aiSuggestedTitle !== null && (
-                    <div style={{ marginBottom: 8, background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(168,85,247,0.08) 100%)", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 8, padding: "10px 12px" }}>
+                    <div style={{ marginBottom: 8, background: "linear-gradient(135deg, var(--primary-light) 0%, var(--primary-light) 100%)", border: "1px solid var(--primary-light)", borderRadius: 8, padding: "10px 12px" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent, #6366f1)", letterSpacing: "0.04em" }}>✨ AI SUGGESTED</span>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent)", letterSpacing: "0.04em" }}>✨ AI SUGGESTED</span>
                         <div style={{ display: "flex", gap: 6 }}>
                           <button className="btn btn-primary" style={{ fontSize: 11, padding: "2px 10px" }} onClick={() => { handleTitleChange(aiSuggestedTitle); setAiSuggestedTitle(null); }}>Accept</button>
                           <button className="btn btn-ghost" style={{ fontSize: 11, padding: "2px 8px" }} onClick={() => { dismissedAiTitleRef.current = true; setAiSuggestedTitle(null); }}>Discard</button>
                         </div>
                       </div>
-                      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary, var(--muted))" }}>{aiSuggestedTitle}</p>
+                      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--muted)" }}>{aiSuggestedTitle}</p>
                     </div>
                   )}
                   <input className="input" value={title} onChange={(e) => handleTitleChange(e.target.value)} />
@@ -5871,15 +5878,15 @@ function ProductDetail() {
                 <div className="modal-field" style={{ marginBottom: 12 }}>
                   <label>Brand (Optional)</label>
                   {aiSuggestedBrand !== null && (
-                    <div style={{ marginBottom: 8, background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(168,85,247,0.08) 100%)", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 8, padding: "10px 12px" }}>
+                    <div style={{ marginBottom: 8, background: "linear-gradient(135deg, var(--primary-light) 0%, var(--primary-light) 100%)", border: "1px solid var(--primary-light)", borderRadius: 8, padding: "10px 12px" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent, #6366f1)", letterSpacing: "0.04em" }}>✨ AI SUGGESTED BRAND</span>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent)", letterSpacing: "0.04em" }}>✨ AI SUGGESTED BRAND</span>
                         <div style={{ display: "flex", gap: 6 }}>
                           <button className="btn btn-primary" style={{ fontSize: 11, padding: "2px 10px" }} onClick={() => { handleBrandChange(aiSuggestedBrand); setAiSuggestedBrand(null); }}>Accept</button>
                           <button className="btn btn-ghost" style={{ fontSize: 11, padding: "2px 8px" }} onClick={() => setAiSuggestedBrand(null)}>Discard</button>
                         </div>
                       </div>
-                      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary, var(--muted))" }}>{aiSuggestedBrand}</p>
+                      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--muted)" }}>{aiSuggestedBrand}</p>
                     </div>
                   )}
                   <input
@@ -5907,18 +5914,18 @@ function ProductDetail() {
                     </button>
                   </div>
                   {aiDescSuggestion !== null && (
-                    <div style={{ marginBottom: 10, background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(168,85,247,0.08) 100%)", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 8, padding: "10px 12px" }}>
+                    <div style={{ marginBottom: 10, background: "linear-gradient(135deg, var(--primary-light) 0%, var(--primary-light) 100%)", border: "1px solid var(--primary-light)", borderRadius: 8, padding: "10px 12px" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent, #6366f1)", letterSpacing: "0.04em" }}>✨ AI SUGGESTED</span>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent)", letterSpacing: "0.04em" }}>✨ AI SUGGESTED</span>
                         <div style={{ display: "flex", gap: 6 }}>
                           <button className="btn btn-primary" style={{ fontSize: 11, padding: "2px 10px" }} onClick={() => { handleDescriptionChange(aiDescSuggestion); setAiDescSuggestion(null); }}>Accept</button>
                           <button className="btn btn-ghost" style={{ fontSize: 11, padding: "2px 8px" }} onClick={() => { dismissedAiDescriptionRef.current = true; setAiDescSuggestion(null); }}>Discard</button>
                         </div>
                       </div>
-                      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary, var(--muted))" }}>{aiDescSuggestion}</p>
+                      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--muted)" }}>{aiDescSuggestion}</p>
                     </div>
                   )}
-                  {aiDescError && <div style={{ fontSize: 12, color: "#ef4444", marginBottom: 6 }}>{aiDescError}</div>}
+                  {aiDescError && <div style={{ fontSize: 12, color: "var(--danger)", marginBottom: 6 }}>{aiDescError}</div>}
                   <textarea className="input" rows={8} value={description} onChange={(e) => handleDescriptionChange(e.target.value)} />
                 </div>
 
@@ -5939,7 +5946,6 @@ function ProductDetail() {
                             border: "var(--border-thin) solid var(--border)",
                             borderRadius: "var(--radius)",
                             fontSize: 12,
-                            fontFamily: "'Space Mono', monospace",
                             color: "var(--text)",
                           }}
                         >
@@ -6051,6 +6057,8 @@ function ProductDetail() {
                 </div>
               </div>
 
+              <div className="detail-section">
+                <h2 style={{ margin: 0 }}>Price &amp; Platforms</h2>
               <div className="detail-badges">
                 {product.crossPostStatus?.wonni === "active" && (
                   <span
@@ -6103,9 +6111,9 @@ function ProductDetail() {
                           fontSize: 11,
                           padding: "2px 10px",
                           borderRadius: 12,
-                          background: "rgba(245, 158, 11, 0.15)",
-                          color: "#f59e0b",
-                          border: "1px solid #f59e0b",
+                          background: "var(--warning-tint)",
+                          color: "var(--warning)",
+                          border: "1px solid var(--warning)",
                           fontWeight: 600,
                           cursor: "pointer"
                         }}
@@ -6123,7 +6131,7 @@ function ProductDetail() {
                 {product.crossPostStatus?.etsy === "draft" && (
                   <span
                     title="Posted to Etsy as a draft (Advanced setting). Turn the setting off and post again to publish it."
-                    style={{ fontSize: 12, padding: "3px 10px", borderRadius: 999, background: "var(--surface-2, #eee)" }}
+                    style={{ fontSize: 12, padding: "3px 10px", borderRadius: 999, background: "var(--fill)" }}
                   >
                     Etsy: Draft (not published)
                   </span>
@@ -6152,9 +6160,9 @@ function ProductDetail() {
                           fontSize: 11,
                           padding: "2px 10px",
                           borderRadius: 12,
-                          background: "rgba(249, 115, 22, 0.15)",
-                          color: "#f97316",
-                          border: "1px solid #f97316",
+                          background: "var(--warning-tint)",
+                          color: "var(--warning)",
+                          border: "1px solid var(--warning)",
                           fontWeight: 600,
                           cursor: "pointer"
                         }}
@@ -6251,7 +6259,7 @@ function ProductDetail() {
                 {aiSuggestedPrice === null && !listingPriceValid && suggestedListingPrice(product) !== null && (
                   <div style={{
                     marginBottom: 6, display: "flex", alignItems: "center", gap: 6,
-                    fontSize: 11, color: "var(--accent, #6366f1)",
+                    fontSize: 11, color: "var(--accent)",
                   }}>
                     <span title="2× source price ÷ 0.9">✨ suggested: ${suggestedListingPrice(product)}</span>
                     <button
@@ -6270,7 +6278,7 @@ function ProductDetail() {
                     alignItems: "center",
                     gap: 6,
                     fontSize: 11,
-                    color: "var(--accent, #6366f1)",
+                    color: "var(--accent)",
                   }}>
                     <span>✨ AI suggests ${aiSuggestedPrice.toFixed(2)}</span>
                     <button
@@ -6328,10 +6336,11 @@ function ProductDetail() {
                 />
               </div>
 
+              </div>
               {/* ── Draft Shipping Weight & Package Dimensions Section ── */}
-              <div className="detail-section" style={{ background: "var(--surface-hover)", padding: 14, borderRadius: 8, gridColumn: "1 / -1", width: "100%" }}>
+              <div className="detail-section" style={{ gridColumn: "1 / -1", width: "100%" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                  <h2 style={{ margin: 0, fontSize: 14 }}>Shipping Weight & Package Dimensions</h2>
+                  <h2 style={{ margin: 0 }}>Shipping Weight & Package Dimensions</h2>
                   <button className="btn btn-ghost" style={{ fontSize: 11, padding: "2px 6px" }} onClick={applyAIShipping}>
                     ✨ Apply AI Suggested
                   </button>

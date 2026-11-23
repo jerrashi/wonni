@@ -1,65 +1,50 @@
 import { useRef, useEffect, useState } from "react";
 
+// ⋯ button + iOS-style context menu (styles: .overflow-trigger / .overflow-menu
+// in index.css). items: [{ label, onClick, danger?, disabled? }]
 export default function OverflowMenu({ items }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef(null);
   const buttonRef = useRef(null);
 
   useEffect(() => {
+    if (!open) return;
     function handleClickOutside(e) {
       if (menuRef.current && !menuRef.current.contains(e.target) && !buttonRef.current?.contains(e.target)) {
         setOpen(false);
       }
     }
-    if (open) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
-    }
+    function handleKey(e) { if (e.key === "Escape") setOpen(false); }
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKey);
+    };
   }, [open]);
 
   return (
     <div style={{ position: "relative" }}>
       <button
         ref={buttonRef}
-        className="btn btn-ghost"
-        style={{ padding: "8px 10px", fontSize: 12 }}
+        className="overflow-trigger"
         onClick={() => setOpen(!open)}
+        aria-label="More options"
+        aria-haspopup="menu"
+        aria-expanded={open}
         title="More options"
       >
-        ⋯
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" />
+        </svg>
       </button>
       {open && (
-        <div
-          ref={menuRef}
-          style={{
-            position: "absolute",
-            top: "100%",
-            right: 0,
-            marginTop: 4,
-            background: "var(--surface)",
-            border: "1px solid var(--border)",
-            borderRadius: 6,
-            minWidth: 160,
-            zIndex: 100,
-            boxShadow: "0 4px 8px rgba(0,0,0,0.3)",
-          }}
-        >
+        <div ref={menuRef} className="overflow-menu" role="menu">
           {items.map((item, idx) => (
             <button
               key={idx}
-              className="btn btn-ghost"
-              style={{
-                display: "block",
-                width: "100%",
-                textAlign: "left",
-                padding: "8px 12px",
-                fontSize: 12,
-                borderRadius: 0,
-                color: item.danger ? "var(--danger)" : "inherit",
-                opacity: item.disabled ? 0.5 : 1,
-                cursor: item.disabled ? "not-allowed" : "pointer",
-                borderBottom: idx < items.length - 1 ? "1px solid var(--border)" : "none",
-              }}
+              role="menuitem"
+              className={item.danger ? "danger" : ""}
               onClick={() => {
                 if (!item.disabled) {
                   item.onClick?.();

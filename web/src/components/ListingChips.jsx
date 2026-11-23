@@ -70,7 +70,7 @@ export function PostJobChip({ job, productId }) {
   if (shown.status === "failed") {
     return (
       <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <span className="chip" style={{ background: "var(--bad-bg, #fbe3e1)", color: "var(--bad, #b3261e)" }}>
+        <span className="chip" style={{ background: "var(--danger-tint)", color: "var(--danger)" }}>
           Posting to {name} stopped{total ? ` · ${done} of ${total} live` : ""}
         </span>
         <button
@@ -89,7 +89,7 @@ export function PostJobChip({ job, productId }) {
 
   const pct = total ? Math.round((done / total) * 100) : 0;
   return (
-    <span className="chip" style={{ display: "inline-flex", gap: 8, alignItems: "center", background: "var(--warn-bg, #fdf0d9)", color: "var(--warn, #b26a00)" }}>
+    <span className="chip" style={{ display: "inline-flex", gap: 8, alignItems: "center", background: "var(--warning-tint)", color: "var(--warning)" }}>
       Posting to {name}{total ? ` · ${done} of ${total} listings` : "…"}
       <span aria-hidden style={{ width: 70, height: 6, borderRadius: 3, background: "rgba(0,0,0,.12)", overflow: "hidden", display: "inline-block" }}>
         <i style={{ display: "block", height: "100%", width: `${pct}%`, background: "currentColor" }} />

@@ -467,7 +467,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                       {p.locked && " (always included)"}
                     </span>
                     {isAlreadyPosted && (
-                      <span style={{ fontSize: 11, color: "var(--success, #10b981)", fontWeight: 600, marginLeft: "auto" }}>
+                      <span style={{ fontSize: 11, color: "var(--success, var(--success))", fontWeight: 600, marginLeft: "auto" }}>
                         ✓ Live
                       </span>
                     )}
@@ -522,14 +522,14 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                   {isSelected && p.id === "etsy" && (
                     <div style={{ marginTop: 12, paddingLeft: 24 }}>
                       {etsyError && (
-                        <div style={{ fontSize: 12, color: "var(--danger)", marginBottom: 8, padding: 8, background: "rgba(239, 68, 68, 0.08)", borderRadius: 6, border: "1px solid rgba(239, 68, 68, 0.2)" }}>
+                        <div style={{ fontSize: 12, color: "var(--danger)", marginBottom: 8, padding: 8, background: "var(--danger-tint)", borderRadius: 6, border: "1px solid var(--danger-tint)" }}>
                           <div style={{ marginBottom: 6 }}>{etsyError}</div>
                           <div style={{ display: "flex", gap: 12 }}>
                             <a
                               href="https://www.etsy.com/sell"
                               target="_blank"
                               rel="noopener noreferrer"
-                              style={{ fontSize: 11, color: "var(--accent, #6366f1)", textDecoration: "underline", fontWeight: 600 }}
+                              style={{ fontSize: 11, color: "var(--accent)", textDecoration: "underline", fontWeight: 600 }}
                             >
                               Open Etsy Shop Setup ↗
                             </a>
@@ -537,7 +537,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                               href="/web/settings"
                               target="_blank"
                               rel="noopener noreferrer"
-                              style={{ fontSize: 11, color: "var(--accent, #6366f1)", textDecoration: "underline", fontWeight: 600 }}
+                              style={{ fontSize: 11, color: "var(--accent)", textDecoration: "underline", fontWeight: 600 }}
                             >
                               Settings ↗
                             </a>
@@ -730,7 +730,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                     {p.locked && " (always included)"}
                   </span>
                   {isAlreadyPosted && (
-                    <span style={{ fontSize: 11, color: "var(--accent, #6366f1)", fontWeight: 600, marginLeft: "auto" }}>
+                    <span style={{ fontSize: 11, color: "var(--accent)", fontWeight: 600, marginLeft: "auto" }}>
                       ✓ Already Posted
                     </span>
                   )}
@@ -744,14 +744,14 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                 {isSelected && p.id === "etsy" && (
                   <div style={{ marginTop: 12, paddingLeft: 24 }}>
                     {etsyError && (
-                      <div style={{ fontSize: 12, color: "var(--danger)", marginBottom: 8, padding: 8, background: "rgba(239, 68, 68, 0.08)", borderRadius: 6, border: "1px solid rgba(239, 68, 68, 0.2)" }}>
+                      <div style={{ fontSize: 12, color: "var(--danger)", marginBottom: 8, padding: 8, background: "var(--danger-tint)", borderRadius: 6, border: "1px solid var(--danger-tint)" }}>
                         <div style={{ marginBottom: 6 }}>{etsyError}</div>
                         <div style={{ display: "flex", gap: 12 }}>
                           <a
                             href="https://www.etsy.com/sell"
                             target="_blank"
                             rel="noopener noreferrer"
-                            style={{ fontSize: 11, color: "var(--accent, #6366f1)", textDecoration: "underline", fontWeight: 600 }}
+                            style={{ fontSize: 11, color: "var(--accent)", textDecoration: "underline", fontWeight: 600 }}
                           >
                             Open Etsy Shop Setup ↗
                           </a>
@@ -759,7 +759,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                             href="/web/settings"
                             target="_blank"
                             rel="noopener noreferrer"
-                            style={{ fontSize: 11, color: "var(--accent, #6366f1)", textDecoration: "underline", fontWeight: 600 }}
+                            style={{ fontSize: 11, color: "var(--accent)", textDecoration: "underline", fontWeight: 600 }}
                           >
                             Settings ↗
                           </a>

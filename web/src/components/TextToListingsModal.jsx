@@ -151,9 +151,9 @@ export default function TextToListingsModal({ text, onClose, onCreated }) {
     return { text: "Text", tone: "neutral" };
   };
   const toneStyle = {
-    src: { background: "rgba(255,215,0,0.14)", color: "var(--primary)" },
+    src: { background: "var(--warning-tint)", color: "var(--primary)" },
     neutral: { background: "var(--surface-high)", color: "var(--muted)" },
-    bad: { background: "rgba(239,68,68,0.14)", color: "var(--danger)" },
+    bad: { background: "var(--danger-tint)", color: "var(--danger)" },
   };
   const photoLabel = (d) => {
     const n = d.imageUrls?.length || 0;

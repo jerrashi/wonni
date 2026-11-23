@@ -292,7 +292,7 @@ export default function BulkPostModal({ products, onClose }) {
                     {p.locked && " (always included)"}
                   </span>
                   {allAlreadyPosted && (
-                    <span style={{ fontSize: 11, color: "var(--accent, #6366f1)", fontWeight: 600, marginLeft: "auto" }}>
+                    <span style={{ fontSize: 11, color: "var(--accent)", fontWeight: 600, marginLeft: "auto" }}>
                       ✓ All already posted
                     </span>
                   )}

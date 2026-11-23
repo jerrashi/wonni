@@ -92,7 +92,7 @@ function ListModal({ product, onClose, onListed }) {
           <div className="modal-field">
             <label>Listing price (USD) <span style={{ color: "var(--danger)" }}>*</span></label>
             {!priceValid && suggestedListingPrice(product) != null && (
-              <div style={{ marginBottom: 4, fontSize: 11, color: "var(--accent, #6366f1)", display: "flex", gap: 6, alignItems: "center" }}>
+              <div style={{ marginBottom: 4, fontSize: 11, color: "var(--accent)", display: "flex", gap: 6, alignItems: "center" }}>
                 <span title="2× source price ÷ 0.9">✨ suggested: ${suggestedListingPrice(product)}</span>
                 <button className="btn btn-ghost" style={{ fontSize: 11, padding: "1px 6px" }} onClick={() => setPrice(String(suggestedListingPrice(product)))}>Use</button>
               </div>
@@ -338,51 +338,31 @@ function PostedPlatforms({ product }) {
 
   if (platforms.length === 0) return null;
 
+  // Capsule per platform with a status dot (green live, orange incomplete);
+  // clicking opens the live listing.
+  const short = { "TikTok Shop": "TikTok" };
   return (
-    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+    <div className="platform-badges">
       {platforms.map((p) => {
         const listingUrl = getPlatformListingUrl(p.id, product);
+        const incomplete = p.status === "incomplete";
         return (
-          <div
+          <button
+            type="button"
             key={p.id}
-            title={p.name + (p.status === "incomplete" ? " (incomplete)" : "") + (listingUrl ? ` - Click to open live listing` : "")}
+            className="platform-badge"
+            title={p.name + (incomplete ? " (incomplete)" : "") + (listingUrl ? " · open live listing" : "")}
+            disabled={!listingUrl}
             onClick={(e) => {
               e.stopPropagation();
-              if (listingUrl) {
-                if (listingUrl.startsWith("http")) {
-                  window.open(listingUrl, "_blank", "noopener,noreferrer");
-                } else {
-                  window.location.href = listingUrl;
-                }
-              }
-            }}
-            style={{
-              width: 32,
-              height: 32,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: p.status === "incomplete" ? "var(--surface-high)" : "var(--surface-high)",
-              border: p.status === "incomplete" ? "1px solid var(--warning)" : "var(--border-thin) solid var(--primary)",
-              borderRadius: "var(--radius)",
-              fontSize: 11,
-              fontWeight: 700,
-              color: p.status === "incomplete" ? "var(--warning)" : "var(--primary)",
-              cursor: listingUrl ? "pointer" : "default",
-              fontFamily: "'Space Mono', monospace",
-              textTransform: "uppercase",
-              letterSpacing: "0.05em",
-              transition: "transform 0.15s ease, box-shadow 0.15s ease",
-            }}
-            onMouseEnter={(e) => {
-              if (listingUrl) e.currentTarget.style.transform = "scale(1.1)";
-            }}
-            onMouseLeave={(e) => {
-              if (listingUrl) e.currentTarget.style.transform = "scale(1)";
+              if (!listingUrl) return;
+              if (listingUrl.startsWith("http")) window.open(listingUrl, "_blank", "noopener,noreferrer");
+              else window.location.href = listingUrl;
             }}
           >
-            {p.logo}
-          </div>
+            <span className="platform-dot" style={{ background: incomplete ? "var(--warning)" : "var(--success)" }} />
+            {short[p.name] ?? p.name}
+          </button>
         );
       })}
     </div>
@@ -438,21 +418,9 @@ function ProductCard({ product, selected = false, onSelect = null, selectMode = 
 
   return (
     <>
-      <div className="product-card" style={{ position: "relative" }}>
+      <div className={`product-card ${selected ? "product-card-selected" : ""}`} style={{ position: "relative" }}>
         {/* Upper-right actions submenu */}
-        <div
-          style={{
-            position: "absolute",
-            top: 8,
-            right: 8,
-            zIndex: 20,
-            background: "rgba(20, 20, 25, 0.75)",
-            backdropFilter: "blur(6px)",
-            borderRadius: "var(--radius)",
-            border: "1px solid rgba(255, 255, 255, 0.1)",
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
+        <div className="product-card-menu" onClick={(e) => e.stopPropagation()}>
           <OverflowMenu
             items={[
               ...(product?.saleStatus !== "sold" ? [{
@@ -482,125 +450,43 @@ function ProductCard({ product, selected = false, onSelect = null, selectMode = 
             <div className="product-card-placeholder">No image</div>
           )}
 
-          {/* Sold Out badge - lower left */}
-          {isSourceSoldOut && (
-            <span
-              style={{
-                position: "absolute",
-                bottom: 8,
-                left: 8,
-                background: "var(--danger)",
-                color: "white",
-                fontSize: 11,
-                fontWeight: 700,
-                padding: "6px 10px",
-                borderRadius: "var(--radius)",
-                fontFamily: "'Space Mono', monospace",
-                textTransform: "uppercase",
-                letterSpacing: "0.05em"
-              }}
-            >
-              Sold Out
-            </span>
-          )}
+          {/* Status badge - upper left: Sold Out wins over Draft; live shows nothing
+              (the platform badges below already say where it is). */}
+          {isSourceSoldOut ? (
+            <span className="product-card-badge" style={{ color: "var(--danger)" }}>Sold Out</span>
+          ) : !isLive ? (
+            <span className="product-card-badge" style={{ color: "var(--warning)" }}>Draft</span>
+          ) : null}
 
-          {/* Live/Draft badge - lower right */}
-          <span
-            style={{
-              position: "absolute",
-              bottom: 8,
-              right: 8,
-              background: isLive ? "var(--primary)" : "var(--surface-high)",
-              color: isLive ? "var(--on-primary)" : "var(--text)",
-              border: isLive ? "none" : `var(--border-thin) solid var(--border)`,
-              fontSize: 11,
-              fontWeight: 700,
-              padding: "6px 10px",
-              borderRadius: "var(--radius)",
-              fontFamily: "'Space Mono', monospace",
-              textTransform: "uppercase",
-              letterSpacing: "0.05em"
-            }}
-          >
-            {isLive ? "Live" : "Draft"}
-          </span>
-
-          {/* Select checkbox - only in select mode */}
+          {/* Select circle - only in select mode (iOS checkmark.circle) */}
           {selectMode && (
-            <div style={{ position: "absolute", top: 8, left: 8, zIndex: 10 }} onClick={(e) => e.stopPropagation()}>
-              <input
-                type="checkbox"
-                checked={selected}
-                onChange={() => onSelect(!selected)}
-                style={{
-                  width: 20,
-                  height: 20,
-                  cursor: "pointer",
-                  accentColor: "var(--primary)"
-                }}
-              />
-            </div>
+            <span className={`select-circle ${selected ? "on" : ""}`} aria-hidden="true">
+              {selected && (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5"><path d="M5 12l5 5 9-10" /></svg>
+              )}
+            </span>
           )}
         </button>
 
         <div className="product-card-body">
-          {/* Title */}
           <button
             className="product-card-title-button"
+            aria-pressed={selectMode ? selected : undefined}
             onClick={() => (selectMode ? onSelect(!selected) : navigate(`/sell/products/${product.id}`))}
           >
             <div className="product-card-title">{product.title}</div>
           </button>
 
-          {/* Metadata */}
-          <div className="product-card-meta">
-            <span>{typeof product.listingPrice === "number" ? `$${product.listingPrice.toFixed(2)}` : "—"}</span>
+          <div className="product-card-price-row">
+            <span className="product-card-price">
+              {typeof product.listingPrice === "number" ? `$${product.listingPrice.toFixed(2)}` : "No price"}
+            </span>
+            {(product.quantity ?? 1) > 1 && <span className="product-card-qty">Qty {product.quantity}</span>}
           </div>
 
-          {/* Description preview */}
-          <div className="product-card-preview">
-            {product.description?.trim()
-              ? product.description.trim().slice(0, 85)
-              : `${product.images?.length ?? 0} images${product.variants?.length ? ` · ${product.variants.length} variants` : ""}`}
-          </div>
-
-          {/* Tag badges */}
-          {Array.isArray(product.tags) && product.tags.length > 0 && (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 8, marginBottom: 2 }}>
-              {product.tags.map((tag) => (
-                <span
-                  key={tag}
-                  style={{
-                    fontSize: 10,
-                    padding: "2px 6px",
-                    background: "var(--surface-high)",
-                    border: "var(--border-thin) solid var(--border)",
-                    borderRadius: 4,
-                    color: "var(--text-secondary)",
-                    fontFamily: "'Space Mono', monospace",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  🏷️ {tag}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {/* Bottom section: Platforms + Post button */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: "auto", paddingTop: 12 }}>
-            {/* Platform logos */}
+          <div className="product-card-footer">
             <PostedPlatforms product={product} />
-
-            {/* Spacer */}
-            <div style={{ flex: 1 }} />
-
-            {/* Post button */}
-            <button
-              className="btn btn-primary"
-              style={{ padding: "10px 16px", whiteSpace: "nowrap" }}
-              onClick={() => setShowPostModal(true)}
-            >
+            <button className="btn btn-ghost btn-sm" onClick={() => setShowPostModal(true)}>
               Post
             </button>
           </div>
@@ -777,23 +663,49 @@ export default function Dashboard() {
 
   return (
     <Layout>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      {/* iOS top bar: (Select | Done · Select All) · actions trailing. Once
+          something is selected the trailing side becomes the selection actions. */}
+      <div className="page-toolbar">
+        <button
+          className="btn btn-plain"
+          onClick={() => { setSelectMode(!selectMode); setSelectedIds(new Set()); }}
+        >
+          {selectMode ? "Done" : "Select"}
+        </button>
+        {selectMode && (
+          <button className="btn btn-plain" onClick={toggleSelectAll}>
+            {allSelected ? "Deselect All" : "Select All"}
+          </button>
+        )}
+        <span className="spacer" />
+        {selectMode && someSelected ? (
+          <>
+            <span className="page-subtitle">{selectedIds.size} selected</span>
+            <button className="btn btn-ghost" onClick={() => setShowBulkTagModal(true)}>Tag</button>
+            <button className="btn btn-ghost" onClick={handleBulkMarkOutOfStock} disabled={bulkMarkingOOS}>
+              {bulkMarkingOOS ? "Marking…" : "Mark Out of Stock"}
+            </button>
+            <button className="btn btn-ghost-danger" onClick={handleBulkDelete} disabled={bulkDeleting}>
+              {bulkDeleting ? "Deleting…" : "Delete"}
+            </button>
+            <button className="btn btn-primary" onClick={() => setShowBulkPostModal(true)}>
+              Post to Platforms
+            </button>
+          </>
+        ) : !selectMode ? (
+          <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+            Draft from Photo
+          </button>
+        ) : null}
+      </div>
+
+      <div className="page-header">
         <div>
-          <h1 style={{ margin: 0 }}>Products</h1>
-          <span style={{ fontSize: 13, color: "var(--muted)" }}>
+          <h1>Products</h1>
+          <span className="page-subtitle">
             {regularProducts.length} total · {regularProducts.filter(isLive).length} live
           </span>
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button
-            className={`btn ${selectMode ? "btn-primary" : "btn-ghost"}`}
-            onClick={() => { setSelectMode(!selectMode); setSelectedIds(new Set()); }}
-          >
-            {selectMode ? "✓ Select Mode" : "Select"}
-          </button>
-          <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
-            📷 Create Draft from Photo
-          </button>
         </div>
       </div>
 
@@ -838,100 +750,47 @@ export default function Dashboard() {
         </div>
       ) : (
         <>
-          <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 500 }}>Filter:</span>
-              {["all", "draft", "live"].map((f) => (
+          {/* Segmented status filter + one scrolling row of tag chips. */}
+          <div className="filter-bar">
+            <div className="segmented" role="group" aria-label="Filter products">
+              {[
+                ["all", "All", regularProducts.length],
+                ["draft", "Drafts", regularProducts.filter((p) => !isLive(p)).length],
+                ["live", "Live", regularProducts.filter(isLive).length],
+              ].map(([f, label, count]) => (
                 <button
                   key={f}
-                  className={`btn ${filter === f ? "btn-primary" : "btn-ghost"}`}
-                  style={{ fontSize: 12, padding: "6px 12px" }}
+                  className={filter === f ? "active" : ""}
+                  aria-pressed={filter === f}
                   onClick={() => { setFilter(f); setSelectedIds(new Set()); }}
                 >
-                  {f.charAt(0).toUpperCase() + f.slice(1)}
+                  {label} {count}
                 </button>
               ))}
             </div>
 
-            {selectMode && someSelected && (
-              <div style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: "auto" }}>
-                <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                  {selectedIds.size} selected
-                </span>
+            {allTags.length > 0 && (
+              <div className="chip-row" role="group" aria-label="Filter by tag">
                 <button
-                  className="btn btn-secondary"
-                  style={{ fontSize: 12, padding: "8px 12px" }}
-                  onClick={() => setShowBulkTagModal(true)}
+                  className={`chip-filter ${selectedTag === null ? "active" : ""}`}
+                  aria-pressed={selectedTag === null}
+                  onClick={() => { setSelectedTag(null); setSelectedIds(new Set()); }}
                 >
-                  🏷️ Tag Selected
+                  All tags
                 </button>
-                <button
-                  className="btn btn-primary"
-                  style={{ fontSize: 12, padding: "8px 12px" }}
-                  onClick={() => setShowBulkPostModal(true)}
-                >
-                  Post to Platforms
-                </button>
-                <button
-                  className="btn btn-secondary"
-                  style={{ fontSize: 12, padding: "8px 12px" }}
-                  onClick={handleBulkMarkOutOfStock}
-                  disabled={bulkMarkingOOS}
-                >
-                  {bulkMarkingOOS ? "Marking…" : "📭 Mark Out of Stock"}
-                </button>
-                <button
-                  className="btn btn-danger"
-                  style={{ fontSize: 12, padding: "8px 12px" }}
-                  onClick={handleBulkDelete}
-                  disabled={bulkDeleting}
-                >
-                  {bulkDeleting ? "Deleting…" : "🗑️ Delete Selected"}
-                </button>
+                {allTags.map((tag) => (
+                  <button
+                    key={tag}
+                    className={`chip-filter ${selectedTag === tag ? "active" : ""}`}
+                    aria-pressed={selectedTag === tag}
+                    onClick={() => { setSelectedTag(selectedTag === tag ? null : tag); setSelectedIds(new Set()); }}
+                  >
+                    {tag}
+                  </button>
+                ))}
               </div>
             )}
           </div>
-
-          {/* Tag filter bar */}
-          {allTags.length > 0 && (
-            <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginRight: 4 }}>
-                🏷️ Tags:
-              </span>
-              <button
-                className={`btn ${selectedTag === null ? "btn-primary" : "btn-ghost"}`}
-                style={{ fontSize: 11, padding: "4px 10px", borderRadius: 14 }}
-                onClick={() => { setSelectedTag(null); setSelectedIds(new Set()); }}
-              >
-                All
-              </button>
-              {allTags.map((tag) => (
-                <button
-                  key={tag}
-                  className={`btn ${selectedTag === tag ? "btn-primary" : "btn-ghost"}`}
-                  style={{ fontSize: 11, padding: "4px 10px", borderRadius: 14 }}
-                  onClick={() => { setSelectedTag(selectedTag === tag ? null : tag); setSelectedIds(new Set()); }}
-                >
-                  🏷️ {tag}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {selectMode && (
-            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-              <input
-                type="checkbox"
-                checked={allSelected}
-                onChange={toggleSelectAll}
-                style={{ width: 20, height: 20, cursor: "pointer", accentColor: "var(--primary)" }}
-                title={allSelected ? "Deselect all" : "Select all"}
-              />
-              <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                Select All ({filteredProducts.length})
-              </span>
-            </div>
-          )}
 
           <div className="product-grid">
             {filteredProducts.map((p) => (

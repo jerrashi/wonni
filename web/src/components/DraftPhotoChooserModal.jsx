@@ -93,9 +93,9 @@ export default function DraftPhotoChooserModal({ proposal, onClose, onImport }) 
   }
 
   const toneStyle = {
-    src: { background: "rgba(255,215,0,0.14)", color: "var(--primary)" },
-    ok: { background: "rgba(74,222,128,0.15)", color: "var(--success)" },
-    warn: { background: "rgba(245,158,11,0.18)", color: "var(--warning)" },
+    src: { background: "var(--warning-tint)", color: "var(--primary)" },
+    ok: { background: "var(--success-tint)", color: "var(--success)" },
+    warn: { background: "var(--warning-tint)", color: "var(--warning)" },
     neutral: { background: "var(--surface-high)", color: "var(--muted)" },
   };
 
@@ -108,7 +108,7 @@ export default function DraftPhotoChooserModal({ proposal, onClose, onImport }) 
         style={{
           display: "flex", gap: 12, padding: 10, cursor: "pointer",
           border: `1px solid ${picked ? "var(--primary)" : "var(--border)"}`,
-          background: picked ? "rgba(255,215,0,0.06)" : "var(--surface-low)",
+          background: picked ? "var(--warning-tint)" : "var(--surface-low)",
         }}
       >
         <input type="radio" checked={picked} readOnly style={{ marginTop: 4 }} />

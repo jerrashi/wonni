@@ -26,7 +26,7 @@ export default function BackgroundTasksTray() {
       <div
         onClick={() => setCollapsed((c) => !c)}
         style={{
-          background: "var(--card, #1a1a1a)",
+          background: "var(--surface)",
           border: "1px solid var(--border)",
           borderRadius: 8,
           padding: "8px 12px",
@@ -49,7 +49,7 @@ export default function BackgroundTasksTray() {
         <div
           style={{
             marginTop: 6,
-            background: "var(--card, #1a1a1a)",
+            background: "var(--surface)",
             border: "1px solid var(--border)",
             borderRadius: 8,
             maxHeight: 280,

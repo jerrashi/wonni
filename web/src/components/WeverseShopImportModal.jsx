@@ -271,7 +271,7 @@ export default function WeverseShopImportModal({ shopUrl, onClose, onImported })
                 <span className="label-caps" style={{ color: "var(--muted)" }}>
                   Tap items to select — nothing is imported until you confirm
                 </span>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "'Space Mono', monospace", fontSize: 12, color: "var(--text-secondary)", cursor: "pointer" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-secondary)", cursor: "pointer" }}>
                   <input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={importing} />
                   Select all
                 </label>
@@ -299,7 +299,7 @@ export default function WeverseShopImportModal({ shopUrl, onClose, onImported })
                         )}
                         <div className="weverse-tile-check">
                           <svg viewBox="0 0 16 16" fill="none">
-                            <path d="M3 8.5L6.2 12L13 4" stroke="#3a3000" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                            <path d="M3 8.5L6.2 12L13 4" stroke="var(--on-primary)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
                           </svg>
                         </div>
                       </div>
@@ -317,7 +317,7 @@ export default function WeverseShopImportModal({ shopUrl, onClose, onImported })
 
         <div className="weverse-sticky-bar">
           <div>
-            <div style={{ fontFamily: "'Anton', sans-serif", fontSize: 18, color: "var(--primary)", textTransform: "uppercase" }}>
+            <div style={{ fontSize: 18, color: "var(--primary)", textTransform: "uppercase" }}>
               {selected.size} Selected
             </div>
             <div style={{ fontSize: 11, color: "var(--muted)" }}>

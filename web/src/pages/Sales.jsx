@@ -354,28 +354,29 @@ export default function Sales() {
 
   return (
     <Layout>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div className="page-toolbar">
+        <span className="spacer" />
+        {syncNote && <span className="page-subtitle">{syncNote}</span>}
+        <button className="btn btn-ghost" onClick={handleSync} disabled={syncing} title="Check eBay, Etsy, TikTok and Mercari for new sales">
+          {syncing ? "Refreshing…" : "Refresh"}
+        </button>
+        <button className="btn btn-primary" onClick={() => setShowLogModal(true)} title="Add a sale by hand">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+          Add Sale
+        </button>
+      </div>
+
+      <div className="page-header">
         <div>
-          <h1 style={{ margin: 0 }}>📊 Sales Tracker</h1>
-          <span style={{ fontSize: 13, color: "var(--muted)" }}>
-            Cross-platform sales sync for Mercari, eBay, Etsy, & Wonni
-          </span>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {syncNote && <span style={{ fontSize: 12, color: "var(--muted)" }}>{syncNote}</span>}
-          <button className="btn" onClick={handleSync} disabled={syncing} title="Check eBay, Etsy, TikTok and Mercari for new sales">
-            {syncing ? "Refreshing…" : "↻ Refresh"}
-          </button>
-          <button className="btn btn-primary" onClick={() => setShowLogModal(true)} title="Add a sale by hand">
-            + Add sale
-          </button>
+          <h1>Sales</h1>
+          <span className="page-subtitle">Mercari, eBay, Etsy, TikTok and Wonni in one place</span>
         </div>
       </div>
 
       {platformPills && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
           {Object.entries(platformPills).map(([name, state]) => (
-            <span key={name} className="chip" style={{ fontSize: 12, padding: "2px 10px", borderRadius: 999, border: "var(--border-thin) solid var(--border)" }}>
+            <span key={name} className="chip">
               {name} {state}
             </span>
           ))}
@@ -389,55 +390,55 @@ export default function Sales() {
       {/* Top Metrics Cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 16, marginBottom: 24 }}>
         <div className="card" style={{ padding: 16 }}>
-          <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          <div className="metric-label">
             Total Revenue
           </div>
-          <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4, color: "var(--success)" }}>
+          <div className="metric-value" style={{ color: "var(--success)" }}>
             ${totals.revenue.toFixed(2)}
           </div>
         </div>
 
         <div className="card" style={{ padding: 16 }}>
-          <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          <div className="metric-label">
             Net Profit{totals.netIsEstimate ? " ~" : ""}
           </div>
-          <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }} title={totals.netIsEstimate ? "Some sales are missing a real take-home; estimated from platform fee %" : "Real take-home minus cost of goods"}>
+          <div className="metric-value" title={totals.netIsEstimate ? "Some sales are missing a real take-home; estimated from platform fee %" : "Real take-home minus cost of goods"}>
             ${totals.net.toFixed(2)}
           </div>
         </div>
 
         <div className="card" style={{ padding: 16 }}>
-          <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          <div className="metric-label">
             Est. Margin
           </div>
-          <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }}>
+          <div className="metric-value">
             {totals.revenue > 0 ? `${((totals.net / totals.revenue) * 100).toFixed(0)}%` : "—"}
           </div>
         </div>
 
         <div className="card" style={{ padding: 16 }}>
-          <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          <div className="metric-label">
             Cost of Goods
           </div>
-          <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }}>
+          <div className="metric-value">
             ${totals.cost.toFixed(2)}
           </div>
         </div>
 
         <div className="card" style={{ padding: 16 }}>
-          <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          <div className="metric-label">
             Total Units Sold
           </div>
-          <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }}>
+          <div className="metric-value">
             {totals.units} items
           </div>
         </div>
 
         <div className="card" style={{ padding: 16 }}>
-          <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          <div className="metric-label">
             Top Platform
           </div>
-          <div style={{ fontSize: 18, fontWeight: 700, marginTop: 8 }}>
+          <div className="metric-value" style={{ fontSize: 20 }}>
             {topPlatform
               ? `${PLATFORM_LABELS[topPlatform.key]?.label || topPlatform.key} ($${topPlatform.totals.revenue.toFixed(0)})`
               : "—"}
@@ -449,7 +450,7 @@ export default function Sales() {
       {trendPoints.length > 0 && (
         <div className="card" style={{ padding: 16, marginBottom: 24 }}>
           <h3 style={{ margin: "0 0 12px 0", fontSize: 14 }}>
-            📈 8-Week Trend <span style={{ fontWeight: 400, color: "var(--muted)", fontSize: 12 }}>(bars = revenue, dots = net)</span>
+            8-Week Trend <span style={{ fontWeight: 400, color: "var(--muted)", fontSize: 12 }}>(bars = revenue, dots = net)</span>
           </h3>
           <TrendChart points={trendPoints} />
         </div>
@@ -459,7 +460,7 @@ export default function Sales() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, marginBottom: 24 }}>
         {/* Tag Breakdown */}
         <div className="card" style={{ padding: 16 }}>
-          <h3 style={{ margin: "0 0 12px 0", fontSize: 14 }}>🏷️ Sales by Tag</h3>
+          <h3 style={{ margin: "0 0 12px 0", fontSize: 14 }}>Sales by Tag</h3>
           {byTag.groups.length === 0 ? (
             <div style={{ fontSize: 13, color: "var(--muted)" }}>No tagged sales recorded yet.</div>
           ) : (
@@ -472,10 +473,9 @@ export default function Sales() {
                     alignItems: "center",
                     justifyContent: "space-between",
                     padding: "8px 12px",
-                    background: "var(--surface-high)",
+                    background: tagFilter === tag ? "var(--primary-light)" : "var(--surface-low)",
                     borderRadius: "var(--radius)",
                     cursor: "pointer",
-                    border: tagFilter === tag ? "1px solid var(--accent)" : "none",
                   }}
                   onClick={() => setTagFilter(tagFilter === tag ? "all" : tag)}
                 >
@@ -493,7 +493,7 @@ export default function Sales() {
 
         {/* Platform Breakdown */}
         <div className="card" style={{ padding: 16 }}>
-          <h3 style={{ margin: "0 0 12px 0", fontSize: 14 }}>🌐 Sales by Platform</h3>
+          <h3 style={{ margin: "0 0 12px 0", fontSize: 14 }}>Sales by Platform</h3>
           {byPlatform.groups.length === 0 ? (
             <div style={{ fontSize: 13, color: "var(--muted)" }}>No platform sales recorded yet.</div>
           ) : (
@@ -506,10 +506,9 @@ export default function Sales() {
                     alignItems: "center",
                     justifyContent: "space-between",
                     padding: "8px 12px",
-                    background: "var(--surface-high)",
+                    background: platformFilter === plat ? "var(--primary-light)" : "var(--surface-low)",
                     borderRadius: "var(--radius)",
                     cursor: "pointer",
-                    border: platformFilter === plat ? "1px solid var(--primary)" : "none",
                   }}
                   onClick={() => setPlatformFilter(platformFilter === plat ? "all" : plat)}
                 >
@@ -527,77 +526,69 @@ export default function Sales() {
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="card" style={{ marginBottom: 20, padding: 16 }}>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
-          {/* Platform Filters */}
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>Platform:</span>
+      {/* Search + platform chips, then one scrolling row of tags. */}
+      <div className="filter-bar" style={{ marginTop: 0 }}>
+        <input
+          className="input"
+          type="search"
+          placeholder="Search sales or SKU"
+          aria-label="Search sales"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          style={{ maxWidth: 280 }}
+        />
+        <div className="chip-row" role="group" aria-label="Filter by platform">
+          <button
+            className={`chip-filter ${platformFilter === "all" ? "active" : ""}`}
+            aria-pressed={platformFilter === "all"}
+            onClick={() => setPlatformFilter("all")}
+          >
+            All platforms
+          </button>
+          {Object.keys(PLATFORM_LABELS).map((k) => (
             <button
-              className={`chip ${platformFilter === "all" ? "chip-primary" : "chip-draft"}`}
-              onClick={() => setPlatformFilter("all")}
+              key={k}
+              className={`chip-filter ${platformFilter === k ? "active" : ""}`}
+              aria-pressed={platformFilter === k}
+              onClick={() => setPlatformFilter(k)}
             >
-              All
+              {PLATFORM_LABELS[k].label}
             </button>
-            {Object.keys(PLATFORM_LABELS).map((k) => (
-              <button
-                key={k}
-                className={`chip ${platformFilter === k ? "chip-primary" : "chip-draft"}`}
-                onClick={() => setPlatformFilter(k)}
-              >
-                {PLATFORM_LABELS[k].icon} {PLATFORM_LABELS[k].label}
-              </button>
-            ))}
-          </div>
-
-          {/* Search Box */}
-          <div style={{ minWidth: 220 }}>
-            <input
-              className="input"
-              type="text"
-              placeholder="Search sales or SKU…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={{ fontSize: 12, padding: "6px 12px" }}
-            />
-          </div>
+          ))}
         </div>
+      </div>
 
-        {/* Tag Filters */}
-        {allTags.length > 0 && (
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 12, paddingTop: 12, borderTop: "var(--border-thin) solid var(--border)" }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>Filter Tag:</span>
+      {allTags.length > 0 && (
+        <div className="filter-bar" style={{ marginTop: 0 }}>
+          <div className="chip-row" role="group" aria-label="Filter by tag">
             <button
-              className={`chip ${tagFilter === "all" ? "chip-primary" : "chip-draft"}`}
+              className={`chip-filter ${tagFilter === "all" ? "active" : ""}`}
+              aria-pressed={tagFilter === "all"}
               onClick={() => setTagFilter("all")}
             >
-              All Tags
+              All tags
             </button>
             {allTags.map((t) => (
               <button
                 key={t}
-                className={`chip ${tagFilter === t ? "chip-primary" : "chip-draft"}`}
+                className={`chip-filter ${tagFilter === t ? "active" : ""}`}
+                aria-pressed={tagFilter === t}
                 onClick={() => setTagFilter(tagFilter === t ? "all" : t)}
               >
-                🏷️ {t}
+                {t}
               </button>
             ))}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* View toggle */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-        <button
-          className={`chip ${view === "board" ? "chip-primary" : "chip-draft"}`}
-          onClick={() => switchView("board")}
-        >
-          🗂️ Board
+      <div className="segmented" role="group" aria-label="View" style={{ marginBottom: 12 }}>
+        <button className={view === "board" ? "active" : ""} aria-pressed={view === "board"} onClick={() => switchView("board")}>
+          Board
         </button>
-        <button
-          className={`chip ${view === "spreadsheet" ? "chip-primary" : "chip-draft"}`}
-          onClick={() => switchView("spreadsheet")}
-        >
-          📋 Spreadsheet
+        <button className={view === "spreadsheet" ? "active" : ""} aria-pressed={view === "spreadsheet"} onClick={() => switchView("spreadsheet")}>
+          Spreadsheet
         </button>
       </div>
 
@@ -805,7 +796,7 @@ export default function Sales() {
                                 fontSize: 10,
                                 padding: "2px 6px",
                                 borderRadius: 4,
-                                background: "rgba(99, 102, 241, 0.15)",
+                                background: "var(--primary-light)",
                                 color: "var(--accent)",
                                 border: "1px solid var(--accent)",
                               }}

@@ -59,14 +59,14 @@ export default function ApplyEbayEditsModal({ product, listingDetails, onApply, 
             </thead>
             <tbody>
               {hasDifferences.title && (
-                <tr style={{ borderBottom: "1px solid var(--border)", background: "rgba(249, 115, 22, 0.05)" }}>
+                <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--warning-tint)" }}>
                   <td style={{ padding: 12, fontWeight: 600 }}>Title</td>
                   <td style={{ padding: 12, maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis" }}>{wonni.title}</td>
                   <td style={{ padding: 12, maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis" }}>{ebay.title}</td>
                 </tr>
               )}
               {hasDifferences.description && (
-                <tr style={{ borderBottom: "1px solid var(--border)", background: "rgba(249, 115, 22, 0.05)" }}>
+                <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--warning-tint)" }}>
                   <td style={{ padding: 12, fontWeight: 600 }}>Description</td>
                   <td style={{ padding: 12, maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", fontSize: 12 }}>
                     {wonni.description.slice(0, 50)}…
@@ -77,28 +77,28 @@ export default function ApplyEbayEditsModal({ product, listingDetails, onApply, 
                 </tr>
               )}
               {hasDifferences.price && (
-                <tr style={{ borderBottom: "1px solid var(--border)", background: "rgba(249, 115, 22, 0.05)" }}>
+                <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--warning-tint)" }}>
                   <td style={{ padding: 12, fontWeight: 600 }}>Price</td>
                   <td style={{ padding: 12 }}>${wonni.price?.toFixed(2)}</td>
                   <td style={{ padding: 12 }}>${ebay.price?.toFixed(2)}</td>
                 </tr>
               )}
               {hasDifferences.quantity && (
-                <tr style={{ borderBottom: (hasDifferences.photos || hasDifferences.handlingTime) ? "1px solid var(--border)" : "none", background: "rgba(249, 115, 22, 0.05)" }}>
+                <tr style={{ borderBottom: (hasDifferences.photos || hasDifferences.handlingTime) ? "1px solid var(--border)" : "none", background: "var(--warning-tint)" }}>
                   <td style={{ padding: 12, fontWeight: 600 }}>Quantity</td>
                   <td style={{ padding: 12 }}>{wonni.quantity}</td>
                   <td style={{ padding: 12 }}>{ebay.quantity}</td>
                 </tr>
               )}
               {hasDifferences.photos && (
-                <tr style={{ borderBottom: hasDifferences.handlingTime ? "1px solid var(--border)" : "none", background: "rgba(249, 115, 22, 0.05)" }}>
+                <tr style={{ borderBottom: hasDifferences.handlingTime ? "1px solid var(--border)" : "none", background: "var(--warning-tint)" }}>
                   <td style={{ padding: 12, fontWeight: 600 }}>Photos</td>
                   <td style={{ padding: 12 }}>{wonni.photoCount} photos</td>
                   <td style={{ padding: 12 }}>{ebay.photoCount} photos</td>
                 </tr>
               )}
               {hasDifferences.handlingTime && (
-                <tr style={{ background: "rgba(249, 115, 22, 0.05)" }}>
+                <tr style={{ background: "var(--warning-tint)" }}>
                   <td style={{ padding: 12, fontWeight: 600 }}>Handling Time</td>
                   <td style={{ padding: 12 }}>{wonni.handlingTimeDays} day{wonni.handlingTimeDays === 1 ? "" : "s"}</td>
                   <td style={{ padding: 12 }}>{ebay.handlingTimeDays} day{ebay.handlingTimeDays === 1 ? "" : "s"}</td>

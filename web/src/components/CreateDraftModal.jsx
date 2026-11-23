@@ -896,7 +896,7 @@ export default function CreateDraftModal({ onClose, onCreated }) {
                 borderRadius: 8,
                 textAlign: "center",
                 cursor: "pointer",
-                background: "var(--bg-subtle, rgba(255,255,255,0.02))",
+                background: "var(--bg-subtle, var(--fill))",
               }}
             >
               <div style={{ fontSize: 28, marginBottom: 4 }}>🖼️</div>
@@ -1051,13 +1051,13 @@ export default function CreateDraftModal({ onClose, onCreated }) {
                 {aiDescSuggestion !== null && (
                   <div style={{
                     marginBottom: 10,
-                    background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(168,85,247,0.08) 100%)",
-                    border: "1px solid rgba(99,102,241,0.3)",
+                    background: "linear-gradient(135deg, var(--primary-light) 0%, var(--primary-light) 100%)",
+                    border: "1px solid var(--primary-light)",
                     borderRadius: 8,
                     padding: "10px 12px",
                   }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                      <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent, #6366f1)", letterSpacing: "0.04em" }}>✨ AI SUGGESTED</span>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent)", letterSpacing: "0.04em" }}>✨ AI SUGGESTED</span>
                       <div style={{ display: "flex", gap: 6 }}>
                         <button
                           className="btn btn-primary"
@@ -1075,11 +1075,11 @@ export default function CreateDraftModal({ onClose, onCreated }) {
                         </button>
                       </div>
                     </div>
-                    <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--text-secondary, var(--muted))" }}>{aiDescSuggestion}</p>
+                    <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--muted)" }}>{aiDescSuggestion}</p>
                   </div>
                 )}
                 {aiDescError && (
-                  <div style={{ fontSize: 12, color: "#ef4444", marginBottom: 6 }}>{aiDescError}</div>
+                  <div style={{ fontSize: 12, color: "var(--danger)", marginBottom: 6 }}>{aiDescError}</div>
                 )}
                 <textarea
                   className="input"
@@ -1113,7 +1113,7 @@ export default function CreateDraftModal({ onClose, onCreated }) {
                           gridTemplateColumns: "1.5fr 1fr 1.5fr auto",
                           gap: 8,
                           alignItems: "center",
-                          background: "var(--bg-subtle, rgba(255,255,255,0.02))",
+                          background: "var(--bg-subtle, var(--fill))",
                           padding: 8,
                           borderRadius: 6,
                           border: "1px solid var(--border)",
@@ -1171,7 +1171,7 @@ export default function CreateDraftModal({ onClose, onCreated }) {
                   alignItems: "center",
                   flexWrap: "wrap",
                   padding: 12,
-                  background: "var(--bg-subtle, rgba(255,255,255,0.02))",
+                  background: "var(--bg-subtle, var(--fill))",
                   borderRadius: 8,
                   marginBottom: 16,
                   border: "1px solid var(--border)",
@@ -1400,7 +1400,7 @@ export default function CreateDraftModal({ onClose, onCreated }) {
                             padding: 8,
                             borderRadius: 6,
                             border: isSelected ? "2px solid var(--primary)" : "1px solid var(--border)",
-                            background: "var(--bg-subtle, rgba(255,255,255,0.02))",
+                            background: "var(--bg-subtle, var(--fill))",
                           }}
                           onClick={() => setSelectedBoxId(b.id)}
                         >
