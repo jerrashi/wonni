@@ -8,7 +8,6 @@ const { weverseBulkImportProducts } = require("./weverse_bulk_import");
 const { weverseShopPreview } = require("./weverse_shop");
 const { splitProductImage } = require("./split_image");
 const { identifyProductsInImage } = require("./identify_products");
-const { placeAliexpressOrder, confirmTiktokShipment, pollAliexpressTracking } = require("./aliexpress_order");
 const { tiktokExchangeToken } = require("./tiktok_auth");
 const { ebayExchangeToken } = require("./ebay_auth");
 const { ebayWebhook } = require("./ebay_webhook");
@@ -139,9 +138,6 @@ module.exports = {
   // Orders + fulfillment
   syncTiktokOrders,
   syncTiktokOrdersScheduled,
-  placeAliexpressOrder,
-  confirmTiktokShipment,
-  pollAliexpressTracking,
 
   // Sales + quantity cascade
   recordSale,

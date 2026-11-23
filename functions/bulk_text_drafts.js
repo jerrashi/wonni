@@ -918,7 +918,7 @@ function textToListingsHandler(name) {
   });
 }
 
-const TEXT_TO_LISTINGS_OPTS = { secrets: [GEMINI_API_KEY, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, GOOGLE_CSE_KEY, GOOGLE_CSE_CX], timeoutSeconds: 540, memory: "1GiB" };
+const TEXT_TO_LISTINGS_OPTS = { secrets: [GEMINI_API_KEY, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, GOOGLE_CSE_KEY, GOOGLE_CSE_CX, ...require("./aliexpress_auth").AE_SECRETS], timeoutSeconds: 540, memory: "1GiB" };
 exports.textToListings = onCall(TEXT_TO_LISTINGS_OPTS, textToListingsHandler("textToListings"));
 exports.bulkDraftsFromText = onCall(TEXT_TO_LISTINGS_OPTS, textToListingsHandler("bulkDraftsFromText"));
 

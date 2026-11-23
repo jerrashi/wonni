@@ -1,7 +1,7 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const https = require("https");
-const { callAliexpressApi } = require("./aliexpress_auth");
+const { callAliexpressApi, AE_SECRETS } = require("./aliexpress_auth");
 const { buildNewProductDoc } = require("./product_schema");
 
 const ALLOWED_IMAGE_HOSTS = [".alicdn.com", ".aliexpress-media.com"];
@@ -105,6 +105,12 @@ function mapAliexpressVariants(skus, productId) {
 }
 
 // Import a product from AliExpress — called by Chrome extension (scrapedData) or web URL paste
+/** `image_urls` is a ";"-joined string in ds.product.get; older docs show {string: []}. */
+function aeImageUrls(v) {
+  const list = typeof v === "string" ? v.split(";") : Array.isArray(v?.string) ? v.string : Array.isArray(v) ? v : [];
+  return list.map((u) => String(u).trim()).filter((u) => /^https?:\/\//.test(u));
+}
+
 /**
  * One DS API call → the same `scrapedData` shape the extension sends
  * ({ productId, productUrl, title, price, images, variants }). Shared with
@@ -129,7 +135,7 @@ async function fetchAliexpressDsProduct(itemId, productUrl, uid) {
     productUrl,
     title: result.ae_item_base_info_dto?.subject ?? "",
     price: minPrice,
-    images: (result.ae_multimedia_info_dto?.image_urls?.string ?? []).slice(0, 8),
+    images: aeImageUrls(result.ae_multimedia_info_dto?.image_urls).slice(0, 12),
     variants: (result.ae_item_sku_info_dtos?.ae_item_sku_info_d_t_o ?? []).map((s) => ({
       skuId: s.sku_id,
       skuAttr: s.sku_attr,
@@ -140,8 +146,9 @@ async function fetchAliexpressDsProduct(itemId, productUrl, uid) {
 
 exports.aliexpressImportProduct = onCall(
   // No automatic Gemini call at import (opt-in only, see comment below) — no
-  // geminiApiKey secret needed here.
-  { timeoutSeconds: 120, memory: "512MiB" },
+  // geminiApiKey secret needed here. The AliExpress keys are: callAliexpressApi
+  // reads them (unbound before 2026-11-23, so every DS call would have failed).
+  { secrets: AE_SECRETS, timeoutSeconds: 120, memory: "512MiB" },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");

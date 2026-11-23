@@ -165,6 +165,11 @@ class FakeFirestore {
   collection(name) {
     return new FakeCollection(name, this);
   }
+  /** `db.doc("users/u1/integrations/tiktok")` — same store as the chained form. */
+  doc(path) {
+    const parts = path.split("/");
+    return new FakeCollection(parts.slice(0, -1).join("/"), this).doc(parts[parts.length - 1]);
+  }
   async runTransaction(fn) {
     // No contention in a single-threaded test → no retry loop needed.
     const tx = {

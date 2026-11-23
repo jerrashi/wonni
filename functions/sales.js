@@ -28,8 +28,12 @@ const { getValidEtsyToken, getEtsyClientId } = require("./etsy_auth");
 const { variantSkuFor } = require("./ebay_listing");
 const { loadSaleStages } = require("./sale_stages");
 const { createWeverseOrderTaskIfNeeded } = require("./weverse_order_tasks");
+const { TT_APP_KEY, TT_APP_SECRET } = require("./tiktok_auth");
 
-const EBAY_SECRETS = [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET];
+// Every secret the sale cascade can need. The name predates TikTok; every
+// function that cascades binds this list (sales, sale_poller, mercari_sales,
+// cross_post), so the TikTok stock push works wherever a sale is recorded.
+const EBAY_SECRETS = [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, TT_APP_KEY, TT_APP_SECRET];
 
 // ── quantity model ─────────────────────────────────────────────────────────
 
@@ -400,8 +404,9 @@ async function cascade(db, uid, product, productId, { variantSku, newQuantity, s
       } else if (p === "etsy") {
         platforms.etsy = await pushEtsyQuantity(uid, product, newQuantity ?? 0);
       } else {
-        // TODO: tiktokUpdateListing quantity once its consolidation lands.
-        platforms.tiktok = "pending-manual";
+        platforms.tiktok = await require("./tiktok_listing").pushTiktokQuantity(uid, product, {
+          variantSku, newQuantity: newQuantity ?? 0,
+        });
       }
     } catch (e) {
       if (p === "ebay" && e instanceof EbayListingEndedError) {

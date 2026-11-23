@@ -90,7 +90,7 @@ Until deployed: sales still land via `recordSale` + `recordMercariSalesBatch`.
 
 **Cascade coverage today:** eBay (via `bulk_update_price_quantity` on the stored
 offer pointer), Etsy (`listings` PATCH), Mercari (`pendingMercari*` flags).
-TikTok is stubbed `pending-manual` until `tiktokUpdateListing` consolidation.
+TikTok gets a real stock push (`tiktok_listing.pushTiktokQuantity`, 2026-11-23; needs the SKU ids written at post time, so products posted before then are skipped).
 
 #### Quantity model (confirmed 2026-09-09)
 
@@ -189,9 +189,9 @@ it. Remove on the next web pass.
 
 | Function | Status | Notes / action |
 |---|---|---|
-| `tiktokCreateListing` / `Update` / `Delete` | **live** | keep top-level; nested uses `tiktokStatus` field vs canonical `crossPostStatus.tiktok` |
+| `tiktokCreateListing` / `Update` / `Delete` | **rebuilt 2026-11-23, not deployed, never run live** | On `tiktok_client.js` (202309 paths + signing). Create: multi-variant SKUs, real package weight/dims, warehouse from the logistics API, writes `tiktokSkuId` / `variants[i].tiktokSkuId` / `tiktokWarehouseId` / `crossPostListingIds.tiktok`. Delete removes the TikTok product and clears every TikTok field. Not built: category attributes + brand, edit of title/photos. |
 | `getTiktokCategories` | **live** | keep |
-| `syncTiktokOrders` / `syncTiktokOrdersScheduled` | **live** | keep |
+| `syncTiktokOrders` / `syncTiktokOrdersScheduled` | **rebuilt 2026-11-23, not deployed** | Orders → `sales/` via `recordSaleCore` (stock decrement + cascade), one sale per (order, SKU), window by update time with 2 h overlap, cancelled orders only update an existing sale. Needs the `integrations.isConnected` field override in `firestore.indexes.json`. |
 | `tiktokExchangeToken` | **live** | keep top-level |
 
 ### Products / import / media
@@ -220,7 +220,7 @@ it. Remove on the next web pass.
 | `requestAccountDeletion` / `cancelAccountDeletion` / `purgeDeletedAccounts` | **not deployed** — deferred port | see below |
 | `notifySavedSearchMatches` | **not deployed** — deferred port | see below |
 | `ebayWebhook` | **ported 2026-11-13, not deployed** (`functions/ebay_webhook.js`) | `setupEbayNotifications` retired: subscribing happens per seller on connect |
-| `placeAliexpressOrder` / `confirmTiktokShipment` / `pollAliexpressTracking` | **live** | keep |
+| `placeAliexpressOrder` / `confirmTiktokShipment` / `pollAliexpressTracking` | **removed 2026-11-23** | Dropshipped from the orphan `orders/` collection, had no caller, and bound the wrong secrets. Restock orders (`purchaseOrders/`) and TikTok shipping get rebuilt on `sales/` (plan `~/.claude/plans/aliexpress-tiktok-integration.md` § 3, § 5). The next `firebase deploy --only functions` asks to delete the three deployed functions: answer yes. |
 
 ---
 

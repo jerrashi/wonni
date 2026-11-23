@@ -257,8 +257,9 @@ test("uidsWithSalesIntegration: connected eBay/Etsy only, one entry per user", (
 });
 
 test("syncSalesForUser: a platform that throws lands in errors, the other still runs", async () => {
-  // The fake db has no .doc(), so both platform reads throw. Neither may escape.
+  // Both platform reads throw. Neither may escape.
   const db = new FakeFirestore();
+  db.doc = () => { throw new Error("integration read failed"); };
   const r = await syncSalesForUser(db, "u1", { sinceFor: () => 0 });
   assert.equal(r.imported, 0);
   assert.deepEqual(r.errors.map((e) => e.platform), ["ebay", "etsy"]);

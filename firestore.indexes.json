@@ -152,6 +152,20 @@
   "fieldOverrides": [
     {
       "collectionGroup": "integrations",
+      "fieldPath": "isConnected",
+      "indexes": [
+        {
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION"
+        },
+        {
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION_GROUP"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "integrations",
       "fieldPath": "orderNotificationSubscriptionId",
       "indexes": [
         {

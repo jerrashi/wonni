@@ -1,38 +1,59 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
-const https = require("https");
-const crypto = require("crypto");
+const { tokenUrl, parseTokenResponse, createTiktokClient } = require("./tiktok_client");
 
 const TT_APP_KEY = defineSecret("TIKTOK_APP_KEY");
 const TT_APP_SECRET = defineSecret("TIKTOK_APP_SECRET");
 
-function makeHttpsRequest(options, body) {
-  return new Promise((resolve, reject) => {
-    const req = https.request(options, (res) => {
-      let data = "";
-      res.on("data", (c) => (data += c));
-      res.on("end", () => resolve({ status: res.statusCode, body: data }));
-    });
-    req.on("error", reject);
-    if (body) req.write(body);
-    req.end();
+/** The signed-in user's TikTok Shop client (token refresh + shop cipher handled). */
+function tiktokClientFor(uid, { db = admin.firestore(), fetchImpl } = {}) {
+  return createTiktokClient({
+    db, uid, appKey: TT_APP_KEY.value(), appSecret: TT_APP_SECRET.value(),
+    ...(fetchImpl ? { fetchImpl } : {}),
   });
 }
 
-// Sign a TikTok Shop API request
-// Signature = HMAC-SHA256(appSecret, path + sorted_query_params + body)
-function signTiktokRequest(appSecret, path, params, bodyStr = "") {
-  const sorted = Object.keys(params)
-    .filter((k) => k !== "sign" && k !== "access_token")
-    .sort()
-    .map((k) => `${k}${params[k]}`)
-    .join("");
-  const input = `${path}${sorted}${bodyStr}`;
-  return crypto.createHmac("sha256", appSecret).update(input).digest("hex");
+/**
+ * Code → tokens → users/{uid}/integrations/tiktok, then the shop cipher.
+ * The token endpoint does not return the shop; `/authorization/202309/shops`
+ * does, and every shop-scoped call needs its cipher. A shop lookup failure
+ * leaves the connection saved (the client retries the lookup on first use).
+ */
+async function exchangeTiktokCode(db, uid, code, { appKey, appSecret, fetchImpl = fetch, now = Date.now }) {
+  const res = await fetchImpl(tokenUrl("get", { appKey, appSecret, code }), { method: "GET" });
+  let parsed;
+  try { parsed = JSON.parse(await res.text()); } catch { parsed = null; }
+  const t = parseTokenResponse(parsed, now());
+
+  const ref = db.doc(`users/${uid}/integrations/tiktok`);
+  await ref.set({
+    platform: "tiktok",
+    isConnected: true,
+    connectedUsername: t.sellerName ?? t.openId ?? "",
+    connectedAt: admin.firestore.FieldValue.serverTimestamp(),
+    accessToken: t.accessToken,
+    refreshToken: t.refreshToken,
+    tokenExpiresAt: t.tokenExpiresAt,
+    refreshTokenExpiresAt: t.refreshTokenExpiresAt,
+    openId: t.openId,
+    // A reconnect may be a different shop: drop the old cipher so it is re-read.
+    shopId: admin.firestore.FieldValue.delete(),
+    shopCipher: admin.firestore.FieldValue.delete(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  let shopName = null;
+  try {
+    const client = createTiktokClient({ db, uid, appKey, appSecret, fetchImpl, now });
+    await client.shopCipher();
+    shopName = (await ref.get()).data()?.shopName ?? null;
+  } catch (e) {
+    console.error(`[tiktokExchangeToken] shop lookup failed uid=${uid}: ${e.message}`);
+  }
+  return { success: true, shopName };
 }
 
-// Exchange authorization code for access + refresh tokens
 exports.tiktokExchangeToken = onCall(
   { secrets: [TT_APP_KEY, TT_APP_SECRET] },
   async (request) => {
@@ -42,124 +63,25 @@ exports.tiktokExchangeToken = onCall(
     const { code, state } = request.data;
     if (!code) throw new HttpsError("invalid-argument", "Missing code.");
 
-    const stateRef = admin.firestore().doc(`users/${uid}/oauthStates/tiktok`);
-    const stateSnap = await stateRef.get();
-    const stored = stateSnap.data();
+    const db = admin.firestore();
+    const stateRef = db.doc(`users/${uid}/oauthStates/tiktok`);
+    const stored = (await stateRef.get()).data();
     if (!stored?.nonce || stored.nonce !== state) {
       throw new HttpsError("invalid-argument", "Invalid OAuth state.");
     }
+    await stateRef.delete();
     if (Date.now() - stored.createdAt.toMillis() > 10 * 60 * 1000) {
-      await stateRef.delete();
       throw new HttpsError("deadline-exceeded", "OAuth state expired.");
     }
-    await stateRef.delete();
 
-    const appKey = TT_APP_KEY.value();
-    const appSecret = TT_APP_SECRET.value();
-    const timestamp = Math.floor(Date.now() / 1000);
-
-    const params = { app_key: appKey, auth_code: code, grant_type: "authorized_code", timestamp };
-    const sign = signTiktokRequest(appSecret, "/api/v2/token/get", params);
-    const qs = new URLSearchParams({ ...params, sign }).toString();
-
-    const result = await makeHttpsRequest({
-      hostname: "auth.tiktok-shops.com",
-      path: `/api/v2/token/get?${qs}`,
-      method: "GET",
-    });
-
-    let parsed;
-    try { parsed = JSON.parse(result.body); } catch {
-      throw new HttpsError("internal", "Invalid TikTok token response.");
-    }
-
-    if (parsed.code !== 0 || !parsed.data?.access_token) {
-      throw new HttpsError("internal", `TikTok token error: ${parsed.message ?? result.body}`);
-    }
-
-    const { access_token, refresh_token, access_token_expire_in, seller_name, open_id } = parsed.data;
-    const shopId = parsed.data.authorized_shops?.[0]?.shop_id ?? "";
-    const shopCipher = parsed.data.authorized_shops?.[0]?.cipher ?? "";
-
-    await admin.firestore().doc(`users/${uid}/integrations/tiktok`).set({
-      platform: "tiktok",
-      isConnected: true,
-      connectedUsername: seller_name ?? open_id ?? "",
-      connectedAt: admin.firestore.FieldValue.serverTimestamp(),
-      // Web-specific OAuth token storage
-      accessToken: access_token,
-      refreshToken: refresh_token,
-      tokenExpiresAt: Date.now() + (access_token_expire_in ?? 3600) * 1000,
-      shopId,
-      shopCipher,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    return { success: true };
+    return exchangeTiktokCode(db, uid, code, { appKey: TT_APP_KEY.value(), appSecret: TT_APP_SECRET.value() });
   }
 );
 
-// Exported helper — refreshes token if within 5 minutes of expiry
-async function refreshTiktokToken(uid) {
-  const db = admin.firestore();
-  const ref = db.doc(`users/${uid}/integrations/tiktok`);
-  const snap = await ref.get();
-  const data = snap.data();
-  if (!data) throw new Error("TikTok Shop not connected.");
-
-  if (data.tokenExpiresAt - Date.now() > 5 * 60 * 1000) {
-    return { accessToken: data.accessToken, shopId: data.shopId, shopCipher: data.shopCipher };
-  }
-
-  const appKey = TT_APP_KEY.value();
-  const appSecret = TT_APP_SECRET.value();
-  const timestamp = Math.floor(Date.now() / 1000);
-
-  const params = { app_key: appKey, refresh_token: data.refreshToken, grant_type: "refresh_token", timestamp };
-  const sign = signTiktokRequest(appSecret, "/api/v2/token/refresh", params);
-  const qs = new URLSearchParams({ ...params, sign }).toString();
-
-  const result = await makeHttpsRequest({
-    hostname: "auth.tiktok-shops.com",
-    path: `/api/v2/token/refresh?${qs}`,
-    method: "GET",
-  });
-
-  const parsed = JSON.parse(result.body);
-  if (parsed.code !== 0 || !parsed.data?.access_token) {
-    throw new Error(`TikTok refresh failed: ${parsed.message}`);
-  }
-
-  const { access_token, refresh_token, access_token_expire_in } = parsed.data;
-  await ref.update({
-    accessToken: access_token,
-    refreshToken: refresh_token ?? data.refreshToken,
-    tokenExpiresAt: Date.now() + (access_token_expire_in ?? 3600) * 1000,
-  });
-
-  return { accessToken: access_token, shopId: data.shopId, shopCipher: data.shopCipher };
-}
-
-// Build signed headers for a TikTok Shop API call
-function tiktokHeaders(appKey, appSecret, accessToken, path, params = {}, bodyStr = "") {
-  const timestamp = Math.floor(Date.now() / 1000);
-  const allParams = { ...params, app_key: appKey, timestamp };
-  const sign = signTiktokRequest(appSecret, path, allParams, bodyStr);
-  return {
-    "x-tts-access-token": accessToken,
-    "Content-Type": "application/json",
-    "x-tts-timestamp": String(timestamp),
-    "x-tts-app-key": appKey,
-    "x-tts-sign": sign,
-  };
-}
-
 module.exports = {
   tiktokExchangeToken: exports.tiktokExchangeToken,
-  refreshTiktokToken,
-  tiktokHeaders,
-  signTiktokRequest,
-  makeHttpsRequest,
+  tiktokClientFor,
   TT_APP_KEY,
   TT_APP_SECRET,
+  _internal: { exchangeTiktokCode },
 };

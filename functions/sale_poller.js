@@ -23,14 +23,13 @@ const admin = require("firebase-admin");
 
 const { validated } = require("./contracts");
 const {
-  ebayRequest, hasOrderReadScopes, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET,
+  ebayRequest, hasOrderReadScopes,
 } = require("./ebay_auth");
 const { getActiveEtsyToken } = require("./etsy_auth");
 const { variantSkuFor } = require("./ebay_listing");
-const { _internal } = require("./sales");
+const { _internal, EBAY_SECRETS } = require("./sales");
 
 const { recordSaleCore } = _internal;
-const EBAY_SECRETS = [EBAY_CLIENT_ID, EBAY_CLIENT_SECRET];
 const DEFAULT_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 
 // ── product matching ───────────────────────────────────────────────────────
