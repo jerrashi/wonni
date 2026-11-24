@@ -16,6 +16,7 @@ import { usePostJobs } from "../lib/postJobs";
 import { SplitListingChip, PostJobChip } from "../components/ListingChips";
 import { resolveListingPrice, variantPrice, suggestedListingPrice, productCost } from "../lib/pricing";
 import { deleteProductEverywhere, isLiveOnMercari, platformNoteFor } from "../lib/deleteProduct";
+import { extensionError } from "../lib/extensionError";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -4952,7 +4953,7 @@ function ProductDetail() {
           { type: "CHECK_MERCARI_PULL_SYNC", mercariItemId: variant.mercariListingId },
           (response) => {
             if (chrome.runtime.lastError) {
-              reject(new Error(chrome.runtime.lastError.message));
+              reject(extensionError(chrome.runtime.lastError));
             } else {
               resolve(response);
             }

@@ -5,6 +5,7 @@ import { needsBackgroundPost, startPostJob } from "../lib/postJobs";
 import { EbayEditingNoticeModal } from "./EbayEditingNoticeModal";
 import { isPlatformAlreadyPosted } from "./PostModal";
 import { resolveListingPrice, variantPrice } from "../lib/pricing";
+import { extensionError } from "../lib/extensionError";
 
 const PLATFORMS = [
   { id: "wonni", name: "Wonni", locked: true },
@@ -162,7 +163,7 @@ export default function BulkPostModal({ products, onClose }) {
                         { type: "START_MERCARI_CROSS_POST", payload },
                         (response) => {
                           if (chrome.runtime.lastError) {
-                            reject(new Error(chrome.runtime.lastError.message));
+                            reject(extensionError(chrome.runtime.lastError));
                           } else {
                             resolve(response);
                           }
@@ -198,7 +199,7 @@ export default function BulkPostModal({ products, onClose }) {
                       { type: "START_MERCARI_CROSS_POST", payload },
                       (response) => {
                         if (chrome.runtime.lastError) {
-                          reject(new Error(chrome.runtime.lastError.message));
+                          reject(extensionError(chrome.runtime.lastError));
                         } else {
                           resolve(response);
                         }

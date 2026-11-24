@@ -4,6 +4,7 @@ import { db, auth, callFunction } from "../firebase";
 import { needsBackgroundPost, startPostJob } from "../lib/postJobs";
 import { EbayEditingNoticeModal } from "./EbayEditingNoticeModal";
 import { resolveListingPrice, variantPrice } from "../lib/pricing";
+import { extensionError } from "../lib/extensionError";
 
 const PLATFORMS = [
   { id: "wonni", name: "Wonni", requiresConnected: false, locked: true },
@@ -322,7 +323,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                       { type: "START_MERCARI_CROSS_POST", payload },
                       (response) => {
                         if (chrome.runtime.lastError) {
-                          reject(new Error(chrome.runtime.lastError.message));
+                          reject(extensionError(chrome.runtime.lastError));
                         } else {
                           resolve(response);
                         }
@@ -358,7 +359,7 @@ export default function PostModal({ product, onClose, mode = "modal", buttonRef 
                     { type: "START_MERCARI_CROSS_POST", payload },
                     (response) => {
                       if (chrome.runtime.lastError) {
-                        reject(new Error(chrome.runtime.lastError.message));
+                        reject(extensionError(chrome.runtime.lastError));
                       } else {
                         resolve(response);
                       }
