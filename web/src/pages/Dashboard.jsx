@@ -8,6 +8,7 @@ import CreateDraftModal from "../components/CreateDraftModal";
 import PostModal from "../components/PostModal";
 import BulkPostModal from "../components/BulkPostModal";
 import BulkTagModal from "../components/BulkTagModal";
+import BulkEditModal from "../components/BulkEditModal";
 import WeverseShopImportModal from "../components/WeverseShopImportModal";
 import TextToListingsModal from "../components/TextToListingsModal";
 import OverflowMenu from "../components/OverflowMenu";
@@ -516,6 +517,7 @@ export default function Dashboard() {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [showBulkPostModal, setShowBulkPostModal] = useState(false);
   const [showBulkTagModal, setShowBulkTagModal] = useState(false);
+  const [showBulkEditModal, setShowBulkEditModal] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [bulkMarkingOOS, setBulkMarkingOOS] = useState(false);
@@ -681,6 +683,7 @@ export default function Dashboard() {
         {selectMode && someSelected ? (
           <>
             <span className="page-subtitle">{selectedIds.size} selected</span>
+            <button className="btn btn-ghost" onClick={() => setShowBulkEditModal(true)}>Edit</button>
             <button className="btn btn-ghost" onClick={() => setShowBulkTagModal(true)}>Tag</button>
             <button className="btn btn-ghost" onClick={handleBulkMarkOutOfStock} disabled={bulkMarkingOOS}>
               {bulkMarkingOOS ? "Marking…" : "Mark Out of Stock"}
@@ -819,6 +822,16 @@ export default function Dashboard() {
           products={regularProducts.filter((p) => selectedIds.has(p.id))}
           onClose={() => {
             setShowBulkPostModal(false);
+            setSelectedIds(new Set());
+          }}
+        />
+      )}
+
+      {showBulkEditModal && selectedIds.size > 0 && (
+        <BulkEditModal
+          products={regularProducts.filter((p) => selectedIds.has(p.id))}
+          onClose={() => {
+            setShowBulkEditModal(false);
             setSelectedIds(new Set());
           }}
         />

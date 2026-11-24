@@ -412,14 +412,14 @@ class ListingRepository: ObservableObject {
         setHandlingTimeDays: Int? = nil,
         resetHandlingTimeDays: Bool = false
     ) async throws -> [String] {
+        // Returns the ids that changed; the caller pushes those to products/{id}
+        // and every live platform (pushProductEdits, 2026-11-24).
         var updates: [String: [String: Any]] = [:]
-        var ebayPostedIds: [String] = []
 
         // Fetch current states to compute new values
         for id in listingIds {
             let doc = try await db.collection(listingsCollection).document(id).getDocument()
             guard let listing = try? doc.data(as: UserListing.self) else { continue }
-            if listing.crossPostStatus?["ebay"] == "posted" { ebayPostedIds.append(id) }
 
             var data: [String: Any] = [:]
             
@@ -478,7 +478,7 @@ class ListingRepository: ObservableObject {
             }
         }
         
-        guard !updates.isEmpty else { return ebayPostedIds }
+        guard !updates.isEmpty else { return [] }
         
         // Apply computed updates in a batch
         let batch = db.batch()
@@ -487,7 +487,7 @@ class ListingRepository: ObservableObject {
             batch.updateData(data, forDocument: ref)
         }
         try await batch.commit()
-        return ebayPostedIds
+        return Array(updates.keys)
     }
 
     func findListingByMercariId(_ mercariId: String) async -> (listingId: String, coverPhotoPath: String?)? {

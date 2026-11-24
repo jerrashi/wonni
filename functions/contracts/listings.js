@@ -109,6 +109,18 @@ module.exports = {
       }),
     },
     {
+      name: "pushProductEdits",
+      summary: "After editing products/{id} (e.g. bulk edit), push its current title / description / price / package to every platform where it is live: eBay, Etsy and TikTok in parallel. One failing never stops the others. Mercari has no edit automation, so it is reported in manualUpdate.",
+      request: ProductRefRequestSchema,
+      response: z.object({
+        /** API platforms whose listing was updated this call. */
+        updated: z.array(z.string()),
+        failed: z.array(z.object({ platform: z.string(), error: z.string() })),
+        /** Platforms the user must update by hand (Mercari). */
+        manualUpdate: z.array(z.string()),
+      }),
+    },
+    {
       name: "postToWonni",
       summary: "Publish a products/{id} to the Wonni marketplace feed (listings/{id}, status:active). Skips a re-write when a live listing already exists.",
       request: ProductRefRequestSchema,

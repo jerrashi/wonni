@@ -266,3 +266,30 @@ test("syncSalesForUser: a platform that throws lands in errors, the other still 
   const only = await syncSalesForUser(db, "u1", { only: "etsy", sinceFor: () => 0 });
   assert.deepEqual(only.errors.map((e) => e.platform), ["etsy"]);
 });
+
+test("syncSalesForUser: the button run adds TikTok; the scheduled run (no tiktokSync) does not", async () => {
+  const db = new FakeFirestore();
+  db.doc = () => ({ get: async () => ({ data: () => undefined }) }); // eBay/Etsy not connected
+  const calls = [];
+  const tiktokSync = async (_db, uid) => { calls.push(uid); return { imported: 2, skipped: 1, saleIds: ["s1", "s2"] }; };
+
+  const button = await syncSalesForUser(db, "u1", { sinceFor: () => 0, tiktokSync });
+  assert.deepEqual([button.imported, button.skipped, button.saleIds], [2, 1, ["s1", "s2"]]);
+
+  const scheduled = await syncSalesForUser(db, "u1", { sinceFor: () => 0 });
+  assert.equal(scheduled.imported, 0);
+  assert.deepEqual(calls, ["u1"]);
+
+  await syncSalesForUser(db, "u1", { only: "ebay", sinceFor: () => 0, tiktokSync });
+  assert.deepEqual(calls, ["u1"], "only: ebay skips TikTok");
+});
+
+test("syncSalesForUser: a TikTok failure lands in errors, never throws", async () => {
+  const db = new FakeFirestore();
+  db.doc = () => ({ get: async () => ({ data: () => undefined }) });
+  const r = await syncSalesForUser(db, "u1", {
+    sinceFor: () => 0,
+    tiktokSync: async () => { throw new Error("Reconnect TikTok Shop"); },
+  });
+  assert.deepEqual(r.errors, [{ platform: "tiktok", message: "Reconnect TikTok Shop" }]);
+});

@@ -182,7 +182,7 @@ const PushEbayQuantityResponseSchema = z.object({
 
 const SyncSalesRequestSchema = z.object({
   /** Limit the poll to one platform; omit for all connected platforms. */
-  platform: z.enum(["ebay", "etsy"]).nullish(),
+  platform: z.enum(["ebay", "etsy", "tiktok"]).nullish(),
   /** Don't look back past this point. Defaults to 30 days server-side. */
   since: TimestampInputSchema.nullish(),
 });

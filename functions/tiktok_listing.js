@@ -328,17 +328,43 @@ exports.tiktokSuggestCategory = onCall({ secrets: TT_SECRETS }, async (request) 
 });
 
 // Partial edit passthrough (no client calls it yet; plan § 4 "Edit").
+/**
+ * What a Wonni edit sends to TikTok (2026-11-24, bulk edit): the text + package
+ * through partial_edit, prices through prices/update (partial_edit does not take
+ * SKU prices). Price rows only for SKUs whose TikTok id we stored at create time.
+ * Pure; never run against live TikTok yet.
+ */
+function tiktokEditBodies(product) {
+  const { title, description } = toTiktokProductPayload(product);
+  const edit = { title, description, ...tiktokPackage(product) };
+  const base = resolveListingPrice(product);
+  const money = (n) => ({ amount: Number(n).toFixed(2), currency: "USD" });
+  const skus = hasVariantSkus(product)
+    ? activeVariants(product).filter(({ v }) => v.tiktokSkuId).map(({ v }) => ({ id: v.tiktokSkuId, price: money(variantPriceOr(v, base)) }))
+    : product.tiktokSkuId ? [{ id: product.tiktokSkuId, price: money(base) }] : [];
+  return { edit, prices: skus.length ? { skus } : null };
+}
+
 exports.tiktokUpdateListing = onCall({ secrets: TT_SECRETS }, async (request) => {
   const uid = requireUid(request);
   const { productId, updates } = request.data ?? {};
   if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
   const snap = await admin.firestore().collection("products").doc(productId).get();
   if (!snap.exists || snap.data().userId !== uid) throw new HttpsError("not-found", "Product not found.");
-  const { tiktokProductId } = snap.data();
+  const product = snap.data();
+  const { tiktokProductId } = product;
   if (!tiktokProductId) throw new HttpsError("failed-precondition", "Not listed on TikTok yet.");
-  await tiktokClientFor(uid).request("POST", `/product/202309/products/${tiktokProductId}/partial_edit`, {
-    body: updates ?? {}, what: "Updating the TikTok listing",
+  const client = tiktokClientFor(uid);
+  // A caller-built body is sent as is; no body = push the product's current fields.
+  const { edit, prices } = updates ? { edit: updates, prices: null } : tiktokEditBodies(product);
+  await client.request("POST", `/product/202309/products/${tiktokProductId}/partial_edit`, {
+    body: edit, what: "Updating the TikTok listing",
   });
+  if (prices) {
+    await client.request("POST", `/product/202309/products/${tiktokProductId}/prices/update`, {
+      body: prices, what: "Updating TikTok prices",
+    });
+  }
   return { success: true };
 });
 
@@ -354,4 +380,5 @@ exports._internal = {
   buildCategoryList, pickWarehouse, tiktokPackage, skuQuantity, buildTiktokSkus,
   buildTiktokCreatePayload, createResultPatch, inventoryUpdateBody, uploadImage,
   createTiktokListingCore, deleteTiktokListingCore, pushTiktokQuantity, suggestTiktokCategoryCore,
+  tiktokEditBodies,
 };

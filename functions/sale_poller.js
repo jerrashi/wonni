@@ -297,7 +297,7 @@ async function syncEbay(db, uid, productDocs, productById, sinceMs) {
   const integ = (await db.doc(`users/${uid}/integrations/ebay`).get()).data();
   if (!integ?.isConnected) return { imported: 0, skipped: 0, saleIds: [] };
   if (!hasOrderReadScopes(integ)) {
-    throw new Error("eBay order sync needs a reconnect — the fulfillment/finances permissions were added 2026-09-09.");
+    throw new Error("Reconnect eBay in Settings to import eBay sales. This connection is older than the order permissions (added 2026-09-09).");
   }
 
   const skuMap = buildEbaySkuMap(productDocs);
@@ -425,7 +425,7 @@ async function etsyReceiptTakeHome({ shopId, accessToken, clientId }, receiptId)
  * scheduled run can poll only what's new while the button keeps its 30 days.
  * Platforms fail independently; a failure lands in `errors`, never throws.
  */
-async function syncSalesForUser(db, uid, { only = null, sinceFor }) {
+async function syncSalesForUser(db, uid, { only = null, sinceFor, tiktokSync = null }) {
   const productsSnap = await db.collection("products").where("userId", "==", uid).get();
   const productById = new Map(productsSnap.docs.map((d) => [d.id, d.data()]));
 
@@ -444,6 +444,20 @@ async function syncSalesForUser(db, uid, { only = null, sinceFor }) {
     } catch (e) {
       console.error(`[syncSales] ${platform} uid=${uid}: ${e.message}`);
       errors.push({ platform, message: e.message });
+    }
+  }
+  // TikTok rides along only on the ↻ button (web + iOS): the scheduled run
+  // leaves it to syncTiktokOrdersScheduled (every 15 min), which owns the
+  // poll window. A disconnected TikTok returns zeros, so this costs one read.
+  if (tiktokSync && (!only || only === "tiktok")) {
+    try {
+      const r = await tiktokSync(db, uid);
+      imported += r.imported;
+      skipped += r.skipped;
+      saleIds.push(...r.saleIds);
+    } catch (e) {
+      console.error(`[syncSales] tiktok uid=${uid}: ${e.message}`);
+      errors.push({ platform: "tiktok", message: e.message });
     }
   }
   return { imported, skipped, saleIds, errors };
@@ -489,7 +503,9 @@ exports.syncSales = onCall(
       ? (typeof data.since === "number" ? data.since : Date.parse(data.since))
       : Date.now() - DEFAULT_LOOKBACK_MS;
 
-    return syncSalesForUser(db, uid, { only: data.platform ?? null, sinceFor: () => sinceMs });
+    // Lazy: tiktok_orders requires sales.js too; keep module load order flat.
+    const tiktokSync = (d, u) => require("./tiktok_orders")._internal.syncTiktokOrdersForUser(d, u);
+    return syncSalesForUser(db, uid, { only: data.platform ?? null, sinceFor: () => sinceMs, tiktokSync });
   }),
 );
 

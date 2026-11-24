@@ -100,7 +100,11 @@ function mapSaleToPreview(sale, artistId) {
     infoTable,
     [sale.description, sale.shortDescription, sale.longDescription].map(cleanText).find(Boolean) ?? ""
   );
-  const thumbnailUrl = (sale.thumbnailImageUrls ?? []).find(isAllowedImageUrl) ?? null;
+  // Shop/artist grid "productCards" carry ONE `thumbnailImageUrl` string (seen
+  // 2026-11-24); sale pages carry a `thumbnailImageUrls` array. Accept both, or
+  // the preview tiles show "No image" while the import itself still has photos.
+  const thumbnailUrl = [sale.thumbnailImageUrl, ...(sale.thumbnailImageUrls ?? [])]
+    .find((u) => typeof u === "string" && isAllowedImageUrl(u)) ?? null;
 
   return {
     saleId: String(sale.saleId),
@@ -109,7 +113,7 @@ function mapSaleToPreview(sale, artistId) {
     description: description.slice(0, 280),
     price,
     thumbnailUrl,
-    artistName: sale.labelArtistInfo?.artistName ?? sale.labelArtistInfo?.name ?? "",
+    artistName: sale.labelArtistInfo?.artistName ?? sale.labelArtistInfo?.name ?? sale.artistName ?? "",
     saleStatus: sale.status ?? "",
     productUrl: `https://shop.weverse.io/en/shop/USD/artists/${artistId}/sales/${sale.saleId}`,
   };

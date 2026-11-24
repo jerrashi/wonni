@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { Link } from "react-router-dom";
 import { db, auth, callFunction } from "../firebase";
 import Layout from "../components/Layout";
 import LogSaleModal from "../components/LogSaleModal";
@@ -12,6 +13,7 @@ const PLATFORM_LABELS = {
   mercari: { label: "Mercari", color: "#e11d48", icon: "🔴" },
   ebay: { label: "eBay", color: "#0064d2", icon: "🔵" },
   etsy: { label: "Etsy", color: "#f97316", icon: "🟠" },
+  tiktok: { label: "TikTok", color: "#111827", icon: "⚫" },
   wonni: { label: "Wonni", color: "#8b5cf6", icon: "🟣" },
   manual: { label: "In Person", color: "#64748b", icon: "⚪" },
 };
@@ -144,21 +146,21 @@ export default function Sales() {
     return { recorded, pill: recorded.length ? `+${recorded.length}` + (waiting ? ` · ${waiting} to review` : "") : waiting ? `${waiting} to review` : "✓" };
   }
 
-  // ↻ — eBay / Etsy / TikTok through syncSales, Mercari through the extension.
+  // ↻ — eBay / Etsy / TikTok through syncSales (TikTok joined 2026-11-24), Mercari through the extension.
   async function handleSync() {
     setSyncing(true);
     setSyncNote("");
     setError("");
-    setPlatformPills({ "eBay · Etsy": "…", Mercari: "…" });
+    setPlatformPills({ "eBay · Etsy · TikTok": "…", Mercari: "…" });
     let apiNew = 0;
     const api = callFunction("syncSales")({}).then((res) => {
       const { imported = 0, errors = [] } = res.data || {};
       apiNew = imported;
       const note = errors.length ? errors.map((e) => `${e.platform}: ${e.message}`).join(" · ") : "";
-      setPlatformPills((p) => ({ ...p, "eBay · Etsy": imported ? `+${imported}` : errors.length ? "needs attention" : "✓" }));
+      setPlatformPills((p) => ({ ...p, "eBay · Etsy · TikTok": imported ? `+${imported}` : errors.length ? "needs attention" : "✓" }));
       if (note) setSyncNote(note);
     }).catch((e) => {
-      setPlatformPills((p) => ({ ...p, "eBay · Etsy": "failed" }));
+      setPlatformPills((p) => ({ ...p, "eBay · Etsy · TikTok": "failed" }));
       setError("Sync failed: " + (e?.message ?? e));
     });
     let mercari = { recorded: [] };
@@ -356,7 +358,12 @@ export default function Sales() {
     <Layout>
       <div className="page-toolbar">
         <span className="spacer" />
-        {syncNote && <span className="page-subtitle">{syncNote}</span>}
+        {syncNote && (
+          <span className="page-subtitle">
+            {syncNote}
+            {/reconnect/i.test(syncNote) && <> · <Link to="/sell/settings">Open Settings</Link></>}
+          </span>
+        )}
         <button className="btn btn-ghost" onClick={handleSync} disabled={syncing} title="Check eBay, Etsy, TikTok and Mercari for new sales">
           {syncing ? "Refreshing…" : "Refresh"}
         </button>

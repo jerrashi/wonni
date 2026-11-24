@@ -59,6 +59,7 @@ const { recordMercariSalesBatch, reviewMercariSales, setMercariSalesDiscarded, l
 const { syncSales, syncSalesScheduled, getOrderTakeHome } = require("./sale_poller");
 const { postToWonni } = require("./wonni_listing");
 const { deleteProductEverywhere } = require("./cascade_delete");
+const { pushProductEdits } = require("./push_product_edits");
 const { startPostJob, onPostJobCreated } = require("./post_jobs");
 const { watchStockSourcesScheduled } = require("./stock_watch");
 const { applyCrossPostRules } = require("./cross_post");
@@ -168,6 +169,7 @@ module.exports = {
   reassignSaleStage,
   postToWonni,
   deleteProductEverywhere,
+  pushProductEdits,
   startPostJob,
   onPostJobCreated,
 

@@ -460,7 +460,7 @@ struct BulkEditSheet: View {
             do {
                 if hasFieldChanges {
                     let dims: (Double, Double, Double)? = hasDimensions ? (lengthIn!, widthIn!, heightIn!) : nil
-                    let ebayIds = try await ListingRepository.shared.bulkUpdate(
+                    let changedIds = try await ListingRepository.shared.bulkUpdate(
                         listingIds: Array(selectedListingIds),
                         priceAdjustment: adjustment,
                         isPercentage: isPercentage,
@@ -479,12 +479,14 @@ struct BulkEditSheet: View {
                         resetHandlingTimeDays: resetHandlingTimeToDefault
                     )
 
-                    // markSoldOutAndCascade hides the eBay listing with qty=0 anyway,
-                    // so pushing field edits to eBay is skipped when going out of stock.
+                    // Copies each edit into products/{id}, then pushProductEdits updates
+                    // every live eBay / Etsy / TikTok listing (server decides where it
+                    // is live). Skipped when going out of stock: markSoldOutAndCascade
+                    // ends/hides those listings anyway.
                     if !markOutOfStock {
-                        for id in ebayIds {
+                        for id in changedIds {
                             Task {
-                                try? await ProductRepository.shared.pushListingEdits(listingId: id)
+                                try? await ProductRepository.shared.pushListingEdits(listingId: id, function: "pushProductEdits")
                             }
                         }
                     }

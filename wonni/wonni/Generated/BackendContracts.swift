@@ -98,6 +98,8 @@ struct BackendContracts: Codable, Sendable {
     let productDoc: ProductDoc?
     let pushEbayQuantityUpdateRequest: PushEbayQuantityUpdateRequest?
     let pushEbayQuantityUpdateResponse: PushEbayQuantityUpdateResponse?
+    let pushProductEditsRequest: PushProductEditsRequest?
+    let pushProductEditsResponse: PushProductEditsResponse?
     let reassignSaleStageRequest: ReassignSaleStageRequest?
     let reassignSaleStageResponse: ReassignSaleStageResponse?
     let recordMercariSalesBatchRequest: RecordMercariSalesBatchRequest?
@@ -232,6 +234,8 @@ struct BackendContracts: Codable, Sendable {
         case productDoc = "ProductDoc"
         case pushEbayQuantityUpdateRequest = "PushEbayQuantityUpdateRequest"
         case pushEbayQuantityUpdateResponse = "PushEbayQuantityUpdateResponse"
+        case pushProductEditsRequest = "PushProductEditsRequest"
+        case pushProductEditsResponse = "PushProductEditsResponse"
         case reassignSaleStageRequest = "ReassignSaleStageRequest"
         case reassignSaleStageResponse = "ReassignSaleStageResponse"
         case recordMercariSalesBatchRequest = "RecordMercariSalesBatchRequest"
@@ -386,6 +390,8 @@ extension BackendContracts {
         productDoc: ProductDoc?? = nil,
         pushEbayQuantityUpdateRequest: PushEbayQuantityUpdateRequest?? = nil,
         pushEbayQuantityUpdateResponse: PushEbayQuantityUpdateResponse?? = nil,
+        pushProductEditsRequest: PushProductEditsRequest?? = nil,
+        pushProductEditsResponse: PushProductEditsResponse?? = nil,
         reassignSaleStageRequest: ReassignSaleStageRequest?? = nil,
         reassignSaleStageResponse: ReassignSaleStageResponse?? = nil,
         recordMercariSalesBatchRequest: RecordMercariSalesBatchRequest?? = nil,
@@ -520,6 +526,8 @@ extension BackendContracts {
             productDoc: productDoc ?? self.productDoc,
             pushEbayQuantityUpdateRequest: pushEbayQuantityUpdateRequest ?? self.pushEbayQuantityUpdateRequest,
             pushEbayQuantityUpdateResponse: pushEbayQuantityUpdateResponse ?? self.pushEbayQuantityUpdateResponse,
+            pushProductEditsRequest: pushProductEditsRequest ?? self.pushProductEditsRequest,
+            pushProductEditsResponse: pushProductEditsResponse ?? self.pushProductEditsResponse,
             reassignSaleStageRequest: reassignSaleStageRequest ?? self.reassignSaleStageRequest,
             reassignSaleStageResponse: reassignSaleStageResponse ?? self.reassignSaleStageResponse,
             recordMercariSalesBatchRequest: recordMercariSalesBatchRequest ?? self.recordMercariSalesBatchRequest,
@@ -2261,7 +2269,7 @@ extension DeleteProductEverywhereRequest {
 // MARK: - DeleteProductEverywhereResponse
 struct DeleteProductEverywhereResponse: Codable, Equatable, Sendable {
     let deleted: Bool
-    let failed: [Failed]
+    let failed: [DeleteProductEverywhereResponseFailed]
     let manualRemoval: [String]
     let removedFrom: [String]
 
@@ -2293,7 +2301,7 @@ extension DeleteProductEverywhereResponse {
 
     func with(
         deleted: Bool? = nil,
-        failed: [Failed]? = nil,
+        failed: [DeleteProductEverywhereResponseFailed]? = nil,
         manualRemoval: [String]? = nil,
         removedFrom: [String]? = nil
     ) -> DeleteProductEverywhereResponse {
@@ -2320,8 +2328,8 @@ extension DeleteProductEverywhereResponse {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-// MARK: - Failed
-struct Failed: Codable, Equatable, Sendable {
+// MARK: - DeleteProductEverywhereResponseFailed
+struct DeleteProductEverywhereResponseFailed: Codable, Equatable, Sendable {
     let error: String
     let platform: String
 
@@ -2331,11 +2339,11 @@ struct Failed: Codable, Equatable, Sendable {
     }
 }
 
-// MARK: Failed convenience initializers and mutators
+// MARK: DeleteProductEverywhereResponseFailed convenience initializers and mutators
 
-extension Failed {
+extension DeleteProductEverywhereResponseFailed {
     init(data: Data) throws {
-        self = try newJSONDecoder().decode(Failed.self, from: data)
+        self = try newJSONDecoder().decode(DeleteProductEverywhereResponseFailed.self, from: data)
     }
 
     init(_ json: String, using encoding: String.Encoding = .utf8) throws {
@@ -2352,8 +2360,8 @@ extension Failed {
     func with(
         error: String? = nil,
         platform: String? = nil
-    ) -> Failed {
-        return Failed(
+    ) -> DeleteProductEverywhereResponseFailed {
+        return DeleteProductEverywhereResponseFailed(
             error: error ?? self.error,
             platform: platform ?? self.platform
         )
@@ -8479,6 +8487,168 @@ enum PushEbayQuantityUpdateResponseOutcome: String, Codable, Equatable, Sendable
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
+// MARK: - PushProductEditsRequest
+struct PushProductEditsRequest: Codable, Equatable, Sendable {
+    let productId: String
+
+    enum CodingKeys: String, CodingKey {
+        case productId = "productId"
+    }
+}
+
+// MARK: PushProductEditsRequest convenience initializers and mutators
+
+extension PushProductEditsRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(PushProductEditsRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        productId: String? = nil
+    ) -> PushProductEditsRequest {
+        return PushProductEditsRequest(
+            productId: productId ?? self.productId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - PushProductEditsResponse
+struct PushProductEditsResponse: Codable, Equatable, Sendable {
+    let failed: [PushProductEditsResponseFailed]
+    let manualUpdate: [String]
+    let updated: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case failed = "failed"
+        case manualUpdate = "manualUpdate"
+        case updated = "updated"
+    }
+}
+
+// MARK: PushProductEditsResponse convenience initializers and mutators
+
+extension PushProductEditsResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(PushProductEditsResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        failed: [PushProductEditsResponseFailed]? = nil,
+        manualUpdate: [String]? = nil,
+        updated: [String]? = nil
+    ) -> PushProductEditsResponse {
+        return PushProductEditsResponse(
+            failed: failed ?? self.failed,
+            manualUpdate: manualUpdate ?? self.manualUpdate,
+            updated: updated ?? self.updated
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - PushProductEditsResponseFailed
+struct PushProductEditsResponseFailed: Codable, Equatable, Sendable {
+    let error: String
+    let platform: String
+
+    enum CodingKeys: String, CodingKey {
+        case error = "error"
+        case platform = "platform"
+    }
+}
+
+// MARK: PushProductEditsResponseFailed convenience initializers and mutators
+
+extension PushProductEditsResponseFailed {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(PushProductEditsResponseFailed.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        error: String? = nil,
+        platform: String? = nil
+    ) -> PushProductEditsResponseFailed {
+        return PushProductEditsResponseFailed(
+            error: error ?? self.error,
+            platform: platform ?? self.platform
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 // MARK: - ReassignSaleStageRequest
 struct ReassignSaleStageRequest: Codable, Equatable, Sendable {
     let fromKey: String
@@ -10903,7 +11073,7 @@ extension SyncSalesPlatformError {
 
 // MARK: - SyncSalesRequest
 struct SyncSalesRequest: Codable, Equatable, Sendable {
-    let platform: GetOrderTakeHomeRequestPlatform?
+    let platform: SyncSalesRequestPlatform?
     let since: SoldAtUnion?
 
     enum CodingKeys: String, CodingKey {
@@ -10931,7 +11101,7 @@ extension SyncSalesRequest {
     }
 
     func with(
-        platform: GetOrderTakeHomeRequestPlatform?? = nil,
+        platform: SyncSalesRequestPlatform?? = nil,
         since: SoldAtUnion?? = nil
     ) -> SyncSalesRequest {
         return SyncSalesRequest(
@@ -10947,6 +11117,12 @@ extension SyncSalesRequest {
     func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
         return String(data: try self.jsonData(), encoding: encoding)
     }
+}
+
+enum SyncSalesRequestPlatform: String, Codable, Equatable, Sendable {
+    case ebay = "ebay"
+    case etsy = "etsy"
+    case tiktok = "tiktok"
 }
 
 //
