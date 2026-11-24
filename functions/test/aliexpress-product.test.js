@@ -77,3 +77,17 @@ test("aliexpressDocFields: package, currency, specifics, shipping quote", () => 
   assert.equal(f.itemSpecifics.Material, "EVA");
   assert.deepEqual(f.sourceShipping, m.shipping);
 });
+
+test("regression: aliexpressDocFields never copies caller keys (scrapedData is client input)", () => {
+  const f = A.aliexpressDocFields({
+    package: { userId: "victim", weightLbs: 2, weightOz: "9", isDraft: false },
+    currency: { $gt: 1 },
+    itemSpecifics: { Material: "EVA", Bad: { nested: 1 } },
+    shipping: { cost: 3, carrier: "X", userId: "victim" },
+  });
+  assert.deepEqual(f, {
+    weightLbs: 2,
+    itemSpecifics: { Material: "EVA" },
+    sourceShipping: { cost: 3, minDays: null, maxDays: null, carrier: "X" },
+  });
+});

@@ -326,7 +326,8 @@ exports.aliexpressImportProduct = onCall(
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    await docRef.set({ ...newProduct, ...aliexpressDocFields(product) });
+    // Server-owned fields last, so nothing from the import can override them.
+    await docRef.set({ ...aliexpressDocFields(product), ...newProduct, userId: uid, source: "aliexpress" });
     return { productId: docRef.id };
   }
 );
@@ -334,18 +335,52 @@ exports.aliexpressImportProduct = onCall(
 /** Fields the DS API gives that buildNewProductDoc doesn't take by name. */
 function aliexpressExtras(product) {
   const out = {};
-  if (product.shipping) {
-    out.sourceShippingCost = product.shipping.cost;
-  }
+  const cost = finiteOrNull(product.shipping?.cost);
+  if (cost != null) out.sourceShippingCost = cost;
   return out;
 }
 
-/** The rest, written after buildNewProductDoc (its allowlist drops them). */
+const PACKAGE_FIELDS = ["weightLbs", "weightOz", "lengthIn", "widthIn", "heightIn"];
+const finiteOrNull = (v) => (typeof v === "number" && Number.isFinite(v) && v >= 0 && v < 1e6 ? v : null);
+const shortStr = (v, max) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
+
+/**
+ * The rest, written after buildNewProductDoc (its allowlist drops them).
+ * `product` can be the extension's scrapedData, i.e. caller-supplied, so every
+ * field is picked by name and type-checked: never spread it into the doc (a
+ * `package: {userId}` would otherwise move the product into another account).
+ */
 function aliexpressDocFields(product) {
-  const out = { ...(product.package || {}) };
-  if (product.currency) out.sourceCurrency = product.currency;
-  if (product.itemSpecifics && Object.keys(product.itemSpecifics).length) out.itemSpecifics = product.itemSpecifics;
-  if (product.shipping) out.sourceShipping = product.shipping;
+  const out = {};
+  const pkg = product.package && typeof product.package === "object" ? product.package : {};
+  for (const k of PACKAGE_FIELDS) {
+    const n = finiteOrNull(pkg[k]);
+    if (n != null) out[k] = n;
+  }
+  const currency = shortStr(product.currency, 8);
+  if (currency) out.sourceCurrency = currency;
+  const specs = product.itemSpecifics;
+  if (specs && typeof specs === "object" && !Array.isArray(specs)) {
+    const clean = {};
+    for (const [k, v] of Object.entries(specs).slice(0, 50)) {
+      const key = shortStr(k, 65);
+      const value = shortStr(v, 200);
+      if (key && value) clean[key] = value;
+    }
+    if (Object.keys(clean).length) out.itemSpecifics = clean;
+  }
+  const s = product.shipping;
+  if (s && typeof s === "object") {
+    const cost = finiteOrNull(s.cost);
+    if (cost != null) {
+      out.sourceShipping = {
+        cost,
+        minDays: finiteOrNull(s.minDays),
+        maxDays: finiteOrNull(s.maxDays),
+        carrier: shortStr(s.carrier, 80),
+      };
+    }
+  }
   return out;
 }
 
