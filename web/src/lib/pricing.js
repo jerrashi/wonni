@@ -49,6 +49,19 @@ export function productCost(product) {
  */
 export function suggestedListingPrice(product) {
   if (Number(product?.listingPrice) > 0) return null;
-  const cost = productCost(product);
+  const cost = landedCost(product);
   return cost == null ? null : Math.round((2 * cost) / 0.9);
+}
+
+/**
+ * What one unit costs to get here: `sourcePrice` plus `sourceShippingCost`
+ * (the AliExpress freight quote / a Weverse shop's shipping fee). Used for the
+ * suggested price only; null when the cost is unknown.
+ * @returns {number|null}
+ */
+export function landedCost(product) {
+  const cost = productCost(product);
+  if (cost == null) return null;
+  const ship = Number(product?.sourceShippingCost);
+  return Math.round((cost + (Number.isFinite(ship) && ship > 0 ? ship : 0)) * 100) / 100;
 }

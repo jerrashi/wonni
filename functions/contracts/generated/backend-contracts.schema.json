@@ -328,6 +328,60 @@
     "GenerateListingPhotoResponse": {
       "$ref": "#/definitions/GenerateListingPhotoResponse"
     },
+    "GetTiktokCategoriesRequest": {
+      "$ref": "#/definitions/GetTiktokCategoriesRequest"
+    },
+    "GetTiktokCategoriesResponse": {
+      "$ref": "#/definitions/GetTiktokCategoriesResponse"
+    },
+    "TiktokSuggestCategoryRequest": {
+      "$ref": "#/definitions/TiktokSuggestCategoryRequest"
+    },
+    "TiktokSuggestCategoryResponse": {
+      "$ref": "#/definitions/TiktokSuggestCategoryResponse"
+    },
+    "TiktokCreateListingRequest": {
+      "$ref": "#/definitions/TiktokCreateListingRequest"
+    },
+    "TiktokCreateListingResponse": {
+      "$ref": "#/definitions/TiktokCreateListingResponse"
+    },
+    "TiktokShippingProvidersRequest": {
+      "$ref": "#/definitions/TiktokShippingProvidersRequest"
+    },
+    "TiktokShippingProvidersResponse": {
+      "$ref": "#/definitions/TiktokShippingProvidersResponse"
+    },
+    "TiktokMarkShippedRequest": {
+      "$ref": "#/definitions/TiktokMarkShippedRequest"
+    },
+    "TiktokMarkShippedResponse": {
+      "$ref": "#/definitions/TiktokMarkShippedResponse"
+    },
+    "TiktokDeleteListingRequest": {
+      "$ref": "#/definitions/TiktokDeleteListingRequest"
+    },
+    "TiktokDeleteListingResponse": {
+      "$ref": "#/definitions/TiktokDeleteListingResponse"
+    },
+    "AliexpressCreateRestockOrderRequest": {
+      "$ref": "#/definitions/AliexpressCreateRestockOrderRequest"
+    },
+    "AliexpressCreateRestockOrderResponse": {
+      "$ref": "#/definitions/AliexpressCreateRestockOrderResponse"
+    },
+    "SyncPurchaseOrdersRequest": {
+      "$ref": "#/definitions/SyncPurchaseOrdersRequest"
+    },
+    "SyncPurchaseOrdersResponse": {
+      "$ref": "#/definitions/SyncPurchaseOrdersResponse"
+    },
+    "MarkPurchaseOrderReceivedRequest": {
+      "$ref": "#/definitions/MarkPurchaseOrderReceivedRequest"
+    },
+    "MarkPurchaseOrderReceivedResponse": {
+      "$ref": "#/definitions/MarkPurchaseOrderReceivedResponse"
+    },
     "SaleDoc": {
       "$ref": "#/definitions/SaleDoc"
     },
@@ -3009,6 +3063,12 @@
         "listingUrl": {
           "type": "string",
           "format": "uri"
+        },
+        "renamedTo": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -5632,6 +5692,440 @@
       },
       "required": [
         "url"
+      ]
+    },
+    "GetTiktokCategoriesRequest": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": {}
+    },
+    "GetTiktokCategoriesResponse": {
+      "type": "object",
+      "properties": {
+        "categories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ]
+          }
+        }
+      },
+      "required": [
+        "categories"
+      ]
+    },
+    "TiktokSuggestCategoryRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "categoryId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "productId"
+      ]
+    },
+    "TiktokSuggestCategoryResponse": {
+      "type": "object",
+      "properties": {
+        "categoryId": {
+          "type": "string"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recommended": {
+          "type": "boolean"
+        },
+        "filledAttributes": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "missing": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unmet": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "problem": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "categoryId",
+        "path",
+        "recommended",
+        "filledAttributes",
+        "missing",
+        "unmet",
+        "problem"
+      ]
+    },
+    "TiktokCreateListingRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "categoryId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 255
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "productId"
+      ]
+    },
+    "TiktokCreateListingResponse": {
+      "type": "object",
+      "properties": {
+        "tiktokProductId": {
+          "type": "string"
+        },
+        "categoryId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "alreadyListed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "tiktokProductId"
+      ]
+    },
+    "TiktokShippingProvidersRequest": {
+      "type": "object",
+      "properties": {
+        "saleId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "saleId"
+      ]
+    },
+    "TiktokShippingProvidersResponse": {
+      "type": "object",
+      "properties": {
+        "providers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ]
+          }
+        }
+      },
+      "required": [
+        "providers"
+      ]
+    },
+    "TiktokMarkShippedRequest": {
+      "type": "object",
+      "properties": {
+        "saleId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trackingNumber": {
+          "type": "string",
+          "minLength": 1
+        },
+        "shippingProviderId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "shippingProviderName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "saleId",
+        "trackingNumber",
+        "shippingProviderId"
+      ]
+    },
+    "TiktokMarkShippedResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "const": true
+        },
+        "packageId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "success",
+        "packageId"
+      ]
+    },
+    "TiktokDeleteListingRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "productId"
+      ]
+    },
+    "TiktokDeleteListingResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "success"
+      ]
+    },
+    "AliexpressCreateRestockOrderRequest": {
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "variantSku": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quantity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "address": {
+          "type": "object",
+          "properties": {
+            "fullName": {
+              "type": "string",
+              "minLength": 1
+            },
+            "phone": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line1": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line2": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "city": {
+              "type": "string",
+              "minLength": 1
+            },
+            "state": {
+              "type": "string",
+              "minLength": 1
+            },
+            "zip": {
+              "type": "string",
+              "minLength": 1
+            },
+            "country": {
+              "default": "US",
+              "type": "string"
+            }
+          },
+          "required": [
+            "fullName",
+            "phone",
+            "line1",
+            "city",
+            "state",
+            "zip"
+          ]
+        }
+      },
+      "required": [
+        "productId",
+        "quantity",
+        "address"
+      ]
+    },
+    "AliexpressCreateRestockOrderResponse": {
+      "type": "object",
+      "properties": {
+        "purchaseOrderId": {
+          "type": "string"
+        },
+        "aeOrderIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "placed",
+            "paid",
+            "shipped",
+            "delivered",
+            "received",
+            "cancelled"
+          ]
+        }
+      },
+      "required": [
+        "purchaseOrderId",
+        "aeOrderIds",
+        "status"
+      ]
+    },
+    "SyncPurchaseOrdersRequest": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": {}
+    },
+    "SyncPurchaseOrdersResponse": {
+      "type": "object",
+      "properties": {
+        "updated": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "updated",
+        "failed"
+      ]
+    },
+    "MarkPurchaseOrderReceivedRequest": {
+      "type": "object",
+      "properties": {
+        "purchaseOrderId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quantity": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "purchaseOrderId"
+      ]
+    },
+    "MarkPurchaseOrderReceivedResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "const": true
+        },
+        "added": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "newQuantity": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "success",
+        "added",
+        "newQuantity"
       ]
     },
     "SaleDoc": {

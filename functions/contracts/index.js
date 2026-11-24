@@ -32,8 +32,10 @@ const products = require("./products");
 const crossPostRules = require("./cross_post_rules");
 const weverseOrderTasks = require("./weverse_order_tasks");
 const bulkDrafts = require("./bulk_drafts");
+const tiktok = require("./tiktok");
+const aliexpress = require("./aliexpress");
 
-const domains = { sales, mercari, listings, ebay, etsy, enrichment, settings, crossPostRules, weverseOrderTasks, bulkDrafts };
+const domains = { sales, mercari, listings, ebay, etsy, enrichment, settings, crossPostRules, weverseOrderTasks, bulkDrafts, tiktok, aliexpress };
 
 /** Flat list of every contract: [{ name, summary, request, response, domain }]. */
 const ALL = Object.entries(domains).flatMap(([domain, mod]) =>

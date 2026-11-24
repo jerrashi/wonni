@@ -34,6 +34,9 @@ const EbayCreateListingResponseSchema = z.object({
   inventoryItemGroupKey: z.string().nullish(),
   variantOfferIds: z.record(z.string(), z.string()).nullish(),
   listingUrl: z.string().url(),
+  /** Set when eBay refused the post as identical to another Wonni product's live
+   *  listing and the product was renamed "Title (n)" and re-posted. */
+  renamedTo: z.string().nullish(),
 });
 
 const EbayListingVariantGroupSchema = z.object({

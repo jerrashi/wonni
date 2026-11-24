@@ -13,7 +13,9 @@ function sendToExtension(msg) {
 }
 
 const ALIEXPRESS_APP_KEY = import.meta.env.VITE_ALIEXPRESS_APP_KEY ?? "REPLACE_ME";
-const TIKTOK_APP_KEY = import.meta.env.VITE_TIKTOK_APP_KEY ?? "REPLACE_ME";
+// TikTok Shop authorizes by service id (the "ID" under the app name in Partner
+// Center), not app key. Public identifier, like the app key.
+const TIKTOK_SERVICE_ID = import.meta.env.VITE_TIKTOK_SERVICE_ID ?? "7648225262445987597";
 const EBAY_CLIENT_ID = import.meta.env.VITE_EBAY_CLIENT_ID ?? "REPLACE_ME";
 const EBAY_RU_NAME = import.meta.env.VITE_EBAY_RU_NAME ?? "REPLACE_ME";
 const EBAY_AUTH_HOST = import.meta.env.VITE_EBAY_ENV === "production"
@@ -225,9 +227,12 @@ export default function Settings() {
         redirect_uri: "https://wonni-app.web.app/web/oauth/aliexpress",
         state,
       }),
-      tiktok: "https://auth.tiktok-shops.com/oauth/authorize?" + new URLSearchParams({
-        app_key: TIKTOK_APP_KEY,
-        redirect_uri: "https://wonni-app.web.app/web/oauth/tiktok",
+      // US shops authorize on services.us.tiktokshop.com (others:
+      // services.tiktokshop.com). The redirect is the one registered on the
+      // app in Partner Center; the old auth.tiktok-shops.com/oauth/authorize
+      // link is the legacy flow.
+      tiktok: "https://services.us.tiktokshop.com/open/authorize?" + new URLSearchParams({
+        service_id: TIKTOK_SERVICE_ID,
         state,
       }),
       // eBay's redirect_uri is the RuName; the RuName config points at /oauth/ebay
