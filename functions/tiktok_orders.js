@@ -15,6 +15,20 @@
  * UNPAID / ON_HOLD orders are skipped (TikTok says not to ship an on-hold order;
  * it comes back once released). A cancelled order is recorded only when its sale
  * already exists — never created, or it would decrement stock for nothing.
+ *
+ * Fulfillment (model A: the seller ships). Each TikTok sale also carries
+ *   sales/{id}.shipBy  — ms; TikTok's own deadline (tts_sla_time, else
+ *                        rts_sla_time), else 2 business days after the order.
+ *   sales/{id}.tiktok  — {orderId, lineItemIds, deliveryOptionId, shippingType,
+ *                        packageId, piiExpiresAt}; written after recordSaleCore,
+ *                        which keeps a fixed field list.
+ * `tiktokShippingProviders {saleId}` lists the carriers TikTok accepts for the
+ * order; `tiktokMarkShipped {saleId, trackingNumber, shippingProviderId}` sends
+ * the tracking. TikTok Shipping orders (shipping_type TIKTOK) get their label in
+ * Seller Center, so marking them is refused with that reason.
+ * Buyer data: TikTok's data policy limits keeping buyer PII, so name + address
+ * are cleared 30 days after delivery / cancellation (`purgeTiktokBuyerData`,
+ * daily), and a re-poll past that date doesn't write them back.
  */
 
 "use strict";
@@ -32,6 +46,35 @@ const PAGE_SIZE = 50;
 const MAX_PAGES = 20;
 
 const SKIP_STATUSES = new Set(["UNPAID", "ON_HOLD"]);
+const PII_KEEP_MS = 30 * 24 * 3600 * 1000;
+const DAY_MS = 24 * 3600 * 1000;
+
+/** `days` business days (Mon–Fri, UTC) after `ms`. */
+function addBusinessDays(ms, days) {
+  let t = ms;
+  let left = days;
+  while (left > 0) {
+    t += DAY_MS;
+    const d = new Date(t).getUTCDay();
+    if (d !== 0 && d !== 6) left--;
+  }
+  return t;
+}
+
+const secToMs = (s) => (Number(s) > 0 ? Number(s) * 1000 : null);
+
+/** Ship-by for an order (ms). */
+function shipByFor(order) {
+  return secToMs(order.tts_sla_time) ?? secToMs(order.rts_sla_time)
+    ?? addBusinessDays(secToMs(order.create_time) ?? Date.now(), 2);
+}
+
+/** When the buyer's name + address must be gone (ms), or null while the order is open. */
+function piiExpiresAtFor(order, saleStatus) {
+  if (!["delivered", "complete", "cancelled"].includes(saleStatus)) return null;
+  const ended = secToMs(order.delivery_time) ?? secToMs(order.cancel_time) ?? secToMs(order.update_time) ?? Date.now();
+  return ended + PII_KEEP_MS;
+}
 
 function saleStatusFor(tiktokStatus) {
   switch (tiktokStatus) {
@@ -107,7 +150,7 @@ function tiktokBuyerAddress(order) {
  * still recorded (productId null, no stock change) so the dashboard shows every
  * TikTok sale. `cancelOnly` = record only if the sale already exists.
  */
-function tiktokOrderToSales(order, maps) {
+function tiktokOrderToSales(order, maps, nowMs = Date.now()) {
   if (!order?.id || SKIP_STATUSES.has(order.status)) return [];
   const groups = new Map();
   for (const li of order.line_items ?? []) {
@@ -126,8 +169,19 @@ function tiktokOrderToSales(order, maps) {
     const tracking = g.items.find((x) => x.tracking_number);
     // A line item cancelled on its own (partial cancel) cancels that sale.
     const st = g.items.every((x) => x.display_status === "CANCELLED") ? "cancelled" : status;
+    const piiExpiresAt = piiExpiresAtFor(order, st);
+    const piiGone = piiExpiresAt != null && piiExpiresAt <= nowMs;
     out.push({
       cancelOnly: st === "cancelled",
+      shipBy: shipByFor(order),
+      tiktok: {
+        orderId: String(order.id),
+        lineItemIds: g.items.map((x) => String(x.id)),
+        deliveryOptionId: order.delivery_option_id != null ? String(order.delivery_option_id) : null,
+        shippingType: order.shipping_type ?? null,
+        packageId: g.items.find((x) => x.package_id)?.package_id ?? order.packages?.[0]?.id ?? null,
+        piiExpiresAt,
+      },
       fields: {
         platform: "tiktok",
         productId: match?.productId ?? null,
@@ -138,8 +192,8 @@ function tiktokOrderToSales(order, maps) {
         soldAt: (Number(order.create_time) || Math.floor(Date.now() / 1000)) * 1000,
         platformOrderId: single ? String(order.id) : `${order.id}-${g.key}`,
         platformItemId: li.product_id != null ? String(li.product_id) : null,
-        buyerName: order.recipient_address?.name ?? null,
-        buyerAddress: tiktokBuyerAddress(order),
+        buyerName: piiGone ? null : order.recipient_address?.name ?? null,
+        buyerAddress: piiGone ? null : tiktokBuyerAddress(order),
         trackingNumber: tracking?.tracking_number ?? null,
         carrier: tracking?.shipping_provider_name ?? null,
         listingTitle: li.product_name ?? null,
@@ -187,10 +241,14 @@ async function syncTiktokOrdersForUser(db, uid, { client, recordSale = salesInte
     const query = { page_size: PAGE_SIZE, sort_field: "update_time", sort_order: "ASC", ...(pageToken ? { page_token: pageToken } : {}) };
     const data = await c.request("POST", "/order/202309/orders/search", { query, body, what: "Loading TikTok orders" });
     for (const order of data.orders ?? []) {
-      for (const { fields, cancelOnly } of tiktokOrderToSales(order, maps)) {
+      for (const { fields, cancelOnly, shipBy, tiktok } of tiktokOrderToSales(order, maps, now())) {
         try {
           if (cancelOnly && !(await saleExists(db, uid, fields.platformOrderId))) { skipped++; continue; }
           const { saleId, created } = await recordSale(db, uid, fields, productById.get(fields.productId) ?? null);
+          // Keep a package id we learned when marking shipped if TikTok's copy lags.
+          const prev = (await db.collection("sales").doc(saleId).get()).data()?.tiktok;
+          await db.collection("sales").doc(saleId).set(
+            { shipBy, tiktok: { ...tiktok, packageId: tiktok.packageId ?? prev?.packageId ?? null } }, { merge: true });
           saleIds.push(saleId);
           created ? imported++ : updated++;
         } catch (e) {
@@ -206,6 +264,105 @@ async function syncTiktokOrdersForUser(db, uid, { client, recordSale = salesInte
   await integRef.set({ lastOrdersPollAt: now() }, { merge: true });
   return { imported, updated, skipped, saleIds };
 }
+
+// ── fulfillment ─────────────────────────────────────────────────────────────
+
+async function loadTiktokSale(db, uid, saleId) {
+  const snap = await db.collection("sales").doc(String(saleId || "")).get();
+  const sale = snap.exists ? snap.data() : null;
+  if (!sale || sale.userId !== uid) throw new HttpsError("not-found", "Sale not found.");
+  if (sale.platform !== "tiktok" || !sale.tiktok?.orderId) {
+    throw new HttpsError("failed-precondition", "This isn't a TikTok order Wonni has synced. Refresh TikTok orders and try again.");
+  }
+  return sale;
+}
+
+function refuseTiktokShipping(sale) {
+  if (sale.tiktok.shippingType === "TIKTOK") {
+    throw new HttpsError("failed-precondition",
+      "This order uses TikTok Shipping. Buy and print the label in TikTok Seller Center; tracking is added there.");
+  }
+}
+
+async function shippingProvidersCore(db, uid, client, { saleId }) {
+  const sale = await loadTiktokSale(db, uid, saleId);
+  refuseTiktokShipping(sale);
+  if (!sale.tiktok.deliveryOptionId) {
+    throw new HttpsError("failed-precondition", "TikTok hasn't given this order a delivery option yet. Refresh TikTok orders and try again.");
+  }
+  const data = await client.request("GET", `/logistics/202309/delivery_options/${sale.tiktok.deliveryOptionId}/shipping_providers`, {
+    what: "Loading TikTok carriers",
+  });
+  const providers = (data.shipping_providers ?? []).map((p) => ({ id: String(p.id), name: p.name ?? String(p.id) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { providers };
+}
+
+async function markShippedCore(db, uid, client, { saleId, trackingNumber, shippingProviderId, shippingProviderName }) {
+  const tracking = String(trackingNumber || "").trim();
+  if (!tracking) throw new HttpsError("invalid-argument", "Enter a tracking number.");
+  if (!shippingProviderId) throw new HttpsError("invalid-argument", "Pick a carrier.");
+  const sale = await loadTiktokSale(db, uid, saleId);
+  refuseTiktokShipping(sale);
+  const body = { tracking_number: tracking, shipping_provider_id: String(shippingProviderId) };
+  let packageId = sale.tiktok.packageId;
+  if (packageId) {
+    // Already a package (re-send / correction): update its tracking.
+    await client.request("POST", `/fulfillment/202309/packages/${packageId}/shipping_info/update`, { body, what: "Updating TikTok tracking" });
+  } else {
+    const data = await client.request("POST", `/fulfillment/202309/orders/${sale.tiktok.orderId}/packages`, {
+      body: { ...body, order_line_item_ids: sale.tiktok.lineItemIds }, what: "Marking the TikTok order shipped",
+    });
+    packageId = data?.package_id != null ? String(data.package_id) : null;
+  }
+  await db.collection("sales").doc(String(saleId)).update({
+    trackingNumber: tracking,
+    carrier: shippingProviderName || null,
+    status: sale.status === "pending" || !sale.status ? "shipped" : sale.status,
+    "tiktok.packageId": packageId,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+  return { success: true, packageId };
+}
+
+/** Clear buyer name + address on TikTok sales past their piiExpiresAt. */
+async function purgeTiktokBuyerDataCore(db, nowMs = Date.now()) {
+  const snap = await db.collection("sales").where("platform", "==", "tiktok").get();
+  let cleared = 0;
+  for (const d of snap.docs) {
+    const s = d.data();
+    const exp = s.tiktok?.piiExpiresAt;
+    if (exp == null || exp > nowMs || (s.buyerName == null && s.buyerAddress == null)) continue;
+    await db.collection("sales").doc(d.id).update({ buyerName: null, buyerAddress: null });
+    cleared++;
+  }
+  return { cleared };
+}
+
+function requireUid(request) {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+  return uid;
+}
+
+const TT_ONLY = [TT_APP_KEY, TT_APP_SECRET];
+
+exports.tiktokShippingProviders = onCall({ secrets: TT_ONLY }, async (request) => {
+  const uid = requireUid(request);
+  const db = admin.firestore();
+  return shippingProvidersCore(db, uid, tiktokClientFor(uid, { db }), request.data ?? {});
+});
+
+exports.tiktokMarkShipped = onCall({ secrets: TT_ONLY }, async (request) => {
+  const uid = requireUid(request);
+  const db = admin.firestore();
+  return markShippedCore(db, uid, tiktokClientFor(uid, { db }), request.data ?? {});
+});
+
+exports.purgeTiktokBuyerData = onSchedule({ schedule: "every day 04:00", timeoutSeconds: 300 }, async () => {
+  const { cleared } = await purgeTiktokBuyerDataCore(admin.firestore());
+  console.log(`[purgeTiktokBuyerData] cleared ${cleared} sale(s)`);
+});
 
 exports.syncTiktokOrders = onCall({ secrets: SECRETS, timeoutSeconds: 300 }, async (request) => {
   const uid = request.auth?.uid;
@@ -230,5 +387,6 @@ exports.syncTiktokOrdersScheduled = onSchedule(
 
 exports._internal = {
   saleStatusFor, buildTiktokMatchMaps, matchLineItem, tiktokBuyerAddress, tiktokOrderToSales,
-  windowStart, syncTiktokOrdersForUser,
+  windowStart, syncTiktokOrdersForUser, addBusinessDays, shipByFor, piiExpiresAtFor,
+  shippingProvidersCore, markShippedCore, purgeTiktokBuyerDataCore,
 };

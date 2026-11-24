@@ -528,6 +528,7 @@ async function resolveLink(link, deps = {}) {
         const product = await a.fetchAliexpressDsProduct(detected.sourceId, link.url, deps.uid);
         return done({
           title: product.title,
+          description: (product.description || "").slice(0, 2000),
           imageUrls: (product.images || []).filter(httpsOnly).slice(0, MAX_SOURCE_PHOTOS),
           price: parsePriceText(product.price),
         });

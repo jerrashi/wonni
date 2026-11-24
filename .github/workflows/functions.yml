@@ -60,10 +60,13 @@ jobs:
         # committed) so it must come from a repo secret; add EBAY_RU_NAME
         # under Settings → Secrets and variables → Actions for this deploy
         # to succeed. EBAY_ENV defaults to production if unset.
+        # EBAY_WEBHOOK_URL is the public ebayWebhook endpoint (not a secret);
+        # it must be listed here too or the deploy stops on the missing param.
         run: |
           {
             echo "EBAY_RU_NAME=${EBAY_RU_NAME}"
             echo "EBAY_ENV=${EBAY_ENV:-production}"
+            echo "EBAY_WEBHOOK_URL=https://us-central1-wonni-app.cloudfunctions.net/ebayWebhook"
           } > functions/.env.wonni-app
         env:
           EBAY_RU_NAME: ${{ secrets.EBAY_RU_NAME }}

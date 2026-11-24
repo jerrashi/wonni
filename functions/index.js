@@ -3,6 +3,8 @@ admin.initializeApp();
 
 const { aliexpressExchangeToken } = require("./aliexpress_auth");
 const { aliexpressImportProduct } = require("./aliexpress_product");
+const { checkAliexpressSources } = require("./aliexpress_monitor");
+const { aliexpressCreateRestockOrder, syncPurchaseOrders, markPurchaseOrderReceived, syncPurchaseOrdersScheduled } = require("./purchase_orders");
 const { weverseImportProduct } = require("./weverse_product");
 const { weverseBulkImportProducts } = require("./weverse_bulk_import");
 const { weverseShopPreview } = require("./weverse_shop");
@@ -27,7 +29,7 @@ const {
 } = require("./ebay_listing");
 const { recoverEbayOfferIds } = require("./recover_ebay_offer_ids");
 const { ebayRetrieveComps } = require("./ebay_comps");
-const { tiktokCreateListing, tiktokUpdateListing, tiktokDeleteListing, getTiktokCategories } = require("./tiktok_listing");
+const { tiktokCreateListing, tiktokUpdateListing, tiktokDeleteListing, getTiktokCategories, tiktokSuggestCategory } = require("./tiktok_listing");
 const { etsyExchangeToken } = require("./etsy_auth");
 const {
   etsyCreateListing, etsyUpdateListing, etsyDeleteListing, etsyCheckShopSetup,
@@ -35,7 +37,7 @@ const {
   getEtsyCategories, suggestEtsyCategory, getEtsyShippingProfiles, getEtsyReturnPolicies,
 } = require("./etsy_listing");
 const { updateMercariListingStatus, ensureMercariListingDetails } = require("./mercari_listing");
-const { syncTiktokOrders, syncTiktokOrdersScheduled } = require("./tiktok_orders");
+const { syncTiktokOrders, syncTiktokOrdersScheduled, tiktokShippingProviders, tiktokMarkShipped, purgeTiktokBuyerData } = require("./tiktok_orders");
 const { disconnectPlatform, updateSettings, generateOAuthState, updateSaleStages } = require("./user_settings");
 const { onProductDeleted } = require("./product_cleanup");
 const { generateProductDescription } = require("./generate_description");
@@ -73,6 +75,11 @@ module.exports = {
 
   // Products
   aliexpressImportProduct,
+  checkAliexpressSources,
+  aliexpressCreateRestockOrder,
+  syncPurchaseOrders,
+  markPurchaseOrderReceived,
+  syncPurchaseOrdersScheduled,
   weverseImportProduct,
   weverseBulkImportProducts,
   weverseShopPreview,
@@ -93,6 +100,7 @@ module.exports = {
   // TikTok Shop listings
   getTiktokCategories,
   tiktokCreateListing,
+  tiktokSuggestCategory,
   tiktokUpdateListing,
   tiktokDeleteListing,
   getTiktokCategories,
@@ -138,6 +146,9 @@ module.exports = {
   // Orders + fulfillment
   syncTiktokOrders,
   syncTiktokOrdersScheduled,
+  tiktokShippingProviders,
+  tiktokMarkShipped,
+  purgeTiktokBuyerData,
 
   // Sales + quantity cascade
   recordSale,

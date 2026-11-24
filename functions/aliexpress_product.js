@@ -97,6 +97,8 @@ function mapAliexpressVariants(skus, productId) {
       quantity: 1,
       sourcePrice: typeof s.price === "number" ? s.price : null,
       sourceVariantId: s.skuId ?? null,
+      // The SUPPLIER's stock, never ours (model A: AliExpress is where we buy).
+      ...(Number.isFinite(s.stock) ? { sourceStock: s.stock } : {}),
       active: true,
     };
   });
@@ -111,37 +113,141 @@ function aeImageUrls(v) {
   return list.map((u) => String(u).trim()).filter((u) => /^https?:\/\//.test(u));
 }
 
+const MAX_IMAGES = 12;
+
+const numOrNull = (v) => {
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+/** AliExpress `detail` is store HTML (often just <img> tags) → plain text, or "". */
+function htmlToText(html) {
+  return String(html || "")
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<br\s*\/?>|<\/(p|div|li|h\d)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").replace(/\n{2,}/g, "\n").trim()
+    .slice(0, 4000);
+}
+
+/** package_info_dto (cm, kg) → Wonni's inch / lb + oz fields. */
+function aePackage(pkg) {
+  if (!pkg) return {};
+  const out = {};
+  const kg = numOrNull(pkg.gross_weight);
+  if (kg && kg > 0) {
+    const oz = kg * 35.27396;
+    out.weightLbs = Math.floor(oz / 16);
+    out.weightOz = Math.round((oz - out.weightLbs * 16) * 10) / 10;
+  }
+  const dims = [pkg.package_length, pkg.package_width, pkg.package_height].map(numOrNull);
+  if (dims.every((d) => d && d > 0)) {
+    [out.lengthIn, out.widthIn, out.heightIn] = dims.map((cm) => Math.round((cm / 2.54) * 10) / 10);
+  }
+  return out;
+}
+
+/** ae_item_properties → { "Material": "Cotton", … } (item specifics for eBay/TikTok). */
+function aeProperties(props) {
+  const list = props?.ae_item_property ?? (Array.isArray(props) ? props : []);
+  const out = {};
+  for (const p of list) {
+    const name = String(p?.attr_name ?? "").trim();
+    const value = String(p?.attr_value ?? "").trim();
+    if (!name || !value || out[name]) continue;
+    out[name] = value.slice(0, 65);
+  }
+  return out;
+}
+
 /**
- * One DS API call → the same `scrapedData` shape the extension sends
- * ({ productId, productUrl, title, price, images, variants }). Shared with
- * source_links.js (a pasted AliExpress link inside "textToListings").
- * Needs the user's AliExpress connection (`callAliexpressApi` reads their token).
+ * ds.product.get `result` → the `scrapedData` shape the extension sends
+ * ({ productId, productUrl, title, price, images, variants }) plus what the DS
+ * API alone has: description, package, itemSpecifics, currency, per-SKU stock.
+ * The price is the sale price a buyer pays now (offer_sale_price), else the list price.
  */
-async function fetchAliexpressDsProduct(itemId, productUrl, uid) {
-  const response = await callAliexpressApi("aliexpress.ds.product.get", {
+function mapDsProduct(result, itemId, productUrl) {
+  const skus = result.ae_item_sku_info_dtos?.ae_item_sku_info_d_t_o ?? [];
+  const priceOf = (s) => numOrNull(s.offer_sale_price) ?? numOrNull(s.sku_price) ?? 0;
+  const prices = skus.map(priceOf).filter((n) => n > 0);
+  const base = result.ae_item_base_info_dto ?? {};
+  return {
+    productId: String(itemId),
+    productUrl,
+    title: base.subject ?? "",
+    description: htmlToText(base.mobile_detail || base.detail),
+    price: prices.length ? Math.min(...prices) : 0,
+    currency: skus.find((s) => s.currency_code)?.currency_code ?? base.currency_code ?? "USD",
+    images: aeImageUrls(result.ae_multimedia_info_dto?.image_urls).slice(0, MAX_IMAGES),
+    package: aePackage(result.package_info_dto),
+    itemSpecifics: aeProperties(result.ae_item_properties),
+    variants: skus.map((s) => ({
+      skuId: s.sku_id,
+      skuAttr: s.sku_attr,
+      price: priceOf(s),
+      stock: numOrNull(s.sku_available_stock ?? s.ipm_sku_stock),
+    })),
+  };
+}
+
+/**
+ * Cheapest US delivery option from aliexpress.ds.freight.query's result →
+ * {cost, minDays, maxDays, carrier}, or null. Fee is `shipping_fee_cent` (cents)
+ * or a decimal `shipping_fee_format` / `shipping_fee`; free_shipping means 0.
+ */
+function cheapestFreight(result) {
+  const opts = result?.delivery_options?.delivery_option_d_t_o ?? result?.delivery_options ?? [];
+  const priced = (Array.isArray(opts) ? opts : []).map((o) => {
+    let cost = o.free_shipping === true || o.free_shipping === "true" ? 0
+      : o.shipping_fee_cent != null ? numOrNull(o.shipping_fee_cent) / 100
+      : numOrNull(String(o.shipping_fee_format ?? o.shipping_fee ?? "").replace(/[^0-9.]/g, ""));
+    if (cost == null || !Number.isFinite(cost)) cost = null;
+    return { cost, minDays: numOrNull(o.min_delivery_days), maxDays: numOrNull(o.max_delivery_days), carrier: o.company ?? o.code ?? null };
+  }).filter((o) => o.cost != null);
+  if (!priced.length) return null;
+  priced.sort((a, b) => a.cost - b.cost || (a.maxDays ?? 99) - (b.maxDays ?? 99));
+  return { ...priced[0], cost: Math.round(priced[0].cost * 100) / 100 };
+}
+
+/** Best-effort shipping quote for one unit to the US; null on any failure. */
+async function fetchAliexpressFreight(itemId, skuId, uid, callApi = callAliexpressApi) {
+  try {
+    const response = await callApi("aliexpress.ds.freight.query", {
+      queryDeliveryReq: JSON.stringify({
+        quantity: 1, shipToCountry: "US", productId: String(itemId), ...(skuId ? { selectedSkuId: String(skuId) } : {}),
+        language: "en_US", currency: "USD", locale: "en_US",
+      }),
+    }, uid);
+    return cheapestFreight(response?.aliexpress_ds_freight_query_response?.result);
+  } catch (e) {
+    console.warn(`[aliexpress freight] ${itemId}: ${e.message}`);
+    return null;
+  }
+}
+
+/**
+ * One DS API call → scrapedData (see mapDsProduct), plus a best-effort shipping
+ * quote as `shipping`. Shared with source_links.js (a pasted AliExpress link
+ * inside "textToListings"). Needs the user's AliExpress connection.
+ */
+/** ds.product.get → mapDsProduct, no freight quote (the daily monitor's read). */
+async function mapDsProductFor(itemId, productUrl, uid, { callApi = callAliexpressApi } = {}) {
+  const response = await callApi("aliexpress.ds.product.get", {
     product_id: itemId,
     ship_to_country: "US",
     local_currency: "USD",
   }, uid);
-
   const result = response?.aliexpress_ds_product_get_response?.result;
   if (!result) throw new HttpsError("not-found", "Product not found on AliExpress.");
+  return mapDsProduct(result, itemId, productUrl);
+}
 
-  const priceRange = result.ae_item_sku_info_dtos?.ae_item_sku_info_d_t_o ?? [];
-  const minPrice = Math.min(...priceRange.map((s) => parseFloat(s.sku_price ?? "0"))) || 0;
-
-  return {
-    productId: String(itemId),
-    productUrl,
-    title: result.ae_item_base_info_dto?.subject ?? "",
-    price: minPrice,
-    images: aeImageUrls(result.ae_multimedia_info_dto?.image_urls).slice(0, 12),
-    variants: (result.ae_item_sku_info_dtos?.ae_item_sku_info_d_t_o ?? []).map((s) => ({
-      skuId: s.sku_id,
-      skuAttr: s.sku_attr,
-      price: parseFloat(s.sku_price ?? "0"),
-    })),
-  };
+async function fetchAliexpressDsProduct(itemId, productUrl, uid, { callApi = callAliexpressApi } = {}) {
+  const mapped = await mapDsProductFor(itemId, productUrl, uid, { callApi });
+  const cheapestSku = [...mapped.variants].sort((a, b) => (a.price || Infinity) - (b.price || Infinity))[0];
+  mapped.shipping = await fetchAliexpressFreight(itemId, cheapestSku?.skuId, uid, callApi);
+  return mapped;
 }
 
 exports.aliexpressImportProduct = onCall(
@@ -178,7 +284,7 @@ exports.aliexpressImportProduct = onCall(
 
     // Upload images to Firebase Storage
     const storedImages = [];
-    for (let i = 0; i < Math.min(product.images.length, 5); i++) {
+    for (let i = 0; i < Math.min(product.images.length, MAX_IMAGES); i++) {
       try {
         const buf = await downloadBuffer(product.images[i]);
         const path = `dropship/${uid}/${product.productId}/${i}.jpg`;
@@ -193,14 +299,15 @@ exports.aliexpressImportProduct = onCall(
     // Create Firestore product document
     const docRef = db.collection("products").doc();
     const { options, variants } = mapAliexpressVariants(product.variants, docRef.id);
-    const finalImages = storedImages.length ? storedImages : product.images.slice(0, 5);
-    const sourceImages = product.images.slice(0, 5); // Original AliExpress CDN URLs
+    const finalImages = storedImages.length ? storedImages : product.images.slice(0, MAX_IMAGES);
+    const sourceImages = product.images.slice(0, MAX_IMAGES); // Original AliExpress CDN URLs
 
     // AI enrichment is opt-in now — the user runs "AI autofill" (or it happens
     // as post-time gap-fill). No automatic Gemini call at import.
 
     // Build new schema product
     const newProduct = buildNewProductDoc({
+      ...aliexpressExtras(product),
       userId: uid,
       source: "aliexpress",
       sourceId: product.productId,
@@ -219,10 +326,29 @@ exports.aliexpressImportProduct = onCall(
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    await docRef.set(newProduct);
+    await docRef.set({ ...newProduct, ...aliexpressDocFields(product) });
     return { productId: docRef.id };
   }
 );
 
+/** Fields the DS API gives that buildNewProductDoc doesn't take by name. */
+function aliexpressExtras(product) {
+  const out = {};
+  if (product.shipping) {
+    out.sourceShippingCost = product.shipping.cost;
+  }
+  return out;
+}
+
+/** The rest, written after buildNewProductDoc (its allowlist drops them). */
+function aliexpressDocFields(product) {
+  const out = { ...(product.package || {}) };
+  if (product.currency) out.sourceCurrency = product.currency;
+  if (product.itemSpecifics && Object.keys(product.itemSpecifics).length) out.itemSpecifics = product.itemSpecifics;
+  if (product.shipping) out.sourceShipping = product.shipping;
+  return out;
+}
+
 exports.extractItemId = extractItemId;
+exports._internal = { mapDsProduct, mapDsProductFor, htmlToText, aePackage, aeProperties, cheapestFreight, fetchAliexpressFreight, fetchAliexpressDsProduct, mapAliexpressVariants, aliexpressDocFields };
 exports.fetchAliexpressDsProduct = fetchAliexpressDsProduct;

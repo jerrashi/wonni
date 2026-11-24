@@ -11,9 +11,10 @@
  * Seller SKU = productId (no variants) or ebay_listing.variantSkuFor(...) — the
  * same SKU eBay uses, so order matching shares one rule.
  *
- * Not built yet (plan § 4): category-required attributes + brand, editing title /
- * photos after posting. `getTiktokCategories` still returns every leaf; the web
- * picker passes one back as `categoryId`.
+ * Category + required attributes: tiktok_category.js (the user's pick, else the
+ * remembered `tiktokCategoryId`, else TikTok's recommendation from the title).
+ * `tiktokSuggestCategory` previews that for the picker. Not built yet: editing
+ * title / photos after posting.
  */
 
 "use strict";
@@ -24,6 +25,7 @@ const { tiktokClientFor, TT_APP_KEY, TT_APP_SECRET } = require("./tiktok_auth");
 const { listingImagesFor, toTiktokProductPayload, resolveListingPrice, variantPriceOr, sharedPoolQuantity } = require("./platform_adapters");
 const { isSharedPool } = require("./quantity_model");
 const { fetchBytes } = require("./source_links");
+const { resolveTiktokCategory, categoryProblem } = require("./tiktok_category");
 
 const TT_SECRETS = [TT_APP_KEY, TT_APP_SECRET];
 // Same 6 oz default eBay uses (ebayPackageWeightAndSize); dims are a small padded
@@ -120,11 +122,15 @@ function buildTiktokSkus(product, productId, { warehouseId }) {
   });
 }
 
-function buildTiktokCreatePayload(product, productId, { categoryId, titleOverride, imageUris, warehouseId }) {
-  const { images: _unused, price: _p, attributes, ...base } = toTiktokProductPayload(product, { titleOverride, categoryId });
+function buildTiktokCreatePayload(product, productId, { categoryId, titleOverride, imageUris, warehouseId, productAttributes = [] }) {
+  const { images: _unused, price: _p, attributes: manual, ...base } = toTiktokProductPayload(product, { titleOverride, categoryId });
+  // Hand-set `product.tiktokAttributes` win over the filled ones, per attribute id.
+  const byId = new Map(productAttributes.map((a) => [String(a.id), a]));
+  for (const a of manual || []) if (a?.id != null) byId.set(String(a.id), a);
+  const attributes = [...byId.values()];
   return {
     ...base,
-    ...(attributes?.length ? { product_attributes: attributes } : {}),
+    ...(attributes.length ? { product_attributes: attributes } : {}),
     main_images: imageUris.map((uri) => ({ uri })),
     skus: buildTiktokSkus(product, productId, { warehouseId }),
     ...tiktokPackage(product),
@@ -135,12 +141,13 @@ function buildTiktokCreatePayload(product, productId, { categoryId, titleOverrid
  * Create response → the doc patch. Variants are written back as a WHOLE array
  * (never `variants.0.x` — that clobbers the array into a map).
  */
-function createResultPatch(product, productId, data, warehouseId) {
+function createResultPatch(product, productId, data, warehouseId, categoryId = null) {
   const tiktokProductId = String(data.product_id);
   const bySeller = new Map((data.skus ?? []).map((s) => [s.seller_sku, String(s.id)]));
   const patch = {
     tiktokProductId,
     tiktokWarehouseId: warehouseId,
+    ...(categoryId ? { tiktokCategoryId: String(categoryId) } : {}),
     "crossPostStatus.tiktok": "active",
     "crossPostListingIds.tiktok": tiktokProductId,
   };
@@ -210,6 +217,9 @@ async function createTiktokListingCore(db, uid, client, { productId, titleOverri
     return { tiktokProductId: product.tiktokProductId, alreadyListed: true };
   }
   resolveListingPrice(product); // fail before any upload when there is no price
+  const category = await resolveTiktokCategory(client, product, { categoryId });
+  const problem = categoryProblem(category);
+  if (problem) throw new HttpsError("failed-precondition", problem);
 
   const imageUris = [];
   for (const url of listingImagesFor(product, 9)) {
@@ -223,11 +233,13 @@ async function createTiktokListingCore(db, uid, client, { productId, titleOverri
   if (!imageUris.length) throw new HttpsError("failed-precondition", "No photos could be uploaded to TikTok.");
 
   const warehouseId = await shopWarehouse(db, uid, client);
-  const payload = buildTiktokCreatePayload(product, productId, { categoryId, titleOverride, imageUris, warehouseId });
+  const payload = buildTiktokCreatePayload(product, productId, {
+    categoryId: category.categoryId, titleOverride, imageUris, warehouseId, productAttributes: category.attributes,
+  });
   const data = await client.request("POST", "/product/202309/products", { body: payload, what: "Posting to TikTok" });
-  const patch = createResultPatch(product, productId, data, warehouseId);
+  const patch = createResultPatch(product, productId, data, warehouseId, category.categoryId);
   await docRef.update({ ...patch, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-  return { tiktokProductId: patch.tiktokProductId };
+  return { tiktokProductId: patch.tiktokProductId, categoryId: category.categoryId };
 }
 
 /** Sale cascade hook (sales.js). Returns "updated" | "skipped". */
@@ -291,10 +303,29 @@ exports.tiktokCreateListing = onCall(
     const uid = requireUid(request);
     const { productId, title: titleOverride, categoryId } = request.data ?? {};
     if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
-    if (!categoryId) throw new HttpsError("invalid-argument", "Missing categoryId.");
+    // categoryId is optional: without it the remembered or recommended category is used.
     return createTiktokListingCore(admin.firestore(), uid, tiktokClientFor(uid), { productId, titleOverride, categoryId });
   }
 );
+
+/** What a post would use: category (picked / remembered / recommended) and
+ *  whether every required field can be filled. For the web/iOS category picker. */
+async function suggestTiktokCategoryCore(db, uid, client, { productId, categoryId }) {
+  const snap = await db.collection("products").doc(productId).get();
+  if (!snap.exists || snap.data().userId !== uid) throw new HttpsError("not-found", "Product not found.");
+  const c = await resolveTiktokCategory(client, snap.data(), { categoryId });
+  return {
+    categoryId: c.categoryId, path: c.path, recommended: c.recommended,
+    filledAttributes: c.attributes.length, missing: c.missing, unmet: c.unmet, problem: categoryProblem(c),
+  };
+}
+
+exports.tiktokSuggestCategory = onCall({ secrets: TT_SECRETS }, async (request) => {
+  const uid = requireUid(request);
+  const { productId, categoryId } = request.data ?? {};
+  if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
+  return suggestTiktokCategoryCore(admin.firestore(), uid, tiktokClientFor(uid), { productId, categoryId });
+});
 
 // Partial edit passthrough (no client calls it yet; plan § 4 "Edit").
 exports.tiktokUpdateListing = onCall({ secrets: TT_SECRETS }, async (request) => {
@@ -322,5 +353,5 @@ exports.pushTiktokQuantity = pushTiktokQuantity;
 exports._internal = {
   buildCategoryList, pickWarehouse, tiktokPackage, skuQuantity, buildTiktokSkus,
   buildTiktokCreatePayload, createResultPatch, inventoryUpdateBody, uploadImage,
-  createTiktokListingCore, deleteTiktokListingCore, pushTiktokQuantity,
+  createTiktokListingCore, deleteTiktokListingCore, pushTiktokQuantity, suggestTiktokCategoryCore,
 };

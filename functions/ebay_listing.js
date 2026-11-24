@@ -8,6 +8,7 @@ const {
 } = require("./platform_adapters");
 const { fillBlankFieldsInline, geminiApiKey } = require("./listing_fields");
 const { parseConditionPolicy, cardCondition } = require("./ebay_condition");
+const { fitTitle, ebayDuplicateOf, resolveEbayDuplicate } = require("./duplicate_titles");
 
 const MARKETPLACE_ID = "EBAY_US";
 
@@ -1110,7 +1111,7 @@ function sanitizeEbayText(text, conditionEnum) {
 function ebayListingText(product) {
   const conditionEnum = productConditionToEbayEnum(product);
   return {
-    title: sanitizeEbayText(product.title ?? "", conditionEnum).slice(0, 80),
+    title: fitTitle(sanitizeEbayText(product.title ?? "", conditionEnum), 80),
     description: sanitizeEbayText(canonicalDescription(product), conditionEnum),
   };
 }
@@ -1303,6 +1304,7 @@ async function postSingleVariant(ctx) {
 
   await docRef.update({
     "crossPostStatus.ebay": "active",
+    "crossPostErrors.ebay": admin.firestore.FieldValue.delete(),
     "crossPostListingIds.ebay": listingId,
     ebayOfferId: offerId,
     ebayListingId: listingId,
@@ -1578,6 +1580,7 @@ async function postMultiVariant(ctx) {
       // "active" only once EVERY listing is up: a half-posted product must not
       // look done (a retry/continuation resumes from the saved pointers).
       "crossPostStatus.ebay": last ? "active" : "pending",
+      "crossPostErrors.ebay": admin.firestore.FieldValue.delete(),
       "crossPostListingIds.ebay": first.listingId,
       ebayInventoryItemGroupKey: first.groupKey,
       // Only written when split; a single listing keeps the old shape.
@@ -1617,6 +1620,27 @@ async function postMultiVariant(ctx) {
 // over HTTP. Assumes `uid`/`productId` are already validated/authenticated —
 // mirrors the `recordSale` / `recordSaleCore` split in sales.js.
 async function ebayCreateListingCore(uid, productId, opts = {}) {
+  try {
+    const result = await postProductToEbay(uid, productId, opts);
+    if (opts.duplicateRenamedTo) result.renamedTo = opts.duplicateRenamedTo;
+    return result;
+  } catch (e) {
+    // eBay's identical-item refusal: rename to "Title (n)" when another Wonni
+    // product owns the live listing, then retry once (duplicate_titles.js).
+    const dup = ebayDuplicateOf(e);
+    if (!dup) throw e;
+    const db = admin.firestore();
+    if (opts.duplicateRenamedTo) {
+      const message = `eBay still sees "${opts.duplicateRenamedTo}" as a duplicate of listing ${dup.existingListingId}. Change the title or description and post again.`;
+      await db.collection("products").doc(productId).update({ "crossPostStatus.ebay": "failed", "crossPostErrors.ebay": message });
+      throw new HttpsError("already-exists", message);
+    }
+    const { title } = await resolveEbayDuplicate(db, uid, productId, dup);
+    return ebayCreateListingCore(uid, productId, { ...opts, duplicateRenamedTo: title });
+  }
+}
+
+async function postProductToEbay(uid, productId, opts = {}) {
   if (!productId) throw new HttpsError("invalid-argument", "Missing productId.");
 
   const db = admin.firestore();

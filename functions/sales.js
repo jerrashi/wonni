@@ -690,11 +690,23 @@ exports.decrementAndCascade = onCall({ secrets: EBAY_SECRETS }, validated("decre
 exports.restockAndCascade = onCall({ secrets: EBAY_SECRETS }, validated("restockAndCascade", async (data, request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
-  const db = admin.firestore();
-  const applied = await applyQuantityDelta(db, data.productId, uid, data.variantSku ?? null, 0, { force: data.quantity });
+  await restockCore(admin.firestore(), uid, { productId: data.productId, variantSku: data.variantSku ?? null, quantity: data.quantity });
+  return { success: true };
+}));
+
+/**
+ * Set (`quantity`) or add to (`delta`) a product's stock, push the new number to
+ * every live platform, and clear the "needs a manual Mercari action" flags.
+ * Shared by restockAndCascade and AliExpress restock orders (purchase_orders.js).
+ */
+async function restockCore(db, uid, { productId, variantSku = null, quantity, delta }) {
+  const applied = delta != null
+    ? await applyQuantityDelta(db, productId, uid, variantSku, delta)
+    : await applyQuantityDelta(db, productId, uid, variantSku, 0, { force: quantity });
   if (applied.skipped) throw new HttpsError("failed-precondition", VARIANT_NEEDS_SKU);
+  const data = { productId };
   await cascade(db, uid, applied.product, data.productId, {
-    variantSku: data.variantSku ?? null,
+    variantSku,
     newQuantity: applied.newQuantity,
     soldOut: false,
     soldOnPlatform: null,
@@ -712,8 +724,8 @@ exports.restockAndCascade = onCall({ secrets: EBAY_SECRETS }, validated("restock
     });
   }
   await db.collection("products").doc(data.productId).set(clear, { merge: true });
-  return { success: true };
-}));
+  return { newQuantity: applied.newQuantity, previousQuantity: applied.previousQuantity };
+}
 
 exports.markSoldOutAndCascade = onCall({ secrets: EBAY_SECRETS }, validated("markSoldOutAndCascade", async (data, request) => {
   const uid = request.auth?.uid;
@@ -853,7 +865,7 @@ exports.reassignSaleStage = onCall(validated("reassignSaleStage", async (data, r
 // Internal — reused by mercari_sales.js recordMercariSalesBatch.
 exports._internal = {
   resolveSaleId,
-  applyQuantityDelta, cascade, resolveStock, toTimestamp, recordSaleCore,
+  applyQuantityDelta, cascade, resolveStock, toTimestamp, recordSaleCore, restockCore,
   loadOwnedProduct, shouldAdvanceStatus, applyMercariFlags, updateSaleStatusCore,
   reassignSaleStageCore, pushEbayQuantity,
   setEbayRequest: (fn) => { ebayCall = fn || ebayRequest; },

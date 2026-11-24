@@ -185,20 +185,25 @@ manual smoke.
 `ProductDetail.jsx` pass `credentialSet: "web"` — the schema accepts & ignores
 it. Remove on the next web pass.
 
-### TikTok  → `contracts/tiktok.js` *(to add)*
+### TikTok  → `contracts/tiktok.js`
 
 | Function | Status | Notes / action |
 |---|---|---|
-| `tiktokCreateListing` / `Update` / `Delete` | **rebuilt 2026-11-23, not deployed, never run live** | On `tiktok_client.js` (202309 paths + signing). Create: multi-variant SKUs, real package weight/dims, warehouse from the logistics API, writes `tiktokSkuId` / `variants[i].tiktokSkuId` / `tiktokWarehouseId` / `crossPostListingIds.tiktok`. Delete removes the TikTok product and clears every TikTok field. Not built: category attributes + brand, edit of title/photos. |
+| `tiktokCreateListing` / `Update` / `Delete` | **rebuilt 2026-11-23, not deployed, never run live** | On `tiktok_client.js` (202309 paths + signing). Create: multi-variant SKUs, real package weight/dims, warehouse from the logistics API, writes `tiktokSkuId` / `variants[i].tiktokSkuId` / `tiktokWarehouseId` / `crossPostListingIds.tiktok`. Delete removes the TikTok product and clears every TikTok field. Category (2026-11-23, `tiktok_category.js`): the picked id, else the remembered `tiktokCategoryId`, else TikTok's recommendation from the title; required PRODUCT_PROPERTY attributes filled from brand / item specifics (listed value, typed value when customizable, else a neutral "Other"); a field nothing can fill, a required certification or size chart stops the post before any upload with a readable reason. Not built: edit of title/photos. |
+| `tiktokSuggestCategory` | **new 2026-11-23, not deployed** | Preview for the picker: category, path, and `missing` / `unmet` / `problem`. |
 | `getTiktokCategories` | **live** | keep |
-| `syncTiktokOrders` / `syncTiktokOrdersScheduled` | **rebuilt 2026-11-23, not deployed** | Orders → `sales/` via `recordSaleCore` (stock decrement + cascade), one sale per (order, SKU), window by update time with 2 h overlap, cancelled orders only update an existing sale. Needs the `integrations.isConnected` field override in `firestore.indexes.json`. |
+| `syncTiktokOrders` / `syncTiktokOrdersScheduled` | **rebuilt 2026-11-23, not deployed** | Orders → `sales/` via `recordSaleCore` (stock decrement + cascade), one sale per (order, SKU), window by update time with 2 h overlap, cancelled orders only update an existing sale. Needs the `integrations.isConnected` field override in `firestore.indexes.json`. Each sale also gets `shipBy` (TikTok's SLA, else 2 business days) and a `tiktok` block (order + line-item ids, delivery option, shipping type, package id, `piiExpiresAt`). |
+| `tiktokShippingProviders` / `tiktokMarkShipped` | **new 2026-11-23, not deployed** | Carriers for the order's delivery option; mark shipped creates the package (or updates its tracking). TikTok Shipping orders are refused (label lives in Seller Center). |
+| `purgeTiktokBuyerData` | **new 2026-11-23, not deployed** | Daily: clears buyer name + address 30 days after delivery / cancellation (TikTok data policy). |
 | `tiktokExchangeToken` | **live** | keep top-level |
 
 ### Products / import / media
 
 | Function | Status | Notes / action |
 |---|---|---|
-| `aliexpressImportProduct` / `weverseImportProduct` / `weverseBulkImportProducts` | **live** | keep top-level (opt-in Gemini path). |
+| `aliexpressImportProduct` / `weverseImportProduct` / `weverseBulkImportProducts` | **live** | keep top-level (opt-in Gemini path). AliExpress, 2026-11-23 (not deployed): up to 12 photos, sale price, description, package weight/dims, item specifics, currency, supplier stock as `variants[i].sourceStock` (never our quantity), and a best-effort US freight quote → `sourceShippingCost` + `sourceShipping`. |
+| `checkAliexpressSources` | **new 2026-11-23, not deployed** | Daily: re-reads up to 60 AliExpress products per user, writes `sourceCheck` + a one-line `sourceAlert` (price moved ≥ $0.25 and 5%, stock-outs, gone). Never edits price, stock or listings. |
+| `aliexpressCreateRestockOrder` / `syncPurchaseOrders(Scheduled)` / `markPurchaseOrderReceived` | **new 2026-11-23, not deployed, never run live** | `purchaseOrders/` (client read-only rule in firestore.rules). Order ships to the seller's address (remembered in `users/{uid}/settings/aliexpressRestock`), created unpaid; status + tracking every 6 h; received adds the units via `sales.restockCore` (same cascade as `restockAndCascade`), once. |
 | `identifyProductsInImage` | **live** | keep |
 | `enrichListing` | ✅ **built** (`functions/enrichment.js`, wired, not deployed) | Merges `identifyItem` + `aiAutofillListing`. `mode:"draft"` `{images[], hints?}` → `identifyDraft` (base64 / data: / https images, `DRAFT_SYSTEM_PROMPT`), persists nothing. `mode:"product"` `{productId, fillBlanksOnly, persist}` → wraps the existing `resolveListingFields()`; writes blank fields when `persist`. Response: `{suggested, writes, proposals, applied, aiModel, aiPromptVersion}` (contract shape — `geminiCategory`→`category`, `weightLbs`→`weightOz`, iOS 7-value condition → canonical 5 via `normalizeCondition`). 7 tests. |
 | `identifyItem` | **dead** (iOS) | Superseded by `enrichListing` mode:"draft". iOS `GeminiService.swift` still calls it — repoint in step 9. |

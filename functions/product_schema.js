@@ -61,6 +61,8 @@ function buildNewProductDoc(rawData) {
       quantity: v.quantity || 1,
       active: v.active !== false,
       sourceVariantId: v.sourceVariantId || null,
+      // Supplier stock at import (AliExpress) — not ours; omitted when unknown.
+      ...(v.sourceStock != null ? { sourceStock: v.sourceStock } : {}),
       // Platform cross-post status
       crossPostStatus: v.crossPostStatus || {
         ebay: null,

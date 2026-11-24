@@ -105,7 +105,7 @@ test("createTiktokListingCore: uploads photos, picks + caches the warehouse, wri
     "/product/202309/products": { product_id: "TT1", skus: [{ id: "SKU1", seller_sku: "P1" }] },
   });
   const r = await L.createTiktokListingCore(db, UID, client, { productId: "P1", categoryId: "600001" }, { fetchBytesImpl: imageFetch });
-  assert.deepEqual(r, { tiktokProductId: "TT1" });
+  assert.deepEqual(r, { tiktokProductId: "TT1", categoryId: "600001" });
 
   const create = client.calls.find((c) => c.path === "/product/202309/products");
   const body = create.opts.body;

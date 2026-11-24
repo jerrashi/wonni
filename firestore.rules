@@ -49,6 +49,14 @@ service cloud.firestore {
                     && request.auth.uid == request.resource.data.userId;
     }
 
+    // ── AliExpress restock orders (functions/purchase_orders.js) ──────────────
+    // Written only by the functions (Admin SDK); clients read their own.
+    match /purchaseOrders/{orderId} {
+      allow read: if request.auth != null
+                  && request.auth.uid == resource.data.userId;
+      allow write: if false;
+    }
+
     // ── Sales ────────────────────────────────────────────────────────────────
     // Each user can only access their own sales records.
     match /sales/{saleId} {
