@@ -705,7 +705,7 @@ struct ProfileView: View {
     /// it used to write a `listings/{id}` doc with `status: .draft`, but nothing reads
     /// that state anymore (drafts live as local `Item`s synced to `products/{id}`,
     /// same as any other draft). This now creates a `products/{id}` catalog-shaped doc
-    /// and adopts it the exact same way `DesktopDraftsView.adopt(_:)` does, so the
+    /// and adopts it the exact same way `DraftsView.download(_:)` does, so the
     /// result opens in `DraftEditSheet` and shows up in `DraftHistoryView` like any
     /// other in-progress draft instead of disappearing into the old dead path.
     private func sellSimilar(_ original: UserListing) async {
@@ -2483,6 +2483,9 @@ struct SettingsSheet: View {
                     }
                 }
 
+                Section(header: Text("Drafts"), footer: Text("Off: drafts made on the web are only under the PC button in Drafts.")) {
+                    ShowPcDraftsToggle()
+                }
                 Section(header: Text("Cross-posting")) {
                     NavigationLink {
                         CrossPostDefaultsView()

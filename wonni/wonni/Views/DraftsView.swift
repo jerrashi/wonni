@@ -46,7 +46,14 @@ struct DraftsView: View {
     @FocusState private var focusedField: DraftFocusField?
     @State private var lastFocusMoveDelta = 1
     @State private var showDraftBulkEdit = false
-    @State private var showDesktopDrafts = false
+    /// The PC button: list only drafts made on the web (see PCDrafts.swift).
+    @State private var pcOnly = false
+    /// Settings › Drafts › "Show PC drafts" (account-wide, off by default).
+    @State private var showPcDrafts = false
+    /// PC drafts on the server (`isDraft`, not made on iOS); the ones with no local copy
+    /// are the cloud rows.
+    @State private var remotePcDrafts: [(id: String, data: [String: Any])] = []
+    @State private var downloadingId: String?
     @State private var showBulkTextDrafts = false
     @State private var showMoveTarget = false
     @State private var showDeleteConfirm = false
@@ -61,8 +68,20 @@ struct DraftsView: View {
         allItems.filter {
             !$0.sourceAssetIdentifiers.isEmpty && !$0.pendingPublish && $0.publishedAt == nil
                 && !uploadManager.deletedDraftIDs.contains($0.id)
+                && DraftOrigin.showsLocal(isMadeOnPC: $0.isMadeOnPC, pcOnly: pcOnly, showPcDrafts: showPcDrafts)
         }
     }
+
+    /// PC drafts not downloaded to this phone yet (network rows with a cloud).
+    private var cloudDrafts: [(id: String, data: [String: Any])] {
+        guard pcOnly || showPcDrafts else { return [] }
+        let local = Set(allItems.compactMap(\.firestoreListingId))
+        let ids = Set(DraftOrigin.cloudOnly(remoteIds: remotePcDrafts.map(\.id), localProductIds: local))
+        return remotePcDrafts.filter { ids.contains($0.id) }
+    }
+
+    /// The tag only means something while phone and PC drafts are mixed.
+    private var showsOriginTag: Bool { showPcDrafts && !pcOnly }
 
     private func compositeIDs(_ draft: Item) -> [String] {
         draft.sourceAssetIdentifiers.map { "\(draft.id.uuidString)|\($0)" }
@@ -88,14 +107,14 @@ struct DraftsView: View {
     var body: some View {
         VStack(spacing: 0) {
             if uploadManager.isProcessing { processingBanner }
-            if drafts.isEmpty {
+            if drafts.isEmpty && cloudDrafts.isEmpty {
                 emptyState
             } else {
                 draftList
             }
         }
         .bottomActionBar { bottomLeading } trailing: { processButton }
-        .navigationTitle("Drafts")
+        .navigationTitle(pcOnly ? "PC drafts" : "Drafts")
         .navigationBarTitleDisplayMode(.inline)
         // Back lives in the bottom bar (and turns into Cancel while selecting).
         .navigationBarBackButtonHidden(true)
@@ -121,8 +140,10 @@ struct DraftsView: View {
             DraftBulkEditSheet(items: fullySelectedDrafts) { exitSelectMode() }
                 .environmentObject(uploadManager)
         }
-        .sheet(isPresented: $showDesktopDrafts) {
-            NavigationStack { DesktopDraftsView() }
+        .task { await loadPcDrafts() }
+        .onChange(of: pcOnly) { _, _ in
+            exitSelectMode()
+            Task { await loadPcDrafts() }
         }
         .sheet(isPresented: $showBulkTextDrafts) {
             BulkTextDraftsSheet()
@@ -158,7 +179,7 @@ struct DraftsView: View {
             Image(systemName: "photo.on.rectangle.angled")
                 .font(.system(size: 60))
                 .foregroundStyle(.tertiary)
-            Text("No drafts yet")
+            Text(pcOnly ? "No PC drafts" : "No drafts yet")
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -177,7 +198,8 @@ struct DraftsView: View {
                         onTogglePhoto: { assetId in togglePhoto(draft, assetId: assetId) },
                         onAddPhotos: { onAddPhotos(draft.id) },
                         onEdit: { onEdit(draft.id) },
-                        onChoosePhotos: { choosingPhotosFor = draft }
+                        onChoosePhotos: { choosingPhotosFor = draft },
+                        originTag: showsOriginTag ? draft.isMadeOnPC : nil
                     )
                     .id(draft.id)
                     .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
@@ -187,6 +209,18 @@ struct DraftsView: View {
                     guard !isSelectMode else { return }
                     for offset in offsets {
                         uploadManager.deleteDraftLocallyAndCloud(draft: drafts[offset], modelContext: modelContext)
+                    }
+                }
+                if !isSelectMode {
+                    ForEach(cloudDrafts, id: \.id) { remote in
+                        CloudDraftCard(
+                            data: remote.data,
+                            showTag: showsOriginTag,
+                            isDownloading: downloadingId == remote.id
+                        ) { download(remote.id) }
+                        .disabled(downloadingId != nil)
+                        .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+                        .listRowSeparator(.hidden)
                     }
                 }
             }
@@ -242,6 +276,13 @@ struct DraftsView: View {
                     Button("Deselect All") { selectedPhotos.removeAll() }
                         .accessibilityIdentifier("draftHistoryDeselectAllButton")
                 }
+            } else if pcOnly {
+                Button {
+                    pcOnly = false
+                } label: {
+                    Label("Drafts", systemImage: "chevron.left").labelStyle(.titleAndIcon)
+                }
+                .accessibilityIdentifier("pcDraftsBackButton")
             } else {
                 Button("Select") { isSelectMode = true }
                     .disabled(drafts.isEmpty)
@@ -252,6 +293,15 @@ struct DraftsView: View {
             if isSelectMode {
                 if !selectedPhotos.isEmpty { selectionActionsMenu }
             } else {
+                HStack(spacing: 12) {
+                if !pcOnly {
+                    Button {
+                        pcOnly = true
+                    } label: {
+                        Label("PC", systemImage: "desktopcomputer").labelStyle(.titleAndIcon)
+                    }
+                    .accessibilityIdentifier("pcDraftsButton")
+                }
                 Menu {
                     Button {
                         showBulkTextDrafts = true
@@ -259,15 +309,11 @@ struct DraftsView: View {
                         Label("Drafts from a List", systemImage: "text.badge.plus")
                     }
                     .accessibilityIdentifier("draftsFromTextButton")
-                    Button {
-                        showDesktopDrafts = true
-                    } label: {
-                        Label("Desktop Drafts", systemImage: "desktopcomputer")
-                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
                 .accessibilityIdentifier("draftsImportMenu")
+                }
             }
         }
     }
@@ -352,6 +398,26 @@ struct DraftsView: View {
             return "\(whole) whole draft\(whole == 1 ? "" : "s") and any other selected photos will be deleted."
         }
         return "\(photos) photo\(photos == 1 ? "" : "s") will be removed."
+    }
+
+    // MARK: - PC drafts
+
+    private func loadPcDrafts() async {
+        showPcDrafts = await DraftsSettings.loadShowPcDrafts()
+        guard pcOnly || showPcDrafts, let uid = Auth.auth().currentUser?.uid else { return }
+        if let remote = try? await ProductRepository.shared.fetchDesktopDrafts(userId: uid) {
+            remotePcDrafts = remote
+        }
+    }
+
+    /// Opening a PC draft always downloads it first; then it opens in Edit like any draft.
+    private func download(_ productId: String) {
+        downloadingId = productId
+        Task {
+            let item = await uploadManager.adoptProduct(productId: productId, modelContext: modelContext)
+            downloadingId = nil
+            if let item { onEdit(item.id) }
+        }
     }
 
     private func toggleDraft(_ draft: Item) {
@@ -508,6 +574,8 @@ struct DraftCard: View {
     let onEdit: () -> Void
     /// The "Choose photos" badge (list-made drafts with a weak or empty photo match).
     var onChoosePhotos: () -> Void = {}
+    /// Phone / PC tag next to the title; nil = don't show (see DraftsView.showsOriginTag).
+    var originTag: Bool? = nil
 
     @Environment(\.modelContext) private var modelContext
     @State private var localTitle = ""
@@ -565,6 +633,10 @@ struct DraftCard: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+                if let originTag {
+                    DraftOriginTag(isMadeOnPC: originTag).padding(.top, 2)
+                }
 
                 if !isSelectMode {
                     Button(action: onEdit) {

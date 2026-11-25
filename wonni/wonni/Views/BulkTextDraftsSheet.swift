@@ -120,7 +120,7 @@ struct BulkTextDraftsSheet: View {
             } header: {
                 Text("What are you selling?")
             } footer: {
-                Text("Write it however you like, and paste product links where you have them: Amazon, eBay, AliExpress, Weverse or any store page. Each item becomes one draft, in order. A link gives its draft the page's photos and what you paid; the asking price still comes from eBay comps. Items you say are sold together become one bundle listing.")
+                Text("Write it however you like, and paste product links where you have them: Amazon, eBay, AliExpress, Weverse or any store page. Each item becomes one draft, in order. A Weverse shop or artist page link on its own imports every item on that page, and a list of only Weverse or AliExpress product links imports them with their sizes and colors, as on the web. A link gives its draft the page's photos and what you paid; the asking price still comes from eBay comps. Items you say are sold together become one bundle listing.")
             }
 
             Section {
@@ -200,6 +200,10 @@ struct BulkTextDraftsSheet: View {
                 }
                 ForEach(Array(BulkTextDraftMapper.linkSummaryLines(summary.links).enumerated()), id: \.offset) { entry in
                     Label(entry.element, systemImage: entry.element.contains("could not") ? "exclamationmark.triangle" : "link")
+                        .foregroundStyle(entry.element.contains("could not") ? .orange : .secondary)
+                }
+                ForEach(Array(summary.importLines.enumerated()), id: \.offset) { entry in
+                    Label(entry.element, systemImage: entry.element.contains("could not") ? "exclamationmark.triangle" : "shippingbox")
                         .foregroundStyle(entry.element.contains("could not") ? .orange : .secondary)
                 }
                 if !text.isEmpty {

@@ -89,10 +89,17 @@ struct SelectablePhotoGridItem: View, Equatable {
             Color.clear
                 .aspectRatio(1, contentMode: .fit)
                 .overlay(
+                    // scaledToFill overflows the square (portrait photos spill into
+                    // the next row). .clipped() hides that overflow but does NOT stop
+                    // it taking taps, and the next row's cell is drawn on top — so a
+                    // tap near a cell's bottom edge selected the photo below. The photo
+                    // takes no taps; the tap area is exactly the square.
                     PhotoItemView(asset: asset, cache: cache, imageSize: imageSize)
                         .scaledToFill()
+                        .allowsHitTesting(false)
                 )
                 .clipped()
+                .contentShape(Rectangle())
                 .opacity((isSelected || isDrafted) ? 0.5 : 1.0)
                 .onTapGesture {
                     toggleAction()
@@ -460,6 +467,7 @@ struct DraftEditSheet: View {
     @AppStorage("mercariKeepSmartPricing") private var accountSmartPricing = false
 
     @State private var showPhotoEditModal = false
+    @State private var photoToolsTarget: PhotoToolsTarget?
     @State private var selectedItems: [PhotosPickerItem] = []
 
     @State private var showTemplatePicker = false
@@ -497,12 +505,18 @@ struct DraftEditSheet: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 12) {
                                 ForEach(item.sourceAssetIdentifiers, id: \.self) { assetId in
-                                    ZStack(alignment: .topTrailing) {
+                                    // Tap → photo tools (Cover · Crop · Split · Identify · Delete).
+                                    Button {
+                                        photoToolsTarget = PhotoToolsTarget(id: assetId)
+                                    } label: {
                                         DraftThumbnailView(item: item, assetId: assetId)
                                         .frame(width: 80, height: 80)
                                         .cornerRadius(8)
                                         .clipped()
+                                        .contentShape(Rectangle()) // clipped overflow still takes taps
                                     }
+                                    .buttonStyle(.plain)
+                                    .accessibilityIdentifier("draftEditPhotoButton")
                                 }
                                 
                                 PhotosPicker(selection: $selectedItems, matching: .images) {
@@ -764,6 +778,10 @@ struct DraftEditSheet: View {
             }
             .fullScreenCover(isPresented: $showPhotoEditModal) {
                 DraftPhotoEditModal(item: item)
+            }
+            .fullScreenCover(item: $photoToolsTarget) { target in
+                PhotoToolsView(item: item, assetId: target.id)
+                    .environmentObject(UploadManager.shared)
             }
             .onAppear { if !isLoaded { loadForm() } }
             .task {

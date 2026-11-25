@@ -79,6 +79,7 @@ const SIGN_IN_METHODS = [
 
 export default function Settings() {
   const [etsyPublishAsDraft, setEtsyPublishAsDraft] = useState(false);
+  const [showPhoneDrafts, setShowPhoneDrafts] = useState(false);
   const [integrations, setIntegrations] = useState({});
   const [feeRate, setFeeRate] = useState("7.5");
   const [linkedProviderIds, setLinkedProviderIds] = useState(
@@ -140,6 +141,7 @@ export default function Settings() {
       if (snap.exists()) {
         const data = snap.data();
         setEtsyPublishAsDraft(data.etsyPublishAsDraft === true);
+        setShowPhoneDrafts(data.showPhoneDraftsOnWeb === true);
         if (data.defaultLocation) {
           setAddressLine1(data.defaultLocation.addressLine1 || "");
           setCity(data.defaultLocation.city || "");
@@ -1014,6 +1016,34 @@ export default function Settings() {
         <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
           Default 7.5% = 5% referral + 2.5% transaction. Used by the Chrome extension margin calculator.
         </div>
+      </div>
+
+      <div className="settings-section">
+        <h2 style={{ fontSize: 18, margin: "0 0 12px" }}>Drafts</h2>
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 14 }}>
+          <input
+            type="checkbox"
+            checked={showPhoneDrafts}
+            onChange={async (e) => {
+              const on = e.target.checked;
+              setShowPhoneDrafts(on);
+              const uid = auth.currentUser?.uid;
+              if (!uid) return;
+              try {
+                await setDoc(doc(db, "users", uid, "sellingSettings", "default"), { showPhoneDraftsOnWeb: on }, { merge: true });
+              } catch (err) {
+                console.warn("Could not save showPhoneDraftsOnWeb:", err);
+                setShowPhoneDrafts(!on);
+              }
+            }}
+          />
+          <span>
+            Show phone drafts
+            <span style={{ display: "block", fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+              Off: drafts made in the iPhone app are only under the Phone drafts button on Products.
+            </span>
+          </span>
+        </label>
       </div>
 
       <details className="settings-section">

@@ -3,6 +3,7 @@ const admin = require("firebase-admin");
 const https = require("https");
 const { callAliexpressApi, AE_SECRETS } = require("./aliexpress_auth");
 const { buildNewProductDoc } = require("./product_schema");
+const { newProductRef, madeOnFields } = require("./client_product_id");
 
 const ALLOWED_IMAGE_HOSTS = [".alicdn.com", ".aliexpress-media.com"];
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -297,7 +298,8 @@ exports.aliexpressImportProduct = onCall(
     }
 
     // Create Firestore product document
-    const docRef = db.collection("products").doc();
+    // iOS passes its own UUID so a phone import is a phone draft (client_product_id.js).
+    const { ref: docRef, madeOn } = await newProductRef(db, request.data?.productId);
     const { options, variants } = mapAliexpressVariants(product.variants, docRef.id);
     const finalImages = storedImages.length ? storedImages : product.images.slice(0, MAX_IMAGES);
     const sourceImages = product.images.slice(0, MAX_IMAGES); // Original AliExpress CDN URLs
@@ -327,7 +329,7 @@ exports.aliexpressImportProduct = onCall(
     });
 
     // Server-owned fields last, so nothing from the import can override them.
-    await docRef.set({ ...aliexpressDocFields(product), ...newProduct, userId: uid, source: "aliexpress" });
+    await docRef.set({ ...aliexpressDocFields(product), ...newProduct, ...madeOnFields(madeOn), userId: uid, source: "aliexpress" });
     return { productId: docRef.id };
   }
 );

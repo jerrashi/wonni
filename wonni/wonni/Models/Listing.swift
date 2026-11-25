@@ -121,6 +121,11 @@ class Item {
     /// only while the draft still has a title and a price (see DraftAIProcessingPolicy)
     /// — an incomplete draft is processed normally. Optional for lightweight migration.
     var skipAIProcessing: Bool?
+    /// The `products/{id}.source` of a product this draft was downloaded from or made by
+    /// a server importer (weverse, aliexpress, text, …). Synced back as `source` so
+    /// editing on the phone never relabels it "ios". nil = made here (source "ios").
+    /// Optional for lightweight migration (2026-11-25).
+    var importSource: String?
     /// Set the moment `UploadManager.publishDrafts` successfully writes this item's
     /// Firestore listing doc. Distinguishes "still an unpublished draft" from "kept alive
     /// locally only so a queued cross-post job can read its photos" (the item survives in

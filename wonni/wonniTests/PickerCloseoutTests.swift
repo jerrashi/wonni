@@ -188,3 +188,92 @@ final class PendingDraftEditTests: XCTestCase {
         XCTAssertNil(PendingDraftEdit.find(item.id, in: context))
     }
 }
+
+/// Phone vs PC drafts (PCDrafts.swift, 2026-11-25): the id says where a draft was made,
+/// and which drafts the Drafts screen lists.
+final class DraftOriginTests: XCTestCase {
+    func test_isMadeOnPC_uuidIsPhone_autoIdIsPC() {
+        XCTAssertFalse(DraftOrigin.isMadeOnPC(productId: "1030914D-8CEE-4EB7-9F22-9B91CE423505"))
+        XCTAssertTrue(DraftOrigin.isMadeOnPC(productId: "WphLZ61Q9IKvWwjTm06z"))
+        XCTAssertFalse(DraftOrigin.isMadeOnPC(productId: nil), "a draft with no product id yet was made here")
+        XCTAssertFalse(DraftOrigin.isMadeOnPC(productId: ""))
+    }
+
+    func test_showsLocal_phoneByDefault_mixedWithSetting_pcOnlyUnderButton() {
+        // default: phone only
+        XCTAssertTrue(DraftOrigin.showsLocal(isMadeOnPC: false, pcOnly: false, showPcDrafts: false))
+        XCTAssertFalse(DraftOrigin.showsLocal(isMadeOnPC: true, pcOnly: false, showPcDrafts: false))
+        // setting on: both
+        XCTAssertTrue(DraftOrigin.showsLocal(isMadeOnPC: true, pcOnly: false, showPcDrafts: true))
+        XCTAssertTrue(DraftOrigin.showsLocal(isMadeOnPC: false, pcOnly: false, showPcDrafts: true))
+        // PC button: PC only, whatever the setting
+        XCTAssertTrue(DraftOrigin.showsLocal(isMadeOnPC: true, pcOnly: true, showPcDrafts: false))
+        XCTAssertFalse(DraftOrigin.showsLocal(isMadeOnPC: false, pcOnly: true, showPcDrafts: true))
+    }
+
+    func test_cloudOnly_dropsDraftsAlreadyDownloaded() {
+        XCTAssertEqual(DraftOrigin.cloudOnly(remoteIds: ["a", "b", "c"], localProductIds: ["b"]), ["a", "c"])
+    }
+}
+
+/// Photo tools (PhotoToolsView.swift): box math and "replace in place" ordering.
+final class PhotoToolsGeometryTests: XCTestCase {
+    func test_grid_coversTheImageInRowMajorOrder() {
+        let g = PhotoToolsGeometry.grid(rows: 2, cols: 3)
+        XCTAssertEqual(g.count, 6)
+        XCTAssertEqual(g[0], CGRect(x: 0, y: 0, width: 1.0 / 3, height: 0.5))
+        XCTAssertEqual(g[5].maxX, 1, accuracy: 1e-9)
+        XCTAssertEqual(g[5].maxY, 1, accuracy: 1e-9)
+        XCTAssertEqual(PhotoToolsGeometry.rows(3).map(\.width), [1, 1, 1])
+    }
+
+    func test_geminiBox_isYXOrderOn1000Scale() {
+        let r = PhotoToolsGeometry.rect(fromGeminiBox: [100, 200, 600, 900])
+        XCTAssertEqual(r?.minX ?? -1, 0.2, accuracy: 1e-9)
+        XCTAssertEqual(r?.minY ?? -1, 0.1, accuracy: 1e-9)
+        XCTAssertEqual(r?.width ?? -1, 0.7, accuracy: 1e-9)
+        XCTAssertEqual(r?.height ?? -1, 0.5, accuracy: 1e-9)
+        XCTAssertNil(PhotoToolsGeometry.rect(fromGeminiBox: [1, 2, 3]))
+        XCTAssertNil(PhotoToolsGeometry.rect(fromGeminiBox: [500, 500, 500, 500]), "a zero-size box is dropped")
+    }
+
+    func test_pixelRect_staysInsideTheImage() {
+        let px = PhotoToolsGeometry.pixelRect(CGRect(x: 0.5, y: 0.5, width: 0.6, height: 0.6), imageSize: CGSize(width: 1000, height: 800))
+        XCTAssertEqual(px, CGRect(x: 500, y: 400, width: 500, height: 400))
+    }
+
+    func test_resized_squareLockUsesPixelAspect() {
+        // 2000×1000 image: a square in pixels is twice as tall as wide in normalized units.
+        let r = PhotoToolsGeometry.resized(CGRect(x: 0, y: 0, width: 0.2, height: 0.2), by: .zero, aspect: 1, imageSize: CGSize(width: 2000, height: 1000))
+        XCTAssertEqual(r.width * 2000, r.height * 1000, accuracy: 1e-6)
+    }
+
+    func test_replacing_putsPiecesWhereThePhotoWas() {
+        XCTAssertEqual(PhotoToolsGeometry.replacing("b", with: ["x", "y"], in: ["a", "b", "c"]), ["a", "x", "y", "c"])
+        XCTAssertEqual(PhotoToolsGeometry.replacing("z", with: ["x"], in: ["a"]), ["a", "x"])
+    }
+}
+
+/// Link routing for "Drafts from a List" — the same rules as the web import box.
+final class ImportLinkRouterTests: XCTestCase {
+    private let sale = "https://shop.weverse.io/en/shop/USD/artists/3/sales/41587"
+    private let shop = "https://shop.weverse.io/en/shop/USD/artists/3"
+    private let ali = "https://www.aliexpress.us/item/3256806.html"
+
+    func test_loneShopLinkImportsThePage() {
+        XCTAssertEqual(ImportLinkRouter.route("  \(shop)  \n"), .weverseShop(shop))
+    }
+
+    func test_onlyImporterLinksGoToTheImporters() {
+        XCTAssertEqual(ImportLinkRouter.route("\(sale)\n\(ali)"), .importerLinks([sale, ali]))
+        XCTAssertEqual(ImportLinkRouter.route(sale), .importerLinks([sale]))
+        XCTAssertEqual(ImportLinkRouter.route("https://aliexpress.com/x?id=123"), .importerLinks(["https://aliexpress.com/x?id=123"]))
+    }
+
+    func test_anythingElseIsText() {
+        XCTAssertEqual(ImportLinkRouter.route("bts hoodie \(sale)"), .text, "a link inside a sentence stays text, like the web")
+        XCTAssertEqual(ImportLinkRouter.route("\(shop)\n\(sale)"), .text, "a shop link with other lines is text")
+        XCTAssertEqual(ImportLinkRouter.route("https://www.amazon.com/dp/B0CHX1W1XY"), .text)
+        XCTAssertEqual(ImportLinkRouter.route(""), .text)
+    }
+}

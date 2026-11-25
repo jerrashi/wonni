@@ -15,6 +15,18 @@ import OverflowMenu from "../components/OverflowMenu";
 import { getPlatformListingUrl } from "../lib/platformLinks";
 import { productCost, suggestedListingPrice } from "../lib/pricing";
 import { deleteProductEverywhere, isLiveOnMercari } from "../lib/deleteProduct";
+import { madeOn, isWaitingForAI, visibleProducts } from "../lib/draftOrigin";
+
+// Phone / PC tag, shown only while phone drafts are mixed in (see lib/draftOrigin.js).
+function OriginTag({ product }) {
+  const phone = madeOn(product) === "phone";
+  return <span className={`origin-tag ${phone ? "phone" : "pc"}`}>{phone ? "📱 Phone" : "🖥 PC"}</span>;
+}
+
+const VIEW_KEY = "wonni.productsView"; // "tiles" (default, square cards) | "rows"
+function readView() {
+  try { return localStorage.getItem(VIEW_KEY) === "rows" ? "rows" : "tiles"; } catch { return "tiles"; }
+}
 
 // ── List Modal ────────────────────────────────────────────────────────────────
 
@@ -372,7 +384,32 @@ function PostedPlatforms({ product }) {
 
 // ── Product card ──────────────────────────────────────────────────────────────
 
-function ProductCard({ product, selected = false, onSelect = null, selectMode = false }) {
+// Horizontal draft tile — the same layout as an iOS Drafts row: title, price on the
+// line under it, then the photo strip. Used only when the user picks "Rows".
+function ProductRow({ product, selected = false, onSelect = null, selectMode = false, showOrigin = false }) {
+  const navigate = useNavigate();
+  const waiting = isWaitingForAI(product);
+  const open = () => (selectMode ? onSelect(!selected) : navigate(`/sell/products/${product.id}`));
+  return (
+    <button className={`draft-tile ${selected ? "selected" : ""}`} onClick={open} aria-pressed={selectMode ? selected : undefined}>
+      <div className="draft-tile-top">
+        {selectMode && <span className={`select-circle inline ${selected ? "on" : ""}`} aria-hidden="true" />}
+        <span className="draft-tile-title">{waiting ? "Untitled" : product.title}</span>
+        {waiting && <span className="origin-tag wait">Waiting for AI</span>}
+        {showOrigin && <OriginTag product={product} />}
+      </div>
+      <div className="draft-tile-price">
+        {typeof product.listingPrice === "number" && !waiting ? `$${product.listingPrice.toFixed(2)}` : "No price"}
+      </div>
+      <div className="draft-tile-strip">
+        {(product.images ?? []).slice(0, 8).map((url) => <img key={url} src={url} alt="" loading="lazy" />)}
+        {!(product.images ?? []).length && <div className="draft-tile-empty">No photos</div>}
+      </div>
+    </button>
+  );
+}
+
+function ProductCard({ product, selected = false, onSelect = null, selectMode = false, showOrigin = false }) {
   const navigate = useNavigate();
   const [showPostModal, setShowPostModal] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -455,9 +492,12 @@ function ProductCard({ product, selected = false, onSelect = null, selectMode = 
               (the platform badges below already say where it is). */}
           {isSourceSoldOut ? (
             <span className="product-card-badge" style={{ color: "var(--danger)" }}>Sold Out</span>
+          ) : isWaitingForAI(product) ? (
+            <span className="product-card-badge" style={{ color: "var(--warning)" }}>Waiting for AI</span>
           ) : !isLive ? (
             <span className="product-card-badge" style={{ color: "var(--warning)" }}>Draft</span>
           ) : null}
+          {showOrigin && <span className="product-card-origin"><OriginTag product={product} /></span>}
 
           {/* Select circle - only in select mode (iOS checkmark.circle) */}
           {selectMode && (
@@ -475,7 +515,7 @@ function ProductCard({ product, selected = false, onSelect = null, selectMode = 
             aria-pressed={selectMode ? selected : undefined}
             onClick={() => (selectMode ? onSelect(!selected) : navigate(`/sell/products/${product.id}`))}
           >
-            <div className="product-card-title">{product.title}</div>
+            <div className="product-card-title">{isWaitingForAI(product) ? "Untitled" : product.title}</div>
           </button>
 
           <div className="product-card-price-row">
@@ -511,7 +551,9 @@ export default function Dashboard() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [mobileDraftsExpanded, setMobileDraftsExpanded] = useState(false);
+  const [phoneOnly, setPhoneOnly] = useState(false); // the Phone button
+  const [showPhoneDrafts, setShowPhoneDrafts] = useState(false); // account setting
+  const [view, setView] = useState(readView);
   const [filter, setFilter] = useState("all"); // "all", "draft", "live"
   const [selectedTag, setSelectedTag] = useState(null); // null (All) or specific tag string
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -552,8 +594,26 @@ export default function Dashboard() {
     );
   }, []);
 
-  const mobileDrafts = products.filter((p) => p.source === "ios" && p.isDraft !== false);
-  const regularProducts = products.filter((p) => !(p.source === "ios" && p.isDraft !== false));
+  // Settings › Drafts › "Show phone drafts" (account-wide, same doc as the other selling settings).
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    return onSnapshot(
+      doc(db, "users", uid, "sellingSettings", "default"),
+      (snap) => setShowPhoneDrafts(snap.data()?.showPhoneDraftsOnWeb === true),
+      () => setShowPhoneDrafts(false),
+    );
+  }, []);
+
+  function chooseView(next) {
+    setView(next);
+    try { localStorage.setItem(VIEW_KEY, next); } catch { /* per-browser convenience only */ }
+  }
+
+  const phoneDraftCount = visibleProducts(products, { phoneOnly: true }).length;
+  // Everything this page lists, filters and selects from.
+  const regularProducts = visibleProducts(products, { showPhoneDrafts, phoneOnly });
+  const showOrigin = showPhoneDrafts && !phoneOnly;
 
   // Collect all unique tags across user's products
   const allTags = useMemo(() => {
@@ -705,7 +765,7 @@ export default function Dashboard() {
 
       <div className="page-header">
         <div>
-          <h1>Products</h1>
+          <h1>{phoneOnly ? "Phone drafts" : "Products"}</h1>
           <span className="page-subtitle">
             {regularProducts.length} total · {regularProducts.filter(isLive).length} live
           </span>
@@ -716,32 +776,15 @@ export default function Dashboard() {
 
       {error && <div className="card" style={{ marginBottom: 20, color: "var(--danger)" }}>{error}</div>}
 
-      {mobileDrafts.length > 0 && (
-        <div className="card" style={{ marginBottom: 20 }}>
-          <button
-            onClick={() => setMobileDraftsExpanded((v) => !v)}
-            style={{
-              width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
-              background: "none", border: "none", cursor: "pointer", padding: 0, font: "inherit", color: "inherit",
-            }}
-          >
-            <span style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600 }}>
-              📱 Mobile Drafts <span className="chip chip-draft">{mobileDrafts.length}</span>
-            </span>
-            <span style={{ fontSize: 12, color: "var(--muted)" }}>{mobileDraftsExpanded ? "▲ Collapse" : "▼ Expand"}</span>
-          </button>
-          {mobileDraftsExpanded && (
-            <div className="product-grid" style={{ marginTop: 16 }}>
-              {mobileDrafts.map((p) => <ProductCard key={p.id} product={p} />)}
-            </div>
-          )}
-        </div>
-      )}
-
       {loading ? (
         <div className="empty-state">
           <div style={{ fontSize: 32 }}>⏳</div>
           <p>Loading your products…</p>
+        </div>
+      ) : phoneOnly && regularProducts.length === 0 ? (
+        <div className="empty-state">
+          <p>No phone drafts.</p>
+          <button className="btn btn-ghost" style={{ marginTop: 12 }} onClick={() => setPhoneOnly(false)}>‹ Back to products</button>
         </div>
       ) : regularProducts.length === 0 ? (
         <div className="empty-state">
@@ -772,6 +815,25 @@ export default function Dashboard() {
               ))}
             </div>
 
+            <div className="view-controls">
+              {(phoneOnly || phoneDraftCount > 0) && (
+                <button
+                  className={`btn btn-ghost btn-sm ${phoneOnly ? "active" : ""}`}
+                  aria-pressed={phoneOnly}
+                  onClick={() => { setPhoneOnly(!phoneOnly); setSelectedIds(new Set()); }}
+                >
+                  {phoneOnly ? "‹ All products" : `📱 Phone drafts ${phoneDraftCount}`}
+                </button>
+              )}
+              <div className="segmented" role="group" aria-label="View">
+                {[["tiles", "Tiles"], ["rows", "Rows"]].map(([v, label]) => (
+                  <button key={v} className={view === v ? "active" : ""} aria-pressed={view === v} onClick={() => chooseView(v)}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {allTags.length > 0 && (
               <div className="chip-row" role="group" aria-label="Filter by tag">
                 <button
@@ -795,16 +857,20 @@ export default function Dashboard() {
             )}
           </div>
 
-          <div className="product-grid">
-            {filteredProducts.map((p) => (
-              <ProductCard
-                key={p.id}
-                product={p}
-                selectMode={selectMode}
-                selected={selectMode && selectedIds.has(p.id)}
-                onSelect={selectMode ? () => toggleSelect(p.id) : null}
-              />
-            ))}
+          <div className={view === "rows" ? "draft-tile-list" : "product-grid"}>
+            {filteredProducts.map((p) => {
+              const Tile = view === "rows" ? ProductRow : ProductCard;
+              return (
+                <Tile
+                  key={p.id}
+                  product={p}
+                  showOrigin={showOrigin}
+                  selectMode={selectMode}
+                  selected={selectMode && selectedIds.has(p.id)}
+                  onSelect={selectMode ? () => toggleSelect(p.id) : null}
+                />
+              );
+            })}
           </div>
         </>
       )}

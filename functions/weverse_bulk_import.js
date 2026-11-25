@@ -8,6 +8,7 @@ const { buildNewProductDoc, extractSourceImages } = require("./product_schema");
 const { mergeShippingEstimate, getStoredEstimate } = require("./weverse_shipping_estimate");
 const { findPossibleDuplicates } = require("./weverse_duplicate_detection");
 const { maybeApplyCrossPostRulesAfterImport } = require("./cross_post");
+const { newProductRef, madeOnFields } = require("./client_product_id");
 
 const BATCH_SIZE_LIMIT = 25;
 const CONCURRENCY_CHUNK_SIZE = 4;
@@ -21,7 +22,10 @@ function chunkArray(array, size) {
 }
 
 // Bulk import a list of Weverse items (up to 25 per request).
-// Expects: { items: [{ productUrl, saleId, title, orderSheetNumber?, shippingCost? }] }
+// Expects: { items: [{ productUrl, saleId, title, orderSheetNumber?, shippingCost?, productId? }] }
+// productId: an iOS UUID to create the doc under (a phone import; client_product_id.js).
+// Returns importedSaleIds alongside productIds so a client can tell which item landed
+// where (existing = this user already imported that sale; nothing is created).
 // orderSheetNumber (present when importing from Order History) is the
 // user-facing order number, kept for accounting reconciliation. shippingCost
 // (present when the client already ran a per-item shipping estimate, e.g.
@@ -71,6 +75,7 @@ exports.weverseBulkImportProducts = onCall(
     }));
 
     const importedProductIds = [];
+    const importedSaleIds = [];
     const existingProductIds = [];
     const errors = [];
 
@@ -172,7 +177,8 @@ exports.weverseBulkImportProducts = onCall(
               existingWeverseProducts
             );
 
-            const docRef = db.collection("products").doc();
+            // iOS passes each item's own UUID (client_product_id.js).
+            const { ref: docRef, madeOn } = await newProductRef(db, item.productId);
             const newProduct = buildNewProductDoc({
               userId: uid,
               source: "weverse",
@@ -206,7 +212,7 @@ exports.weverseBulkImportProducts = onCall(
               newProduct.possibleDuplicateOf = possibleDuplicates.map((m) => m.productId);
             }
 
-            await docRef.set(newProduct);
+            await docRef.set({ ...newProduct, ...madeOnFields(madeOn) });
 
             // Rule-based cross-posting: automatic, best-effort, never blocks
             // the import — and only runs at all when this user has
@@ -214,6 +220,7 @@ exports.weverseBulkImportProducts = onCall(
             await maybeApplyCrossPostRulesAfterImport(db, uid, docRef.id);
 
             importedProductIds.push(docRef.id);
+            importedSaleIds.push(saleId);
             existingWeverseProducts.push({
               id: docRef.id,
               title: product.title,
@@ -234,6 +241,8 @@ exports.weverseBulkImportProducts = onCall(
       importedCount: importedProductIds.length,
       existingCount: existingProductIds.length,
       productIds: importedProductIds,
+      importedSaleIds,
+      existingSaleIds: existingProductIds,
       errors,
     };
   }

@@ -1094,7 +1094,18 @@ class UploadManager: ObservableObject {
 
         var data: [String: Any] = [:]
         data["userId"] = userId
-        data["source"] = "ios"
+        // A PC draft downloaded to the phone keeps its own `source` (weverse, text, …) and
+        // its PC tag; only drafts made here are "ios". Before 2026-11-25 every sync wrote
+        // "ios", which re-tagged edited web drafts as phone drafts (see PCDrafts.swift).
+        // An imported product (Weverse / AliExpress link pasted on the phone) keeps its
+        // importer's source too (`importSource`); the daily source checks key off it.
+        let madeOnPC = draft.isMadeOnPC
+        if let importSource = draft.importSource, importSource != "ios" {
+            data["source"] = importSource
+        } else if !madeOnPC {
+            data["source"] = "ios"
+        }
+        data["madeOn"] = madeOnPC ? "pc" : "phone"
         data["isDraft"] = isDraftOverride ?? draft.isDraft
         data["title"] = draft.userEditedTitle ?? draft.aiSuggestedTitle
         data["description"] = draft.userEditedDescription ?? draft.aiSuggestedDescription
@@ -1208,7 +1219,7 @@ class UploadManager: ObservableObject {
 
     /// "Adopts" a dropship-originated `products/{id}` doc (a web-started draft) as a new
     /// local `Item`, so the user can continue editing it on iOS the same way as any
-    /// locally-created draft — the iOS half of "Desktop Drafts" (see `DesktopDraftsView`).
+    /// locally-created draft — the "download" step for a PC draft (see `PCDrafts.swift`).
     /// Unlike `pullProductIfNewer`, there's no "is remote newer" question here: the local
     /// `Item` is brand new and has nothing to compare against, so hydration is
     /// unconditional. Returns nil (and does nothing) if the product can't be fetched.
@@ -1216,6 +1227,7 @@ class UploadManager: ObservableObject {
         guard let data = try? await ProductRepository.shared.fetchProduct(productId: productId) else { return nil }
 
         let draft = Item(firestoreListingId: productId)
+        if let source = data["source"] as? String, source != "ios" { draft.importSource = source }
         modelContext.insert(draft)
         await applyRemoteProductFields(data, to: draft)
         // Remote's own updatedAt if present, else "now" — either way this becomes the

@@ -41,6 +41,8 @@ final class BulkTextDraftRunner: ObservableObject {
         var note: String?
         /// What became of each product link in the text (finish screen lines).
         var links: [LinkOutcome] = []
+        /// Finish-screen lines for links that went to the Weverse / AliExpress importers.
+        var importLines: [String] = []
     }
 
     enum Phase: Equatable {
@@ -197,6 +199,14 @@ final class BulkTextDraftRunner: ObservableObject {
             )
         }
 
+        // Weverse shop pages and pure Weverse / AliExpress link lists go to the same
+        // importers the web uses (variants, duplicate checks); everything else is text.
+        let route = ImportLinkRouter.route(text)
+        if route != .text {
+            await runImport(route, modelContext: modelContext, uploadManager: uploadManager)
+            return
+        }
+
         while !stopRequested {
             let response: ProposeResponse
             do {
@@ -330,6 +340,118 @@ final class BulkTextDraftRunner: ObservableObject {
             id: taskId,
             label: summary.created == 1 ? "1 draft created" : "\(summary.created) drafts created",
             detail: summary.leftover > 0 ? "\(summary.leftover) not converted — still in the editor" : nil,
+            progress: 1
+        )
+        AppTaskQueue.shared.complete(id: taskId)
+    }
+
+    // MARK: Importer links (Weverse shop / sale links, AliExpress items)
+
+    private func runImport(_ route: ImportLinkRouter.Route, modelContext: ModelContext, uploadManager: UploadManager) async {
+        let service = BulkTextDraftService.shared
+        var status = RunStatus()
+        var summary = Summary()
+        func report() {
+            phase = .working(status)
+            let total = max(status.total, status.created)
+            AppTaskQueue.shared.update(id: taskId,
+                                       detail: total > 0 ? "\(status.created) of \(total) · \(status.step)" : status.step,
+                                       progress: total > 0 ? Double(status.created) / Double(total) : -1)
+        }
+
+        var jobs: [BulkTextDraftService.ImportJob] = []
+        var shopUrl: String?
+        switch route {
+        case .text: return
+        case .weverseShop(let url):
+            shopUrl = url
+            status.step = "Reading the Weverse page…"
+            report()
+            do {
+                jobs = try await service.weverseShopItems(url)
+            } catch {
+                finishImport(summary: summary, leftover: url, failure: (error as NSError).userInfo["NSLocalizedDescription"] as? String ?? error.localizedDescription)
+                return
+            }
+        case .importerLinks(let urls):
+            jobs = urls.map { BulkTextDraftService.ImportJob(url: $0, productId: UUID().uuidString) }
+        }
+        status.total = jobs.count
+
+        var outcome = BulkTextDraftService.ImportOutcome()
+        var remaining = jobs[...]
+        while !remaining.isEmpty, !stopRequested {
+            // Weverse sales go 25 to a call (the bulk importer); AliExpress one by one.
+            let batch: [BulkTextDraftService.ImportJob]
+            let result: BulkTextDraftService.ImportOutcome
+            if ImportLinkRouter.isWeverseSale(remaining.first!.url) {
+                batch = Array(remaining.prefix { ImportLinkRouter.isWeverseSale($0.url) }.prefix(25))
+                status.step = "Importing from Weverse…"
+                status.detail = "\(batch.count) item\(batch.count == 1 ? "" : "s")"
+                report()
+                result = await service.importWeverseSales(batch)
+            } else {
+                batch = [remaining.first!]
+                status.step = "Importing from AliExpress…"
+                report()
+                result = await service.importOne(batch[0])
+            }
+            remaining = remaining.dropFirst(batch.count)
+            outcome.alreadyImported += result.alreadyImported
+            outcome.failures += result.failures
+
+            // Download each new product into a phone draft (its doc id is our UUID, so
+            // it is tagged Phone), the same way a PC draft is opened.
+            for productId in result.created {
+                status.step = "Downloading photos…"
+                report()
+                if let item = await uploadManager.adoptProduct(productId: productId, modelContext: modelContext) {
+                    createdItems.append(item)
+                    status.created = createdItems.count
+                    report()
+                }
+            }
+        }
+
+        summary.created = createdItems.count
+        if outcome.alreadyImported > 0 {
+            summary.importLines.append(outcome.alreadyImported == 1
+                ? "1 link was already imported, so no new draft was made for it."
+                : "\(outcome.alreadyImported) links were already imported, so no new drafts were made for them.")
+        }
+        for failure in outcome.failures.prefix(5) {
+            summary.importLines.append("\(failure.url) could not be imported: \(failure.reason.trimmingCharacters(in: CharacterSet(charactersIn: ". "))).")
+        }
+        if outcome.failures.count > 5 { summary.importLines.append("\(outcome.failures.count - 5) more could not be imported.") }
+        if shopUrl != nil, !createdItems.isEmpty {
+            summary.importLines.append("Shipping estimates are not run from the phone; the web's shop preview does that.")
+        }
+        // Stopped: the links not tried yet go back in the editor (a shop page as its sale links).
+        let leftoverUrls = remaining.map(\.url) + outcome.failures.map(\.url).filter { $0.hasPrefix("http") }
+        summary.leftover = leftoverUrls.count
+        if stopRequested, !remaining.isEmpty { summary.note = "Stopped." }
+        finishImport(summary: summary, leftover: leftoverUrls.joined(separator: "\n"), failure: nil)
+    }
+
+    private func finishImport(summary: Summary, leftover: String, failure: String?) {
+        if createdItems.isEmpty {
+            pendingText = textBeforeRun
+            let message = failure ?? summary.importLines.first ?? (stopRequested ? nil : "Nothing was imported.")
+            errorMessage = message
+            phase = .input
+            if let message, !stopRequested {
+                AppTaskQueue.shared.update(id: taskId, label: "Couldn't import", detail: message, isError: true)
+            } else {
+                AppTaskQueue.shared.dismiss(id: taskId)
+            }
+            return
+        }
+        pendingText = leftover
+        phase = .finished(summary)
+        AppTaskQueue.shared.update(
+            id: taskId,
+            label: summary.created == 1 ? "1 draft created" : "\(summary.created) drafts created",
+            detail: summary.leftover > 0 ? "\(summary.leftover) not imported — still in the editor" : nil,
             progress: 1
         )
         AppTaskQueue.shared.complete(id: taskId)

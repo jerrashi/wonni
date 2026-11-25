@@ -171,7 +171,9 @@ class ProductRepository: ObservableObject {
             .whereField("isDraft", isEqualTo: true)
             .getDocuments()
         return snap.documents
-            .filter { ($0.data()["source"] as? String) != "ios" }
+            // Made on the web = not an iOS UUID id (DraftOrigin, PCDrafts.swift). The id,
+            // not `source`, because the old iOS sync overwrote `source` on edited PC drafts.
+            .filter { DraftOrigin.isMadeOnPC(productId: $0.documentID) }
             .map { (id: $0.documentID, data: $0.data()) }
     }
 

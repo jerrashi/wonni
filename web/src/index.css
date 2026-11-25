@@ -2557,3 +2557,34 @@ select.input { appearance: auto; }
   font-weight: 600;
 }
 
+
+/* ── Phone / PC drafts + Rows view (2026-11-25) ─────────────────────────────
+   .draft-tile mirrors the iOS Drafts row: title, price under it, photo strip. */
+.view-controls { display: flex; align-items: center; gap: 10px; margin-left: auto; flex-wrap: wrap; }
+.view-controls .btn.active { background: var(--primary); color: var(--on-primary); }
+.origin-tag {
+  display: inline-flex; align-items: center; gap: 3px; flex: none; white-space: nowrap;
+  font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 6px;
+}
+.origin-tag.phone { background: var(--success-tint); color: var(--success); }
+.origin-tag.pc { background: var(--primary-light); color: var(--primary); }
+.origin-tag.wait { background: var(--warning-tint); color: var(--warning); }
+.product-card-origin { position: absolute; top: 34px; left: 8px; }
+.product-card-origin .origin-tag { background: var(--surface); }
+.draft-tile-list {
+  display: grid; gap: 10px; margin-top: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+}
+.draft-tile {
+  background: var(--surface); border: 0; border-radius: 14px; padding: 10px; display: grid; gap: 4px;
+  text-align: left; color: inherit; font: inherit; cursor: pointer; min-width: 0; width: 100%;
+}
+.draft-tile.selected { box-shadow: 0 0 0 2px var(--primary); }
+.draft-tile-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.draft-tile-title { flex: 1; min-width: 0; font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.draft-tile-price { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.draft-tile-strip { display: flex; gap: 6px; overflow: hidden; }
+.draft-tile-strip img { width: 58px; height: 58px; border-radius: 8px; object-fit: cover; flex: none; background: var(--fill); }
+.draft-tile-empty { height: 58px; display: flex; align-items: center; font-size: 13px; color: var(--muted); }
+.select-circle.inline { position: static; flex: none; width: 20px; height: 20px; border-color: var(--border); background: transparent; }
+.select-circle.inline.on { background: var(--primary); border-color: var(--primary); }

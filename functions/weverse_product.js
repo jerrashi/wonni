@@ -6,6 +6,7 @@ const { geminiApiKey } = require("./gemini_identify");
 const { buildNewProductDoc, extractSourceImages } = require("./product_schema");
 const { findPossibleDuplicates } = require("./weverse_duplicate_detection");
 const { maybeApplyCrossPostRulesAfterImport } = require("./cross_post");
+const { newProductRef, madeOnFields } = require("./client_product_id");
 
 const MAX_IMAGES = 24;
 const USER_AGENT =
@@ -353,7 +354,8 @@ exports.weverseImportProduct = onCall(
 
     // AI enrichment is opt-in now (see "AI autofill" / post-time gap-fill).
 
-    const docRef = db.collection("products").doc();
+    // iOS passes its own UUID so a phone import is a phone draft (client_product_id.js).
+    const { ref: docRef, madeOn } = await newProductRef(db, request.data?.productId);
 
     // Build new schema product
     const newProduct = buildNewProductDoc({
@@ -387,7 +389,7 @@ exports.weverseImportProduct = onCall(
       newProduct.possibleDuplicateOf = possibleDuplicates.map((m) => m.productId);
     }
 
-    await docRef.set(newProduct);
+    await docRef.set({ ...newProduct, ...madeOnFields(madeOn) });
 
     // Rule-based cross-posting: automatic, best-effort, never blocks the
     // import — and only runs at all when this user has configured at least

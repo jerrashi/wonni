@@ -603,3 +603,126 @@ final class BulkTextDraftService {
         }
     }
 }
+
+
+// MARK: - Links the web sends to its own importers (2026-11-25)
+
+/// Same routing as the web import box (web/src/pages/Dashboard.jsx ImportBar), so a link
+/// does the same thing on both: a lone Weverse shop / artist-section link imports every
+/// item on that page; text that is ONLY Weverse sale / AliExpress item links goes to
+/// those importers (variants, duplicate checks); anything else — plain text, other
+/// links, or a mix — goes to textToListings as before. The web previews a shop page
+/// before importing; iOS imports it straight from the text (user: "text only").
+enum ImportLinkRouter {
+    enum Route: Equatable {
+        case text
+        case weverseShop(String)
+        case importerLinks([String])
+    }
+
+    static func isURLLine(_ line: String) -> Bool {
+        line.range(of: #"^https?://\S+$"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    static func isWeverseSale(_ url: String) -> Bool {
+        url.contains("shop.weverse.io") && url.range(of: #"/sales/\d+"#, options: .regularExpression) != nil
+    }
+
+    static func isAliexpressItem(_ url: String) -> Bool {
+        url.range(of: #"aliexpress\.(com|us|ru)/"#, options: [.regularExpression, .caseInsensitive]) != nil
+            && (url.range(of: #"/item/\d+"#, options: .regularExpression) != nil
+                || url.range(of: #"[?&]id=\d+"#, options: .regularExpression) != nil)
+    }
+
+    static func route(_ text: String) -> Route {
+        let lines = text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return .text }
+        if lines.count == 1, isURLLine(lines[0]), lines[0].contains("shop.weverse.io"), !isWeverseSale(lines[0]) {
+            return .weverseShop(lines[0])
+        }
+        if lines.allSatisfy({ isURLLine($0) && (isWeverseSale($0) || isAliexpressItem($0)) }) {
+            return .importerLinks(lines)
+        }
+        return .text
+    }
+}
+
+extension BulkTextDraftService {
+    /// One link handed to a server importer, with the UUID its product is created under
+    /// (a phone import is a phone draft: functions/client_product_id.js).
+    struct ImportJob: Equatable {
+        let url: String
+        let productId: String
+        var saleId: String? = nil
+        var title: String? = nil
+    }
+
+    struct ImportOutcome {
+        /// Products this run created, in order (all under the jobs' own UUIDs).
+        var created: [String] = []
+        /// Links this account had already imported; nothing new was made for them.
+        var alreadyImported = 0
+        var failures: [(url: String, reason: String)] = []
+    }
+
+    /// The items on a Weverse shop / artist-section page (max 100, server-side cap).
+    func weverseShopItems(_ shopUrl: String) async throws -> [ImportJob] {
+        let callable = Functions.functions().httpsCallable("weverseShopPreview")
+        callable.timeoutInterval = 90
+        let raw = try await callable.call(["shopUrl": shopUrl]).data
+        let items = ((raw as? [String: Any])?["items"] as? [[String: Any]]) ?? []
+        return items.compactMap { item in
+            guard let url = item["productUrl"] as? String else { return nil }
+            return ImportJob(url: url, productId: UUID().uuidString,
+                             saleId: (item["saleId"] as? String) ?? (item["saleId"] as? NSNumber)?.stringValue,
+                             title: item["title"] as? String)
+        }
+    }
+
+    /// Weverse sale links, 25 per call (the importer's limit).
+    func importWeverseSales(_ jobs: [ImportJob]) async -> ImportOutcome {
+        var outcome = ImportOutcome()
+        let callable = Functions.functions().httpsCallable("weverseBulkImportProducts")
+        callable.timeoutInterval = 300
+        do {
+            let raw = try await callable.call(["items": jobs.map { job -> [String: Any] in
+                var item: [String: Any] = ["productUrl": job.url, "productId": job.productId]
+                if let saleId = job.saleId { item["saleId"] = saleId }
+                if let title = job.title { item["title"] = title }
+                return item
+            }]).data as? [String: Any] ?? [:]
+            let made = Set((raw["productIds"] as? [String]) ?? [])
+            outcome.created = jobs.map(\.productId).filter { made.contains($0) }
+            outcome.alreadyImported = (raw["existingCount"] as? Int) ?? 0
+            for error in (raw["errors"] as? [[String: Any]]) ?? [] {
+                outcome.failures.append(((error["title"] as? String) ?? "An item", (error["error"] as? String) ?? "Import failed."))
+            }
+        } catch {
+            outcome.failures = jobs.map { ($0.url, error.localizedDescription) }
+        }
+        return outcome
+    }
+
+    /// One Weverse sale or AliExpress item link.
+    func importOne(_ job: ImportJob) async -> ImportOutcome {
+        var outcome = ImportOutcome()
+        let name = ImportLinkRouter.isWeverseSale(job.url) ? "weverseImportProduct" : "aliexpressImportProduct"
+        let callable = Functions.functions().httpsCallable(name)
+        callable.timeoutInterval = 150
+        do {
+            let raw = try await callable.call(["productUrl": job.url, "productId": job.productId]).data as? [String: Any] ?? [:]
+            // A different id back means this account already had that product.
+            if let id = raw["productId"] as? String, id == job.productId {
+                outcome.created = [id]
+            } else {
+                outcome.alreadyImported = 1
+            }
+        } catch {
+            let message = (error as NSError).userInfo["NSLocalizedDescription"] as? String ?? error.localizedDescription
+            outcome.failures = [(job.url, message)]
+        }
+        return outcome
+    }
+}
