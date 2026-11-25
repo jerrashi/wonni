@@ -14,6 +14,14 @@
 				<string>wonni</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>firebase-auth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>app-1-840012373819-ios-71fe965f1296c1bd78a11e</string>
+			</array>
+		</dict>
 	</array>
 	<key>EbayClientId</key>
 	<string>$(EBAY_CLIENT_ID)</string>

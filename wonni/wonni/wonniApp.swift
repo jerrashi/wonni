@@ -8,6 +8,7 @@
 import SwiftUI
 import SwiftData
 import FirebaseCore
+import FirebaseAuth
 
 @main
 struct WonniApp: App {
@@ -34,6 +35,11 @@ struct WonniApp: App {
                 .environmentObject(bulkImportManager)
                 .environmentObject(mercariSyncManager)
                 .onOpenURL { url in
+                    // Sign in with Google (Firebase OAuthProvider) returns through the
+                    // app-1-…-ios-… scheme in Info.plist (GOOGLE_APP_ID with ":" → "-").
+                    // Without that scheme Firebase fatalError()s the moment the button is
+                    // tapped; without this hand-off the sign-in never completes.
+                    if Auth.auth().canHandle(url) { return }
                     print("[wonniApp] onOpenURL received URL: \(url.absoluteString)")
                     guard url.scheme == "wonni" else {
                         print("[wonniApp] onOpenURL ignored (scheme is not wonni)")

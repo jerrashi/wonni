@@ -901,7 +901,10 @@ struct EditProfileSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isSaving = false
     @State private var selectedPhotoItem: PhotosPickerItem?
-    
+    // Save used to only print() its error and leave the sheet open, so a refused
+    // username looked like nothing happened.
+    @State private var saveError: String?
+
     var body: some View {
         NavigationStack {
             Form {
@@ -950,6 +953,13 @@ struct EditProfileSheet: View {
             }
             .navigationTitle("Edit Profile")
             .navigationBarTitleDisplayMode(.inline)
+            .alert("Couldn't save profile", isPresented: Binding(
+                get: { saveError != nil }, set: { if !$0 { saveError = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(saveError ?? "")
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -1006,6 +1016,11 @@ struct EditProfileSheet: View {
             dismiss()
         } catch {
             print("Failed to update profile: \(error)")
+            // The usernames rule refuses a name someone else already holds.
+            let ns = error as NSError
+            saveError = ns.domain == "FIRFirestoreErrorDomain" && ns.code == 7
+                ? "That username is taken. Try another one."
+                : error.localizedDescription
         }
     }
 }
