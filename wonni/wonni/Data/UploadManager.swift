@@ -1106,6 +1106,12 @@ class UploadManager: ObservableObject {
             data["source"] = "ios"
         }
         data["madeOn"] = madeOnPC ? "pc" : "phone"
+        // When the draft was made: the web's products list sorts on it (newest first).
+        // Phone drafts never wrote it before 2026-11-25. A PC draft or an import keeps
+        // the server's own value (its local createdAt is only the download time).
+        if !madeOnPC, draft.importSource == nil {
+            data["importedAt"] = Timestamp(date: draft.createdAt)
+        }
         data["isDraft"] = isDraftOverride ?? draft.isDraft
         data["title"] = draft.userEditedTitle ?? draft.aiSuggestedTitle
         data["description"] = draft.userEditedDescription ?? draft.aiSuggestedDescription

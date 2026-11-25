@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { collection, doc, deleteDoc, query, where, orderBy, onSnapshot, updateDoc, serverTimestamp } from "firebase/firestore";
+import { collection, doc, deleteDoc, query, where, onSnapshot, updateDoc, serverTimestamp } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import { db, callFunction } from "../firebase";
 import { auth } from "../firebase";
@@ -21,6 +21,18 @@ import { madeOn, isWaitingForAI, visibleProducts } from "../lib/draftOrigin";
 function OriginTag({ product }) {
   const phone = madeOn(product) === "phone";
   return <span className={`origin-tag ${phone ? "phone" : "pc"}`}>{phone ? "📱 Phone" : "🖥 PC"}</span>;
+}
+
+// When a product was added, in ms. `importedAt` is a Timestamp on most docs, an ISO
+// string on a few July imports, and missing on older phone drafts and listings, which
+// fall back to createdAt, then updatedAt (last edit, the closest thing they have).
+function addedAtMillis(p) {
+  for (const v of [p.importedAt, p.createdAt, p.updatedAt]) {
+    if (v == null) continue;
+    const ms = typeof v.toMillis === "function" ? v.toMillis() : new Date(v).getTime();
+    if (Number.isFinite(ms)) return ms;
+  }
+  return 0;
 }
 
 const VIEW_KEY = "wonni.productsView"; // "tiles" (default, square cards) | "rows"
@@ -572,15 +584,16 @@ export default function Dashboard() {
     }
     setLoading(true);
     setError("");
-    const q = query(
-      collection(db, "products"),
-      where("userId", "==", uid),
-      orderBy("importedAt", "desc")
-    );
+    // No orderBy: Firestore drops every doc that lacks the field (341 of 438 had no
+    // importedAt on 2026-11-25, phone drafts included), and sorts string dates ahead of
+    // timestamps. Sort here instead, newest added first.
+    const q = query(collection(db, "products"), where("userId", "==", uid));
     return onSnapshot(
       q,
       (snap) => {
-        setProducts(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        rows.sort((a, b) => addedAtMillis(b) - addedAtMillis(a));
+        setProducts(rows);
         setLoading(false);
       },
       (err) => {
