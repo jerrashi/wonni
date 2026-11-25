@@ -183,10 +183,12 @@ struct BulkTextDraftsSheet: View {
 
     private func finishedView(_ summary: BulkTextDraftRunner.Summary) -> some View {
         VStack(spacing: 16) {
-            Image(systemName: summary.leftover > 0 || summary.note != nil ? "checkmark.circle" : "checkmark.circle.fill")
+            Image(systemName: summary.created == 0 ? "exclamationmark.triangle"
+                  : summary.leftover > 0 || summary.note != nil ? "checkmark.circle" : "checkmark.circle.fill")
                 .font(.system(size: 56))
-                .foregroundStyle(.green)
-            Text(summary.created == 1 ? "1 draft created" : "\(summary.created) drafts created")
+                .foregroundStyle(summary.created == 0 ? .orange : .green)
+            Text(summary.created == 0 ? "Nothing was imported"
+                 : summary.created == 1 ? "1 draft created" : "\(summary.created) drafts created")
                 .font(.title3.weight(.semibold))
 
             VStack(spacing: 6) {
@@ -265,9 +267,11 @@ struct BulkTextDraftsSheet: View {
                     dismiss()
                 }
             }
-            Button("Undo", role: .destructive) { showUndoConfirm = true }
-                .font(.footnote)
-                .accessibilityIdentifier("bulkTextDraftsUndo")
+            if summary.created > 0 {
+                Button("Undo", role: .destructive) { showUndoConfirm = true }
+                    .font(.footnote)
+                    .accessibilityIdentifier("bulkTextDraftsUndo")
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -276,7 +280,7 @@ struct BulkTextDraftsSheet: View {
     /// at the end, never mid-run). The drafts already made stay in every case.
     /// - Retry: only the failed links, now.
     /// - Continue: drop the failed links and carry on with whatever else is still in
-    ///   the editor (nothing else left = just close).
+    ///   the editor (nothing else left = just close). Hidden when nothing was imported.
     /// - Cancel: close; everything not converted, failed links included, stays in the editor.
     @ViewBuilder
     private func failedImportActions(_ summary: BulkTextDraftRunner.Summary) -> some View {
@@ -298,22 +302,25 @@ struct BulkTextDraftsSheet: View {
             .buttonStyle(.borderedProminent)
             .accessibilityIdentifier("bulkTextDraftsRetry")
 
-            Button {
-                text = rest
-                if rest.isEmpty {
-                    runner.acknowledge()
-                    dismiss()
-                } else {
-                    startRun(continuing: true)
+            // Nothing imported = nothing to continue from: Retry or Cancel only.
+            if summary.created > 0 {
+                Button {
+                    text = rest
+                    if rest.isEmpty {
+                        runner.acknowledge()
+                        dismiss()
+                    } else {
+                        startRun(continuing: true)
+                    }
+                } label: {
+                    Text("Continue")
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
                 }
-            } label: {
-                Text(rest.isEmpty ? "Continue without them" : "Skip them and continue")
-                    .fontWeight(.semibold)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("bulkTextDraftsContinue")
             }
-            .buttonStyle(.bordered)
-            .accessibilityIdentifier("bulkTextDraftsContinue")
 
             Button("Cancel") {
                 runner.acknowledge()

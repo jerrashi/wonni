@@ -456,6 +456,14 @@ final class BulkTextDraftRunner: ObservableObject {
     }
 
     private func finishImport(summary: Summary, leftover: String, failure: String?) {
+        // Every link failed: the finish screen, so the user can Retry or Cancel.
+        if createdItems.isEmpty, !summary.failedUrls.isEmpty, !stopRequested {
+            pendingText = leftover
+            phase = .finished(summary)
+            AppTaskQueue.shared.update(id: taskId, label: "Couldn't import",
+                                       detail: summary.importLines.first, isError: true)
+            return
+        }
         if createdItems.isEmpty {
             pendingText = textBeforeRun
             let message = failure ?? summary.importLines.first ?? (stopRequested ? nil : "Nothing was imported.")
