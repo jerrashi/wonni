@@ -229,15 +229,13 @@ struct BulkTextDraftsSheet: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
 
-            if !text.isEmpty {
+            if !summary.failedUrls.isEmpty {
+                failedImportActions(summary)
+            } else if !text.isEmpty {
                 Button {
                     startRun(continuing: true)
                 } label: {
-                    // Failed importer links are in the editor, so a retry is the same
-                    // run as "continue" — the label says which one the user is getting.
-                    Text(summary.failedImports == 0 ? "Continue with the rest"
-                         : summary.leftover > summary.failedImports ? "Retry \(summary.failedImports) failed and continue"
-                         : summary.failedImports == 1 ? "Retry the failed link" : "Retry \(summary.failedImports) failed")
+                    Text("Continue with the rest")
                         .fontWeight(.semibold)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
@@ -246,7 +244,7 @@ struct BulkTextDraftsSheet: View {
                 .padding(.horizontal, 32)
                 .accessibilityIdentifier("bulkTextDraftsContinue")
             }
-            if offersOpenDrafts {
+            if summary.failedUrls.isEmpty, offersOpenDrafts {
                 Button {
                     uploadManager.openDraftsOverview = true
                     uploadManager.selectedTab = 2
@@ -261,14 +259,68 @@ struct BulkTextDraftsSheet: View {
                 .buttonStyle(.bordered)
                 .padding(.horizontal, 32)
             }
-            Button("Done") {
-                runner.acknowledge()
-                dismiss()
+            if summary.failedUrls.isEmpty {
+                Button("Done") {
+                    runner.acknowledge()
+                    dismiss()
+                }
             }
             Button("Undo", role: .destructive) { showUndoConfirm = true }
                 .font(.footnote)
                 .accessibilityIdentifier("bulkTextDraftsUndo")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// After a run where some importer links failed (user, 2026-11-25: asked only here,
+    /// at the end, never mid-run). The drafts already made stay in every case.
+    /// - Retry: only the failed links, now.
+    /// - Continue: drop the failed links and carry on with whatever else is still in
+    ///   the editor (nothing else left = just close).
+    /// - Cancel: close; everything not converted, failed links included, stays in the editor.
+    @ViewBuilder
+    private func failedImportActions(_ summary: BulkTextDraftRunner.Summary) -> some View {
+        let failed = Set(summary.failedUrls)
+        let rest = text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !failed.contains($0) }
+            .joined(separator: "\n")
+        VStack(spacing: 10) {
+            Button {
+                text = summary.failedUrls.joined(separator: "\n")
+                startRun(continuing: true)
+            } label: {
+                Text(summary.failedUrls.count == 1 ? "Retry the failed link" : "Retry \(summary.failedUrls.count) failed")
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("bulkTextDraftsRetry")
+
+            Button {
+                text = rest
+                if rest.isEmpty {
+                    runner.acknowledge()
+                    dismiss()
+                } else {
+                    startRun(continuing: true)
+                }
+            } label: {
+                Text(rest.isEmpty ? "Continue without them" : "Skip them and continue")
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("bulkTextDraftsContinue")
+
+            Button("Cancel") {
+                runner.acknowledge()
+                dismiss()
+            }
+            .accessibilityIdentifier("bulkTextDraftsCancel")
+        }
+        .padding(.horizontal, 32)
     }
 }

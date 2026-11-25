@@ -43,8 +43,10 @@ final class BulkTextDraftRunner: ObservableObject {
         var links: [LinkOutcome] = []
         /// Finish-screen lines for links that went to the Weverse / AliExpress importers.
         var importLines: [String] = []
-        /// Importer links that failed; they are in the editor and "Retry" re-runs them.
-        var failedImports = 0
+        /// Importer links that failed (also in the editor). The finish screen then offers
+        /// Retry (just these) · Continue (skip them, carry on with the rest) · Cancel.
+        var failedUrls: [String] = []
+        var failedImports: Int { failedUrls.count }
     }
 
     enum Phase: Equatable {
@@ -442,7 +444,7 @@ final class BulkTextDraftRunner: ObservableObject {
                 ? "1 link could not be imported: \(entry.reason)."
                 : "\(entry.count) links could not be imported: \(entry.reason).")
         }
-        summary.failedImports = outcome.failures.filter { $0.url.hasPrefix("http") }.count
+        summary.failedUrls = outcome.failures.map(\.url).filter { $0.hasPrefix("http") }
         if shopUrl != nil, !createdItems.isEmpty {
             summary.importLines.append("Shipping estimates are not run from the phone; the web's shop preview does that.")
         }
