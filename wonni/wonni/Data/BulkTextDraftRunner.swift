@@ -43,6 +43,8 @@ final class BulkTextDraftRunner: ObservableObject {
         var links: [LinkOutcome] = []
         /// Finish-screen lines for links that went to the Weverse / AliExpress importers.
         var importLines: [String] = []
+        /// Importer links that failed; they are in the editor and "Retry" re-runs them.
+        var failedImports = 0
     }
 
     enum Phase: Equatable {
@@ -379,13 +381,14 @@ final class BulkTextDraftRunner: ObservableObject {
         status.total = jobs.count
 
         var outcome = BulkTextDraftService.ImportOutcome()
+        var downloadedExisting = 0
         var remaining = jobs[...]
         while !remaining.isEmpty, !stopRequested {
-            // Weverse sales go 25 to a call (the bulk importer); AliExpress one by one.
+            // Weverse sales go a few to a call (the bulk importer); AliExpress one by one.
             let batch: [BulkTextDraftService.ImportJob]
             let result: BulkTextDraftService.ImportOutcome
             if ImportLinkRouter.isWeverseSale(remaining.first!.url) {
-                batch = Array(remaining.prefix { ImportLinkRouter.isWeverseSale($0.url) }.prefix(25))
+                batch = Array(remaining.prefix { ImportLinkRouter.isWeverseSale($0.url) }.prefix(BulkTextDraftService.weverseBatchSize))
                 status.step = "Importing from Weverse…"
                 status.detail = "\(batch.count) item\(batch.count == 1 ? "" : "s")"
                 report()
@@ -402,11 +405,17 @@ final class BulkTextDraftRunner: ObservableObject {
 
             // Download each new product into a phone draft (its doc id is our UUID, so
             // it is tagged Phone), the same way a PC draft is opened.
-            for productId in result.created {
+            // Products the account already had: download the ones not on this phone (a
+            // retry after a dropped reply lands here — the server made them last time).
+            let onPhone = Set(((try? modelContext.fetch(FetchDescriptor<Item>())) ?? [])
+                .filter { !$0.sourceAssetIdentifiers.isEmpty }.compactMap(\.firestoreListingId))
+            let toDownload = result.created + result.existing.filter { !onPhone.contains($0) }
+            for productId in toDownload {
                 status.step = "Downloading photos…"
                 report()
                 if let item = await uploadManager.adoptProduct(productId: productId, modelContext: modelContext) {
                     createdItems.append(item)
+                    if !result.created.contains(productId) { downloadedExisting += 1 }
                     status.created = createdItems.count
                     report()
                 }
@@ -414,15 +423,26 @@ final class BulkTextDraftRunner: ObservableObject {
         }
 
         summary.created = createdItems.count
-        if outcome.alreadyImported > 0 {
-            summary.importLines.append(outcome.alreadyImported == 1
+        let alreadyHere = outcome.alreadyImported - downloadedExisting
+        if alreadyHere > 0 {
+            summary.importLines.append(alreadyHere == 1
                 ? "1 link was already imported, so no new draft was made for it."
-                : "\(outcome.alreadyImported) links were already imported, so no new drafts were made for them.")
+                : "\(alreadyHere) links were already imported, so no new drafts were made for them.")
         }
-        for failure in outcome.failures.prefix(5) {
-            summary.importLines.append("\(failure.url) could not be imported: \(failure.reason.trimmingCharacters(in: CharacterSet(charactersIn: ". "))).")
+        // One line per reason, not per link: a dropped batch used to list five truncated
+        // URLs and "20 more", with the reason cut off past the edge of the screen.
+        var reasons: [(reason: String, count: Int)] = []
+        for failure in outcome.failures {
+            let reason = failure.reason.trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+            if let i = reasons.firstIndex(where: { $0.reason == reason }) { reasons[i].count += 1 }
+            else { reasons.append((reason, 1)) }
         }
-        if outcome.failures.count > 5 { summary.importLines.append("\(outcome.failures.count - 5) more could not be imported.") }
+        for entry in reasons {
+            summary.importLines.append(entry.count == 1
+                ? "1 link could not be imported: \(entry.reason)."
+                : "\(entry.count) links could not be imported: \(entry.reason).")
+        }
+        summary.failedImports = outcome.failures.filter { $0.url.hasPrefix("http") }.count
         if shopUrl != nil, !createdItems.isEmpty {
             summary.importLines.append("Shipping estimates are not run from the phone; the web's shop preview does that.")
         }

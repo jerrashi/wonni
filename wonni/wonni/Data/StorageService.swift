@@ -94,6 +94,21 @@ class StorageService: ObservableObject {
         "https://storage.googleapis.com/\(storage.bucket)/\(path)"
     }
 
+    /// `publicURL(forPath:)` as a URL, path percent-encoded (a space would make it nil).
+    func publicFetchURL(forPath path: String) -> URL? {
+        guard let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return nil }
+        return URL(string: "https://storage.googleapis.com/\(storage.bucket)/\(encoded)")
+    }
+
+    private nonisolated static func fetch(_ url: URL) async throws -> Data {
+        let (data, response) = try await URLSession.shared.data(from: url)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw NSError(domain: "StorageService", code: http.statusCode,
+                          userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode) fetching \(url)"])
+        }
+        return data
+    }
+
     /// Inverse of `publicURL(forPath:)` — only resolves URLs pointing at *this app's own*
     /// bucket. Returns nil for anything else (e.g. wonni_dropship's pre-merge photos,
     /// still hosted on the old `wonni-dropship` bucket) — those aren't downloadable via
@@ -149,7 +164,14 @@ class StorageService: ObservableObject {
     /// A URL `AsyncImage`/`URLSession` can load, for either stored format.
     func imageURL(forPathOrURL pathOrURL: String) async throws -> URL {
         switch photoLocation(for: pathOrURL) {
-        case .storagePath(let path): return try await storage.child(path).downloadURL()
+        case .storagePath(let path):
+            do {
+                return try await storage.child(path).downloadURL()
+            } catch {
+                // Same refusal as downloadImageData: hand back the public URL instead.
+                guard let url = publicFetchURL(forPath: path) else { throw error }
+                return url
+            }
         case .externalURL(let url):  return url
         case nil:
             throw NSError(domain: "StorageService", code: 400,
@@ -161,14 +183,18 @@ class StorageService: ObservableObject {
     func downloadImageData(path pathOrURL: String, maxSize: Int64 = 10 * 1024 * 1024) async throws -> Data {
         switch photoLocation(for: pathOrURL) {
         case .storagePath(let path):
-            return try await storage.child(path).data(maxSize: maxSize)
-        case .externalURL(let url):
-            let (data, response) = try await URLSession.shared.data(from: url)
-            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                throw NSError(domain: "StorageService", code: http.statusCode,
-                              userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode) fetching \(url)"])
+            do {
+                return try await storage.child(path).data(maxSize: maxSize)
+            } catch {
+                // The SDK goes through Storage rules; the live rules have no `dropship/`
+                // block (web imports, Weverse/AliExpress photos), so every such read is
+                // refused (-13021) even though the object itself is public. Fall back to
+                // the public URL, which is how the web shows the same photo.
+                guard let url = publicFetchURL(forPath: path) else { throw error }
+                return try await Self.fetch(url)
             }
-            return data
+        case .externalURL(let url):
+            return try await Self.fetch(url)
         case nil:
             throw NSError(domain: "StorageService", code: 400,
                           userInfo: [NSLocalizedDescriptionKey: "Empty photo path"])

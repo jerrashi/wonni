@@ -664,7 +664,30 @@ extension BulkTextDraftService {
         var created: [String] = []
         /// Links this account had already imported; nothing new was made for them.
         var alreadyImported = 0
+        /// Products this account already had for the links (downloaded as drafts when
+        /// they aren't on the phone yet, e.g. on a retry after a dropped connection).
+        var existing: [String] = []
         var failures: [(url: String, reason: String)] = []
+    }
+
+    /// Batch size for weverseBulkImportProducts. The server takes 25, but 25 takes ~90 s,
+    /// and on cellular (2026-11-25, SoftBank 4G) the phone lost the reply to an 88 s call
+    /// the server finished — 25 drafts made, all 25 reported failed. 5 is ~20 s a call
+    /// and the progress moves while it runs.
+    static let weverseBatchSize = 5
+
+    /// Which of these product ids exist on the server. After a call fails on the phone the
+    /// server may still have finished it, and since every import is created under the
+    /// phone's own UUID, the products tell us what actually happened.
+    func existingProductIds(_ ids: [String]) async -> Set<String> {
+        await withTaskGroup(of: String?.self) { group in
+            for id in ids {
+                group.addTask { (try? await ProductRepository.shared.fetchProduct(productId: id)) != nil ? id : nil }
+            }
+            var found = Set<String>()
+            for await id in group { if let id { found.insert(id) } }
+            return found
+        }
     }
 
     /// The items on a Weverse shop / artist-section page (max 100, server-side cap).
@@ -696,13 +719,27 @@ extension BulkTextDraftService {
             let made = Set((raw["productIds"] as? [String]) ?? [])
             outcome.created = jobs.map(\.productId).filter { made.contains($0) }
             outcome.alreadyImported = (raw["existingCount"] as? Int) ?? 0
+            outcome.existing = (raw["existingProductIds"] as? [String]) ?? []
             for error in (raw["errors"] as? [[String: Any]]) ?? [] {
                 outcome.failures.append(((error["title"] as? String) ?? "An item", (error["error"] as? String) ?? "Import failed."))
             }
         } catch {
-            outcome.failures = jobs.map { ($0.url, error.localizedDescription) }
+            // The reply was lost, not necessarily the work: keep what the server made.
+            let made = await existingProductIds(jobs.map(\.productId))
+            outcome.created = jobs.map(\.productId).filter { made.contains($0) }
+            outcome.failures = jobs.filter { !made.contains($0.productId) }
+                .map { ($0.url, Self.readableReason(error)) }
         }
         return outcome
+    }
+
+    static func readableReason(_ error: Error) -> String {
+        let ns = error as NSError
+        // URL-level drops, or the Functions SDK's deadline-exceeded (code 4).
+        if ns.domain == NSURLErrorDomain || (ns.domain == FunctionsErrorDomain && ns.code == FunctionsErrorCode.deadlineExceeded.rawValue) {
+            return "The connection dropped before Weverse answered"
+        }
+        return ns.userInfo["NSLocalizedDescription"] as? String ?? error.localizedDescription
     }
 
     /// One Weverse sale or AliExpress item link.
@@ -718,10 +755,14 @@ extension BulkTextDraftService {
                 outcome.created = [id]
             } else {
                 outcome.alreadyImported = 1
+                if let id = raw["productId"] as? String { outcome.existing = [id] }
             }
         } catch {
-            let message = (error as NSError).userInfo["NSLocalizedDescription"] as? String ?? error.localizedDescription
-            outcome.failures = [(job.url, message)]
+            if await !existingProductIds([job.productId]).isEmpty {
+                outcome.created = [job.productId]
+            } else {
+                outcome.failures = [(job.url, Self.readableReason(error))]
+            }
         }
         return outcome
     }

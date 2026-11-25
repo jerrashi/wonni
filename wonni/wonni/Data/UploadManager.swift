@@ -1226,9 +1226,15 @@ class UploadManager: ObservableObject {
     func adoptProduct(productId: String, modelContext: ModelContext) async -> Item? {
         guard let data = try? await ProductRepository.shared.fetchProduct(productId: productId) else { return nil }
 
-        let draft = Item(firestoreListingId: productId)
+        // Reuse a local copy if there is one. Downloads used to always insert a new Item,
+        // and until 2026-11-25 every photo under dropship/ (web + Weverse/AliExpress
+        // imports) failed to download, so a reopened PC draft left behind a photo-less
+        // Item that hid it from both the drafts list and the PC list.
+        let existing = (try? modelContext.fetch(FetchDescriptor<Item>()))?
+            .first { $0.firestoreListingId == productId && $0.publishedAt == nil }
+        let draft = existing ?? Item(firestoreListingId: productId)
         if let source = data["source"] as? String, source != "ios" { draft.importSource = source }
-        modelContext.insert(draft)
+        if existing == nil { modelContext.insert(draft) }
         await applyRemoteProductFields(data, to: draft)
         // Remote's own updatedAt if present, else "now" — either way this becomes the
         // baseline pullProductIfNewer/syncProductData compare against from this point on.

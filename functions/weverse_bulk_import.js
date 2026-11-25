@@ -59,6 +59,12 @@ exports.weverseBulkImportProducts = onCall(
     const existingSaleIds = new Set(
       existingSnap.docs.map((doc) => doc.data().weverseSaleId).filter(Boolean)
     );
+    // saleId -> the product that already has it, so a client can open that product
+    // instead of being told only "already imported" (iOS downloads it as a draft when
+    // it isn't on the phone — e.g. a retry after a dropped connection, 2026-11-25).
+    const existingDocBySale = new Map(
+      existingSnap.docs.filter((doc) => doc.data().weverseSaleId).map((doc) => [doc.data().weverseSaleId, doc.id])
+    );
 
     // Fuzzy repost/duplicate check (second layer, on top of the exact
     // saleId check above): fetched ONCE up front, same as existingSaleIds,
@@ -77,6 +83,7 @@ exports.weverseBulkImportProducts = onCall(
     const importedProductIds = [];
     const importedSaleIds = [];
     const existingProductIds = [];
+    const existingDocIds = [];
     const errors = [];
 
     // Resolve per-item-type shipping cost UP FRONT, before any concurrent
@@ -129,6 +136,7 @@ exports.weverseBulkImportProducts = onCall(
 
             if (existingSaleIds.has(saleId)) {
               existingProductIds.push(saleId);
+              if (existingDocBySale.has(saleId)) existingDocIds.push(existingDocBySale.get(saleId));
               return;
             }
             // Claim the saleId synchronously (before any await) so a duplicate
@@ -243,6 +251,7 @@ exports.weverseBulkImportProducts = onCall(
       productIds: importedProductIds,
       importedSaleIds,
       existingSaleIds: existingProductIds,
+      existingProductIds: existingDocIds,
       errors,
     };
   }

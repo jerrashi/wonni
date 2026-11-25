@@ -75,7 +75,10 @@ struct DraftsView: View {
     /// PC drafts not downloaded to this phone yet (network rows with a cloud).
     private var cloudDrafts: [(id: String, data: [String: Any])] {
         guard pcOnly || showPcDrafts else { return [] }
-        let local = Set(allItems.compactMap(\.firestoreListingId))
+        // A local copy with no photos is hidden from the list above, so it must not
+        // hide the cloud row either (photo-less copies were left by downloads that
+        // couldn't read dropship/ photos before 2026-11-25).
+        let local = Set(allItems.filter { !$0.sourceAssetIdentifiers.isEmpty }.compactMap(\.firestoreListingId))
         let ids = Set(DraftOrigin.cloudOnly(remoteIds: remotePcDrafts.map(\.id), localProductIds: local))
         return remotePcDrafts.filter { ids.contains($0.id) }
     }
@@ -402,7 +405,24 @@ struct DraftsView: View {
 
     // MARK: - PC drafts
 
+    /// Downloaded drafts whose photos never arrived (see `cloudDrafts`): fetch them again,
+    /// so they show up in the list instead of staying invisible. Once per launch.
+    @MainActor private static var repairedThisLaunch = false
+    private func repairPhotolessDownloads() async {
+        guard !Self.repairedThisLaunch else { return }
+        Self.repairedThisLaunch = true
+        let broken = allItems.filter {
+            $0.sourceAssetIdentifiers.isEmpty && $0.publishedAt == nil && !$0.pendingPublish
+                && ($0.firestoreListingId ?? "").isEmpty == false
+        }
+        for item in broken {
+            guard let productId = item.firestoreListingId else { continue }
+            _ = await uploadManager.adoptProduct(productId: productId, modelContext: modelContext)
+        }
+    }
+
     private func loadPcDrafts() async {
+        await repairPhotolessDownloads()
         showPcDrafts = await DraftsSettings.loadShowPcDrafts()
         guard pcOnly || showPcDrafts, let uid = Auth.auth().currentUser?.uid else { return }
         if let remote = try? await ProductRepository.shared.fetchDesktopDrafts(userId: uid) {

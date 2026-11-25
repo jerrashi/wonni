@@ -220,6 +220,7 @@ struct BulkTextDraftsSheet: View {
             }
             .font(.footnote)
             .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true) // wrap, never "…" (reasons were cut off)
             .padding(.horizontal, 32)
 
             Text("Photos are uploading in the background. Edit or delete any draft in your drafts.")
@@ -232,7 +233,11 @@ struct BulkTextDraftsSheet: View {
                 Button {
                     startRun(continuing: true)
                 } label: {
-                    Text("Continue with the rest")
+                    // Failed importer links are in the editor, so a retry is the same
+                    // run as "continue" — the label says which one the user is getting.
+                    Text(summary.failedImports == 0 ? "Continue with the rest"
+                         : summary.leftover > summary.failedImports ? "Retry \(summary.failedImports) failed and continue"
+                         : summary.failedImports == 1 ? "Retry the failed link" : "Retry \(summary.failedImports) failed")
                         .fontWeight(.semibold)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
