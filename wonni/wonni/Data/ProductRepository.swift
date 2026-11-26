@@ -116,6 +116,12 @@ class ProductRepository: ObservableObject {
     /// single Swift `Codable` model exists for the WHOLE doc yet (title, pricing, images,
     /// source-specific fields, etc. are all still loose dict access — see
     /// `fetchProductVariants` below for the one part of the doc that IS typed).
+    /// Hard-deletes products/{id}. Only for drafts: a live listing must go through the
+    /// platform deletes first (web `deleteProductEverywhere`).
+    func deleteProduct(productId: String) async throws {
+        try await db.collection(productsCollection).document(productId).delete()
+    }
+
     func fetchProduct(productId: String) async throws -> [String: Any]? {
         let snap = try await db.collection(productsCollection).document(productId).getDocument()
         return snap.data()

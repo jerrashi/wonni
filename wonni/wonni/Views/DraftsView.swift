@@ -83,6 +83,7 @@ struct DraftsView: View {
         // couldn't read dropship/ photos before 2026-11-25).
         let local = Set(allItems.filter { !$0.sourceAssetIdentifiers.isEmpty }.compactMap(\.firestoreListingId))
         let ids = Set(DraftOrigin.cloudOnly(remoteIds: remotePcDrafts.map(\.id), localProductIds: local))
+            .subtracting(uploadManager.hiddenCloudDraftIDs)
         return remotePcDrafts.filter { ids.contains($0.id) }
     }
 
@@ -125,6 +126,11 @@ struct DraftsView: View {
             } else {
                 draftList
             }
+        }
+        .overlay(alignment: .bottom) {
+            CloudDraftDeletedToast()
+                .padding(.bottom, 12)
+                .animation(.easeOut(duration: 0.2), value: uploadManager.pendingCloudDelete)
         }
         .bottomActionBar { bottomLeading } trailing: { processButton }
         .navigationTitle(pcOnly ? "PC drafts" : "Drafts")
@@ -217,11 +223,25 @@ struct DraftsView: View {
                     .id(draft.id)
                     .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
                     .listRowSeparator(.hidden)
-                }
-                .onDelete { offsets in
-                    guard !isSelectMode else { return }
-                    for offset in offsets {
-                        uploadManager.deleteDraftLocallyAndCloud(draft: drafts[offset], modelContext: modelContext)
+                    // A downloaded PC draft swipes off this phone only; it is still on the
+                    // PC and comes back as a cloud row (user, 2026-11-26).
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        if !isSelectMode {
+                            if draft.isMadeOnPC {
+                                Button(role: .destructive) {
+                                    uploadManager.removeLocalCopy(draft: draft, modelContext: modelContext)
+                                } label: {
+                                    Label("Remove", systemImage: "iphone.slash")
+                                }
+                                .accessibilityIdentifier("draftRemoveLocalCopyButton")
+                            } else {
+                                Button(role: .destructive) {
+                                    uploadManager.deleteDraftLocallyAndCloud(draft: draft, modelContext: modelContext)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
                     }
                 }
                 ForEach(cloudDrafts, id: \.id) { remote in
@@ -240,6 +260,23 @@ struct DraftsView: View {
                     }
                     .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
                     .listRowSeparator(.hidden)
+                    // Deletes it from the cloud, so from the PC and every phone, after a
+                    // 5 s Undo window (user, 2026-11-26).
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        if !isSelectMode {
+                            Button(role: .destructive) {
+                                selectedCloud.remove(remote.id)
+                                uploadManager.deleteCloudDraftWithUndo(
+                                    productId: remote.id,
+                                    title: (remote.data["title"] as? String) ?? "",
+                                    modelContext: modelContext
+                                )
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                            .accessibilityIdentifier("cloudDraftDeleteButton")
+                        }
+                    }
                 }
             }
             .listStyle(.plain)

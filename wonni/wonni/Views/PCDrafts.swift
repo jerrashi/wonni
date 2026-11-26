@@ -79,6 +79,48 @@ struct DraftOriginTag: View {
 
 /// A PC draft that isn't on this phone yet, laid out like `DraftCard` (title, price
 /// under it, 80 pt photo strip, plain list row) with a cloud on the first photo. Tap → download → Edit.
+/// "Deleted <title> · Undo" while a swiped cloud PC draft waits out its Undo window
+/// (`UploadManager.pendingCloudDelete`). Swipe down or sideways to make it final now.
+struct CloudDraftDeletedToast: View {
+    @EnvironmentObject private var uploadManager: UploadManager
+    @Environment(\.modelContext) private var modelContext
+    @State private var dragOffset: CGSize = .zero
+
+    var body: some View {
+        if let pending = uploadManager.pendingCloudDelete {
+            HStack(spacing: 14) {
+                Text(pending.title.isEmpty ? "Draft deleted" : "Deleted \"\(pending.title)\"")
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+                Button("Undo") { uploadManager.undoCloudDelete() }
+                    .font(.subheadline.weight(.semibold))
+                    .accessibilityIdentifier("undoCloudDraftDeleteButton")
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .background(.regularMaterial, in: Capsule())
+            .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+            .padding(.horizontal, 16)
+            .offset(dragOffset)
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { value in
+                        dragOffset = CGSize(width: value.translation.width, height: max(0, value.translation.height))
+                    }
+                    .onEnded { value in
+                        if value.translation.height > 30 || abs(value.translation.width) > 60 {
+                            uploadManager.commitPendingCloudDelete(modelContext: modelContext)
+                        } else {
+                            withAnimation(.spring(response: 0.3)) { dragOffset = .zero }
+                        }
+                    }
+            )
+            .onDisappear { dragOffset = .zero }
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+}
+
 struct CloudDraftCard: View {
     let data: [String: Any]
     let showTag: Bool

@@ -554,6 +554,43 @@ class UploadManager: ObservableObject {
         let listingId = draft.firestoreListingId
         let userId = Auth.auth().currentUser?.uid
         cleanupError = nil
+        removeLocalCopy(draft: draft, modelContext: modelContext)
+
+        guard userId != nil else { return }
+
+        // Perform background cleanups if uploaded. deleteListing itself deletes Storage
+        // photos first, then the Firestore document — so a failed Storage cleanup leaves
+        // the document in place as a retry marker instead of orphaning the photos for good.
+        if let listingId = listingId {
+            Task { [weak self] in
+                print("[UploadManager] Cleaning up Cloud files for discarded draft \(listingId)")
+                do {
+                    try await ListingRepository.shared.deleteListing(id: listingId)
+                } catch {
+                    // Verbose on purpose (2026-09-29): TestFlight reported a "Delete
+                    // Failed" alert with no way to see which step actually threw or why —
+                    // StorageService/ListingRepository now log each step, this is the
+                    // final rollup with the full NSError so the next occurrence's device
+                    // console has enough to root-cause instead of just "some error".
+                    let nsError = error as NSError
+                    print("""
+                    [UploadManager] ⚠️ Cleanup failed for \(listingId):
+                      domain: \(nsError.domain)
+                      code: \(nsError.code)
+                      localizedDescription: \(nsError.localizedDescription)
+                      userInfo: \(nsError.userInfo)
+                    """)
+                    self?.cleanupError = "Couldn't fully delete this draft's photos. It may still be using storage — please try deleting it again."
+                }
+            }
+        }
+    }
+
+    /// Removes a draft from this phone only: Firestore and Storage are untouched. Swipe on
+    /// a downloaded PC draft (user, 2026-11-26) — the draft is still on the PC and comes
+    /// back as a cloud row. Same published-listing guard as `deleteDraftLocallyAndCloud`.
+    func removeLocalCopy(draft: Item, modelContext: ModelContext) {
+        guard draft.publishedAt == nil else { return }
         // Mark immediately (synchronously) so any in-flight background upload/recognition
         // Task for this draft (which may be suspended mid-`await` right now) bails out on
         // its next check instead of touching the model after it's deleted below, and so
@@ -586,33 +623,63 @@ class UploadManager: ObservableObject {
             modelContext.delete(draft)
             try? modelContext.save()
         }
+    }
 
-        guard userId != nil else { return }
+    // MARK: - Delete a PC draft everywhere, with Undo
 
-        // Perform background cleanups if uploaded. deleteListing itself deletes Storage
-        // photos first, then the Firestore document — so a failed Storage cleanup leaves
-        // the document in place as a retry marker instead of orphaning the photos for good.
-        if let listingId = listingId {
-            Task { [weak self] in
-                print("[UploadManager] Cleaning up Cloud files for discarded draft \(listingId)")
-                do {
-                    try await ListingRepository.shared.deleteListing(id: listingId)
-                } catch {
-                    // Verbose on purpose (2026-09-29): TestFlight reported a "Delete
-                    // Failed" alert with no way to see which step actually threw or why —
-                    // StorageService/ListingRepository now log each step, this is the
-                    // final rollup with the full NSError so the next occurrence's device
-                    // console has enough to root-cause instead of just "some error".
-                    let nsError = error as NSError
-                    print("""
-                    [UploadManager] ⚠️ Cleanup failed for \(listingId):
-                      domain: \(nsError.domain)
-                      code: \(nsError.code)
-                      localizedDescription: \(nsError.localizedDescription)
-                      userInfo: \(nsError.userInfo)
-                    """)
-                    self?.cleanupError = "Couldn't fully delete this draft's photos. It may still be using storage — please try deleting it again."
-                }
+    /// A cloud (not downloaded) PC draft swiped away. Nothing is deleted until the Undo
+    /// window ends (user, 2026-11-26): the row is only hidden, so Undo is just unhiding.
+    struct PendingCloudDelete: Equatable {
+        let productId: String
+        let title: String
+    }
+    @Published private(set) var pendingCloudDelete: PendingCloudDelete?
+    /// Cloud rows to leave out of the Drafts list: waiting for Undo, or already deleted.
+    @Published private(set) var hiddenCloudDraftIDs: Set<String> = []
+    private var pendingCloudDeleteTask: Task<Void, Never>?
+
+    func deleteCloudDraftWithUndo(productId: String, title: String, modelContext: ModelContext) {
+        // A previous delete still waiting for Undo is now final.
+        commitPendingCloudDelete(modelContext: modelContext)
+        hiddenCloudDraftIDs.insert(productId)
+        pendingCloudDelete = PendingCloudDelete(productId: productId, title: title)
+        pendingCloudDeleteTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.removedPhotoUndoWindow)
+            guard !Task.isCancelled else { return }
+            self?.commitPendingCloudDelete(modelContext: modelContext)
+        }
+    }
+
+    func undoCloudDelete() {
+        pendingCloudDeleteTask?.cancel()
+        guard let pending = pendingCloudDelete else { return }
+        pendingCloudDelete = nil
+        hiddenCloudDraftIDs.remove(pending.productId)
+    }
+
+    /// Deletes `products/{id}` (what the web and every phone list), then best-effort the
+    /// photos this app uploaded under users/{uid}/{id} and any legacy listings/{id}. A
+    /// photo-less local copy left by an old download goes too.
+    func commitPendingCloudDelete(modelContext: ModelContext) {
+        pendingCloudDeleteTask?.cancel()
+        guard let pending = pendingCloudDelete else { return }
+        pendingCloudDelete = nil
+        let productId = pending.productId
+        let copies = (try? modelContext.fetch(FetchDescriptor<Item>(predicate: #Predicate { $0.firestoreListingId == productId }))) ?? []
+        for copy in copies { removeLocalCopy(draft: copy, modelContext: modelContext) }
+        Task { [weak self] in
+            do {
+                try await ProductRepository.shared.deleteProduct(productId: productId)
+            } catch {
+                print("[UploadManager] Deleting PC draft \(productId) failed: \(error)")
+                self?.hiddenCloudDraftIDs.remove(productId)
+                self?.cleanupError = "Couldn't delete \"\(pending.title)\". Check your connection and try again."
+                return
+            }
+            do {
+                try await ListingRepository.shared.deleteListing(id: productId)
+            } catch {
+                print("[UploadManager] PC draft \(productId) deleted; photo cleanup failed: \(error)")
             }
         }
     }
