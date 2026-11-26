@@ -799,7 +799,8 @@ struct ProfileView: View {
         let selectedListingsArray = listings.filter { selectedListings.contains($0.id ?? "") }
         
         var webJobs: [CrossPostJob] = []
-        
+        var apiTriggers: [UploadManager.PendingAPITrigger] = []
+
         for listing in selectedListingsArray {
             guard let id = listing.id else { continue }
             
@@ -829,24 +830,17 @@ struct ProfileView: View {
                         updated.crossPostStatus = status
                         listings[index] = updated
                     }
-                    
-                    Task {
-                        do {
-                            let functions = Functions.functions()
-                            let _ = try await functions.httpsCallable("ebayCreateListing").call(["productId": id])
-                            await loadListings()
-                        } catch {
-                            print("Failed to bulk cross-post listing \(id): \(error)")
-                            await loadListings()
-                            let msg = extractCrossPostErrorMessage(error)
-                            crossPostErrorMessage = msg
-                            showCrossPostError = true
-                        }
-                    }
+                    apiTriggers.append(.init(listingId: id, title: listing.customTitle ?? "Untitled", platforms: ["ebay"]))
                 }
             }
         }
-        
+
+        // One run, one task row ("Posting to eBay · 2 of 5"); failures stay as a red
+        // row with Retry instead of one alert per listing.
+        if !apiTriggers.isEmpty {
+            uploadManager.runAPICrossPosts(apiTriggers) { await loadListings() }
+        }
+
         if !webJobs.isEmpty {
             enqueueWebJobs(webJobs)
         }

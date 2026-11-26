@@ -1229,9 +1229,13 @@ struct CrossPostStatusView: View {
     var onDone: (Bool) -> Void
 
     @State private var statuses: [String: [String: String]] = [:]   // listingId -> platform -> status
+    /// eBay / Etsy state from products/{id} — where the functions write it (and the
+    /// failure reason). The listing doc never gets it, so these rows used to sit on
+    /// "In progress…" forever with no Retry.
+    @State private var apiStatuses: [String: [String: String]] = [:]
+    @State private var apiErrors: [String: [String: String]] = [:]
     @State private var listeners: [ListenerRegistration] = []
     @State private var retryJob: CrossPostJob? = nil
-    @State private var retryingEbay: Set<String> = []
     @AppStorage("hasSeenEbayEditingNotice") private var hasSeenEbayEditingNotice = false
     @State private var showEbayNoticeAlert = false
     @EnvironmentObject private var uploadManager: UploadManager
@@ -1251,11 +1255,23 @@ struct CrossPostStatusView: View {
         }
     }
 
+    private func status(for item: CrossPostSessionItem, platform: String) -> String {
+        if platform == "wonni" { return wonniStatus(for: item) }
+        if platform == "ebay" || platform == "etsy" {
+            switch apiStatuses[item.id]?[platform] {
+            case "active", "posted": return "posted"
+            case "failed": return "failed"
+            default: return "pending"
+            }
+        }
+        return statuses[item.id]?[platform] ?? "pending"
+    }
+
     private var allResolved: Bool {
         for item in items {
             if wonniStatus(for: item) == "pending" { return false }
             for platform in item.platforms where platform != "wonni" {
-                let status = statuses[item.id]?[platform] ?? "pending"
+                let status = status(for: item, platform: platform)
                 if status == "pending" || status == "removing" { return false }
             }
         }
@@ -1311,20 +1327,7 @@ struct CrossPostStatusView: View {
         .sheet(item: $retryJob) { job in
             FacebookAutoPosterView(job: job)
         }
-        // See UploadManager.crossPostError — surfaced here (not on ProcessResultsOverviewView)
-        // because this is reliably the screen the user is on by the time an eBay/Etsy
-        // cross-post Task resolves, regardless of how quickly the previous screen dismissed.
-        // The live status badge below (via startListeners' Firestore listener) already shows
-        // "Failed" + Retry per-row from the Cloud Function's own crossPostStatus write, so this
-        // alert exists mainly to explain WHY it failed the moment it happens, once, per attempt.
-        .alert("Cross-Post Failed", isPresented: Binding(
-            get: { uploadManager.crossPostError != nil },
-            set: { if !$0 { uploadManager.crossPostError = nil } }
-        )) {
-            Button("OK", role: .cancel) { uploadManager.crossPostError = nil }
-        } message: {
-            Text(uploadManager.crossPostError ?? "")
-        }
+        // eBay / Etsy failures show their reason under the row (apiErrors), not an alert.
         // See UploadManager.photoUploadWarning — a listing can publish (and cross-post) with
         // fewer photos than selected if one silently failed every upload retry; this is the
         // first point the user finds out, rather than noticing a thin listing later.
@@ -1347,21 +1350,26 @@ struct CrossPostStatusView: View {
 
     @ViewBuilder
     private func platformRow(item: CrossPostSessionItem, platform: String) -> some View {
-        let status = platform == "wonni" ? wonniStatus(for: item) : (statuses[item.id]?[platform] ?? "pending")
+        let status = status(for: item, platform: platform)
         HStack(spacing: 12) {
             Image(systemName: platformIcon(platform))
                 .frame(width: 22)
                 .foregroundStyle(.secondary)
-            Text(platformName(platform))
-                .font(.subheadline)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(platformName(platform))
+                    .font(.subheadline)
+                if status == "failed", let reason = apiErrors[item.id]?[platform], !reason.isEmpty {
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
             Spacer()
             statusBadge(status)
             if status == "failed" {
                 Button("Retry") { retry(item: item, platform: platform) }
                     .font(.caption.weight(.semibold))
-                    .buttonStyle(.bordered)
-                    .disabled(platform == "ebay" && retryingEbay.contains(item.id))
-            }
+                    .buttonStyle(.bordered)            }
         }
     }
 
@@ -1393,11 +1401,25 @@ struct CrossPostStatusView: View {
                 guard let data = snap?.data() else { return }
                 let cpStatus = data["crossPostStatus"] as? [String: String] ?? [:]
                 statuses[item.id] = cpStatus
-                if !hasSeenEbayEditingNotice && cpStatus["ebay"] == "posted" {
+            }
+            listeners.append(reg)
+            guard item.platforms.contains(where: { $0 == "ebay" || $0 == "etsy" }) else { continue }
+            let productReg = db.collection("products").document(item.id).addSnapshotListener { snap, _ in
+                guard let data = snap?.data() else { return }
+                let status = data["crossPostStatus"] as? [String: Any] ?? [:]
+                let errors = data["crossPostErrors"] as? [String: Any] ?? [:]
+                var s: [String: String] = [:], e: [String: String] = [:]
+                for p in ["ebay", "etsy"] {
+                    if let v = status[p] as? String { s[p] = v }
+                    if let v = errors[p] as? String { e[p] = v }
+                }
+                apiStatuses[item.id] = s
+                apiErrors[item.id] = e
+                if !hasSeenEbayEditingNotice && s["ebay"] == "active" {
                     showEbayNoticeAlert = true
                 }
             }
-            listeners.append(reg)
+            listeners.append(productReg)
         }
     }
 
@@ -1412,11 +1434,9 @@ struct CrossPostStatusView: View {
             guard let draft = allDraftItems.first(where: { $0.id == item.draftId }) else { return }
             uploadManager.retryFailedPublish(drafts: [draft], modelContext: modelContext)
         case "ebay", "etsy":
-            retryingEbay.insert(item.id)
-            Task {
-                try? await IntegrationRepository.shared.triggerCrossPost(listingId: item.id, platforms: [platform])
-                retryingEbay.remove(item.id)
-            }
+            // Clears the shown failure at once; the product listener brings the result.
+            apiStatuses[item.id]?[platform] = "pending"
+            uploadManager.runAPICrossPosts([UploadManager.PendingAPITrigger(listingId: item.id, title: item.title, platforms: [platform])])
         case "mercari":
             let job = CrossPostJob(
                 platform: platform,

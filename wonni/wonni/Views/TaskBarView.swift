@@ -22,6 +22,35 @@
 import SwiftUI
 import UIKit
 
+// MARK: - Platform mark
+
+/// A platform's name in its letter colors, for rows about one platform
+/// ("2/5 Listings failed" on eBay). Drawn as text: the app ships no logo assets.
+struct PlatformMark: View {
+    let platform: String
+
+    var body: some View {
+        switch platform {
+        case "ebay":
+            ["e", "b", "a", "y"].enumerated().reduce(Text("")) { acc, pair in
+                let colors: [Color] = [
+                    Color(red: 0.90, green: 0.20, blue: 0.22), Color(red: 0.0, green: 0.39, blue: 0.82),
+                    Color(red: 0.96, green: 0.69, blue: 0.01), Color(red: 0.53, green: 0.72, blue: 0.09),
+                ]
+                return acc + Text(pair.element).foregroundColor(colors[pair.offset])
+            }
+            .font(.system(size: 17, weight: .heavy))
+            .kerning(-0.6)
+            .accessibilityLabel("eBay")
+        case "etsy":
+            Text("Etsy").font(.system(size: 15, weight: .heavy, design: .serif))
+                .foregroundStyle(Color(red: 0.95, green: 0.33, blue: 0.0))
+        default:
+            Text(platform.capitalized).font(.caption.weight(.bold))
+        }
+    }
+}
+
 // MARK: - The bar
 
 /// Thin, full-width row: status icon, label (+ detail), "+N" for queued tasks, chevron.

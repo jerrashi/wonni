@@ -372,7 +372,9 @@ struct AppTaskActivityView: View {
     @ViewBuilder
     private func activityRow(_ task: AppTaskQueue.AppTask, isDone: Bool) -> some View {
         HStack(spacing: 12) {
-            if isDone {
+            if let platform = task.platform {
+                PlatformMark(platform: platform)
+            } else if isDone {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
             } else if task.isError {
@@ -386,7 +388,7 @@ struct AppTaskActivityView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(task.label).font(.subheadline.weight(.medium))
                     .foregroundStyle(task.isError ? .red : .primary)
-                if let detail = task.detail {
+                if let detail = task.detail, !detail.isEmpty {
                     Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
@@ -402,6 +404,10 @@ struct AppTaskActivityView: View {
                     .font(.caption.weight(.semibold))
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
+                    Button("Dismiss") { AppTaskQueue.shared.dismiss(id: task.id) }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.bordered)
+                        .tint(.secondary)
                 } else if task.onCancel != nil {
                     // Queued task: tap opens cancel confirmation
                     Button("Cancel") { cancelTarget = task }

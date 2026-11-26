@@ -24,6 +24,8 @@ final class AppTaskQueue: ObservableObject {
         /// For queued-but-not-yet-running tasks: tapping opens a cancel confirmation.
         /// Nil for active tasks.
         var onCancel: (() -> Void)?
+        /// "ebay" / "etsy": the Activity row shows that platform's mark.
+        var platform: String? = nil
     }
 
     @Published private(set) var tasks: [AppTask] = []
@@ -43,13 +45,14 @@ final class AppTaskQueue: ObservableObject {
         detail: String? = nil,
         progress: Double = -1,
         accentColor: Color = Color.accentColor,
+        platform: String? = nil,
         onTap: (() -> Void)? = nil,
         onCancel: (() -> Void)? = nil
     ) {
         guard !tasks.contains(where: { $0.id == id }) else { return }
         tasks.append(AppTask(id: id, label: label, detail: detail,
                              progress: progress, accentColor: accentColor,
-                             onTap: onTap, onCancel: onCancel))
+                             onTap: onTap, onCancel: onCancel, platform: platform))
     }
 
     func update(id: UUID, label: String? = nil, detail: String? = nil, progress: Double? = nil, isError: Bool? = nil, onTap: (() -> Void)? = nil) {

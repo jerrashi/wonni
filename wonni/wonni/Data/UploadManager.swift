@@ -1734,30 +1734,8 @@ class UploadManager: ObservableObject {
         // Fire deferred API cross-posts now that the Firestore write has completed.
         let apiTriggers = pendingAPITriggers
         if !apiTriggers.isEmpty {
-            let triggers = apiTriggers
             pendingAPITriggers = []
-            apiTriggersInFlight += 1
-            Task {
-                defer { apiTriggersInFlight -= 1 }
-                var errorMessages: [String] = []
-                for trigger in triggers {
-                    do {
-                        try await IntegrationRepository.shared.triggerCrossPost(
-                            listingId: trigger.listingId,
-                            platforms: trigger.platforms
-                        )
-                    } catch {
-                        errorMessages.append(Self.formatCrossPostError(error, title: trigger.title))
-                    }
-                    markCrossPostEnded { $0.kind == .api && $0.listingId == trigger.listingId }
-                }
-                if !errorMessages.isEmpty {
-                    // Review & Publish is very likely already dismissed by the time this
-                    // Task resolves — crossPostError outlives it and is surfaced from
-                    // CrossPostStatusView, reliably the next screen the user lands on.
-                    crossPostError = errorMessages.joined(separator: "\n\n")
-                }
-            }
+            runAPICrossPosts(apiTriggers)
         }
         // Build web autofill jobs NOW — publish has completed, so every item has its
         // firestoreListingId and uploaded Storage photo paths. Jobs carry those plain
@@ -1830,6 +1808,63 @@ class UploadManager: ObservableObject {
             return "Cross-post failed for \"\(title.prefix(40))\": \(serverMsg)"
         }
         return "Cross-post failed for \"\(title.prefix(40))\". Check your connection and integration settings, then try again."
+    }
+
+    // MARK: – eBay / Etsy runs
+
+    /// Posts listings to eBay / Etsy one after another with one task-bar row:
+    /// "Posting to eBay · 2 of 5", tap → the status list. Failures leave a red
+    /// "2/5 Listings failed" row (eBay logo) with Retry, which re-runs only the
+    /// failed ones, and Dismiss. The functions record each failure's reason on
+    /// products/{id}, which the status list shows. Mock
+    /// https://claude.ai/artifact/9ijgbKfDxPgafAbkfCKtUi v2 (approved 2026-11-26);
+    /// before this an eBay post had no row and failures were one alert.
+    func runAPICrossPosts(_ triggers: [PendingAPITrigger], onFinish: (() async -> Void)? = nil) {
+        guard !triggers.isEmpty else { return }
+        let taskId = UUID()
+        let platforms = Array(Set(triggers.flatMap(\.platforms))).sorted()
+        let names = platforms.map { $0 == "ebay" ? "eBay" : $0.capitalized }.joined(separator: ", ")
+        let total = triggers.count
+        AppTaskQueue.shared.begin(
+            id: taskId,
+            label: "Posting to \(names) · 0 of \(total)",
+            detail: triggers.first?.title,
+            progress: 0,
+            platform: platforms.count == 1 ? platforms.first : nil,
+            onTap: { [weak self] in self?.showCrossPostStatus = true }
+        )
+        apiTriggersInFlight += 1
+        Task {
+            defer { apiTriggersInFlight -= 1 }
+            var failed: [PendingAPITrigger] = []
+            for (index, trigger) in triggers.enumerated() {
+                AppTaskQueue.shared.update(
+                    id: taskId,
+                    label: "Posting to \(names) · \(index + 1) of \(total)",
+                    detail: trigger.title,
+                    progress: Double(index) / Double(total)
+                )
+                do {
+                    try await IntegrationRepository.shared.triggerCrossPost(listingId: trigger.listingId, platforms: trigger.platforms)
+                } catch {
+                    failed.append(trigger)
+                }
+                markCrossPostEnded { $0.kind == .api && $0.listingId == trigger.listingId }
+            }
+            if failed.isEmpty {
+                AppTaskQueue.shared.complete(id: taskId)
+            } else {
+                AppTaskQueue.shared.update(
+                    id: taskId,
+                    label: "\(failed.count)/\(total) Listings failed",
+                    detail: "",
+                    progress: 1,
+                    isError: true,
+                    onTap: { [weak self] in self?.runAPICrossPosts(failed, onFinish: onFinish) }
+                )
+            }
+            await onFinish?()
+        }
     }
 
     // MARK: – Web autofill queue
@@ -2044,22 +2079,7 @@ class UploadManager: ObservableObject {
         let triggers = apiPlatforms.map { PendingAPITrigger(listingId: $0.key, title: $0.value.title, platforms: $0.value.platforms) }
         trackCrossPostJobs(web: webJobs, api: triggers)
 
-        if !triggers.isEmpty {
-            apiTriggersInFlight += 1
-            Task {
-                defer { apiTriggersInFlight -= 1 }
-                var errorMessages: [String] = []
-                for trigger in triggers {
-                    do {
-                        try await IntegrationRepository.shared.triggerCrossPost(listingId: trigger.listingId, platforms: trigger.platforms)
-                    } catch {
-                        errorMessages.append(Self.formatCrossPostError(error, title: trigger.title))
-                    }
-                    markCrossPostEnded { $0.kind == .api && $0.listingId == trigger.listingId }
-                }
-                if !errorMessages.isEmpty { crossPostError = errorMessages.joined(separator: "\n\n") }
-            }
-        }
+        runAPICrossPosts(triggers)
         if !webJobs.isEmpty {
             webAutofillQueue.append(contentsOf: webJobs)
             pendingAutofillJobsCount = webAutofillQueue.count
