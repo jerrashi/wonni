@@ -980,6 +980,11 @@ struct ProcessResultsOverviewView: View {
     }
 
     var body: some View {
+        // Filtered once per pass. `results` filters every draft, and the line limit read
+        // it again inside each row (50 drafts = 50 full filters per redraw).
+        let results = self.results
+        let lineLimit = descriptionLineLimit(rowCount: results.count)
+        let failedIDs = uploadManager.processingFailedIDs
         VStack(spacing: 0) {
             List {
                 ForEach(results) { item in
@@ -989,8 +994,8 @@ struct ProcessResultsOverviewView: View {
                         isSelected: selectedIDs.contains(item.id),
                         onToggle: { toggleSelection(item) },
                         focusedField: $focusedField,
-                        isGeminiFailed: uploadManager.processingFailedIDs.contains(item.id),
-                        descriptionLineLimit: descriptionLineLimit,
+                        isGeminiFailed: failedIDs.contains(item.id),
+                        descriptionLineLimit: lineLimit,
                         onDescriptionAutoAdvance: { moveFocus(by: lastFocusMoveDelta) },
                         onEdit: { onEdit(item.id) }
                     )
@@ -1071,9 +1076,9 @@ struct ProcessResultsOverviewView: View {
         else { selectedIDs.insert(item.id) }
     }
 
-    private var descriptionLineLimit: Int {
-        guard !results.isEmpty, listHeight > 0 else { return 4 }
-        let count = CGFloat(results.count)
+    private func descriptionLineLimit(rowCount: Int) -> Int {
+        guard rowCount > 0, listHeight > 0 else { return 4 }
+        let count = CGFloat(rowCount)
         let bottomBarH: CGFloat = 72
         let processingBannerH: CGFloat = uploadManager.isProcessing ? 50 : 0
         let perRowFixedH: CGFloat = 120
@@ -1465,7 +1470,9 @@ struct CrossPostStatusView: View {
 
 // MARK: - WordDiffView
 
-private struct WordDiffView: View {
+/// Equatable so SwiftUI skips the body (and its O(n·m) LCS) when the row redraws with the
+/// same two texts — a long AI-edited description made every redraw of its row expensive.
+private struct WordDiffView: View, Equatable {
     let before: String
     let after: String
 
@@ -1579,6 +1586,37 @@ struct ResultDraftRow: View, Equatable {
     /// the row falls back to presenting Edit as a sheet.
     var onEdit: (() -> Void)? = nil
 
+    init(
+        item: Item,
+        cache: CachedImageManager,
+        isSelected: Bool,
+        onToggle: @escaping () -> Void,
+        focusedField: FocusState<DraftFocusField?>.Binding,
+        isGeminiFailed: Bool = false,
+        descriptionLineLimit: Int = 4,
+        onDescriptionAutoAdvance: (() -> Void)? = nil,
+        onEdit: (() -> Void)? = nil
+    ) {
+        self.item = item
+        self.cache = cache
+        self.isSelected = isSelected
+        self.onToggle = onToggle
+        self.focusedField = focusedField
+        self.isGeminiFailed = isGeminiFailed
+        self.descriptionLineLimit = descriptionLineLimit
+        self.onDescriptionAutoAdvance = onDescriptionAutoAdvance
+        self.onEdit = onEdit
+        _titleText = State(initialValue: Self.shownTitle(item))
+        _descriptionText = State(initialValue: Self.shownDescription(item))
+        _priceText = State(initialValue: Self.priceText(Self.shownPrice(item)))
+    }
+
+    /// What the row shows when the seller hasn't typed anything: their edit, else the AI's.
+    private static func shownTitle(_ item: Item) -> String { item.userEditedTitle ?? item.aiSuggestedTitle ?? "" }
+    private static func shownDescription(_ item: Item) -> String { item.userEditedDescription ?? item.aiSuggestedDescription ?? "" }
+    private static func shownPrice(_ item: Item) -> Double? { item.userEditedPrice ?? item.aiSuggestedPrice }
+    private static func priceText(_ price: Double?) -> String { price.map { String(format: "%.2f", $0) } ?? "" }
+
     // ProcessResultsOverviewView.body re-evaluates on every uploadManager @Published change
     // (isUploadingPhotos, isPublishing, processingFailedIDs are all read there directly) —
     // which fires repeatedly while background photo uploads are still finishing, i.e.
@@ -1608,10 +1646,15 @@ struct ResultDraftRow: View, Equatable {
     }
 
     @Environment(\.modelContext) private var modelContext
-    @EnvironmentObject private var uploadManager: UploadManager
-    @State private var titleText: String = ""
-    @State private var priceText: String = ""
-    @State private var descriptionText: String = ""
+    /// Not an @EnvironmentObject: observing it made every row redraw on each of the
+    /// manager's 43 published changes, which `.equatable()` can't stop. The row only
+    /// calls methods on it.
+    private var uploadManager: UploadManager { .shared }
+    // Filled in `init`, not `onAppear`: a row that appeared with blank text and then
+    // grew to its real height one frame later made the List re-lay-out mid-scroll.
+    @State private var titleText: String
+    @State private var priceText: String
+    @State private var descriptionText: String
     @State private var showEditSheet = false
     @State private var showPhotoChooser = false
     @State private var showDescriptionEditor = false
@@ -1655,7 +1698,7 @@ struct ResultDraftRow: View, Equatable {
                     // AND a duplicate editable title, which read as two titles.
                     if let origTitle = item.originalUserTitleBeforeAI, !isEditingAITitle {
                         HStack(alignment: .top, spacing: 6) {
-                            WordDiffView(before: origTitle, after: titleText)
+                            WordDiffView(before: origTitle, after: titleText).equatable()
                             Spacer(minLength: 0)
                             Image(systemName: "pencil")
                                 .font(.caption2)
@@ -1707,7 +1750,7 @@ struct ResultDraftRow: View, Equatable {
             // the diff plus a duplicate description box.
             if let origDesc = item.originalUserDescriptionBeforeAI {
                 HStack(alignment: .top, spacing: 6) {
-                    WordDiffView(before: origDesc, after: descriptionText)
+                    WordDiffView(before: origDesc, after: descriptionText).equatable()
                     Spacer(minLength: 0)
                     Image(systemName: "pencil")
                         .font(.caption2)
@@ -1780,22 +1823,19 @@ struct ResultDraftRow: View, Equatable {
                 initialText: descriptionText,
                 onSave: { newText in
                     let changed = newText != descriptionText
+                    guard changed else { return }
                     item.userEditedDescription = newText.isEmpty ? nil : newText
-                    if changed && item.originalUserDescriptionBeforeAI != nil {
+                    if item.originalUserDescriptionBeforeAI != nil {
                         // The user reshaped the AI's description to their liking —
                         // the diff has served its purpose; show a normal field now.
                         item.originalUserDescriptionBeforeAI = nil
                     }
+                    // Saved here: saveLocalStateToModel now only writes when the row's
+                    // text differs from the draft, which it no longer does after this.
+                    deferredPersist()
                 },
                 hasAIPurple: item.originalUserDescriptionBeforeAI != nil
             )
-        }
-        .onAppear {
-            titleText = item.userEditedTitle ?? item.aiSuggestedTitle ?? ""
-            descriptionText = item.userEditedDescription ?? item.aiSuggestedDescription ?? ""
-            if let p = item.userEditedPrice ?? item.aiSuggestedPrice {
-                priceText = String(format: "%.2f", p)
-            }
         }
         .onChange(of: focusedField.wrappedValue) { oldFocus, newFocus in
             let myTitle = DraftFocusField(itemID: item.id, field: .title)
@@ -1883,21 +1923,32 @@ struct ResultDraftRow: View, Equatable {
         // Same detached-object guard as DraftRow — the sheet can be dismissed as part
         // of a flow that already deleted the draft.
         guard !Item.deletedIDs.contains(item.id) else { return }
+        // Compared with what the row SHOWS, not the user-edited field alone. It used to
+        // compare with `userEditedTitle` (nil on an AI-filled draft), so every row that
+        // scrolled off screen copied the AI text into the user fields, then saved
+        // SwiftData and synced products/{id} on the main thread, and the sync's
+        // `updatedAt` write redrew the whole list. That is what made Review stutter.
+        var changed = false
         let v = String(titleText.prefix(140))
-        if item.userEditedTitle != (v.isEmpty ? nil : v) {
+        if v != Self.shownTitle(item) {
             item.userEditedTitle = v.isEmpty ? nil : v
+            changed = true
         }
 
-        if item.userEditedDescription != (descriptionText.isEmpty ? nil : descriptionText) {
+        if descriptionText != Self.shownDescription(item) {
             item.userEditedDescription = descriptionText.isEmpty ? nil : descriptionText
+            changed = true
         }
 
         let cleaned = priceText.filter { $0.isNumber || $0 == "." }
         let newPrice = cleaned.isEmpty ? nil : Double(cleaned)
-        if item.userEditedPrice != newPrice {
+        // Text comparison, so an AI price like 28.499 shown as "28.50" isn't "changed".
+        if priceText != Self.priceText(Self.shownPrice(item)) && newPrice != Self.shownPrice(item) {
             item.userEditedPrice = newPrice
+            changed = true
         }
 
+        guard changed else { return }
         try? modelContext.save()
         uploadManager.syncProductData(item)
     }
