@@ -6322,7 +6322,7 @@ function ProductDetail() {
               </div>
 
               <div style={{ marginBottom: 8 }}>
-                <label style={{ fontSize: 11, color: "var(--muted)" }}>Source price (cost) - optional</label>
+                <label style={{ fontSize: 11, color: "var(--muted)" }}>Paid (cost) - optional</label>
                 <DollarInput
                   style={{ maxWidth: 120, marginTop: 2 }}
                   value={sourcePriceInput}

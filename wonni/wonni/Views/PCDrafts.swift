@@ -79,20 +79,20 @@ struct DraftOriginTag: View {
 
 /// A PC draft that isn't on this phone yet, laid out like `DraftCard` (title, price
 /// under it, 80 pt photo strip, plain list row) with a cloud on the first photo. Tap → download → Edit.
-/// "Deleted <title> · Undo" while a swiped cloud PC draft waits out its Undo window
-/// (`UploadManager.pendingCloudDelete`). Swipe down or sideways to make it final now.
-struct CloudDraftDeletedToast: View {
+/// "Deleted <title> · Undo" while a swiped draft waits out its Undo window
+/// (`UploadManager.pendingDraftDelete`). Swipe down or sideways to make it final now.
+struct DraftDeletedToast: View {
     @EnvironmentObject private var uploadManager: UploadManager
     @Environment(\.modelContext) private var modelContext
     @State private var dragOffset: CGSize = .zero
 
     var body: some View {
-        if let pending = uploadManager.pendingCloudDelete {
+        if let pending = uploadManager.pendingDraftDelete {
             HStack(spacing: 14) {
                 Text(pending.title.isEmpty ? "Draft deleted" : "Deleted \"\(pending.title)\"")
                     .font(.subheadline.weight(.medium))
                     .lineLimit(1)
-                Button("Undo") { uploadManager.undoCloudDelete() }
+                Button("Undo") { uploadManager.undoDraftDelete() }
                     .font(.subheadline.weight(.semibold))
                     .accessibilityIdentifier("undoCloudDraftDeleteButton")
             }
@@ -109,7 +109,7 @@ struct CloudDraftDeletedToast: View {
                     }
                     .onEnded { value in
                         if value.translation.height > 30 || abs(value.translation.width) > 60 {
-                            uploadManager.commitPendingCloudDelete(modelContext: modelContext)
+                            uploadManager.commitPendingDraftDelete(modelContext: modelContext)
                         } else {
                             withAnimation(.spring(response: 0.3)) { dragOffset = .zero }
                         }

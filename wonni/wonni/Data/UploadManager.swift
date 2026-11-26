@@ -625,61 +625,105 @@ class UploadManager: ObservableObject {
         }
     }
 
-    // MARK: - Delete a PC draft everywhere, with Undo
+    // MARK: - Swipe-delete a draft, with Undo
 
-    /// A cloud (not downloaded) PC draft swiped away. Nothing is deleted until the Undo
-    /// window ends (user, 2026-11-26): the row is only hidden, so Undo is just unhiding.
-    struct PendingCloudDelete: Equatable {
-        let productId: String
+    /// A draft swiped away on the Drafts screen (user, 2026-11-26). Nothing is deleted
+    /// until the Undo window ends: the row is only hidden, so Undo is just unhiding.
+    /// - `cloudPC`: a PC draft not on this phone → deleted from the cloud (PC + phones).
+    /// - `phone`: a phone draft → the local copy, plus products/{id} and its photos when
+    ///   it was ever uploaded (`firestoreListingId` set).
+    struct PendingDraftDelete: Equatable {
+        enum Target: Equatable {
+            case cloudPC(productId: String)
+            case phone(draftID: UUID)
+        }
+        let target: Target
         let title: String
     }
-    @Published private(set) var pendingCloudDelete: PendingCloudDelete?
+    @Published private(set) var pendingDraftDelete: PendingDraftDelete?
     /// Cloud rows to leave out of the Drafts list: waiting for Undo, or already deleted.
     @Published private(set) var hiddenCloudDraftIDs: Set<String> = []
-    private var pendingCloudDeleteTask: Task<Void, Never>?
+    /// Local drafts waiting for Undo.
+    @Published private(set) var hiddenDraftIDs: Set<UUID> = []
+    private var pendingDraftDeleteTask: Task<Void, Never>?
 
     func deleteCloudDraftWithUndo(productId: String, title: String, modelContext: ModelContext) {
+        startPendingDelete(PendingDraftDelete(target: .cloudPC(productId: productId), title: title), modelContext: modelContext)
+    }
+
+    func deletePhoneDraftWithUndo(draft: Item, modelContext: ModelContext) {
+        guard draft.publishedAt == nil else { return }
+        startPendingDelete(PendingDraftDelete(target: .phone(draftID: draft.id), title: draft.userEditedTitle ?? draft.aiSuggestedTitle ?? ""), modelContext: modelContext)
+    }
+
+    private func startPendingDelete(_ pending: PendingDraftDelete, modelContext: ModelContext) {
         // A previous delete still waiting for Undo is now final.
-        commitPendingCloudDelete(modelContext: modelContext)
-        hiddenCloudDraftIDs.insert(productId)
-        pendingCloudDelete = PendingCloudDelete(productId: productId, title: title)
-        pendingCloudDeleteTask = Task { [weak self] in
+        commitPendingDraftDelete(modelContext: modelContext)
+        switch pending.target {
+        case .cloudPC(let productId): hiddenCloudDraftIDs.insert(productId)
+        case .phone(let draftID): hiddenDraftIDs.insert(draftID)
+        }
+        pendingDraftDelete = pending
+        pendingDraftDeleteTask = Task { [weak self] in
             try? await Task.sleep(for: Self.removedPhotoUndoWindow)
             guard !Task.isCancelled else { return }
-            self?.commitPendingCloudDelete(modelContext: modelContext)
+            self?.commitPendingDraftDelete(modelContext: modelContext)
         }
     }
 
-    func undoCloudDelete() {
-        pendingCloudDeleteTask?.cancel()
-        guard let pending = pendingCloudDelete else { return }
-        pendingCloudDelete = nil
-        hiddenCloudDraftIDs.remove(pending.productId)
+    func undoDraftDelete() {
+        pendingDraftDeleteTask?.cancel()
+        guard let pending = pendingDraftDelete else { return }
+        pendingDraftDelete = nil
+        switch pending.target {
+        case .cloudPC(let productId): hiddenCloudDraftIDs.remove(productId)
+        case .phone(let draftID): hiddenDraftIDs.remove(draftID)
+        }
+    }
+
+    func commitPendingDraftDelete(modelContext: ModelContext) {
+        pendingDraftDeleteTask?.cancel()
+        guard let pending = pendingDraftDelete else { return }
+        pendingDraftDelete = nil
+        switch pending.target {
+        case .cloudPC(let productId):
+            // A photo-less local copy left by an old download goes too.
+            let copies = (try? modelContext.fetch(FetchDescriptor<Item>(predicate: #Predicate { $0.firestoreListingId == productId }))) ?? []
+            for copy in copies { removeLocalCopy(draft: copy, modelContext: modelContext) }
+            deleteProductAndPhotos(productId: productId, title: pending.title) { [weak self] in
+                self?.hiddenCloudDraftIDs.remove(productId)
+            }
+        case .phone(let draftID):
+            hiddenDraftIDs.remove(draftID)
+            guard let draft = fetchItem(id: draftID, modelContext: modelContext),
+                  draft.publishedAt == nil, !draft.pendingPublish else { return }
+            let productId = draft.firestoreListingId
+            removeLocalCopy(draft: draft, modelContext: modelContext)
+            // Ever uploaded → the cloud copy goes too. On failure the web keeps it and the
+            // alert says so.
+            if let productId {
+                deleteProductAndPhotos(productId: productId, title: pending.title, onFailure: nil)
+            }
+        }
     }
 
     /// Deletes `products/{id}` (what the web and every phone list), then best-effort the
-    /// photos this app uploaded under users/{uid}/{id} and any legacy listings/{id}. A
-    /// photo-less local copy left by an old download goes too.
-    func commitPendingCloudDelete(modelContext: ModelContext) {
-        pendingCloudDeleteTask?.cancel()
-        guard let pending = pendingCloudDelete else { return }
-        pendingCloudDelete = nil
-        let productId = pending.productId
-        let copies = (try? modelContext.fetch(FetchDescriptor<Item>(predicate: #Predicate { $0.firestoreListingId == productId }))) ?? []
-        for copy in copies { removeLocalCopy(draft: copy, modelContext: modelContext) }
+    /// photos this app uploaded under users/{uid}/{id} and any legacy listings/{id}.
+    private func deleteProductAndPhotos(productId: String, title: String, onFailure: (() -> Void)?) {
         Task { [weak self] in
             do {
                 try await ProductRepository.shared.deleteProduct(productId: productId)
             } catch {
-                print("[UploadManager] Deleting PC draft \(productId) failed: \(error)")
-                self?.hiddenCloudDraftIDs.remove(productId)
-                self?.cleanupError = "Couldn't delete \"\(pending.title)\". Check your connection and try again."
+                print("[UploadManager] Deleting draft \(productId) from the cloud failed: \(error)")
+                onFailure?()
+                let name = title.isEmpty ? "this draft" : "\"\(title)\""
+                self?.cleanupError = "Couldn't delete \(name) from the cloud. Check your connection and try again."
                 return
             }
             do {
                 try await ListingRepository.shared.deleteListing(id: productId)
             } catch {
-                print("[UploadManager] PC draft \(productId) deleted; photo cleanup failed: \(error)")
+                print("[UploadManager] Draft \(productId) deleted; photo cleanup failed: \(error)")
             }
         }
     }
@@ -1260,6 +1304,10 @@ class UploadManager: ObservableObject {
         if let title = data["title"] as? String { draft.userEditedTitle = title.isEmpty ? nil : title }
         if let description = data["description"] as? String { draft.userEditedDescription = description.isEmpty ? nil : description }
         if let price = data["listingPrice"] as? Double { draft.userEditedPrice = price }
+        // Same field the web calls "Source price (cost)" and the phone calls "Paid"
+        // (`syncProductData` writes it back). Downloads never read it before 2026-11-26.
+        if let sourcePrice = data["sourcePrice"] as? Double { draft.sourcePrice = sourcePrice }
+        if let sourceUrl = data["sourceUrl"] as? String, !sourceUrl.isEmpty { draft.sourceUrl = sourceUrl }
         if let quantity = data["quantity"] as? Int { draft.quantity = quantity > 1 ? quantity : nil }
         if let condition = data["condition"] as? String { draft.condition = condition }
         if let category = data["category"] as? String { draft.aiSuggestedCategory = category }

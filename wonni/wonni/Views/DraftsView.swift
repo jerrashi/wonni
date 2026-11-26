@@ -71,6 +71,7 @@ struct DraftsView: View {
         allItems.filter {
             !$0.sourceAssetIdentifiers.isEmpty && !$0.pendingPublish && $0.publishedAt == nil
                 && !uploadManager.deletedDraftIDs.contains($0.id)
+                && !uploadManager.hiddenDraftIDs.contains($0.id)
                 && DraftOrigin.showsLocal(isMadeOnPC: $0.isMadeOnPC, pcOnly: pcOnly, showPcDrafts: showPcDrafts)
         }
     }
@@ -128,9 +129,9 @@ struct DraftsView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            CloudDraftDeletedToast()
+            DraftDeletedToast()
                 .padding(.bottom, 12)
-                .animation(.easeOut(duration: 0.2), value: uploadManager.pendingCloudDelete)
+                .animation(.easeOut(duration: 0.2), value: uploadManager.pendingDraftDelete)
         }
         .bottomActionBar { bottomLeading } trailing: { processButton }
         .navigationTitle(pcOnly ? "PC drafts" : "Drafts")
@@ -236,7 +237,7 @@ struct DraftsView: View {
                                 .accessibilityIdentifier("draftRemoveLocalCopyButton")
                             } else {
                                 Button(role: .destructive) {
-                                    uploadManager.deleteDraftLocallyAndCloud(draft: draft, modelContext: modelContext)
+                                    uploadManager.deletePhoneDraftWithUndo(draft: draft, modelContext: modelContext)
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
