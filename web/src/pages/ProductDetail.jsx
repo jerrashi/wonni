@@ -9,7 +9,7 @@ import OverflowMenu from "../components/OverflowMenu";
 import ApplyMercariEditsModal from "../components/ApplyMercariEditsModal";
 import ApplyEbayEditsModal from "../components/ApplyEbayEditsModal";
 import { useDebouncedCallback } from "../hooks/useDebouncedCallback";
-import { normalizeImageAssets, buildImagePayload } from "../lib/media";
+import { normalizeImageAssets, buildImagePayload, corsImageUrl } from "../lib/media";
 import { useMediaJobQueue } from "../lib/mediaJobQueue";
 import { getPlatformListingUrl, getPlatformListingUrls } from "../lib/platformLinks";
 import { usePostJobs } from "../lib/postJobs";
@@ -416,7 +416,7 @@ function loadImageOntoCanvas(url, targetWidth, targetHeight) {
       resolve({ canvas, naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight });
     };
     img.onerror = reject;
-    img.src = url;
+    img.src = corsImageUrl(url);
   });
 }
 
@@ -490,7 +490,7 @@ function CropEditor({ image, productId, onSave, onCancel, saving, onBusyChange }
     // never fires onload — without this the canvas just stays blank forever
     // with no indication anything went wrong.
     img.onerror = () => setStatus("Could not load this image for cropping — it may be blocked by the image host's CORS policy.");
-    img.src = image.url;
+    img.src = corsImageUrl(image.url);
   }, [image?.url]);
 
   useEffect(() => { draw(); }, [draw, sel]);
@@ -633,7 +633,7 @@ function IdentifyEditor({ image, productId, onSave, onCancel, saving, onBusyChan
     // A blocked cross-origin load (e.g. missing CORS on the image host) never
     // fires onload — without this the canvas overlay just stays blank forever.
     img.onerror = () => setLoadError("Could not load this image for editing — it may be blocked by the image host's CORS policy.");
-    img.src = image.url;
+    img.src = corsImageUrl(image.url);
   }, [image?.url]);
 
   // Convert normalised 0-1000 box to canvas pixels
@@ -1099,7 +1099,7 @@ function SplitEditor({ image, productId, onSave, onCancel, saving }) {
     };
 
     img.crossOrigin = "anonymous";
-    img.src = image.url;
+    img.src = corsImageUrl(image.url);
   }, [image.url, boxes, horizontalCutPcts, splitMethod, selectedBoxId, drawingBox]);
 
   function getCanvasCoords(e) {

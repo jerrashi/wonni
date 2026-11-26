@@ -1,7 +1,7 @@
 import { createContext, useContext, useRef, useState } from "react";
 import { doc, runTransaction, serverTimestamp } from "firebase/firestore";
 import { auth, db, callFunction, uploadImageBlob } from "../firebase";
-import { normalizeImageAssets, buildImagePayload } from "./media";
+import { normalizeImageAssets, buildImagePayload, corsImageUrl } from "./media";
 
 // App-wide queue for photo-split and photo-upload jobs. Lives above the
 // router (see main.jsx) so a job started on one listing keeps running even
@@ -34,7 +34,7 @@ async function processSplitJob(job) {
           el.crossOrigin = "anonymous";
           el.onload = () => res(el);
           el.onerror = rej;
-          el.src = src;
+          el.src = corsImageUrl(src);
         });
 
       let img;

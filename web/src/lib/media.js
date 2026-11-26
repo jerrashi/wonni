@@ -43,3 +43,13 @@ export function buildImagePayload(images) {
     variantTags: Array.isArray(image.variantTags) ? image.variantTags : [],
   }));
 }
+
+// The URL to load a photo from when a canvas needs its pixels (crop, split, edit).
+// Our bucket only started sending CORS headers on 2026-11-26 (storage.cors.json);
+// Google's edge and the browser keep copies fetched without them for up to an hour,
+// and a canvas load that hits one of those copies is refused. A query param gives the
+// canvas its own cache entry. Other hosts are left as they are.
+export function corsImageUrl(url) {
+  if (typeof url !== "string" || !/^https:\/\/(storage|firebasestorage)\.googleapis\.com\//.test(url)) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}cors=1`;
+}

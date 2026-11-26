@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import { db, auth, callFunction, uploadFileToStorage } from "../firebase";
+import { corsImageUrl } from "../lib/media";
 
 // Helper to convert a File object to Data URL
 function fileToDataUrl(file) {
@@ -20,7 +21,7 @@ function loadImage(src) {
     img.crossOrigin = "anonymous";
     img.onload = () => resolve(img);
     img.onerror = reject;
-    img.src = src;
+    img.src = corsImageUrl(src);
   });
 }
 
