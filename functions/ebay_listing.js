@@ -1666,10 +1666,14 @@ async function ebayCreateListingCore(uid, productId, opts = {}) {
       // Record every failure on the product (the app's progress row and status
       // list read it). Before 2026-11-26 only the duplicate case did, so most
       // failures left crossPostStatus.ebay unset and the app showed nothing.
+      // Only on the caller's own product: a permission-denied (someone else's id)
+      // must never write to that product.
       const message = e.ebayErrors?.[0]?.message || e.message || "eBay refused the listing.";
-      await db.collection("products").doc(productId)
-        .update({ "crossPostStatus.ebay": "failed", "crossPostErrors.ebay": String(message).slice(0, 500) })
-        .catch(() => {});
+      const ref = productId ? db.collection("products").doc(String(productId)) : null;
+      const owned = ref ? await ref.get().then((s) => s.exists && s.data().userId === uid).catch(() => false) : false;
+      if (owned) {
+        await ref.update({ "crossPostStatus.ebay": "failed", "crossPostErrors.ebay": String(message).slice(0, 500) }).catch(() => {});
+      }
       throw e;
     }
     if (opts.duplicateRenamedTo) {
