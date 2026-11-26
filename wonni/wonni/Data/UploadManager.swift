@@ -1246,6 +1246,9 @@ class UploadManager: ObservableObject {
         // baseline pullProductIfNewer/syncProductData compare against from this point on.
         draft.updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
         try? modelContext.save()
+        // Photos that came from another bucket: upload the draft so they move into this
+        // one and products/{id}.images points here (the upload ends in syncProductData).
+        if hasUnuploadedPhotos(draft) { startBackgroundUpload(draft: draft, modelContext: modelContext) }
         return draft
     }
 
@@ -1263,16 +1266,43 @@ class UploadManager: ObservableObject {
         let newURLs = remoteImages.filter { !localURLs.contains($0) }
         guard !newURLs.isEmpty else { return }
 
+        // Photos from another bucket (95 on PC drafts on 2026-11-26, the old
+        // wonni-dropship project's, still public) used to be skipped, so drafts came down
+        // missing photos. They are fetched as-is and kept with no Storage path, which makes
+        // the next upload copy them into this bucket (see `adoptProduct`). Until that
+        // upload lands they can't be told apart from the remote URLs, so a draft that
+        // still has unuploaded photos doesn't fetch outside URLs again.
+        let hasUnuploaded = draft.sourceAssetIdentifiers.contains { draft.firebasePhotoPathsByAsset?[$0] == nil }
         for url in newURLs {
             guard !Item.deletedIDs.contains(draft.id) else { return }
-            guard let path = StorageService.shared.path(fromPublicURL: url) else { continue }
-            guard let bytes = try? await StorageService.shared.downloadImageData(path: path) else { continue }
+            let path = StorageService.shared.path(fromPublicURL: url)
+            if path == nil && hasUnuploaded { continue }
+            guard let bytes = try? await StorageService.shared.downloadImageData(path: path ?? url) else { continue }
             let assetId = UUID().uuidString
             draft.sourceAssetIdentifiers.append(assetId)
             draft.setLocalPhoto(bytes, for: assetId)
+            guard let path else { continue }
             if draft.firebasePhotoPathsByAsset == nil { draft.firebasePhotoPathsByAsset = [:] }
             draft.firebasePhotoPathsByAsset?[assetId] = path
         }
+    }
+
+    /// Adds the photos a downloaded draft is missing (only photos; local edits are left
+    /// alone). For PC drafts downloaded before 2026-11-26, when photos from another
+    /// bucket were skipped.
+    func pullMissingPhotos(_ draft: Item, modelContext: ModelContext) async {
+        guard let productId = draft.firestoreListingId,
+              let data = try? await ProductRepository.shared.fetchProduct(productId: productId) else { return }
+        let before = draft.sourceAssetIdentifiers.count
+        await pullNewPhotos(draft, remoteImages: data["images"] as? [String] ?? [])
+        guard draft.sourceAssetIdentifiers.count != before else { return }
+        try? modelContext.save()
+        if hasUnuploadedPhotos(draft) { startBackgroundUpload(draft: draft, modelContext: modelContext) }
+    }
+
+    /// A photo pulled from outside this app's bucket has no Storage path yet.
+    func hasUnuploadedPhotos(_ draft: Item) -> Bool {
+        draft.sourceAssetIdentifiers.contains { draft.firebasePhotoPathsByAsset?[$0] == nil }
     }
 
     // MARK: – Phase 2.5: Inline photo upload (fallback for app-restart scenario)

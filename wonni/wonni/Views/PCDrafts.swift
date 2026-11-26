@@ -83,6 +83,9 @@ struct CloudDraftCard: View {
     let data: [String: Any]
     let showTag: Bool
     let isDownloading: Bool
+    var isSelectMode = false
+    var isSelected = false
+    /// Downloads the draft, or toggles it in select mode.
     let onOpen: () -> Void
 
     private var title: String {
@@ -102,6 +105,11 @@ struct CloudDraftCard: View {
         Button(action: onOpen) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
+                    if isSelectMode {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.title3)
+                            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                    }
                     Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
                     Spacer(minLength: 0)
                     if showTag { DraftOriginTag(isMadeOnPC: true) }
@@ -141,7 +149,8 @@ struct CloudDraftCard: View {
         }
         .buttonStyle(.plain)
         .disabled(isDownloading)
-        .accessibilityLabel("\(title), on your PC. Download to open.")
+        .accessibilityLabel(isSelectMode ? "\(title), on your PC" : "\(title), on your PC. Tap to download.")
+        .accessibilityAddTraits(isSelectMode && isSelected ? .isSelected : [])
         .accessibilityIdentifier("cloudDraftCard")
     }
 }

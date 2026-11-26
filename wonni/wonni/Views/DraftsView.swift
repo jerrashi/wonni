@@ -53,7 +53,10 @@ struct DraftsView: View {
     /// PC drafts on the server (`isDraft`, not made on iOS); the ones with no local copy
     /// are the cloud rows.
     @State private var remotePcDrafts: [(id: String, data: [String: Any])] = []
-    @State private var downloadingId: String?
+    /// PC drafts being downloaded right now.
+    @State private var downloadingIds = Set<String>()
+    /// PC drafts ticked in select mode (cloud rows; photos are in `selectedPhotos`).
+    @State private var selectedCloud = Set<String>()
     @State private var showBulkTextDrafts = false
     @State private var showMoveTarget = false
     @State private var showDeleteConfirm = false
@@ -103,6 +106,13 @@ struct DraftsView: View {
             fullySelectedDrafts: fullySelectedDrafts.count,
             hasAnySelection: !selectedPhotos.isEmpty
         )
+    }
+
+    /// Every local draft and every cloud row is selected.
+    private var everythingSelected: Bool {
+        let total = drafts.count + cloudDrafts.count
+        return total > 0 && fullySelectedDrafts.count == drafts.count
+            && Set(cloudDrafts.map(\.id)).isSubset(of: selectedCloud)
     }
 
     // MARK: - Body
@@ -214,17 +224,22 @@ struct DraftsView: View {
                         uploadManager.deleteDraftLocallyAndCloud(draft: drafts[offset], modelContext: modelContext)
                     }
                 }
-                if !isSelectMode {
-                    ForEach(cloudDrafts, id: \.id) { remote in
-                        CloudDraftCard(
-                            data: remote.data,
-                            showTag: showsOriginTag,
-                            isDownloading: downloadingId == remote.id
-                        ) { download(remote.id) }
-                        .disabled(downloadingId != nil)
-                        .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
-                        .listRowSeparator(.hidden)
+                ForEach(cloudDrafts, id: \.id) { remote in
+                    CloudDraftCard(
+                        data: remote.data,
+                        showTag: showsOriginTag,
+                        isDownloading: downloadingIds.contains(remote.id),
+                        isSelectMode: isSelectMode,
+                        isSelected: selectedCloud.contains(remote.id)
+                    ) {
+                        if isSelectMode {
+                            if selectedCloud.contains(remote.id) { selectedCloud.remove(remote.id) } else { selectedCloud.insert(remote.id) }
+                        } else {
+                            download([remote.id])
+                        }
                     }
+                    .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+                    .listRowSeparator(.hidden)
                 }
             }
             .listStyle(.plain)
@@ -271,30 +286,22 @@ struct DraftsView: View {
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .navigationBarLeading) {
             if isSelectMode {
-                switch selectionToolbar.leading {
-                case .selectAll:
+                if everythingSelected {
+                    Button("Deselect All") { selectedPhotos.removeAll(); selectedCloud.removeAll() }
+                        .accessibilityIdentifier("draftHistoryDeselectAllButton")
+                } else {
                     Button("Select All") { selectAll() }
                         .accessibilityIdentifier("draftHistorySelectAllButton")
-                case .deselectAll:
-                    Button("Deselect All") { selectedPhotos.removeAll() }
-                        .accessibilityIdentifier("draftHistoryDeselectAllButton")
                 }
-            } else if pcOnly {
-                Button {
-                    pcOnly = false
-                } label: {
-                    Label("Drafts", systemImage: "chevron.left").labelStyle(.titleAndIcon)
-                }
-                .accessibilityIdentifier("pcDraftsBackButton")
             } else {
                 Button("Select") { isSelectMode = true }
-                    .disabled(drafts.isEmpty)
+                    .disabled(drafts.isEmpty && cloudDrafts.isEmpty)
                     .accessibilityIdentifier("draftHistorySelectButton")
             }
         }
         ToolbarItem(placement: .navigationBarTrailing) {
             if isSelectMode {
-                if !selectedPhotos.isEmpty { selectionActionsMenu }
+                if !selectedPhotos.isEmpty || !selectedCloud.isEmpty { selectionActionsMenu }
             } else {
                 HStack(spacing: 12) {
                 if !pcOnly {
@@ -326,6 +333,16 @@ struct DraftsView: View {
     private var selectionActionsMenu: some View {
         let toolbar = selectionToolbar
         return Menu {
+            if !selectedCloud.isEmpty {
+                Button {
+                    let ids = cloudDrafts.map(\.id).filter(selectedCloud.contains)
+                    exitSelectMode()
+                    download(ids)
+                } label: {
+                    Label("Download \(selectedCloud.count) PC draft\(selectedCloud.count == 1 ? "" : "s")", systemImage: "icloud.and.arrow.down")
+                }
+                .accessibilityIdentifier("draftsDownloadSelectedButton")
+            }
             Button {
                 showDraftBulkEdit = true
             } label: {
@@ -356,7 +373,6 @@ struct DraftsView: View {
         } label: {
             Image(systemName: "ellipsis.circle")
         }
-        .disabled(!toolbar.canDelete)
         .accessibilityIdentifier("draftHistorySelectionMenu")
     }
 
@@ -369,8 +385,9 @@ struct DraftsView: View {
                 .buttonStyle(BottomBarButtonStyle(kind: .destructive))
                 .accessibilityIdentifier("draftHistoryCancelButton")
         } else {
-            BackBarButton { dismiss() }
-                .accessibilityIdentifier("draftsBackButton")
+            // In PC mode Back goes to the drafts list, one step back like everywhere else.
+            BackBarButton { if pcOnly { pcOnly = false } else { dismiss() } }
+                .accessibilityIdentifier(pcOnly ? "pcDraftsBackButton" : "draftsBackButton")
         }
     }
 
@@ -419,6 +436,11 @@ struct DraftsView: View {
             guard let productId = item.firestoreListingId else { continue }
             _ = await uploadManager.adoptProduct(productId: productId, modelContext: modelContext)
         }
+        // Downloaded PC drafts that came down without their other-bucket photos.
+        let partial = allItems.filter {
+            $0.isMadeOnPC && !$0.sourceAssetIdentifiers.isEmpty && $0.publishedAt == nil && !$0.pendingPublish
+        }
+        for item in partial { await uploadManager.pullMissingPhotos(item, modelContext: modelContext) }
     }
 
     private func loadPcDrafts() async {
@@ -430,13 +452,17 @@ struct DraftsView: View {
         }
     }
 
-    /// Opening a PC draft always downloads it first; then it opens in Edit like any draft.
-    private func download(_ productId: String) {
-        downloadingId = productId
+    /// Downloads PC drafts, one after another. A downloaded draft becomes a normal row in
+    /// place of its cloud row; nothing opens (user, 2026-11-26).
+    private func download(_ productIds: [String]) {
+        let ids = productIds.filter { !downloadingIds.contains($0) }
+        guard !ids.isEmpty else { return }
+        downloadingIds.formUnion(ids)
         Task {
-            let item = await uploadManager.adoptProduct(productId: productId, modelContext: modelContext)
-            downloadingId = nil
-            if let item { onEdit(item.id) }
+            for id in ids {
+                _ = await uploadManager.adoptProduct(productId: id, modelContext: modelContext)
+                downloadingIds.remove(id)
+            }
         }
     }
 
@@ -455,12 +481,14 @@ struct DraftsView: View {
     }
 
     private func selectAll() {
+        selectedCloud.formUnion(cloudDrafts.map(\.id))
         for draft in drafts { for id in compositeIDs(draft) { selectedPhotos.insert(id) } }
     }
 
     private func exitSelectMode() {
         isSelectMode = false
         selectedPhotos.removeAll()
+        selectedCloud.removeAll()
     }
 
     private func skipAI() {
