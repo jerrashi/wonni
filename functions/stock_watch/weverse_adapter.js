@@ -63,7 +63,9 @@ function normalize(raw, url) {
   const variants = mappedVariants.map((v, i) => ({
     optionValues: v.optionValues,
     sku: v.sku ?? null,
-    inStock: v.active !== false,
+    // Weverse's own flag: the mapper turns every imported variant on (the seller's
+    // stock), so `active` no longer says anything about Weverse. Same order as rawVariants.
+    inStock: !rawVariants[i]?.soldOut,
     quantityAvailable: typeof v.quantity === "number" ? v.quantity : null,
     price: typeof v.sourcePrice === "number" ? v.sourcePrice : (typeof price === "number" ? price : null),
   }));

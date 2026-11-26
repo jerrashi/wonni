@@ -209,7 +209,9 @@ function mapWeverseVariantsToOptions(rawVariants) {
       quantity: typeof v.maxOrderQuantity === "number" ? v.maxOrderQuantity : 1,
       sourcePrice: typeof v.price === "number" ? v.price + (v.addPrice ?? 0) : null,
       sourceVariantId: v.stockId ?? null,
-      active: !v.soldOut,
+      // Always on (user, 2026-11-26): sold out on Weverse says nothing about the
+      // seller's own stock, and an all-off product can't post to eBay.
+      active: true,
     };
   });
 

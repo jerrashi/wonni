@@ -65,3 +65,12 @@ test("every variation turned off on a real choice is caught", () => {
   assert.ok(!hasRealOptions({ options: [{ values: ["Scarf"] }], variants: [{}] }));
   assert.ok(!hasRealOptions({}));
 });
+
+test("Weverse import turns every variant on, even sold-out ones", () => {
+  const { mapWeverseVariantsToOptions } = require("../weverse_product");
+  const { variants } = mapWeverseVariantsToOptions([
+    { stockId: 1, name: "S", price: 10, soldOut: true },
+    { stockId: 2, name: "M", price: 10, soldOut: false },
+  ]);
+  assert.ok(variants.every((v) => v.active === true));
+});
