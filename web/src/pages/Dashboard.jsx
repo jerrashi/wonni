@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { collection, doc, deleteDoc, query, where, onSnapshot, updateDoc, serverTimestamp } from "firebase/firestore";
+import { collection, doc, deleteDoc, query, where, onSnapshot, updateDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import { db, callFunction } from "../firebase";
 import { auth } from "../firebase";
@@ -16,6 +16,7 @@ import { getPlatformListingUrl } from "../lib/platformLinks";
 import { productCost, suggestedListingPrice } from "../lib/pricing";
 import { deleteProductEverywhere, isLiveOnMercari } from "../lib/deleteProduct";
 import { madeOn, isWaitingForAI, visibleProducts } from "../lib/draftOrigin";
+import { orderProducts, moveId } from "../lib/productOrder";
 
 // Phone / PC tag, shown only while phone drafts are mixed in (see lib/draftOrigin.js).
 function OriginTag({ product }) {
@@ -566,6 +567,10 @@ export default function Dashboard() {
   const [phoneOnly, setPhoneOnly] = useState(false); // the Phone button
   const [showPhoneDrafts, setShowPhoneDrafts] = useState(false); // account setting
   const [view, setView] = useState(readView);
+  const [sortMode, setSortMode] = useState("newest"); // account setting, see lib/productOrder.js
+  const [customOrder, setCustomOrder] = useState([]);
+  const [dragId, setDragId] = useState(null);
+  const [dropId, setDropId] = useState(null);
   const [filter, setFilter] = useState("all"); // "all", "draft", "live"
   const [selectedTag, setSelectedTag] = useState(null); // null (All) or specific tag string
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -613,10 +618,38 @@ export default function Dashboard() {
     if (!uid) return;
     return onSnapshot(
       doc(db, "users", uid, "sellingSettings", "default"),
-      (snap) => setShowPhoneDrafts(snap.data()?.showPhoneDraftsOnWeb === true),
+      (snap) => {
+        const data = snap.data() ?? {};
+        setShowPhoneDrafts(data.showPhoneDraftsOnWeb === true);
+        setSortMode(data.productSortMode === "custom" ? "custom" : "newest");
+        setCustomOrder(Array.isArray(data.productOrder) ? data.productOrder : []);
+      },
       () => setShowPhoneDrafts(false),
     );
   }, []);
+
+  function saveOrder(patch) {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    setDoc(doc(db, "users", uid, "sellingSettings", "default"), patch, { merge: true })
+      .catch((e) => setError(`Couldn't save the order: ${e.message ?? e}`));
+  }
+
+  function chooseSort(next) {
+    if (next === "custom" && !customOrder.length) return; // nothing dragged yet
+    setSortMode(next);
+    saveOrder({ productSortMode: next });
+  }
+
+  // Drop `fromId` onto `toId`: the whole list (not just what a filter shows) is reordered
+  // and saved, so the order is the same with every filter.
+  function dropOnto(fromId, toId) {
+    if (!fromId || fromId === toId) return;
+    const next = moveId(orderedProducts.map((p) => p.id), fromId, toId);
+    setCustomOrder(next);
+    setSortMode("custom");
+    saveOrder({ productSortMode: "custom", productOrder: next });
+  }
 
   function chooseView(next) {
     setView(next);
@@ -625,7 +658,8 @@ export default function Dashboard() {
 
   const phoneDraftCount = visibleProducts(products, { phoneOnly: true }).length;
   // Everything this page lists, filters and selects from.
-  const regularProducts = visibleProducts(products, { showPhoneDrafts, phoneOnly });
+  const orderedProducts = orderProducts(products, sortMode, customOrder);
+  const regularProducts = visibleProducts(orderedProducts, { showPhoneDrafts, phoneOnly });
   const showOrigin = showPhoneDrafts && !phoneOnly;
 
   // Collect all unique tags across user's products
@@ -838,6 +872,20 @@ export default function Dashboard() {
                   {phoneOnly ? "‹ All products" : `📱 Phone drafts ${phoneDraftCount}`}
                 </button>
               )}
+              <div className="segmented" role="group" aria-label="Sort">
+                {[["newest", "Newest"], ["custom", "Custom"]].map(([m, label]) => (
+                  <button
+                    key={m}
+                    className={sortMode === m ? "active" : ""}
+                    aria-pressed={sortMode === m}
+                    disabled={m === "custom" && !customOrder.length}
+                    title={m === "custom" && !customOrder.length ? "Drag a product to start a custom order" : undefined}
+                    onClick={() => chooseSort(m)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               <div className="segmented" role="group" aria-label="View">
                 {[["tiles", "Tiles"], ["rows", "Rows"]].map(([v, label]) => (
                   <button key={v} className={view === v ? "active" : ""} aria-pressed={view === v} onClick={() => chooseView(v)}>
@@ -873,15 +921,27 @@ export default function Dashboard() {
           <div className={view === "rows" ? "draft-tile-list" : "product-grid"}>
             {filteredProducts.map((p) => {
               const Tile = view === "rows" ? ProductRow : ProductCard;
+              // Drag to reorder (not in select mode). The wrapper is the drag source and
+              // drop target; clicks still reach the tile inside.
               return (
-                <Tile
+                <div
                   key={p.id}
-                  product={p}
-                  showOrigin={showOrigin}
-                  selectMode={selectMode}
-                  selected={selectMode && selectedIds.has(p.id)}
-                  onSelect={selectMode ? () => toggleSelect(p.id) : null}
-                />
+                  className={`reorder-item${dragId === p.id ? " dragging" : ""}${dropId === p.id && dragId !== p.id ? " drop-target" : ""}`}
+                  draggable={!selectMode}
+                  onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", p.id); setDragId(p.id); }}
+                  onDragEnd={() => { setDragId(null); setDropId(null); }}
+                  onDragOver={(e) => { if (dragId) { e.preventDefault(); if (dropId !== p.id) setDropId(p.id); } }}
+                  onDrop={(e) => { e.preventDefault(); dropOnto(dragId, p.id); setDragId(null); setDropId(null); }}
+                >
+                  <Tile
+                    product={p}
+                    showOrigin={showOrigin}
+                    selectMode={selectMode}
+                    selected={selectMode && selectedIds.has(p.id)}
+                    onSelect={selectMode ? () => toggleSelect(p.id) : null}
+                  />
+                  {!selectMode && <span className="reorder-handle" aria-hidden="true">⠿</span>}
+                </div>
               );
             })}
           </div>

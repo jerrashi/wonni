@@ -2588,3 +2588,16 @@ select.input { appearance: auto; }
 .draft-tile-empty { height: 58px; display: flex; align-items: center; font-size: 13px; color: var(--muted); }
 .select-circle.inline { position: static; flex: none; width: 20px; height: 20px; border-color: var(--border); background: transparent; }
 .select-circle.inline.on { background: var(--primary); border-color: var(--primary); }
+
+/* Drag to reorder on Products (lib/productOrder.js). The wrapper is the grid item. */
+.reorder-item { position: relative; min-width: 0; display: grid; }
+.reorder-item[draggable="true"] { cursor: grab; }
+.reorder-item.dragging { opacity: 0.4; }
+.reorder-item.drop-target > :first-child { box-shadow: 0 0 0 2px var(--primary); border-radius: var(--radius-md); }
+.reorder-handle {
+  position: absolute; top: 8px; right: 8px; padding: 2px 6px; border-radius: 6px;
+  background: var(--surface); color: var(--muted); font-size: 14px; line-height: 1;
+  pointer-events: none; opacity: 0; transition: opacity 0.15s;
+}
+.reorder-item:hover .reorder-handle { opacity: 1; }
+@media (hover: none) { .reorder-handle { display: none; } }
