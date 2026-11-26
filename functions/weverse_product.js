@@ -7,6 +7,7 @@ const { buildNewProductDoc, extractSourceImages } = require("./product_schema");
 const { findPossibleDuplicates } = require("./weverse_duplicate_detection");
 const { maybeApplyCrossPostRulesAfterImport } = require("./cross_post");
 const { newProductRef, madeOnFields } = require("./client_product_id");
+const { looksLikeSizes } = require("./variation_names");
 
 const MAX_IMAGES = 24;
 const USER_AGENT =
@@ -186,14 +187,17 @@ function mapWeverseVariantsToOptions(rawVariants) {
   }
 
   const styleValues = [...new Set(parsed.map((v) => v.style).filter(Boolean))];
-  const options = [{ id: "opt-0", name: "Style", values: styleValues }];
+  // A lone dimension of sizes (S/M/L/XL) is Size, not Style — eBay refuses Style as
+  // a variation on apparel and requires Size (see variation_names.js).
+  const firstName = !hasSize && looksLikeSizes(styleValues) ? "Size" : "Style";
+  const options = [{ id: "opt-0", name: firstName, values: styleValues }];
   if (hasSize) {
     const sizeValues = [...new Set(parsed.map((v) => v.size).filter(Boolean))];
     options.push({ id: "opt-1", name: "Size", values: sizeValues });
   }
 
   const variants = parsed.map((v, i) => {
-    const optionValues = { Style: v.style };
+    const optionValues = { [firstName]: v.style };
     if (hasSize) optionValues.Size = v.size ?? "";
     return {
       id: `v${Date.now()}${i}`,

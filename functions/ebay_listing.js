@@ -1,5 +1,6 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { isSharedPool } = require("./quantity_model");
+const { ebayVariationNames } = require("./variation_names");
 const admin = require("firebase-admin");
 const { ebayRequest, ebayApiHost, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_ENV, throwIfCredentialsRejected } = require("./ebay_auth");
 const {
@@ -967,13 +968,21 @@ function findMatchingAspectValue(aspectMeta, title = "", optionValues = {}) {
   return null;
 }
 
+// Aspects where a made-up value is a wrong listing: never filled with the brand or
+// eBay's first allowed value. A Size of "BTS" (the brand) failed every apparel post
+// 2026-11-26 (25129); guessing "XS" would post the wrong size. Left missing, eBay
+// asks for it by name, which is the error the seller can act on.
+const NO_GUESS_ASPECTS = new Set(["size", "color", "colour"]);
+
 function fillValueForAspect(name, categoryAspects, brand, title = "", optionValues = {}) {
   const meta = categoryAspects.find((a) => a.name === name);
   if (meta) {
     const matched = findMatchingAspectValue(meta, title, optionValues);
     if (matched) return [matched];
+    if (NO_GUESS_ASPECTS.has(String(name).toLowerCase())) return null;
     if (meta.mode === "SELECTION_ONLY" && meta.values.length > 0) return [meta.values[0]];
   }
+  if (NO_GUESS_ASPECTS.has(String(name).toLowerCase())) return null;
   return [brand && brand !== "Generic" && brand !== "Unbranded" ? brand : "Unbranded"];
 }
 
@@ -1042,7 +1051,8 @@ function buildProductAspects(categoryAspects, brand, title = "", optionValues = 
   for (const aspect of categoryAspects) {
     if (aspects[aspect.name]) continue;
     if (!aspect.required && aspect.name !== "Size Type" && aspect.name !== "Department") continue;
-    aspects[aspect.name] = fillValueForAspect(aspect.name, categoryAspects, brand, title, optionValues);
+    const value = fillValueForAspect(aspect.name, categoryAspects, brand, title, optionValues);
+    if (value) aspects[aspect.name] = value;
   }
   return aspects;
 }
@@ -1196,11 +1206,19 @@ async function resolveSingleOfferId(uid, product, productId) {
 
 // createOffer, with recovery when eBay says an offer already exists (25002)
 // for this SKU — adopt it and push the current values.
-async function createOrAdoptOffer(uid, sku, offerBody) {
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function createOrAdoptOffer(uid, sku, offerBody, waits = 0) {
   try {
     const created = await ebayRequest(uid, "POST", "/sell/inventory/v1/offer", offerBody);
     return created.offerId;
   } catch (e) {
+    // 25604: the inventory item for this SKU was PUT a moment ago and eBay
+    // hasn't caught up (see publishWithRecovery). Wait and retry, twice at most.
+    if (waits < 2 && e.ebayErrors?.some((err) => err.errorId === 25604)) {
+      await sleep(3000 * (waits + 1));
+      return createOrAdoptOffer(uid, sku, offerBody, waits + 1);
+    }
     const dup = e.ebayErrors?.find((err) => err.errorId === 25002);
     if (!dup) throw e;
     let offerId = dup.parameters?.find((p) => p.name === "offerId")?.value;
@@ -1227,7 +1245,8 @@ async function publishWithRecovery({ doPublish, refresh, categoryAspects, brand,
   let conditionOverride = null;
   let triedCondition = false;
   let triedTransient = false;
-  for (let attempt = 0; attempt < 4; attempt++) {
+  let transientWaits = 0;
+  for (let attempt = 0; attempt < 6; attempt++) {
     try {
       return await doPublish();
     } catch (e) {
@@ -1247,10 +1266,20 @@ async function publishWithRecovery({ doPublish, refresh, categoryAspects, brand,
         await refresh({ addedAspects, condition: conditionOverride });
         continue;
       }
+      // 25604 "Availability not found … try again": eBay hasn't caught up with
+      // inventory items PUT a moment ago. Seen only when ~10 posts ran at once
+      // (2026-11-26). Wait and retry, twice at most.
+      if (transientWaits < 2 && errs.some((x) => x.errorId === 25604)) {
+        transientWaits += 1;
+        console.warn("[ebay publish] availability not found (25604) — waiting, then retrying");
+        await sleep(3000 * transientWaits);
+        continue;
+      }
       const missing = extractMissingAspects(errs).filter((n) => !addedAspects[n]);
-      if (!missing.length || attempt === 3) throw ebayPolicyError(e) || e;
-      for (const n of missing) addedAspects[n] = fillValueForAspect(n, categoryAspects, brand, title, {});
-      console.warn(`[ebay publish] filling missing aspects: ${missing.join(", ")}`);
+      const fillable = missing.map((n) => [n, fillValueForAspect(n, categoryAspects, brand, title, {})]).filter(([, v]) => v);
+      if (!fillable.length || attempt === 5) throw ebayPolicyError(e) || e;
+      for (const [n, v] of fillable) addedAspects[n] = v;
+      console.warn(`[ebay publish] filling missing aspects: ${fillable.map(([n]) => n).join(", ")}`);
       await refresh({ addedAspects, condition: conditionOverride });
     }
   }
@@ -1365,10 +1394,14 @@ async function postVariantGroup(ctx, { groupKey, activeVariants }) {
   // variesBy.specifications and each variant's own value must use the mapped
   // form and stay aligned.
   const aspectByName = Object.fromEntries(categoryAspects.map((a) => [a.name.toLowerCase(), a]));
+  // The name each option goes to eBay under ("Style" of S/M/L/XL → "Size"); the
+  // product doc keeps its own names. See variation_names.js.
+  const ebayNames = ebayVariationNames(options, categoryAspects);
+  const nameFor = (optName) => ebayNames[optName] ?? optName;
   // A variation aspect whose value list eBay enforces (SELECTION_ONLY, or
   // FREE_TEXT + variation-enabled — apparel "Size" is the latter).
   const controlledAspect = (optName) => {
-    const meta = aspectByName[String(optName).toLowerCase()];
+    const meta = aspectByName[String(nameFor(optName)).toLowerCase()];
     if (!meta || !meta.values?.length) return null;
     return meta.mode === "SELECTION_ONLY" || meta.variationEnabled ? meta : null;
   };
@@ -1432,7 +1465,7 @@ async function postVariantGroup(ctx, { groupKey, activeVariants }) {
     // { "Size": ["2XL"], "Color": ["Red"] } — mapped + arrays.
     const aspects = Object.entries(v.optionValues ?? {}).reduce((acc, [k, val]) => {
       const values = (Array.isArray(val) ? val : [val]).map((x) => mapOptionValue(k, x));
-      acc[k] = values;
+      acc[nameFor(k)] = values;
       return acc;
     }, {});
     return { variantIndex: i, sku, qty, price: variantPriceOr(v, basePrice), aspects };
@@ -1455,7 +1488,7 @@ async function postVariantGroup(ctx, { groupKey, activeVariants }) {
   // any aspect that IS a variation dimension — it belongs in variesBy, not
   // as a fixed value.
   const productAspects = buildProductAspects(categoryAspects, brand, title, {}, { ...toAspectArrays(product.geminiItemSpecifics), ...toAspectArrays(product.ebayAspects) });
-  for (const opt of options) delete productAspects[opt.name];
+  for (const opt of options) { delete productAspects[opt.name]; delete productAspects[nameFor(opt.name)]; }
 
   // 25 items per eBay call (bulk), single-PUT fallback per failed row.
   const putAllItems = ({ addedAspects = {}, condition } = {}) => bulkPutInventoryItems(
@@ -1477,8 +1510,8 @@ async function postVariantGroup(ctx, { groupKey, activeVariants }) {
     aspects: { ...productAspects, ...addedAspects },
     variesBy: {
       specifications: options.map((opt) => ({
-        name: opt.name,
-        values: [...(variesByValues[opt.name] || new Set())],
+        name: nameFor(opt.name),
+        values: [...(variesByValues[nameFor(opt.name)] || new Set())],
       })),
     },
     variantSKUs: perVariant.map((pv) => pv.sku),
@@ -1628,8 +1661,17 @@ async function ebayCreateListingCore(uid, productId, opts = {}) {
     // eBay's identical-item refusal: rename to "Title (n)" when another Wonni
     // product owns the live listing, then retry once (duplicate_titles.js).
     const dup = ebayDuplicateOf(e);
-    if (!dup) throw e;
     const db = admin.firestore();
+    if (!dup) {
+      // Record every failure on the product (the app's progress row and status
+      // list read it). Before 2026-11-26 only the duplicate case did, so most
+      // failures left crossPostStatus.ebay unset and the app showed nothing.
+      const message = e.ebayErrors?.[0]?.message || e.message || "eBay refused the listing.";
+      await db.collection("products").doc(productId)
+        .update({ "crossPostStatus.ebay": "failed", "crossPostErrors.ebay": String(message).slice(0, 500) })
+        .catch(() => {});
+      throw e;
+    }
     if (opts.duplicateRenamedTo) {
       const message = `eBay still sees "${opts.duplicateRenamedTo}" as a duplicate of listing ${dup.existingListingId}. Change the title or description and post again.`;
       await db.collection("products").doc(productId).update({ "crossPostStatus.ebay": "failed", "crossPostErrors.ebay": message });
@@ -1638,6 +1680,13 @@ async function ebayCreateListingCore(uid, productId, opts = {}) {
     const { title } = await resolveEbayDuplicate(db, uid, productId, dup);
     return ebayCreateListingCore(uid, productId, { ...opts, duplicateRenamedTo: title });
   }
+}
+
+/** An option with more than one value — a real choice, not a one-value label. */
+function hasRealOptions(product) {
+  const options = Array.isArray(product.options) ? product.options : [];
+  return options.some((o) => Array.isArray(o.values) && o.values.length > 1)
+    && Array.isArray(product.variants) && product.variants.length > 1;
 }
 
 async function postProductToEbay(uid, productId, opts = {}) {
@@ -1684,7 +1733,15 @@ async function postProductToEbay(uid, productId, opts = {}) {
     // budget check between groups, and groups a previous run of this job finished.
     onProgress: opts.onProgress, shouldStop: opts.shouldStop, skipGroupKeys: opts.skipGroupKeys || [],
   };
-  const hasVariations = buildEbayVariations(product) !== null;
+  // A one-value label ("Style: Scarf") is not a choice: posted as a group it fails
+  // in categories without variations (25005, 2026-11-26), so it posts plain.
+  const hasVariations = buildEbayVariations(product) !== null && hasRealOptions(product);
+  // Real choices (sizes, members) but every one turned off (Weverse imports turn off
+  // what's sold out THERE): posting it plain would list a shirt with no size at the
+  // full quantity. Seen 2026-11-26 on several BTS tour shirts.
+  if (!hasVariations && hasRealOptions(product)) {
+    throw new HttpsError("failed-precondition", "Every variation is turned off. Turn on the ones you have in stock, then post again.");
+  }
   return hasVariations ? postMultiVariant(ctx) : postSingleVariant(ctx);
 }
 
@@ -2568,5 +2625,6 @@ module.exports = {
     buildShippingRuleName, buildShippingRulePayload,
     validateListingFormatInput, buildEbayOfferPayload,
     buildSingleVariantEditPayloads, pushSingleVariantEdit, pushEbayEdit, mapLimit,
+    fillValueForAspect, buildProductAspects, hasRealOptions,
   },
 };
