@@ -235,6 +235,17 @@ final class PhotoToolsGeometryTests: XCTestCase {
         XCTAssertEqual(pieces.map(\.height)[2], 1.0 / 3, accuracy: 1e-9)
     }
 
+    func test_gridInFrame_staysEvenInsideTheFrame() {
+        let frame = CGRect(x: 0.2, y: 0.1, width: 0.6, height: 0.8)
+        let g = PhotoToolsGeometry.grid(rows: 2, cols: 3, in: frame)
+        XCTAssertEqual(g.count, 6)
+        XCTAssertEqual(g[0].minX, 0.2, accuracy: 1e-9)
+        XCTAssertEqual(g[0].width, 0.2, accuracy: 1e-9)
+        XCTAssertEqual(g[0].height, 0.4, accuracy: 1e-9)
+        XCTAssertEqual(g[5].maxX, 0.8, accuracy: 1e-9)
+        XCTAssertEqual(g[5].maxY, 0.9, accuracy: 1e-9)
+    }
+
     func test_movedCut_neverCrossesANeighbourOrAnEdge() {
         let cuts: [CGFloat] = [0.3, 0.6]
         XCTAssertEqual(PhotoToolsGeometry.movedCut(cuts, index: 0, to: 0.9)[0], 0.6 - PhotoToolsGeometry.minSide, accuracy: 1e-9)

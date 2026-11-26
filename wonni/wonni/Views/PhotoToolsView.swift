@@ -30,6 +30,15 @@ enum PhotoToolsGeometry {
         grid(rowCuts: evenCuts(rows), colCuts: evenCuts(cols))
     }
 
+    /// An even rows × cols grid inside `frame` (Split › Grid: the frame moves and resizes
+    /// like the crop box; the cells stay evenly spaced in it).
+    static func grid(rows: Int, cols: Int, in frame: CGRect) -> [CGRect] {
+        grid(rows: rows, cols: cols).map {
+            CGRect(x: frame.minX + $0.minX * frame.width, y: frame.minY + $0.minY * frame.height,
+                   width: $0.width * frame.width, height: $0.height * frame.height)
+        }
+    }
+
     static func rows(_ n: Int) -> [CGRect] { grid(rows: n, cols: 1) }
 
     /// Inner cut positions (0–1) that split one axis into `pieces` equal parts.
@@ -167,6 +176,9 @@ struct PhotoToolsView: View {
     @State private var rowCuts: [CGFloat] = []
     @State private var colCuts: [CGFloat] = []
     @State private var cutDragStart: CGFloat?
+    /// Split › Grid: the area the grid covers; moved and resized like the crop box.
+    @State private var gridFrame = PhotoToolsGeometry.full
+    @State private var gridFrameDragStart: CGRect?
     @State private var cropShape: CropShape = .free
     @State private var drawing: CGRect?
     @State private var isWorking = false
@@ -262,6 +274,7 @@ struct PhotoToolsView: View {
                         boxView(i, fit: fit)
                     }
                     if showsCutLines { cutHandles(fit: fit) }
+                    if mode == .split && splitKind == .grid { gridFrameHandles(fit: fit) }
                     if let drawing { boxShape(drawing, fit: fit, label: nil, color: .orange.opacity(0.7)) }
                     if isWorking {
                         ProgressView().tint(.white).frame(width: geo.size.width, height: geo.size.height)
@@ -399,7 +412,9 @@ struct PhotoToolsView: View {
                         }
                     }
                     .font(.footnote)
-                    Text(splitKind == .rows ? "Drag the lines to move the cuts. Replaces this photo with \(boxes.count)" : "Replaces this photo with \(boxes.count)")
+                    Text(splitKind == .rows ? "Drag the lines to move the cuts. Replaces this photo with \(boxes.count)"
+                         : splitKind == .grid ? "Drag the grid to move it, the corner to resize. Replaces this photo with \(boxes.count)"
+                         : "Replaces this photo with \(boxes.count)")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             case .identify:
@@ -461,7 +476,7 @@ struct PhotoToolsView: View {
         labels = []
         switch m {
         case .crop: boxes = [CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)]; cropShape = .free
-        case .split: splitKind = .grid; gridRows = 2; gridCols = 2; layoutSplit()
+        case .split: splitKind = .grid; gridRows = 2; gridCols = 2; gridFrame = PhotoToolsGeometry.full; layoutSplit()
         case .identify: boxes = []; identify()
         case .menu: boxes = []
         }
@@ -473,9 +488,9 @@ struct PhotoToolsView: View {
         switch splitKind {
         case .boxes: boxes = []
         case .grid:
-            rowCuts = PhotoToolsGeometry.evenCuts(gridRows)
-            colCuts = PhotoToolsGeometry.evenCuts(gridCols)
-            boxes = PhotoToolsGeometry.grid(rowCuts: rowCuts, colCuts: colCuts)
+            rowCuts = []
+            colCuts = []
+            boxes = PhotoToolsGeometry.grid(rows: gridRows, cols: gridCols, in: gridFrame)
         case .rows:
             if gridRows < 2 { gridRows = 2 }
             rowCuts = PhotoToolsGeometry.evenCuts(gridRows)
@@ -488,6 +503,39 @@ struct PhotoToolsView: View {
 
     /// Only Rows has movable cuts; Grid stays even (user, 2026-11-26).
     private var showsCutLines: Bool { mode == .split && splitKind == .rows }
+
+    // MARK: Grid frame
+
+    /// Split › Grid: drag inside to move the whole grid, the corner dot to resize it.
+    @ViewBuilder
+    private func gridFrameHandles(fit: CGRect) -> some View {
+        let s = onScreen(gridFrame, fit: fit)
+        Rectangle().strokeBorder(Color.white, lineWidth: 2)
+            .background(Color.white.opacity(0.001))
+            .frame(width: s.width, height: s.height)
+            .position(x: s.midX, y: s.midY)
+            .gesture(gridFrameGesture(fit: fit, resize: false))
+            .accessibilityLabel("Grid area")
+        Circle().fill(Color.white).frame(width: 22, height: 22)
+            .position(x: s.maxX, y: s.maxY)
+            .gesture(gridFrameGesture(fit: fit, resize: true))
+            .accessibilityLabel("Resize grid")
+    }
+
+    private func gridFrameGesture(fit: CGRect, resize: Bool) -> some Gesture {
+        DragGesture(minimumDistance: resize ? 1 : 4)
+            .onChanged { v in
+                guard fit.width > 0, fit.height > 0, let image else { return }
+                if gridFrameDragStart == nil { gridFrameDragStart = gridFrame }
+                guard let start = gridFrameDragStart else { return }
+                let d = CGSize(width: v.translation.width / fit.width, height: v.translation.height / fit.height)
+                gridFrame = resize
+                    ? PhotoToolsGeometry.resized(start, by: d, aspect: nil, imageSize: image.pixelSize)
+                    : PhotoToolsGeometry.clamp(start.offsetBy(dx: d.width, dy: d.height))
+                boxes = PhotoToolsGeometry.grid(rows: gridRows, cols: gridCols, in: gridFrame)
+            }
+            .onEnded { _ in gridFrameDragStart = nil }
+    }
 
     /// A draggable line per row cut. The visible line is thin; the hit area is 44 pt.
     @ViewBuilder
