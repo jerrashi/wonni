@@ -227,6 +227,22 @@ final class PhotoToolsGeometryTests: XCTestCase {
         XCTAssertEqual(PhotoToolsGeometry.rows(3).map(\.width), [1, 1, 1])
     }
 
+    func test_movedRowCut_resizesTheTwoPiecesBesideIt() {
+        let cuts = PhotoToolsGeometry.movedCut(PhotoToolsGeometry.evenCuts(3), index: 0, to: 0.2)
+        let pieces = PhotoToolsGeometry.grid(rowCuts: cuts, colCuts: [])
+        XCTAssertEqual(pieces.map(\.height)[0], 0.2, accuracy: 1e-9)
+        XCTAssertEqual(pieces.map(\.height)[1], 2.0 / 3 - 0.2, accuracy: 1e-9)
+        XCTAssertEqual(pieces.map(\.height)[2], 1.0 / 3, accuracy: 1e-9)
+    }
+
+    func test_movedCut_neverCrossesANeighbourOrAnEdge() {
+        let cuts: [CGFloat] = [0.3, 0.6]
+        XCTAssertEqual(PhotoToolsGeometry.movedCut(cuts, index: 0, to: 0.9)[0], 0.6 - PhotoToolsGeometry.minSide, accuracy: 1e-9)
+        XCTAssertEqual(PhotoToolsGeometry.movedCut(cuts, index: 0, to: -1)[0], PhotoToolsGeometry.minSide, accuracy: 1e-9)
+        XCTAssertEqual(PhotoToolsGeometry.movedCut(cuts, index: 1, to: 2)[1], 1 - PhotoToolsGeometry.minSide, accuracy: 1e-9)
+        XCTAssertEqual(PhotoToolsGeometry.movedCut(cuts, index: 5, to: 0.5), cuts)
+    }
+
     func test_geminiBox_isYXOrderOn1000Scale() {
         let r = PhotoToolsGeometry.rect(fromGeminiBox: [100, 200, 600, 900])
         XCTAssertEqual(r?.minX ?? -1, 0.2, accuracy: 1e-9)

@@ -27,15 +27,38 @@ enum PhotoToolsGeometry {
     static let minSide: CGFloat = 0.05
 
     static func grid(rows: Int, cols: Int) -> [CGRect] {
-        let r = max(1, rows), c = max(1, cols)
-        return (0..<r).flatMap { i in
-            (0..<c).map { j in
-                CGRect(x: CGFloat(j) / CGFloat(c), y: CGFloat(i) / CGFloat(r), width: 1 / CGFloat(c), height: 1 / CGFloat(r))
+        grid(rowCuts: evenCuts(rows), colCuts: evenCuts(cols))
+    }
+
+    static func rows(_ n: Int) -> [CGRect] { grid(rows: n, cols: 1) }
+
+    /// Inner cut positions (0–1) that split one axis into `pieces` equal parts.
+    static func evenCuts(_ pieces: Int) -> [CGFloat] {
+        let n = max(1, pieces)
+        return (1..<n).map { CGFloat($0) / CGFloat(n) }
+    }
+
+    /// Pieces between the cut lines, row-major. Cuts are sorted inner positions (0–1).
+    static func grid(rowCuts: [CGFloat], colCuts: [CGFloat]) -> [CGRect] {
+        let ys = [0] + rowCuts + [1], xs = [0] + colCuts + [1]
+        return (0..<(ys.count - 1)).flatMap { i in
+            (0..<(xs.count - 1)).map { j in
+                CGRect(x: xs[j], y: ys[i], width: xs[j + 1] - xs[j], height: ys[i + 1] - ys[i])
             }
         }
     }
 
-    static func rows(_ n: Int) -> [CGRect] { grid(rows: n, cols: 1) }
+    /// Cut `index` dragged to `position`, kept at least `minSide` from its neighbours
+    /// (and the edges) so no piece collapses or two cuts cross.
+    static func movedCut(_ cuts: [CGFloat], index: Int, to position: CGFloat) -> [CGFloat] {
+        guard cuts.indices.contains(index) else { return cuts }
+        let lower = (index == 0 ? 0 : cuts[index - 1]) + minSide
+        let upper = (index == cuts.count - 1 ? 1 : cuts[index + 1]) - minSide
+        guard lower <= upper else { return cuts }
+        var out = cuts
+        out[index] = min(max(position, lower), upper)
+        return out
+    }
 
     /// Gemini's `[ymin, xmin, ymax, xmax]`, 0–1000, to a normalized rect. nil if unusable.
     static func rect(fromGeminiBox box: [Double]) -> CGRect? {
@@ -139,6 +162,11 @@ struct PhotoToolsView: View {
     @State private var splitKind: SplitKind = .grid
     @State private var gridRows = 2
     @State private var gridCols = 2
+    /// Split › Grid / Rows: where the cut lines are (0–1). In Rows a line can be dragged;
+    /// the stepper resets them to even spacing (user, 2026-11-26: rows couldn't be moved).
+    @State private var rowCuts: [CGFloat] = []
+    @State private var colCuts: [CGFloat] = []
+    @State private var cutDragStart: CGFloat?
     @State private var cropShape: CropShape = .free
     @State private var drawing: CGRect?
     @State private var isWorking = false
@@ -233,6 +261,7 @@ struct PhotoToolsView: View {
                     ForEach(boxes.indices, id: \.self) { i in
                         boxView(i, fit: fit)
                     }
+                    if showsCutLines { cutHandles(fit: fit) }
                     if let drawing { boxShape(drawing, fit: fit, label: nil, color: .orange.opacity(0.7)) }
                     if isWorking {
                         ProgressView().tint(.white).frame(width: geo.size.width, height: geo.size.height)
@@ -370,7 +399,8 @@ struct PhotoToolsView: View {
                         }
                     }
                     .font(.footnote)
-                    Text("Replaces this photo with \(boxes.count)").font(.footnote).foregroundStyle(.secondary)
+                    Text(splitKind == .rows ? "Drag the lines to move the cuts. Replaces this photo with \(boxes.count)" : "Replaces this photo with \(boxes.count)")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
             case .identify:
                 VStack(spacing: 6) {
@@ -442,9 +472,65 @@ struct PhotoToolsView: View {
     private func layoutSplit() {
         switch splitKind {
         case .boxes: boxes = []
-        case .grid: boxes = PhotoToolsGeometry.grid(rows: gridRows, cols: gridCols)
-        case .rows: if gridRows < 2 { gridRows = 2 }; boxes = PhotoToolsGeometry.rows(gridRows)
+        case .grid:
+            rowCuts = PhotoToolsGeometry.evenCuts(gridRows)
+            colCuts = PhotoToolsGeometry.evenCuts(gridCols)
+            boxes = PhotoToolsGeometry.grid(rowCuts: rowCuts, colCuts: colCuts)
+        case .rows:
+            if gridRows < 2 { gridRows = 2 }
+            rowCuts = PhotoToolsGeometry.evenCuts(gridRows)
+            colCuts = []
+            boxes = PhotoToolsGeometry.grid(rowCuts: rowCuts, colCuts: colCuts)
         }
+    }
+
+    // MARK: Split cut lines
+
+    /// Only Rows has movable cuts; Grid stays even (user, 2026-11-26).
+    private var showsCutLines: Bool { mode == .split && splitKind == .rows }
+
+    /// A draggable line per row cut. The visible line is thin; the hit area is 44 pt.
+    @ViewBuilder
+    private func cutHandles(fit: CGRect) -> some View {
+        ForEach(rowCuts.indices, id: \.self) { i in
+            cutHandle(horizontal: true, fit: fit, position: rowCuts[i])
+                .gesture(cutGesture(horizontal: true, index: i, fit: fit))
+                .accessibilityLabel("Row cut \(i + 1)")
+        }
+    }
+
+    private func cutHandle(horizontal: Bool, fit: CGRect, position: CGFloat) -> some View {
+        ZStack {
+            Rectangle().fill(Color.orange)
+                .frame(width: horizontal ? fit.width : 3, height: horizontal ? 3 : fit.height)
+            Capsule().fill(Color.orange)
+                .frame(width: horizontal ? 44 : 14, height: horizontal ? 14 : 44)
+                .overlay(
+                    Image(systemName: horizontal ? "arrow.up.and.down" : "arrow.left.and.right")
+                        .font(.system(size: 9, weight: .bold)).foregroundStyle(.black)
+                )
+        }
+        .frame(width: horizontal ? fit.width : 44, height: horizontal ? 44 : fit.height)
+        .contentShape(Rectangle())
+        .position(
+            x: horizontal ? fit.midX : fit.minX + position * fit.width,
+            y: horizontal ? fit.minY + position * fit.height : fit.midY
+        )
+    }
+
+    private func cutGesture(horizontal: Bool, index: Int, fit: CGRect) -> some Gesture {
+        DragGesture(minimumDistance: 1)
+            .onChanged { v in
+                let cuts = horizontal ? rowCuts : colCuts
+                guard cuts.indices.contains(index), fit.width > 0, fit.height > 0 else { return }
+                if cutDragStart == nil { cutDragStart = cuts[index] }
+                guard let start = cutDragStart else { return }
+                let delta = horizontal ? v.translation.height / fit.height : v.translation.width / fit.width
+                let moved = PhotoToolsGeometry.movedCut(cuts, index: index, to: start + delta)
+                if horizontal { rowCuts = moved } else { colCuts = moved }
+                boxes = PhotoToolsGeometry.grid(rowCuts: rowCuts, colCuts: colCuts)
+            }
+            .onEnded { _ in cutDragStart = nil }
     }
 
     private func identify() {
