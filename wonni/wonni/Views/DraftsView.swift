@@ -478,7 +478,7 @@ struct DraftsView: View {
         let partial = allItems.filter {
             $0.isMadeOnPC && !$0.sourceAssetIdentifiers.isEmpty && $0.publishedAt == nil && !$0.pendingPublish
         }
-        for item in partial { await uploadManager.pullMissingPhotos(item, modelContext: modelContext) }
+        for item in partial { await uploadManager.pullMissingDownloadData(item, modelContext: modelContext) }
     }
 
     private func loadPcDrafts() async {

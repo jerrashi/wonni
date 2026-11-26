@@ -1402,14 +1402,25 @@ class UploadManager: ObservableObject {
         }
     }
 
-    /// Adds the photos a downloaded draft is missing (only photos; local edits are left
-    /// alone). For PC drafts downloaded before 2026-11-26, when photos from another
-    /// bucket were skipped.
-    func pullMissingPhotos(_ draft: Item, modelContext: ModelContext) async {
+    /// Adds what a downloaded draft is missing: photos, and Paid / source link (local edits
+    /// are left alone; only empty fields are filled). For PC drafts downloaded before
+    /// 2026-11-26, when photos from another bucket were skipped and downloads never read
+    /// `sourcePrice` / `sourceUrl`.
+    func pullMissingDownloadData(_ draft: Item, modelContext: ModelContext) async {
         guard let productId = draft.firestoreListingId,
               let data = try? await ProductRepository.shared.fetchProduct(productId: productId) else { return }
+        var filledFields = false
+        if draft.sourcePrice == nil, let sourcePrice = data["sourcePrice"] as? Double {
+            draft.sourcePrice = sourcePrice
+            filledFields = true
+        }
+        if draft.sourceUrl == nil, let sourceUrl = data["sourceUrl"] as? String, !sourceUrl.isEmpty {
+            draft.sourceUrl = sourceUrl
+            filledFields = true
+        }
         let before = draft.sourceAssetIdentifiers.count
         await pullNewPhotos(draft, remoteImages: data["images"] as? [String] ?? [])
+        if filledFields && draft.sourceAssetIdentifiers.count == before { try? modelContext.save() }
         guard draft.sourceAssetIdentifiers.count != before else { return }
         try? modelContext.save()
         if hasUnuploadedPhotos(draft) { startBackgroundUpload(draft: draft, modelContext: modelContext) }
