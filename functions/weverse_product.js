@@ -7,7 +7,7 @@ const { buildNewProductDoc, extractSourceImages } = require("./product_schema");
 const { findPossibleDuplicates } = require("./weverse_duplicate_detection");
 const { maybeApplyCrossPostRulesAfterImport } = require("./cross_post");
 const { newProductRef, madeOnFields } = require("./client_product_id");
-const { looksLikeSizes } = require("./variation_names");
+const { looksLikeSizes, dropSingleChoice } = require("./variation_names");
 
 const MAX_IMAGES = 24;
 const USER_AGENT =
@@ -250,7 +250,8 @@ function mapSaleToProduct(sale, sourceUrl) {
     soldOut: Boolean(opt.isSoldOut),
     maxOrderQuantity: opt.optionOrderLimit?.maxOrderQuantity ?? null,
   }));
-  const { options, variants } = mapWeverseVariantsToOptions(rawVariants);
+  // The stock watcher keeps using the mapper's variants; the product drops a lone one.
+  const { options, variants } = dropSingleChoice(mapWeverseVariantsToOptions(rawVariants));
 
   return {
     title: sale.name ?? "",

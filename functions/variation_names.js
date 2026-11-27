@@ -60,4 +60,12 @@ function ebayVariationNames(options = [], categoryAspects = []) {
   return out;
 }
 
-module.exports = { isSizeValue, looksLikeSizes, ebayVariationNames };
+/**
+ * One choice is no choice (user, 2026-11-27: "no need for Style for the scarf"):
+ * an import with a single variant becomes a plain product, no options/variants.
+ */
+function dropSingleChoice({ options, variants }) {
+  return Array.isArray(variants) && variants.length > 1 ? { options, variants } : { options: [], variants: [] };
+}
+
+module.exports = { isSizeValue, looksLikeSizes, ebayVariationNames, dropSingleChoice };

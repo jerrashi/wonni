@@ -74,3 +74,14 @@ test("Weverse import turns every variant on, even sold-out ones", () => {
   ]);
   assert.ok(variants.every((v) => v.active === true));
 });
+
+test("an import with one choice is a plain product (no Style for a scarf)", () => {
+  const { mapSaleToProduct } = require("../weverse_product");
+  const { dropSingleChoice } = require("../variation_names");
+  const sale = { name: "Scarf", price: { salePrice: 30 }, option: { options: [{ saleStockId: 1, saleOptionName: "Scarf" }] } };
+  const p = mapSaleToProduct(sale, "https://shop.weverse.io/x");
+  assert.deepEqual(p.options, []);
+  assert.deepEqual(p.variants, []);
+  const two = { options: [{ name: "Size", values: ["S", "M"] }], variants: [{}, {}] };
+  assert.deepEqual(dropSingleChoice(two), two);
+});
