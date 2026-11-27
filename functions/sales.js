@@ -394,9 +394,13 @@ async function cascade(db, uid, product, productId, { variantSku, newQuantity, s
   const skip = new Set(skipPlatforms);
 
   // API platforms (eBay/Etsy/TikTok): push the new quantity — UNLESS the sale
-  // came from that platform, which already decremented itself.
+  // came from that platform, which already decremented itself. Shared pool with
+  // variants is the exception: the platform only decremented the variant that
+  // sold, and every other variant must drop to the new shared number too
+  // (2026-11-27: an eBay sale of one size left the other sizes at the old count).
+  const sharedVariants = isSharedPool(product) && Array.isArray(product.variants) && product.variants.length > 1;
   for (const p of ["ebay", "etsy", "tiktok"]) {
-    if (p === soldOnPlatform || skip.has(p)) { platforms[p] = "skipped"; continue; }
+    if ((p === soldOnPlatform && !sharedVariants) || skip.has(p)) { platforms[p] = "skipped"; continue; }
     if (product.crossPostStatus?.[p] !== "active") { platforms[p] = "skipped"; continue; }
     try {
       if (p === "ebay") {

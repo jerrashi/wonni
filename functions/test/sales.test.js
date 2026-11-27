@@ -843,3 +843,44 @@ test("regression: mark-sold-out on a per-variant product zeroes every variant's 
     assert.deepEqual(sent.map((r) => [r.offers[0].offerId, r.offers[0].availableQuantity]), [["o1", 0], ["o2", 0]]);
   } finally { restore(); }
 });
+
+test("regression: shared pool — an eBay sale of one size drops every other size on that eBay listing", async () => {
+  // Before 2026-11-27 the cascade skipped the platform the sale came from, so the
+  // sizes that didn't sell kept the old shared count on eBay (stock 15 → 14 in
+  // Wonni, the other sizes still offered 15 on eBay).
+  const sent = [];
+  const restore = withEbay(async (_uid, _m, _p, body) => { sent.push(...body.requests); return { responses: [] }; });
+  try {
+    const product = plainProduct({
+      hasVariants: true, quantityVariesByVariant: false, quantity: 14,
+      crossPostStatus: { ebay: "active" }, crossPostListingIds: { ebay: "1" },
+      variants: [
+        { id: "vS", sku: "TEE-S", active: true, ebayOfferId: "o1", ebayVariantSku: "p1vS" },
+        { id: "vM", sku: "TEE-M", active: true, ebayOfferId: "o2", ebayVariantSku: "p1vM" },
+      ],
+    });
+    const db = new FakeFirestore({ products: { p1: product } });
+    const r = await cascade(db, UID, product, "p1", { variantSku: "TEE-M", newQuantity: 14, soldOut: false, soldOnPlatform: "ebay" });
+    assert.equal(r.platforms.ebay, "updated");
+    assert.deepEqual(sent.map((q) => [q.offers[0].offerId, q.offers[0].availableQuantity]), [["o1", 14], ["o2", 14]]);
+  } finally { restore(); }
+});
+
+test("per-variant stock: an eBay sale still leaves eBay alone (eBay already decremented that variant)", async () => {
+  let called = false;
+  const restore = withEbay(async () => { called = true; return { responses: [] }; });
+  try {
+    const product = plainProduct({
+      hasVariants: true, quantityVariesByVariant: true,
+      crossPostStatus: { ebay: "active" }, crossPostListingIds: { ebay: "1" },
+      variants: [
+        { id: "vS", sku: "TEE-S", quantity: 3, active: true, ebayOfferId: "o1", ebayVariantSku: "p1vS" },
+        { id: "vM", sku: "TEE-M", quantity: 2, active: true, ebayOfferId: "o2", ebayVariantSku: "p1vM" },
+      ],
+    });
+    const db = new FakeFirestore({ products: { p1: product } });
+    const r = await cascade(db, UID, product, "p1", { variantSku: "TEE-M", newQuantity: 2, soldOut: false, soldOnPlatform: "ebay" });
+    assert.equal(r.platforms.ebay, "skipped");
+    assert.equal(called, false);
+  } finally { restore(); }
+});
