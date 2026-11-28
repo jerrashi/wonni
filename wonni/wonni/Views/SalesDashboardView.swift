@@ -5,6 +5,7 @@
 
 import SwiftUI
 import FirebaseFirestore
+import FirebaseAuth
 import FirebaseFunctions
 import FirebaseStorage
 import WebKit
@@ -637,6 +638,7 @@ struct SalesDashboardView: View {
         // Mercari) reads both lists to the end once.
         var found: [MercariFoundSaleItem] = []
         var seenIds = Set<String>()
+        var reports: [[String: Any]] = []
         for tab in MercariSaleTab.allCases {
             let tabItems = await mercariSaleSyncManager.scanForNewSales(
                 knownOrderIds: known,
@@ -645,6 +647,15 @@ struct SalesDashboardView: View {
                 stopAtKnown: !fullRescan
             )
             for item in tabItems where seenIds.insert(item.id).inserted { found.append(item) }
+            if let report = mercariSaleSyncManager.lastScanReport { reports.append(report) }
+        }
+        // Best-effort record of what the scan saw (one doc, overwritten each Refresh).
+        if let uid = Auth.auth().currentUser?.uid {
+            try? await Firestore.firestore().collection("users").document(uid)
+                .collection("sellingSettings").document("mercariLastScan")
+                .setData(["at": Timestamp(date: Date()), "fullRescan": fullRescan,
+                          "knownIds": known.count, "needsLogin": mercariSaleSyncManager.needsLogin,
+                          "tabs": reports])
         }
         var result: (message: String, actionLabel: String?, action: (() -> Void)?)? = nil
         if !found.isEmpty {

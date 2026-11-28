@@ -4947,6 +4947,11 @@ final class MercariSaleSyncManager: ObservableObject {
     /// counts, sample hrefs). Surfaced in the UI so a TestFlight user can screenshot why a
     /// scan found nothing — console logs aren't visible outside Xcode.
     @Published var lastScanDiagnostics: String? = nil
+    /// What the last `scanForNewSales` saw, saved by the sales dashboard after each Refresh
+    /// (`users/{uid}/sellingSettings/mercariLastScan`) so an empty scan can be diagnosed.
+    var lastScanReport: [String: Any]? = nil
+    /// Refresh stops after this many already-recorded rows in a row.
+    static let knownRunToStop = 10
 
     let webView: WKWebView
     private let navDelegate = SaleNavDelegate()
@@ -5359,6 +5364,19 @@ final class MercariSaleSyncManager: ObservableObject {
         var noChangeStreak = 0
         var stopped = false
         var lastDiag: String? = nil
+        var knownStreak = 0
+        var knownHits = 0
+        defer {
+            lastScanReport = [
+                "tab": tab.rawValue,
+                "url": webView.url?.absoluteString ?? "",
+                "rowsOnPage": lastCount,
+                "knownRows": knownHits,
+                "newRows": newItems.count,
+                "stoppedAtKnown": stopped,
+                "diag": lastDiag ?? ""
+            ]
+        }
 
         for _ in 0..<30 {
             guard !stopped else { break }
@@ -5389,9 +5407,16 @@ final class MercariSaleSyncManager: ObservableObject {
             for dict in arr.dropFirst(lastCount) {
                 guard let id = dict["id"] as? String, !id.isEmpty else { continue }
                 if knownOrderIds.contains(id) {
-                    if stopAtKnown { stopped = true; break }
+                    knownHits += 1
+                    // The list is sorted by LAST UPDATED, not sold date: an old sale that
+                    // was just shipped, delivered or rated jumps to the top. Stopping at the
+                    // first known row hid every newer sale below it, so no Mercari sale was
+                    // recorded after the Nov 12 Refresh change. Stop only after a run of them.
+                    knownStreak += 1
+                    if stopAtKnown, knownStreak >= Self.knownRunToStop { stopped = true; break }
                     continue
                 }
+                knownStreak = 0
                 if addedIds.contains(id) { continue }
 
                 // Optional cutoff: stop once items are older than the caller's date.
