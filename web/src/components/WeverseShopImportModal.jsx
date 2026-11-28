@@ -9,6 +9,16 @@ import { callFunction } from "../firebase";
 // ever calling weverseBulkImportProducts — see runShippingEstimatePipeline's
 // own comment for why, and functions/weverse_shipping_estimate.js for the
 // server-side per-(user, itemType) lookup table this pipeline feeds.
+// Server limits: classifyWeverseItemTypes and weverseBulkImportProducts both refuse
+// more than 25 items per call.
+const CLASSIFY_BATCH = 25;
+const IMPORT_BATCH = 10;
+function chunk(list, size) {
+  const out = [];
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+  return out;
+}
+
 export default function WeverseShopImportModal({ shopUrl, onClose, onImported }) {
   const [items, setItems] = useState([]);
   const [selected, setSelected] = useState(new Set());
@@ -87,22 +97,37 @@ export default function WeverseShopImportModal({ shopUrl, onClose, onImported })
           }),
       });
 
-      setStatus(`Importing ${itemsWithTypeAndShipping.length} item${itemsWithTypeAndShipping.length === 1 ? "" : "s"}…`);
-      const response = await callFunction("weverseBulkImportProducts")({
-        items: itemsWithTypeAndShipping.map((it) => ({
-          productUrl: it.productUrl,
-          saleId: it.saleId,
-          title: it.title,
-          itemType: it.itemType ?? null,
-          shippingCost: it.shippingCost,
-        })),
-      });
-      const res = response?.data;
-      const errors = res?.errors ?? [];
+      // The server takes at most 25 items per call (BATCH_SIZE_LIMIT); a 46-item
+      // import used to send one call, get refused, and show the error below the
+      // tiles where nobody saw it (2026-11-28). Batches of 10 keep each call well
+      // under the 300 s timeout; a failed batch is reported and the rest go on.
+      const total = itemsWithTypeAndShipping.length;
+      const res = { importedCount: 0, errors: [], productIds: [] };
+      for (const batch of chunk(itemsWithTypeAndShipping, IMPORT_BATCH)) {
+        setStatus(`Importing ${Math.min(total, res.importedCount + res.errors.length + batch.length)} of ${total}…`);
+        try {
+          const response = await callFunction("weverseBulkImportProducts")({
+            items: batch.map((it) => ({
+              productUrl: it.productUrl,
+              saleId: it.saleId,
+              title: it.title,
+              itemType: it.itemType ?? null,
+              shippingCost: it.shippingCost,
+            })),
+          });
+          const d = response?.data ?? {};
+          res.importedCount += d.importedCount ?? 0;
+          res.errors.push(...(d.errors ?? []));
+          res.productIds.push(...(d.productIds ?? []));
+        } catch (e) {
+          res.errors.push(...batch.map((it) => ({ title: it.title, error: e.message ?? "Import failed" })));
+        }
+      }
+      const errors = res.errors;
       setStatus(
-        `Imported ${res?.importedCount ?? 0}${errors.length ? `, ${errors.length} failed` : ""}.`
+        `Imported ${res.importedCount}${errors.length ? `, ${errors.length} failed` : ""}.`
       );
-      onImported?.(res?.productIds ?? []);
+      onImported?.(res.productIds);
       if (!errors.length) {
         setTimeout(onClose, 700);
       } else {
@@ -312,7 +337,7 @@ export default function WeverseShopImportModal({ shopUrl, onClose, onImported })
             </>
           )}
 
-          {error && <div style={{ fontSize: 13, color: "var(--danger)" }}>{error}</div>}
+          {error && items.length === 0 && <div style={{ fontSize: 13, color: "var(--danger)" }}>{error}</div>}
         </div>
 
         <div className="weverse-sticky-bar">
@@ -320,9 +345,14 @@ export default function WeverseShopImportModal({ shopUrl, onClose, onImported })
             <div style={{ fontSize: 18, color: "var(--primary)", textTransform: "uppercase" }}>
               {selected.size} Selected
             </div>
-            <div style={{ fontSize: 11, color: "var(--muted)" }}>
-              {status || "Shipping estimated per item type during import"}
-            </div>
+            {/* Errors go here, next to the button: below a long tile grid they were never seen. */}
+            {error && items.length > 0 ? (
+              <div role="alert" style={{ fontSize: 12, color: "var(--danger)" }}>{error}</div>
+            ) : (
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                {status || "Shipping estimated per item type during import"}
+              </div>
+            )}
           </div>
           <div style={{ display: "flex", gap: 10 }}>
             <button className="btn btn-ghost" onClick={onClose} disabled={importing}>Cancel</button>
@@ -366,11 +396,17 @@ async function runShippingEstimatePipeline(chosenItems, { setStatus, confirmType
 
   let itemTypeBySaleId = {};
   try {
-    const classifyResponse = await callFunction("classifyWeverseItemTypes")({
-      items: chosenItems.map((it) => ({ saleId: it.saleId, title: it.title, thumbnailUrl: it.thumbnailUrl })),
-    });
-    const { knownTypes = [], classifications = {} } = classifyResponse?.data ?? {};
-    itemTypeBySaleId = { ...classifications };
+    // 25 per call, the server's limit.
+    const knownTypeSet = new Set();
+    for (const batch of chunk(chosenItems, CLASSIFY_BATCH)) {
+      const classifyResponse = await callFunction("classifyWeverseItemTypes")({
+        items: batch.map((it) => ({ saleId: it.saleId, title: it.title, thumbnailUrl: it.thumbnailUrl })),
+      });
+      const { knownTypes: kt = [], classifications = {} } = classifyResponse?.data ?? {};
+      kt.forEach((t) => knownTypeSet.add(t));
+      Object.assign(itemTypeBySaleId, classifications);
+    }
+    const knownTypes = [...knownTypeSet];
 
     const unresolved = chosenItems.filter((it) => !itemTypeBySaleId[it.saleId]);
     if (unresolved.length) {

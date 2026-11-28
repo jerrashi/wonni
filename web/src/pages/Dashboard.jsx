@@ -243,11 +243,24 @@ function ImportBar({ onImported }) {
         setStatus("");
         onImported?.(result.data.productId);
       } else if (lines.every(isWeverseSale)) {
-        const response = await callFunction("weverseBulkImportProducts")({ items: lines.map((url) => ({ productUrl: url })) });
-        const res = response?.data;
+        // 10 per call: the server refuses more than 25 (2026-11-28).
+        const res = { importedCount: 0, existingCount: 0, errors: [], productIds: [] };
+        for (let i = 0; i < lines.length; i += 10) {
+          const batch = lines.slice(i, i + 10);
+          setStatus(`Importing ${Math.min(lines.length, i + batch.length)} of ${lines.length}…`);
+          try {
+            const d = (await callFunction("weverseBulkImportProducts")({ items: batch.map((url) => ({ productUrl: url })) }))?.data ?? {};
+            res.importedCount += d.importedCount ?? 0;
+            res.existingCount += d.existingCount ?? 0;
+            res.errors.push(...(d.errors ?? []));
+            res.productIds.push(...(d.productIds ?? []));
+          } catch (e) {
+            res.errors.push(...batch.map((url) => ({ title: url, error: e.message ?? "Import failed" })));
+          }
+        }
         setText("");
-        const errors = res?.errors ?? [];
-        setStatus(`Bulk import complete! ${res?.importedCount ?? 0} imported, ${res?.existingCount ?? 0} already existing.`);
+        const errors = res.errors;
+        setStatus(`Bulk import complete! ${res.importedCount} imported, ${res.existingCount} already existing.`);
         if (errors.length) {
           const preview = errors.slice(0, 3).map((e) => `${e.title ?? "Item"}: ${e.error}`).join("; ");
           setError(`${errors.length} item${errors.length === 1 ? "" : "s"} failed — ${preview}${errors.length > 3 ? "…" : ""}`);
