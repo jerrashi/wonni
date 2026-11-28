@@ -282,6 +282,24 @@ module.exports = {
       }),
     },
     {
+      name: "adjustQuantityAndCascade",
+      summary: "Bulk edit quantity (Remove / Set / Add): shared number or every variant; 0 = mark sold out, from 0 = restock; pushed to every live platform.",
+      request: z.object({
+        productId: ProductIdSchema,
+        mode: z.enum(["remove", "set", "add"]),
+        amount: z.number().int().nonnegative(),
+      }),
+      response: z.object({
+        success: z.literal(true),
+        outcome: z.enum(["unchanged", "updated", "sold-out", "restocked"]),
+        /** Total across active variants for a per-variant product. */
+        previousQuantity: z.number().int().nonnegative(),
+        newQuantity: z.number().int().nonnegative(),
+        platforms: z.record(z.string(), z.string()).optional(),
+        errors: z.record(z.string(), z.string()).optional(),
+      }),
+    },
+    {
       name: "syncSales",
       summary: "Poll eBay + Etsy for orders not yet in sales/, import each via recordSale.",
       request: SyncSalesRequestSchema,

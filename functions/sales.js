@@ -739,22 +739,98 @@ async function restockCore(db, uid, { productId, variantSku = null, quantity, de
   return { newQuantity: applied.newQuantity, previousQuantity: applied.previousQuantity };
 }
 
-exports.markSoldOutAndCascade = onCall({ secrets: EBAY_SECRETS }, validated("markSoldOutAndCascade", async (data, request) => {
-  const uid = request.auth?.uid;
-  if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
-  const db = admin.firestore();
+async function markSoldOutCore(db, uid, productId, skipPlatforms = []) {
   // zeroAll — unambiguous even for a variant product (every active variant → 0).
-  const applied = await applyQuantityDelta(db, data.productId, uid, null, 0, { zeroAll: true });
-  const result = await cascade(db, uid, applied.product, data.productId, {
+  const applied = await applyQuantityDelta(db, productId, uid, null, 0, { zeroAll: true });
+  const result = await cascade(db, uid, applied.product, productId, {
     variantSku: null,
     newQuantity: 0,
     soldOut: true,
     soldOnPlatform: null,
-    skipPlatforms: data.skipPlatforms ?? [],
+    skipPlatforms,
   });
   // Per-platform outcome for the app's progress list: "failed" + errors[p] is a
   // real failure; "ended" means the eBay listing was already gone (counts as done).
   return { success: true, platforms: result.platforms, errors: result.errors, previousQuantity: applied.previousQuantity ?? 0 };
+}
+
+exports.markSoldOutAndCascade = onCall({ secrets: EBAY_SECRETS }, validated("markSoldOutAndCascade", async (data, request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+  return markSoldOutCore(admin.firestore(), uid, data.productId, data.skipPlatforms ?? []);
+}));
+
+// ── adjustQuantityAndCascade — bulk edit "Quantity: Remove / Set / Add" ─────
+// (2026-11-28, mock https://claude.ai/artifact/8Z2t5BCtMsWaeuMw4iJS9t approved.)
+// Shared pool / no variants: the product's one number changes. Quantity varies by
+// variant: every active variant gets the same change. Reaching 0 everywhere is Mark
+// as out of stock (saves quantityBeforeSoldOut); anything else goes through the
+// restock path, which pushes the number to every live platform and, coming back
+// from 0, re-lists and clears the Mercari flags.
+
+/** n through the rule; Remove never goes below 0. */
+function adjustOne(n, mode, amount) {
+  const q = Math.max(0, Number(n) || 0);
+  if (mode === "set") return amount;
+  if (mode === "add") return q + amount;
+  return Math.max(0, q - amount);
+}
+
+/** What the change does to one product. Pure. */
+function planQuantityAdjustment(product, mode, amount) {
+  const variants = Array.isArray(product.variants) ? product.variants : [];
+  const perVariant = (product.hasVariants === true || variants.length > 0) && !isSharedPool(product);
+  if (!perVariant) {
+    const before = Math.max(0, Number(product.quantity) || 0);
+    const after = adjustOne(before, mode, amount);
+    return { perVariant: false, before, after, changes: [] };
+  }
+  const changes = [];
+  let before = 0, after = 0;
+  variants.forEach((v, index) => {
+    if (!v || v.active === false) return;
+    const b = Math.max(0, Number(v.quantity) || 0);
+    const a = adjustOne(b, mode, amount);
+    before += b; after += a;
+    if (a !== b) changes.push({ index, sku: v.sku ?? null, before: b, after: a });
+  });
+  return { perVariant: true, before, after, changes };
+}
+
+async function adjustQuantityCore(db, uid, { productId, mode, amount }) {
+  const product = await loadOwnedProduct(db, uid, productId);
+  if (!product) throw new HttpsError("not-found", "Product not found.");
+  const plan = planQuantityAdjustment(product, mode, amount);
+  const out = { success: true, previousQuantity: plan.before, newQuantity: plan.after };
+  const unchanged = plan.perVariant ? plan.changes.length === 0 : plan.after === plan.before;
+  if (unchanged) return { ...out, outcome: "unchanged" };
+  if (plan.after === 0) {
+    const r = await markSoldOutCore(db, uid, productId);
+    return { ...out, outcome: "sold-out", platforms: r.platforms, errors: r.errors };
+  }
+  if (!plan.perVariant) {
+    await restockCore(db, uid, { productId, quantity: plan.after });
+  } else {
+    if (plan.changes.some((c) => !c.sku)) throw new HttpsError("failed-precondition", VARIANT_NEEDS_SKU);
+    for (const c of plan.changes) {
+      if (c.after > 0) {
+        await restockCore(db, uid, { productId, variantSku: c.sku, quantity: c.after });
+      } else {
+        // One size runs out while others are left: that size only.
+        const applied = await applyQuantityDelta(db, productId, uid, c.sku, 0, { force: 0 });
+        await cascade(db, uid, applied.product, productId, {
+          variantSku: c.sku, newQuantity: 0, soldOut: true, soldOnPlatform: null,
+        });
+      }
+    }
+  }
+  return { ...out, outcome: plan.before === 0 ? "restocked" : "updated" };
+}
+
+exports.adjustQuantityAndCascade = onCall({ secrets: EBAY_SECRETS }, validated("adjustQuantityAndCascade", async (data, request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Must be signed in.");
+  return adjustQuantityCore(admin.firestore(), uid, data);
 }));
 
 // Manual Wonni-side quantity edit (not a sale) → push to eBay only. See
@@ -878,6 +954,7 @@ exports.reassignSaleStage = onCall(validated("reassignSaleStage", async (data, r
 exports._internal = {
   resolveSaleId,
   applyQuantityDelta, cascade, resolveStock, toTimestamp, recordSaleCore, restockCore,
+  planQuantityAdjustment, adjustQuantityCore, markSoldOutCore,
   loadOwnedProduct, shouldAdvanceStatus, applyMercariFlags, updateSaleStatusCore,
   reassignSaleStageCore, pushEbayQuantity,
   setEbayRequest: (fn) => { ebayCall = fn || ebayRequest; },

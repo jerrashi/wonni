@@ -61,3 +61,27 @@ test("hasAnyEdit", () => {
   assert.equal(hasAnyEdit({ price: { mode: "set", amount: "5" } }), true);
   assert.equal(hasAnyEdit({ shipping: "buyer" }), true);
 });
+
+// ── Quantity (2026-11-28) ───────────────────────────────────────────────────
+import { adjustQuantity, quantityChange, quantityWarning } from "./bulkEdit.js";
+
+test("adjustQuantity: remove floors at 0, set, add, blank = no change", () => {
+  assert.equal(adjustQuantity(3, { mode: "remove", amount: "5" }), 0);
+  assert.equal(adjustQuantity(3, { mode: "set", amount: "15" }), 15);
+  assert.equal(adjustQuantity(3, { mode: "add", amount: "2" }), 5);
+  assert.equal(adjustQuantity(3, { mode: "add", amount: "" }), null);
+  assert.equal(adjustQuantity(3, { mode: null, amount: "2" }), null);
+});
+
+test("quantityChange: shared pool vs per variant", () => {
+  const shared = { quantity: 15, variants: [{ quantity: 15 }, { quantity: 15 }] };
+  assert.deepEqual(quantityChange(shared, { mode: "add", amount: "5" }), { before: 15, after: 20 });
+  const per = { quantityVariesByVariant: true, variants: [{ quantity: 3 }, { quantity: 0 }, { quantity: 9, active: false }] };
+  assert.deepEqual(quantityChange(per, { mode: "add", amount: "1" }), { before: 3, after: 5 });
+});
+
+test("quantityWarning: counts sold out and restocked", () => {
+  const ps = [{ quantity: 2 }, { quantity: 0 }, { quantity: 9 }];
+  assert.equal(quantityWarning(ps, { mode: "remove", amount: "2" }), "1 will be marked out of stock.");
+  assert.equal(quantityWarning(ps, { mode: "set", amount: "4" }), "1 will be restocked and re-listed.");
+});

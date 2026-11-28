@@ -14,6 +14,8 @@ import Foundation
 /// Generated from functions/contracts/. Do not edit by hand.
 // MARK: - BackendContracts
 struct BackendContracts: Codable, Sendable {
+    let adjustQuantityAndCascadeRequest: AdjustQuantityAndCascadeRequest?
+    let adjustQuantityAndCascadeResponse: AdjustQuantityAndCascadeResponse?
     let aliexpressCreateRestockOrderRequest: AliexpressCreateRestockOrderRequest?
     let aliexpressCreateRestockOrderResponse: AliexpressCreateRestockOrderResponse?
     let applyCrossPostRulesRequest: ApplyCrossPostRulesRequest?
@@ -150,6 +152,8 @@ struct BackendContracts: Codable, Sendable {
     let weverseOrderTaskWithId: WeverseOrderTaskWithId?
 
     enum CodingKeys: String, CodingKey {
+        case adjustQuantityAndCascadeRequest = "AdjustQuantityAndCascadeRequest"
+        case adjustQuantityAndCascadeResponse = "AdjustQuantityAndCascadeResponse"
         case aliexpressCreateRestockOrderRequest = "AliexpressCreateRestockOrderRequest"
         case aliexpressCreateRestockOrderResponse = "AliexpressCreateRestockOrderResponse"
         case applyCrossPostRulesRequest = "ApplyCrossPostRulesRequest"
@@ -306,6 +310,8 @@ extension BackendContracts {
     }
 
     func with(
+        adjustQuantityAndCascadeRequest: AdjustQuantityAndCascadeRequest?? = nil,
+        adjustQuantityAndCascadeResponse: AdjustQuantityAndCascadeResponse?? = nil,
         aliexpressCreateRestockOrderRequest: AliexpressCreateRestockOrderRequest?? = nil,
         aliexpressCreateRestockOrderResponse: AliexpressCreateRestockOrderResponse?? = nil,
         applyCrossPostRulesRequest: ApplyCrossPostRulesRequest?? = nil,
@@ -442,6 +448,8 @@ extension BackendContracts {
         weverseOrderTaskWithId: WeverseOrderTaskWithId?? = nil
     ) -> BackendContracts {
         return BackendContracts(
+            adjustQuantityAndCascadeRequest: adjustQuantityAndCascadeRequest ?? self.adjustQuantityAndCascadeRequest,
+            adjustQuantityAndCascadeResponse: adjustQuantityAndCascadeResponse ?? self.adjustQuantityAndCascadeResponse,
             aliexpressCreateRestockOrderRequest: aliexpressCreateRestockOrderRequest ?? self.aliexpressCreateRestockOrderRequest,
             aliexpressCreateRestockOrderResponse: aliexpressCreateRestockOrderResponse ?? self.aliexpressCreateRestockOrderResponse,
             applyCrossPostRulesRequest: applyCrossPostRulesRequest ?? self.applyCrossPostRulesRequest,
@@ -586,6 +594,147 @@ extension BackendContracts {
     func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
         return String(data: try self.jsonData(), encoding: encoding)
     }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - AdjustQuantityAndCascadeRequest
+struct AdjustQuantityAndCascadeRequest: Codable, Equatable, Sendable {
+    let amount: Int
+    let mode: AdjustQuantityAndCascadeRequestMode
+    let productId: String
+
+    enum CodingKeys: String, CodingKey {
+        case amount = "amount"
+        case mode = "mode"
+        case productId = "productId"
+    }
+}
+
+// MARK: AdjustQuantityAndCascadeRequest convenience initializers and mutators
+
+extension AdjustQuantityAndCascadeRequest {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(AdjustQuantityAndCascadeRequest.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        amount: Int? = nil,
+        mode: AdjustQuantityAndCascadeRequestMode? = nil,
+        productId: String? = nil
+    ) -> AdjustQuantityAndCascadeRequest {
+        return AdjustQuantityAndCascadeRequest(
+            amount: amount ?? self.amount,
+            mode: mode ?? self.mode,
+            productId: productId ?? self.productId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+enum AdjustQuantityAndCascadeRequestMode: String, Codable, Equatable, Sendable {
+    case add = "add"
+    case modeSet = "set"
+    case remove = "remove"
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - AdjustQuantityAndCascadeResponse
+struct AdjustQuantityAndCascadeResponse: Codable, Equatable, Sendable {
+    let errors: [String: String]?
+    let newQuantity: Int
+    let outcome: AdjustQuantityAndCascadeResponseOutcome
+    let platforms: [String: String]?
+    let previousQuantity: Int
+    let success: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case errors = "errors"
+        case newQuantity = "newQuantity"
+        case outcome = "outcome"
+        case platforms = "platforms"
+        case previousQuantity = "previousQuantity"
+        case success = "success"
+    }
+}
+
+// MARK: AdjustQuantityAndCascadeResponse convenience initializers and mutators
+
+extension AdjustQuantityAndCascadeResponse {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(AdjustQuantityAndCascadeResponse.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        errors: [String: String]?? = nil,
+        newQuantity: Int? = nil,
+        outcome: AdjustQuantityAndCascadeResponseOutcome? = nil,
+        platforms: [String: String]?? = nil,
+        previousQuantity: Int? = nil,
+        success: Bool? = nil
+    ) -> AdjustQuantityAndCascadeResponse {
+        return AdjustQuantityAndCascadeResponse(
+            errors: errors ?? self.errors,
+            newQuantity: newQuantity ?? self.newQuantity,
+            outcome: outcome ?? self.outcome,
+            platforms: platforms ?? self.platforms,
+            previousQuantity: previousQuantity ?? self.previousQuantity,
+            success: success ?? self.success
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+enum AdjustQuantityAndCascadeResponseOutcome: String, Codable, Equatable, Sendable {
+    case restocked = "restocked"
+    case soldOut = "sold-out"
+    case unchanged = "unchanged"
+    case updated = "updated"
 }
 
 //
@@ -4010,7 +4159,7 @@ enum EbayUpdateListingResponseStatus: String, Codable, Equatable, Sendable {
 struct EnrichListingRequest: Codable, Equatable, Sendable {
     let hints: Hints?
     let images: [String]?
-    let mode: Mode
+    let mode: EnrichListingRequestMode
     let fillBlanksOnly: Bool?
     let persist: Bool?
     let productId: String?
@@ -4046,7 +4195,7 @@ extension EnrichListingRequest {
     func with(
         hints: Hints?? = nil,
         images: [String]?? = nil,
-        mode: Mode? = nil,
+        mode: EnrichListingRequestMode? = nil,
         fillBlanksOnly: Bool?? = nil,
         persist: Bool?? = nil,
         productId: String?? = nil
@@ -4128,7 +4277,7 @@ extension Hints {
     }
 }
 
-enum Mode: String, Codable, Equatable, Sendable {
+enum EnrichListingRequestMode: String, Codable, Equatable, Sendable {
     case draft = "draft"
     case product = "product"
 }

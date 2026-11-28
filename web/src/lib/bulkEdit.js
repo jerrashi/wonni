@@ -92,5 +92,56 @@ export function bulkEditPatch(product, edits) {
 /** Does the dialog change anything at all? (Apply stays disabled until it does.) */
 export function hasAnyEdit(edits) {
   return bulkEditPatch({ title: "", description: "", listingPrice: 10, variants: [{ price: 12 }] }, { ...edits, changeVariantPrices: false }) != null
-    || Boolean(edits.markOutOfStock);
+    || Boolean(edits.markOutOfStock)
+    || adjustQuantity(0, edits.quantity ?? {}) != null;
+}
+
+// ── Quantity: Remove / Set / Add (2026-11-28) ───────────────────────────────
+// Same rule as functions/sales.js planQuantityAdjustment, which does the real
+// write; this only drives the dialog's "N will be marked out of stock" line.
+
+/** Remove never goes below 0. null = no quantity change. */
+export function adjustQuantity(current, { mode, amount }) {
+  const a = num(amount);
+  if (!mode || a == null || a < 0 || !Number.isInteger(a)) return null;
+  const q = Math.max(0, Number(current) || 0);
+  if (mode === "set") return a;
+  if (mode === "add") return q + a;
+  return Math.max(0, q - a);
+}
+
+/** Total stock before and after for one product (every active variant when the
+ *  quantity varies by variant, else the one shared number). */
+export function quantityChange(product, quantity) {
+  const variants = Array.isArray(product?.variants) ? product.variants : [];
+  const perVariant = variants.length > 0 && product.quantityVariesByVariant === true;
+  if (!perVariant) {
+    const before = Math.max(0, Number(product?.quantity) || 0);
+    const after = adjustQuantity(before, quantity);
+    return after == null ? null : { before, after };
+  }
+  let before = 0, after = 0;
+  for (const v of variants) {
+    if (!v || v.active === false) continue;
+    const b = Math.max(0, Number(v.quantity) || 0);
+    const n = adjustQuantity(b, quantity);
+    if (n == null) return null;
+    before += b; after += n;
+  }
+  return { before, after };
+}
+
+/** "2 will be marked out of stock · 1 will be restocked and re-listed." or "". */
+export function quantityWarning(products, quantity) {
+  let out = 0, back = 0;
+  for (const p of products) {
+    const c = quantityChange(p, quantity);
+    if (!c) continue;
+    if (c.before > 0 && c.after === 0) out++;
+    if (c.before === 0 && c.after > 0) back++;
+  }
+  const parts = [];
+  if (out) parts.push(`${out} will be marked out of stock`);
+  if (back) parts.push(`${back} will be restocked and re-listed`);
+  return parts.length ? `${parts.join(" · ")}.` : "";
 }

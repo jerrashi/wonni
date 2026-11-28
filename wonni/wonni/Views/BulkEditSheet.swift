@@ -23,6 +23,11 @@ struct BulkEditSheet: View {
     @State private var selectedCondition: ItemCondition? = nil
     @State private var selectedShipping: ShippingPolicyMode = .unchanged
     @State private var markOutOfStock = false
+    /// Quantity: Remove / Set / Add (2026-11-28, mock
+    /// https://claude.ai/artifact/8Z2t5BCtMsWaeuMw4iJS9t). Applied per listing by
+    /// `adjustQuantityAndCascade`: 0 = sold out, from 0 = restock, pushed everywhere.
+    @State private var quantityMode: QuantityMode = .none
+    @State private var quantityAmount: Int?
     @State private var weightWholeLbs: Int = 0
     @State private var weightOz: Double = 0
     @State private var lengthIn: Double? = nil
@@ -41,7 +46,7 @@ struct BulkEditSheet: View {
     @FocusState private var focusedField: FocusField?
 
     enum FocusField: Hashable {
-        case titlePrepend, titleAppend, descPrepend, descAppend, priceAmount, priceLimit
+        case titlePrepend, titleAppend, descPrepend, descAppend, priceAmount, priceLimit, quantityAmount
         case weightLbs, weightOz, lengthIn, widthIn, heightIn
     }
 
@@ -59,6 +64,10 @@ struct BulkEditSheet: View {
     
     enum PriceAdjustmentType {
         case percentage, absolute
+    }
+
+    enum QuantityMode: String {
+        case none, remove, set, add
     }
     
     enum ShippingPolicyMode: String, CaseIterable {
@@ -184,6 +193,41 @@ struct BulkEditSheet: View {
                 } header: {
                     Text("Price Adjustment")
                 }
+
+                Section {
+                    Picker("Quantity", selection: $quantityMode) {
+                        Text("− Remove").tag(QuantityMode.remove)
+                        Text("Set").tag(QuantityMode.set)
+                        Text("+ Add").tag(QuantityMode.add)
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: quantityMode) { _, mode in
+                        if mode != .none { markOutOfStock = false }
+                    }
+                    if quantityMode != .none {
+                        HStack {
+                            Text("Amount")
+                            TextField("0", value: $quantityAmount, format: .number)
+                                .keyboardType(.numberPad)
+                                .multilineTextAlignment(.trailing)
+                                .textFieldStyle(.roundedBorder)
+                                .focused($focusedField, equals: .quantityAmount)
+                                .accessibilityIdentifier("bulkEditQuantityAmount")
+                        }
+                        Button("Leave unchanged") {
+                            quantityMode = .none
+                            quantityAmount = nil
+                        }
+                        .font(.subheadline)
+                    }
+                } header: {
+                    Text("Quantity")
+                } footer: {
+                    if quantityMode != .none {
+                        Text("Products that track quantity per variant get the change on every variant.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 
                 Section {
                     Picker("Condition", selection: $selectedCondition) {
@@ -269,6 +313,9 @@ struct BulkEditSheet: View {
                 Section {
                     Toggle("Mark as Out of Stock", isOn: $markOutOfStock)
                         .tint(.red)
+                        .onChange(of: markOutOfStock) { _, on in
+                            if on { quantityMode = .none; quantityAmount = nil }
+                        }
                 } header: {
                     Text("Availability")
                 } footer: {
@@ -372,8 +419,10 @@ struct BulkEditSheet: View {
             focusedField = .descAppend
         case .priceLimit:
             focusedField = .priceAmount
-        case .weightLbs:
+        case .quantityAmount:
             focusedField = .priceLimit
+        case .weightLbs:
+            focusedField = .quantityAmount
         case .weightOz:
             focusedField = .weightLbs
         case .lengthIn:
@@ -400,6 +449,8 @@ struct BulkEditSheet: View {
         case .priceAmount:
             focusedField = .priceLimit
         case .priceLimit:
+            focusedField = .quantityAmount
+        case .quantityAmount:
             focusedField = .weightLbs
         case .weightLbs:
             focusedField = .weightOz
@@ -425,8 +476,12 @@ struct BulkEditSheet: View {
         handlingTimeDaysValue > 0 || resetHandlingTimeToDefault
     }
 
+    private var hasQuantityChange: Bool {
+        quantityMode != .none && (quantityAmount ?? -1) >= 0
+    }
+
     private var hasChanges: Bool {
-        hasFieldChanges || markOutOfStock
+        hasFieldChanges || markOutOfStock || hasQuantityChange
     }
     
     private func applyBulkEdit() {
@@ -488,6 +543,19 @@ struct BulkEditSheet: View {
                             Task {
                                 try? await ProductRepository.shared.pushListingEdits(listingId: id, function: "pushProductEdits")
                             }
+                        }
+                    }
+                }
+
+                if hasQuantityChange, !markOutOfStock, let amount = quantityAmount {
+                    // Server does the math (shared number or every variant) and the
+                    // cascade; listings/{id} is mirrored there too. Listing id = product id.
+                    for id in selectedListingIds {
+                        do {
+                            _ = try await Functions.functions().httpsCallable("adjustQuantityAndCascade")
+                                .call(["productId": id, "mode": quantityMode.rawValue, "amount": amount])
+                        } catch {
+                            print("[BulkEdit] quantity failed for \(id): \(error.localizedDescription)")
                         }
                     }
                 }
