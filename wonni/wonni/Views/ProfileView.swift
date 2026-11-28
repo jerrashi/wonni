@@ -3589,6 +3589,7 @@ struct RestockSheet: View {
             }
             .navigationTitle("Restock")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear { quantity = RestockSheet.startingQuantity(for: listing) }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -3607,6 +3608,12 @@ struct RestockSheet: View {
             }
         }
         .presentationDetents([.medium])
+    }
+
+    /// What the stepper starts at: the stock before it sold out, else the listing's
+    /// own quantity, else 1.
+    static func startingQuantity(for listing: UserListing) -> Int {
+        min(999, max(1, listing.quantityBeforeSoldOut ?? listing.quantity ?? 1))
     }
 }
 

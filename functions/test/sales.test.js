@@ -884,3 +884,16 @@ test("per-variant stock: an eBay sale still leaves eBay alone (eBay already decr
     assert.equal(called, false);
   } finally { restore(); }
 });
+
+test("regression: mark sold out remembers the stock so a restock starts from it (muffler 15 → 1)", async () => {
+  const db = new FakeFirestore({
+    products: { p1: plainProduct({ quantity: 15, quantityVariesByVariant: false }) },
+    listings: { p1: { userId: UID, status: "active", quantity: 1 } },
+  });
+  const r = await applyQuantityDelta(db, "p1", UID, null, 0, { zeroAll: true });
+  assert.equal(r.previousQuantity, 15);
+  assert.equal(db.peek("products", "p1").quantityBeforeSoldOut, 15);
+  assert.equal(db.peek("products", "p1").quantity, 0);
+  assert.equal(db.peek("listings", "p1").quantityBeforeSoldOut, 15, "the app's copy carries it for the restock sheet");
+  assert.equal(db.peek("listings", "p1").status, "sold");
+});

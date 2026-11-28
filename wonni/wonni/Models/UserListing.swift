@@ -163,6 +163,9 @@ struct UserListing: Identifiable, Codable {
     var price: Double?
     var currency: String            // "USD"
     var quantity: Int?              // nil = 1 (default for single-item listings)
+    /// Stock just before "Mark as sold out" zeroed it (server, 2026-11-28). The restock
+    /// sheet starts from it; it used to start at 1, which left a 15-unit item at 1.
+    var quantityBeforeSoldOut: Int?
 
     // ── Condition ─────────────────────────────────────────────────────────────
     var condition: ItemCondition

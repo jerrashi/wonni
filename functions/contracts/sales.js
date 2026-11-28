@@ -277,6 +277,8 @@ module.exports = {
         platforms: z.record(z.string(), z.string()).optional(),
         /** Why a platform failed, keyed like `platforms`. */
         errors: z.record(z.string(), z.string()).optional(),
+        /** Stock before it was zeroed (also saved as products/listings quantityBeforeSoldOut); a restock starts from it. */
+        previousQuantity: z.number().int().nonnegative().optional(),
       }),
     },
     {

@@ -114,6 +114,13 @@ async function applyQuantityDelta(db, productId, uid, variantSku, delta, { force
     // zeroAll: force every active variant (or the product) to 0. Used by
     // markSoldOutAndCascade, which is unambiguous even without a variant sku.
     if (zeroAll) {
+      // What the stock was, remembered so a restock starts from it (2026-11-27:
+      // the app's restock sheet started at 1, and a sold-out → restock left a
+      // 15-unit product at 1, sold out again by the next two sales).
+      const before = isVariantProduct && !isSharedPool(product)
+        ? variants.filter((v) => v && v.active !== false).reduce((n, v) => n + Math.max(0, Number(v.quantity) || 0), 0)
+        : Math.max(0, Number(product.quantity) || 0);
+      if (before > 0) update.quantityBeforeSoldOut = before;
       // Shared pool: the master `product.quantity` is the field every read
       // path (resolveStock, postMultiVariant) treats as authoritative, so it
       // must go to 0 even though the product also has a `variants` array.
@@ -126,8 +133,9 @@ async function applyQuantityDelta(db, productId, uid, variantSku, delta, { force
       }
       update.saleStatus = "sold";
       tx.update(ref, update);
-      mirrorToListing(0);
-      return { previousQuantity: null, newQuantity: 0, soldOut: true, variantSku, product: { ...product, ...update } };
+      const patch = listingStockPatch(listingSnap.exists ? listingSnap.data() : null, uid, 0);
+      if (patch) tx.update(listingRef, before > 0 ? { ...patch, quantityBeforeSoldOut: before } : patch);
+      return { previousQuantity: before, newQuantity: 0, soldOut: true, variantSku, product: { ...product, ...update } };
     }
 
     const { scope, qty, variantIndex } = resolveStock(product, variantSku);
@@ -746,7 +754,7 @@ exports.markSoldOutAndCascade = onCall({ secrets: EBAY_SECRETS }, validated("mar
   });
   // Per-platform outcome for the app's progress list: "failed" + errors[p] is a
   // real failure; "ended" means the eBay listing was already gone (counts as done).
-  return { success: true, platforms: result.platforms, errors: result.errors };
+  return { success: true, platforms: result.platforms, errors: result.errors, previousQuantity: applied.previousQuantity ?? 0 };
 }));
 
 // Manual Wonni-side quantity edit (not a sale) → push to eBay only. See

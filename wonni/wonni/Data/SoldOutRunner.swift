@@ -273,6 +273,9 @@ final class SoldOutRunner: ObservableObject {
             if !skipList.isEmpty { payload["skipPlatforms"] = skipList }
             let result = try await Functions.functions().httpsCallable("markSoldOutAndCascade").call(payload)
             reply.errors = (result.data as? [String: Any])?["errors"] as? [String: String] ?? [:]
+            if let previous = (result.data as? [String: Any])?["previousQuantity"] as? Int, previous > 0 {
+                reply.previousQuantity = previous
+            }
         }
         switch serverResult {
         case .failure(let message):
@@ -329,7 +332,7 @@ final class SoldOutRunner: ObservableObject {
             // The server call already zeroed stock; put it back so nothing is half done.
             // If even that fails, say so: the listing is then sold out on Wonni/API
             // platforms but still live on Mercari, and the user has to look at it.
-            let restored = await restoreStock(listingId: listingId, quantity: job.previousQuantity)
+            let restored = await restoreStock(listingId: listingId, quantity: reply.previousQuantity ?? job.previousQuantity)
             let failure = restored ? message : "\(message). Stock could not be restored either — this listing is sold out here but still live on Mercari; check it."
             update(jobId) {
                 $0.mercariStep = .failed(message)
@@ -344,6 +347,9 @@ final class SoldOutRunner: ObservableObject {
     /// What the server call answered, filled inside the retried closure.
     private final class ServerReply: @unchecked Sendable {
         var errors: [String: String] = [:]
+        /// Stock the server zeroed; the Mercari-failure restore puts back this, not the
+        /// listing doc's quantity (often unset or stale, so it restored 1).
+        var previousQuantity: Int?
     }
 
     /// Runs `body` up to `times` times, each bounded by the step timeout.

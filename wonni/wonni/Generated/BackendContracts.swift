@@ -7504,11 +7504,13 @@ enum SkipPlatform: String, Codable, Equatable, Sendable {
 struct MarkSoldOutAndCascadeResponse: Codable, Equatable, Sendable {
     let errors: [String: String]?
     let platforms: [String: String]?
+    let previousQuantity: Int?
     let success: Bool
 
     enum CodingKeys: String, CodingKey {
         case errors = "errors"
         case platforms = "platforms"
+        case previousQuantity = "previousQuantity"
         case success = "success"
     }
 }
@@ -7534,11 +7536,13 @@ extension MarkSoldOutAndCascadeResponse {
     func with(
         errors: [String: String]?? = nil,
         platforms: [String: String]?? = nil,
+        previousQuantity: Int?? = nil,
         success: Bool? = nil
     ) -> MarkSoldOutAndCascadeResponse {
         return MarkSoldOutAndCascadeResponse(
             errors: errors ?? self.errors,
             platforms: platforms ?? self.platforms,
+            previousQuantity: previousQuantity ?? self.previousQuantity,
             success: success ?? self.success
         )
     }
