@@ -285,6 +285,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
     private var hasDetectedSuccess = false
     /// One success watch per page load; see `startSuccessWatch`.
     private var isWatchingForSuccess = false
+    private var successWatchDeadline = Date.distantPast
     /// Guards against re-entrant/duplicate autofill. SwiftUI can re-run the trigger (and the
     /// simulator's flaky WebContent process can reload the page), which previously fired several
     /// concurrent injection passes that fought over the same form — a carrier would save in one
@@ -305,6 +306,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         #endif
         // Load immediately — page loads while photos are being fetched concurrently
         webView.load(URLRequest(url: URL(string: "https://www.mercari.com/sell/")!))
+        startSuccessWatch()
     }
 
     func reloadSellPage() {
@@ -312,6 +314,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         hasStartedInjection = false
         status = .loading
         webView.load(URLRequest(url: URL(string: "https://www.mercari.com/sell/")!))
+        startSuccessWatch()
     }
 
     // Resets the injection guard so a resume pass can run without reloading the page.
@@ -392,7 +395,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         buyerPaysShipping: Bool,
         preferences: ShippingPreferences
     ) async {
-        guard !hasStartedInjection else { return }
+        guard !hasStartedInjection, !hasDetectedSuccess else { return }
         hasStartedInjection = true
         status = .injecting
         startSuccessWatch()
@@ -515,6 +518,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         }
 
         isListingComplete = await checkListingButtonEnabled()
+        startSuccessWatch()  // autofill is done; the user may finish by hand from here
         if status == .injecting { status = .waitingForCategory }
     }
 
@@ -646,6 +650,8 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
             print("[MercariPostingState] injectFields skipped — a pass is already in progress")
             return
         }
+        // The user filled and posted it by hand before autofill began.
+        guard !hasDetectedSuccess else { return }
         hasStartedInjection = true
         status = .injecting
         // Watch for the post-success screen from the START of the pass, not the end: the user
@@ -875,8 +881,9 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         // Poll once to set isListingComplete so the banner accurately reflects form state.
         // (The List button becomes enabled only after Mercari validates all required fields.)
         isListingComplete = await checkListingButtonEnabled()
+        startSuccessWatch()  // autofill is done; the user may finish by hand from here
 
-        // The .success state is set either by pollForSuccessModal or the navigation delegate.
+        // The .success state is set either by the success watch or the navigation delegate.
         // If we're still here, leave a "review & list" resting state rather than a hard failure —
         // the form is filled as far as we could take it, so the user finishes in the webview.
         if status == .injecting { status = .waitingForCategory }
@@ -885,18 +892,37 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
     /// Polls the DOM for Mercari's post-success modal ("Post another item" / "Share your listing").
     /// Mercari's React router does not navigate away from /sell/ after submission, so the
     /// navigation delegate never fires. This is the only reliable success signal.
-    /// Starts `pollForSuccessModal` once per page load (reset by reload / resume).
+    /// How long the watch keeps going after its last (re)start. Each start pushes the
+    /// deadline out: the sell page opening, each autofill pass starting, and each pass
+    /// finishing (the user may finish by hand after that).
+    private static let successWatchWindow: TimeInterval = 5 * 60
+
+    /// Watches for Mercari's success screen from the moment the sell page opens, so a
+    /// listing the user fills and posts by hand (before or during autofill) is still
+    /// caught. One loop at a time; it ends on success, at the deadline, or when the
+    /// Mercari screen closes (the loop holds this state weakly).
     private func startSuccessWatch() {
-        guard !isWatchingForSuccess, !hasDetectedSuccess else { return }
+        guard !hasDetectedSuccess else { return }
+        successWatchDeadline = Date().addingTimeInterval(Self.successWatchWindow)
+        guard !isWatchingForSuccess else { return }
         isWatchingForSuccess = true
         Task { [weak self] in
-            await self?.pollForSuccessModal()
-            self?.isWatchingForSuccess = false
+            while true {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self else { return }
+                if await self.checkForSuccessOnce() { self.isWatchingForSuccess = false; return }
+                if Date() >= self.successWatchDeadline {
+                    self.isWatchingForSuccess = false
+                    print("[MercariPostingState] Success watch ended — success screen not detected")
+                    return
+                }
+            }
         }
     }
 
-    private func pollForSuccessModal() async {
-        guard !hasDetectedSuccess else { return }
+    /// One look at the page. True once success is known (now or earlier).
+    private func checkForSuccessOnce() async -> Bool {
+        guard !hasDetectedSuccess else { return true }
         let js = """
         return (function() {
             var buttons = document.querySelectorAll('button, a');
@@ -916,26 +942,18 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
             return 'not-found';
         })();
         """
-        // Up to 20 minutes: it now runs alongside autofill (which alone can take minutes) and
-        // must still cover the user finishing the listing by hand afterwards.
-        for _ in 0..<1200 {
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            guard !hasDetectedSuccess else { return }
-            let result = (try? await webView.callJS(js)) as? String ?? "not-found"
-            if result == "success" {
-                hasDetectedSuccess = true
-                // Capture the Mercari item ID *before* flipping to .success, so updateFirestore()
-                // (which fires on the .success change) persists it. Without this the ID was almost
-                // never saved — the navigation delegate it used to rely on doesn't fire on the SPA.
-                if mercariItemId == nil {
-                    mercariItemId = await extractMercariItemId()
-                }
-                print("[MercariPostingState] Success modal detected, itemId=\(mercariItemId ?? "nil")")
-                status = .success
-                return
-            }
+        let result = (try? await webView.callJS(js)) as? String ?? "not-found"
+        guard result == "success", !hasDetectedSuccess else { return hasDetectedSuccess }
+        hasDetectedSuccess = true
+        // Capture the Mercari item ID *before* flipping to .success, so updateFirestore()
+        // (which fires on the .success change) persists it. Without this the ID was almost
+        // never saved — the navigation delegate it used to rely on doesn't fire on the SPA.
+        if mercariItemId == nil {
+            mercariItemId = await extractMercariItemId()
         }
-        print("[MercariPostingState] Success poll ended — success screen not detected")
+        print("[MercariPostingState] Success modal detected, itemId=\(mercariItemId ?? "nil")")
+        status = .success
+        return true
     }
 
     /// Extracts the Mercari item ID (e.g. "m1234567890") from the post-success screen. First scrapes
