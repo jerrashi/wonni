@@ -40,17 +40,18 @@ function buildEbaySkuMap(productDocs) {
   for (const doc of productDocs) {
     const p = doc.data();
     const variants = Array.isArray(p.variants) ? p.variants : [];
-    const isVariant = p.hasVariants === true || variants.length > 0;
-    if (isVariant) {
-      variants.forEach((v, i) => {
-        const sku = v.ebayVariantSku || variantSkuFor(doc.id, v, i);
-        if (sku && !map.has(sku)) map.set(sku, { productId: doc.id, variantSku: v.sku ?? null });
-      });
-    } else {
-      map.set(doc.id, { productId: doc.id, variantSku: null });
-      // Legacy iOS SKU, for listings not yet migrated off `listings/`.
-      map.set(`wonni_${doc.id}`, { productId: doc.id, variantSku: null });
-    }
+    variants.forEach((v, i) => {
+      const sku = v.ebayVariantSku || variantSkuFor(doc.id, v, i);
+      if (sku && !map.has(sku)) map.set(sku, { productId: doc.id, variantSku: v.sku ?? null });
+    });
+    // The product id is the SKU of a plain eBay listing. Mapped for EVERY product,
+    // variants or not: a product with one choice posts to eBay as a plain listing
+    // (SKU = product id), and when only the variant SKUs were mapped its sales
+    // matched nothing and were skipped silently (2026-11-27: a muffler with one
+    // "Style" sold on eBay and reached Wonni 17 h later, through a later push).
+    if (!map.has(doc.id)) map.set(doc.id, { productId: doc.id, variantSku: null });
+    // Legacy iOS SKU, for listings not yet migrated off `listings/`.
+    if (!map.has(`wonni_${doc.id}`)) map.set(`wonni_${doc.id}`, { productId: doc.id, variantSku: null });
   }
   return map;
 }
@@ -318,7 +319,13 @@ async function syncEbay(db, uid, productDocs, productById, sinceMs) {
     const matches = (order.lineItems ?? [])
       .map((li) => ({ li, match: skuMap.get(li.sku ?? "") }))
       .filter((x) => x.match);
-    if (!matches.length) { skipped++; continue; }
+    if (!matches.length) {
+      // Not silent: the scheduled poll's window moves on, so an order skipped here
+      // is only picked up again by a push or the 30-day button.
+      console.warn(`[syncSales] ebay order ${order.orderId} uid=${uid}: no product for SKU ${(order.lineItems ?? []).map((li) => li.sku || "(none)").join(", ")}`);
+      skipped++;
+      continue;
+    }
 
     const [tracking, finance] = await Promise.all([
       ebayFetchTracking(uid, order.orderId),

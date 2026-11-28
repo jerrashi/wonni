@@ -41,6 +41,14 @@ test("buildEbaySkuMap: single = productId + legacy wonni_ alias; variant = per-v
   assert.deepEqual(map.get("CUSTOM-M"), { productId: "p2", variantSku: "TEE-M" }, "stored ebayVariantSku wins");
 });
 
+test("regression: a product with one choice, posted plain (SKU = product id), still matches", () => {
+  const map = buildEbaySkuMap(docs({
+    muffler: { variants: [{ id: "v1", sku: "MUF", optionValues: { Style: "Muffler" } }] },
+  }));
+  assert.deepEqual(map.get("muffler"), { productId: "muffler", variantSku: null });
+  assert.deepEqual(map.get("mufflerv1"), { productId: "muffler", variantSku: "MUF" });
+});
+
 test("buildEtsyListingMap: product- and variant-level ids, current + legacy keys", () => {
   const map = buildEtsyListingMap(docs({
     p1: { crossPostListingIds: { etsy: 111 } },
