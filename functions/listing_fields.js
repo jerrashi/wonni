@@ -42,7 +42,10 @@ function blankFields(product, { includeFacebookCategory = false } = {}) {
   const out = [];
   if (isBlank(product.description)) out.push("description");
   if (isBlank(product.brand) && isBlank(product.artistName)) out.push("brand");
-  if (isBlank(product.tags)) out.push("tags");
+  // Tags the seller made live in `tags`; the AI only ever offers 1-3 in
+  // `suggestedTags`, saved to `tags` only when the seller taps + (2026-11-28, user:
+  // 8 AI tags per product made 900+ tags and buried the seller's own).
+  if (isBlank(product.tags) && isBlank(product.suggestedTags)) out.push("tags");
   if (isBlank(product.condition) && isBlank(product.mercariCondition)) out.push("condition");
   if (isBlank(product.category) && isBlank(product.geminiCategory)) out.push("category");
   if (includeFacebookCategory && isBlank(product.facebookCategory)) out.push("facebookCategory");
@@ -55,7 +58,7 @@ Given a product's title, its current description (may be empty), and one photo, 
 - "descriptionAddon": ONE extra sentence adding a detail not already in the current description (used when a description already exists).
 - "titleAddon": a short keyword phrase (<= 24 characters, no leading punctuation) to append to the current title for searchability.
 - "brand": the brand / artist / franchise (e.g. "BTS", "Sanrio", "Nike"). Use "Unbranded" if there is none.
-- "tags": array of up to 8 short lowercase search keywords.
+- "tags": array of 1-3 short lowercase keywords a seller would group this item under (franchise, line, type). Fewer is better.
 - "condition": exactly one of "new", "likenew", "good", "fair", "poor" — your best guess from the photo.
 - "category": a short category path hint like "Collectibles > K-pop > Photocards" (a hint for a marketplace category picker, NOT an ID).
 - "facebookCategory": ONLY if asked — must be EXACTLY one string from the provided candidate list, verbatim, no variation.
@@ -143,7 +146,7 @@ async function resolveListingFields(product, { apiKey, includeFacebookCategory =
   }
 
   if (blanks.includes("tags") && Array.isArray(g.tags) && g.tags.length) {
-    writes.tags = g.tags.map((t) => String(t).toLowerCase().trim()).filter(Boolean).slice(0, 8);
+    writes.suggestedTags = g.tags.map((t) => String(t).toLowerCase().trim()).filter(Boolean).slice(0, 3);
   }
 
   if (blanks.includes("category") && typeof g.category === "string" && g.category.trim()) {
@@ -225,3 +228,4 @@ exports.aiAutofillListing = onCall(
 
 exports.resolveListingFields = resolveListingFields;
 exports.fillBlankFieldsInline = fillBlankFieldsInline;
+exports._internal = { blankFields };

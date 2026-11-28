@@ -100,6 +100,16 @@ class Item {
     var updatedAt: Date = Date()
     var sourceAssetIdentifiers: [String]
     var tags: [String]
+    /// 1-3 AI-suggested tags, kept apart from the seller's `tags` (products/{id}.suggestedTags,
+    /// same field as the web). Saved into `tags` only when the seller taps + (2026-11-28).
+    /// Property-level default for SwiftData's lightweight migration.
+    var suggestedTags: [String] = []
+
+    /// Tags left after removing the AI's old ones: the AI always wrote lowercase, so an
+    /// all-lowercase tag is the AI's (see UploadManager.removeLegacyAITags).
+    static func tagsWithoutLegacyAI(_ tags: [String]) -> [String] {
+        tags.filter { $0 != $0.lowercased() }
+    }
     var personalNote: String?
     /// Maps a photo's local asset identifier to its uploaded Storage path. Keyed by
     /// assetId (not position) so it stays correct across `movePhoto`/`removePhoto`/
@@ -714,6 +724,8 @@ struct DraftEditFields: Codable, Equatable {
     var estimatedDays = ""
     var condition: ItemCondition = .good
     var tagsText = ""
+    /// Optional so a PendingDraftEdit saved by an older build still decodes.
+    var suggestedTags: [String]?
     /// nil = the account's default (see Item.facebookOfferShipping).
     var facebookOfferShipping: Bool?
     var facebookHideFromFriends: Bool?
@@ -742,6 +754,7 @@ struct DraftEditFields: Codable, Equatable {
         estimatedDays = "\(item.estimatedShippingDays)"
         handlingTimeDays = item.handlingTimeDays
         tagsText = item.tags.joined(separator: ", ")
+        suggestedTags = item.suggestedTags
         facebookOfferShipping = item.facebookOfferShipping
         facebookHideFromFriends = item.facebookHideFromFriends
         mercariSmartPricing = item.mercariSmartPricing
@@ -749,6 +762,29 @@ struct DraftEditFields: Codable, Equatable {
         lengthText = item.lengthIn.map { String(format: "%.2f", $0) } ?? ""
         widthText = item.widthIn.map { String(format: "%.2f", $0) } ?? ""
         heightText = item.heightIn.map { String(format: "%.2f", $0) } ?? ""
+    }
+
+    /// Suggestions not already among the typed tags (case-insensitive).
+    var visibleSuggestedTags: [String] {
+        let typed = Set(Self.splitTags(tagsText).map { $0.lowercased() })
+        return (suggestedTags ?? []).filter { !typed.contains($0.lowercased()) }
+    }
+
+    /// + on a suggestion: append it to the typed tags and drop it from the suggestions.
+    mutating func keepSuggestedTag(_ tag: String) {
+        var typed = Self.splitTags(tagsText)
+        if !typed.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) { typed.append(tag) }
+        tagsText = typed.joined(separator: ", ")
+        suggestedTags = (suggestedTags ?? []).filter { $0 != tag }
+    }
+
+    /// x on a suggestion: dismiss it for this draft.
+    mutating func dropSuggestedTag(_ tag: String) {
+        suggestedTags = (suggestedTags ?? []).filter { $0 != tag }
+    }
+
+    static func splitTags(_ text: String) -> [String] {
+        text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
     private static func number(_ text: String) -> Double? {
@@ -785,6 +821,7 @@ struct DraftEditFields: Codable, Equatable {
         item.tags = tagsText.split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
+        item.suggestedTags = suggestedTags ?? item.suggestedTags
         item.weightLbs = Self.number(weightText)
         item.lengthIn = Self.number(lengthText)
         item.widthIn = Self.number(widthText)

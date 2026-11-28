@@ -89,7 +89,9 @@ function productDocFor(uid, p, { images, now }) {
   // buildNewProductDoc only emits its own allowlist; the proposal's extra
   // listing fields go on afterwards (same keys ebayCreateListing / the web read).
   doc.shortTitle = p.shortTitle || p.title.slice(0, 80);
-  doc.tags = p.tags || [];
+  // The proposal's tags are AI suggestions: offered on the product page, not saved as tags.
+  doc.tags = [];
+  doc.suggestedTags = (p.tags || []).slice(0, 3);
   doc.quantity = p.quantity || 1;
   if (p.ebayCategoryId) doc.ebayCategoryId = p.ebayCategoryId;
   if (p.ebayConditionId) doc.ebayConditionId = p.ebayConditionId;

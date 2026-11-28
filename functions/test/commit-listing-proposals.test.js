@@ -84,7 +84,8 @@ test("productDocFor: importer doc shape plus the proposal's listing fields; cost
   assert.deepEqual(doc.images, ["https://storage.googleapis.com/b/x.jpg"]);
   assert.deepEqual(doc.sourceImages, ["https://m.media-amazon.com/a.jpg", "https://m.media-amazon.com/b.png"]);
   assert.equal(doc.shortTitle, "Spigen Ultra Hybrid iPhone 18 Pro Case Clear");
-  assert.deepEqual(doc.tags, ["spigen", "iphone"]);
+  assert.deepEqual(doc.tags, [], "AI tags are never saved as the seller's tags");
+  assert.deepEqual(doc.suggestedTags, ["spigen", "iphone"]);
   assert.equal(doc.quantity, 1);
   assert.equal(doc.ebayCategoryId, "9355");
   assert.deepEqual(doc.geminiItemSpecifics, { Brand: "Spigen" });

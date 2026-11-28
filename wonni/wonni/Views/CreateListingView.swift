@@ -623,8 +623,17 @@ struct DraftEditSheet: View {
                     }
                 }
 
-                Section("Tags") {
+                Section {
                     TextField("e.g. photocard, kpop, sealed", text: $fields.tagsText)
+                    if !fields.visibleSuggestedTags.isEmpty {
+                        SuggestedTagsRow(
+                            tags: fields.visibleSuggestedTags,
+                            onKeep: { fields.keepSuggestedTag($0) },
+                            onDrop: { fields.dropSuggestedTag($0) }
+                        )
+                    }
+                } header: {
+                    Text("Tags")
                 }
 
                 Section("Note (hidden from buyer)") {
@@ -2156,6 +2165,41 @@ struct DraftEditRoute: View {
             DraftEditSheet(item: item, embedded: true)
         } else {
             ContentUnavailableView("Draft not found", systemImage: "doc.questionmark")
+        }
+    }
+}
+
+
+/// The AI's 1-3 suggested tags under the Tags field: + keeps one (adds it to the tags),
+/// x dismisses it. Kept apart from the seller's tags (2026-11-28, mock
+/// https://claude.ai/artifact/1KVn223oxTWMPnE2QJLGSR).
+struct SuggestedTagsRow: View {
+    let tags: [String]
+    let onKeep: (String) -> Void
+    let onDrop: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Suggested").font(.caption).foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(tags, id: \.self) { tag in
+                        HStack(spacing: 6) {
+                            Button { onKeep(tag) } label: { Image(systemName: "plus") }
+                                .accessibilityLabel("Add \(tag) to tags")
+                            Text(tag)
+                            Button { onDrop(tag) } label: { Image(systemName: "xmark").font(.caption2) }
+                                .accessibilityLabel("Dismiss \(tag)")
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10).padding(.vertical, 4)
+                        .background(Capsule().strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3])).foregroundStyle(.tertiary))
+                    }
+                }
+            }
+            .accessibilityIdentifier("draftEditSuggestedTags")
         }
     }
 }

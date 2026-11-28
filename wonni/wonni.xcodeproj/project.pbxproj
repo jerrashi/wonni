@@ -15,6 +15,7 @@
 		0A6C5D24F71BE8393D402C56 /* VisionTitlePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F5B4C13E60AD7282C3F1B45 /* VisionTitlePolicyTests.swift */; };
 		D7A10001C0FFEE0000000003 /* DraftPhotoStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE0000000004 /* DraftPhotoStoreTests.swift */; };
 		D7A10001C0FFEE0000000015 /* PickerCloseoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE0000000016 /* PickerCloseoutTests.swift */; };
+		C0FFEE5A6700000000000001 /* SuggestedTagsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE5A6700000000000002 /* SuggestedTagsTests.swift */; };
 		D7A10001C0FFEE0000000005 /* LayoutRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE0000000006 /* LayoutRegressionTests.swift */; };
 		D7A10001C0FFEE0000000007 /* FacebookAutoPosterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE0000000008 /* FacebookAutoPosterView.swift */; };
 		D7A10001C0FFEE0000000009 /* FacebookAutofillPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A10001C0FFEE000000000A /* FacebookAutofillPolicyTests.swift */; };
@@ -253,6 +254,7 @@
 		9F5B4C13E60AD7282C3F1B45 /* VisionTitlePolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VisionTitlePolicyTests.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE0000000004 /* DraftPhotoStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftPhotoStoreTests.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE0000000016 /* PickerCloseoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickerCloseoutTests.swift; sourceTree = "<group>"; };
+		C0FFEE5A6700000000000002 /* SuggestedTagsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuggestedTagsTests.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE0000000006 /* LayoutRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutRegressionTests.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE0000000008 /* FacebookAutoPosterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FacebookAutoPosterView.swift; sourceTree = "<group>"; };
 		D7A10001C0FFEE000000000A /* FacebookAutofillPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FacebookAutofillPolicyTests.swift; sourceTree = "<group>"; };
@@ -556,6 +558,7 @@
 				9F5B4C13E60AD7282C3F1B45 /* VisionTitlePolicyTests.swift */,
 				D7A10001C0FFEE0000000004 /* DraftPhotoStoreTests.swift */,
 				D7A10001C0FFEE0000000016 /* PickerCloseoutTests.swift */,
+				C0FFEE5A6700000000000002 /* SuggestedTagsTests.swift */,
 				D7A10001C0FFEE0000000006 /* LayoutRegressionTests.swift */,
 				D7A10001C0FFEE000000000A /* FacebookAutofillPolicyTests.swift */,
 				D7A10001C0FFEE0000000010 /* BulkTextDraftMappingTests.swift */,
@@ -826,6 +829,7 @@
 				0A6C5D24F71BE8393D402C56 /* VisionTitlePolicyTests.swift in Sources */,
 				D7A10001C0FFEE0000000003 /* DraftPhotoStoreTests.swift in Sources */,
 				D7A10001C0FFEE0000000015 /* PickerCloseoutTests.swift in Sources */,
+				C0FFEE5A6700000000000001 /* SuggestedTagsTests.swift in Sources */,
 				D7A10001C0FFEE0000000005 /* LayoutRegressionTests.swift in Sources */,
 				D7A10001C0FFEE0000000009 /* FacebookAutofillPolicyTests.swift in Sources */,
 				D7A10001C0FFEE000000000F /* BulkTextDraftMappingTests.swift in Sources */,

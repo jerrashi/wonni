@@ -48,7 +48,7 @@ test("toListingFields: name→title, shortTitle derived, lbs→oz, dims, clamps"
   assert.equal(f.suggestedPrice, 13);
   assert.equal(f.weightOz, 8, "0.5 lb → 8 oz");
   assert.equal(f.lengthIn, 4.4);
-  assert.equal(f.tags.length, 8);
+  assert.equal(f.tags.length, 3, "at most 3 suggested tags");
   assert.deepEqual(f.itemSpecifics, { Type: "Photo Card", Member: "Jungkook" });
   assert.equal(f.confidence, 1, "clamped to [0,1]");
 });
@@ -70,7 +70,7 @@ test("writesToContract: renames gemini* doc keys, drops mercariCondition", () =>
   assert.deepEqual(
     writesToContract({
       description: "d", brand: "b", condition: "good", mercariCondition: "good",
-      tags: ["x"], geminiCategory: "A > B", geminiItemSpecifics: { K: "V" },
+      suggestedTags: ["x"], geminiCategory: "A > B", geminiItemSpecifics: { K: "V" },
     }),
     { description: "d", brand: "b", condition: "good", tags: ["x"], category: "A > B", itemSpecifics: { K: "V" } },
   );
@@ -102,4 +102,11 @@ test("enrichListing contract: draft needs images, product needs productId", () =
   // product-mode defaults
   assert.equal(s.parse({ mode: "product", productId: "p1" }).fillBlanksOnly, true);
   assert.equal(s.parse({ mode: "product", productId: "p1" }).persist, true);
+});
+
+test("blankFields: tags count as filled once the AI has suggested some", () => {
+  const blank = require("../listing_fields")._internal.blankFields;
+  assert.ok(blank({}).includes("tags"));
+  assert.ok(!blank({ suggestedTags: ["bts"] }).includes("tags"));
+  assert.ok(!blank({ tags: ["ARIRANG Tour Merch"] }).includes("tags"));
 });

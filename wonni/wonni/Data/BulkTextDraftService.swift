@@ -56,7 +56,9 @@ enum BulkTextDraftMapper {
         item.quantity = proposal.quantity > 1 ? proposal.quantity : nil
         item.aiSuggestedCategory = proposal.category
         item.aiSuggestedBrand = proposal.brand
-        item.tags = proposal.tags
+        // AI tags are suggestions only (shown under Tags on Edit), never the seller's tags.
+        item.tags = []
+        item.suggestedTags = Array(proposal.tags.prefix(3))
         item.aiModel = aiModel
         item.aiPromptVersion = aiPromptVersion
         // "Sell similar": the comp's real eBay category + item specifics.

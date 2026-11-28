@@ -58,7 +58,7 @@ function toListingFields(g = {}) {
   if (cond) out.condition = cond;
 
   if (Array.isArray(g.tags) && g.tags.length) {
-    out.tags = g.tags.map((t) => String(t).toLowerCase().trim()).filter(Boolean).slice(0, 8);
+    out.tags = g.tags.map((t) => String(t).toLowerCase().trim()).filter(Boolean).slice(0, 3);
   }
 
   const price = Number(g.suggestedPrice ?? g.price);
@@ -108,7 +108,7 @@ function toListingFields(g = {}) {
 /** `resolveListingFields` doc-field writes → the contract's ListingFields view. */
 function writesToContract(writes = {}) {
   const map = {
-    description: "description", brand: "brand", condition: "condition", tags: "tags",
+    description: "description", brand: "brand", condition: "condition", suggestedTags: "tags",
     geminiCategory: "category", geminiItemSpecifics: "itemSpecifics",
     grader: "grader", grade: "grade", gradeCertNumber: "gradeCertNumber",
   };

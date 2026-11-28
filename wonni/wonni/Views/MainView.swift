@@ -115,6 +115,7 @@ struct MainView: View {
             #endif
             uploadManager.cleanupOrphanedPublishedDrafts(modelContext: modelContext)
             uploadManager.migrateDraftPhotoStorage(modelContext: modelContext)
+            uploadManager.removeLegacyAITags(modelContext: modelContext)
             uploadManager.sweepFailedPublishDrafts(modelContext: modelContext)
             await uploadManager.checkInterruptedCrossPosts()
             soldOutRunner.checkInterrupted()

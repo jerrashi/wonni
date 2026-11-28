@@ -115,7 +115,7 @@ For each listing produce:
 - "brand": publisher/manufacturer/franchise owner, or "Unbranded".
 - "category": hierarchical path hint like "Video Games & Consoles > Video Games".
 - "condition": exactly one of "new", "likenew", "good", "fair", "poor". "CIB"/"complete" with no other note = "good". "sealed" = "new".
-- "tags": up to 8 lowercase search tags.
+- "tags": 1-3 lowercase keywords a seller would group this item under (franchise, line, type). Fewer is better.
 - "included": what the seller's text SAYS physically comes with the listing. Exactly one of:
   "complete" = the text says every original part is there ("CIB", "complete", "complete in box", "disc + manual + case", "with box and manual");
   "partial" = original case or box but the text says something is missing ("no manual");
@@ -194,7 +194,8 @@ function toProposalCore(item = {}) {
 
   const shortTitle = str(item.shortTitle, 80) || title.slice(0, 80);
   const condition = normalizeCondition(item.condition) || "good";
-  const tags = list(item.tags).map((t) => t.toLowerCase()).slice(0, 8);
+  // Suggestions only: clients save them as `suggestedTags`, never `tags`.
+  const tags = list(item.tags).map((t) => t.toLowerCase()).slice(0, 3);
   const quantity = Number.isInteger(item.quantity) && item.quantity > 0 ? item.quantity : 1;
 
   return {

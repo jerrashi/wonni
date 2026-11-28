@@ -506,6 +506,25 @@ class UploadManager: ObservableObject {
         }
     }
 
+    /// One-time launch pass (2026-11-28, user: "remove all the AI generated tags"): drop
+    /// the AI's tags from local drafts so the next sync can't write them back to
+    /// products/{id}. Same rule as functions/scripts/remove_ai_tags.js: the AI always
+    /// wrote lowercase, so an all-lowercase tag is the AI's; anything with a capital
+    /// letter the seller typed. Runs once per install.
+    func removeLegacyAITags(modelContext: ModelContext) {
+        let key = "removedLegacyAITags.2026-11-28"
+        guard !UserDefaults.standard.bool(forKey: key),
+              let items = try? modelContext.fetch(FetchDescriptor<Item>()) else { return }
+        var changed = 0
+        for item in items where !Item.deletedIDs.contains(item.id) {
+            let kept = Item.tagsWithoutLegacyAI(item.tags)
+            if kept != item.tags { item.tags = kept; changed += 1 }
+        }
+        if changed > 0 { try? modelContext.save() }
+        UserDefaults.standard.set(true, forKey: key)
+        print("[UploadManager] Removed AI tags from \(changed) local draft(s)")
+    }
+
     /// Finds items where `pendingPublish == true` but `publishedAt == nil` — these were
     /// mid-publish when the app died, or whose Firestore write failed last session.
     /// Populates `failedPublishDrafts` for the modal alert shown on sell-tab entry.
@@ -1232,6 +1251,7 @@ class UploadManager: ObservableObject {
         data["category"] = draft.aiSuggestedCategory
         data["brand"] = draft.aiSuggestedBrand
         data["tags"] = draft.tags
+        data["suggestedTags"] = draft.suggestedTags
         data["personalNote"] = draft.personalNote
         data["weightLbs"] = draft.weightLbs
         data["lengthIn"] = draft.lengthIn
@@ -1313,6 +1333,7 @@ class UploadManager: ObservableObject {
         if let category = data["category"] as? String { draft.aiSuggestedCategory = category }
         if let brand = data["brand"] as? String { draft.aiSuggestedBrand = brand }
         if let tags = data["tags"] as? [String] { draft.tags = tags }
+        if let suggested = data["suggestedTags"] as? [String] { draft.suggestedTags = suggested }
         if let personalNote = data["personalNote"] as? String { draft.personalNote = personalNote.isEmpty ? nil : personalNote }
         // Raw AI suggestions (distinct from the final values above) — e.g. a
         // dropship-originated product's gemini_identify.js suggestion, so it

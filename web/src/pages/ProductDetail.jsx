@@ -3407,6 +3407,9 @@ function ProductDetail() {
   const [estimatedShippingDays, setEstimatedShippingDays] = useState("3");
   const [handlingTimeDays, setHandlingTimeDays] = useState(1);
   const [tags, setTags] = useState([]);
+  // AI-suggested tags (1-3), kept apart from the seller's own: shown only here, saved
+  // into `tags` only on ＋ (2026-11-28, user). Never listed in the Products/Sales filters.
+  const [suggestedTags, setSuggestedTags] = useState([]);
   const [allUserTags, setAllUserTags] = useState([]);
   const [tagInput, setTagInput] = useState("");
   const [showTagSuggestions, setShowTagSuggestions] = useState(false);
@@ -3640,6 +3643,8 @@ function ProductDetail() {
         setHandlingTimeDays(typeof effHandlingTimeDays === "number" ? effHandlingTimeDays : 1);
         const effTags = "tags" in effectiveFields ? effectiveFields.tags : next.tags;
         setTags(Array.isArray(effTags) ? effTags : []);
+        const effSuggested = "suggestedTags" in effectiveFields ? effectiveFields.suggestedTags : next.suggestedTags;
+        setSuggestedTags(Array.isArray(effSuggested) ? effSuggested : []);
 
         const mergedForImages = { ...next };
         if ("images" in effectiveFields) mergedForImages.images = effectiveFields.images;
@@ -4046,6 +4051,20 @@ function ProductDetail() {
     }
     setTagInput("");
     setShowTagSuggestions(false);
+  }
+
+  function keepSuggestedTag(tag) {
+    const nextTags = tags.includes(tag) ? tags : [...tags, tag];
+    const nextSuggested = suggestedTags.filter((t) => t !== tag);
+    setTags(nextTags);
+    setSuggestedTags(nextSuggested);
+    markFieldsDirty({ tags: nextTags, suggestedTags: nextSuggested });
+  }
+
+  function dropSuggestedTag(tag) {
+    const nextSuggested = suggestedTags.filter((t) => t !== tag);
+    setSuggestedTags(nextSuggested);
+    markFieldsDirty({ suggestedTags: nextSuggested });
   }
 
   function handleRemoveTag(tagToRemove) {
@@ -6051,6 +6070,25 @@ function ProductDetail() {
                       })()
                     )}
                   </div>
+                  {suggestedTags.filter((t) => !tags.includes(t)).length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, marginTop: 10 }}>
+                      <span style={{ fontSize: 12, color: "var(--muted)" }}>Suggested</span>
+                      {suggestedTags.filter((t) => !tags.includes(t)).map((tag) => (
+                        <span
+                          key={tag}
+                          style={{
+                            display: "inline-flex", alignItems: "center", gap: 6,
+                            padding: "3px 10px", borderRadius: 999, fontSize: 13,
+                            border: "1px dashed var(--separator)", background: "var(--fill)", color: "var(--muted)",
+                          }}
+                        >
+                          <button type="button" className="btn-plain" style={{ padding: 0, fontSize: 13 }} onClick={() => keepSuggestedTag(tag)} title={`Add ${tag} to your tags`} aria-label={`Add ${tag} to your tags`}>＋</button>
+                          {tag}
+                          <button type="button" className="btn-plain" style={{ padding: 0, fontSize: 12, color: "var(--muted)" }} onClick={() => dropSuggestedTag(tag)} title={`Dismiss ${tag}`} aria-label={`Dismiss ${tag}`}>✕</button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 12 }}>
