@@ -283,6 +283,8 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
 
     let webView: WKWebView
     private var hasDetectedSuccess = false
+    /// One success watch per page load; see `startSuccessWatch`.
+    private var isWatchingForSuccess = false
     /// Guards against re-entrant/duplicate autofill. SwiftUI can re-run the trigger (and the
     /// simulator's flaky WebContent process can reload the page), which previously fired several
     /// concurrent injection passes that fought over the same form — a carrier would save in one
@@ -393,6 +395,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         guard !hasStartedInjection else { return }
         hasStartedInjection = true
         status = .injecting
+        startSuccessWatch()
 
         let probe = await probeFormState()
 
@@ -465,17 +468,20 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         // Category + shipping — only run if not already set.
         if !probe.shippingFullySet {
             injectionStep = "Selecting category…"
+            if hasDetectedSuccess { return }  // posted mid-autofill; stop touching the page
             let categoryResult = await selectCategory(suggestedCategory: suggestedCategory)
             print("[MercariPostingState] Category resume: \(categoryResult)")
         }
 
         // Brand (re-run: idempotent, confirms or sets the brand chip).
+        if hasDetectedSuccess { return }  // posted mid-autofill; stop touching the page
         let brandResult = await selectBrand(suggestedBrand: suggestedBrand)
         print("[MercariPostingState] Brand resume: \(brandResult)")
 
         // Shipping — only run if the carrier isn't set yet.
         if !probe.shippingFullySet {
             injectionStep = "Setting up shipping…"
+            if hasDetectedSuccess { return }  // posted mid-autofill; stop touching the page
             let shippingResult = await completeShipping(
                 weightLbs: weightLbs, lengthIn: lengthIn,
                 widthIn: widthIn, heightIn: heightIn,
@@ -484,10 +490,12 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
             print("[MercariPostingState] Shipping resume: \(shippingResult)")
         }
 
+        if hasDetectedSuccess { return }  // posted mid-autofill; stop touching the page
         let _ = await selectShippingPayer(buyerPays: buyerPaysShipping)
 
         // Last step before List: shipping re-renders the pricing section, so this is the
         // only place the Smart Pricing state is trustworthy.
+        if hasDetectedSuccess { return }  // posted mid-autofill; stop touching the page
         guard await ensureSmartPricingOff(price: price, preferences: preferences) else { return }
 
         injectionStep = "Submitting…"
@@ -498,6 +506,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
             if attempt < 2 { try? await Task.sleep(nanoseconds: 1_500_000_000) }
         }
         if !photoFailed {
+            if hasDetectedSuccess { return }  // posted mid-autofill; stop touching the page
             let submitResult = await submitListing()
             print("[MercariPostingState] Submit resume: \(submitResult)")
             if submitResult.starts(with: "submitted") { latestSubmitResult = submitResult }
@@ -505,7 +514,6 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
             print("[MercariPostingState] Holding submit — photo upload still failing after resume")
         }
 
-        Task { await pollForSuccessModal() }
         isListingComplete = await checkListingButtonEnabled()
         if status == .injecting { status = .waitingForCategory }
     }
@@ -640,6 +648,11 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         }
         hasStartedInjection = true
         status = .injecting
+        // Watch for the post-success screen from the START of the pass, not the end: the user
+        // often taps List by hand (or Mercari posts) while autofill is still on a later step,
+        // and a watch started after the last step never saw it — the sheet sat on Mercari's
+        // "listed" screen forever (2026-11-28).
+        startSuccessWatch()
 
         // Wait until the sell form is actually on the page before touching any field.
         //
@@ -790,6 +803,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         //    Tier 1: Mercari's suggested categories. Tier 2: fuzzy-match the AI category
         //    against the live dropdowns. Tier 3: fall back to "Other".
         injectionStep = "Selecting category…"
+        if hasDetectedSuccess { return }  // posted mid-autofill; stop touching the page
         let categoryResult = await selectCategory(suggestedCategory: suggestedCategory)
         print("[MercariPostingState] Category: \(categoryResult)")
 
@@ -797,6 +811,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         //    Shipping re-renders the pricing section and can switch it back on.)
 
         // 4. Brand — tiered: suggested chips → AI search → no brand.
+        if hasDetectedSuccess { return }  // posted mid-autofill; stop touching the page
         let brandResult = await selectBrand(suggestedBrand: suggestedBrand)
         print("[MercariPostingState] Brand: \(brandResult)")
         // Record the selected brand for future cross-post suggestions (fire-and-forget).
@@ -808,6 +823,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         // 5. Shipping — walk the multi-step carrier modal. Each step is polled, not timed,
         //    because the carrier list is fetched live from Mercari after a weight is entered.
         injectionStep = "Setting up shipping…"
+        if hasDetectedSuccess { return }  // posted mid-autofill; stop touching the page
         let shippingResult = await completeShipping(
             weightLbs: weightLbs, lengthIn: lengthIn, widthIn: widthIn, heightIn: heightIn,
             preferences: preferences
@@ -815,6 +831,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         print("[MercariPostingState] Shipping: \(shippingResult)")
 
         // 5b. "Offer buyers free shipping?" — Yes (seller pays, the default) vs No (buyer pays).
+        if hasDetectedSuccess { return }  // posted mid-autofill; stop touching the page
         let payerResult = await selectShippingPayer(buyerPays: buyerPaysShipping)
         print("[MercariPostingState] ShippingPayer: \(payerResult)")
 
@@ -834,6 +851,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         //
         // 6. Smart Pricing — LAST, after shipping (which re-renders the pricing section). Under
         //    $10 a still-on toggle makes Mercari reject the listing, so that case holds submit.
+        if hasDetectedSuccess { return }  // posted mid-autofill; stop touching the page
         guard await ensureSmartPricingOff(price: price, preferences: preferences) else { return }
 
         injectionStep = "Submitting…"
@@ -844,6 +862,7 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
             if attempt < 2 { try? await Task.sleep(nanoseconds: 1_500_000_000) }
         }
         if !photoFailed {
+            if hasDetectedSuccess { return }  // posted mid-autofill; stop touching the page
             let submitResult = await submitListing()
             print("[MercariPostingState] Submit: \(submitResult)")
             if submitResult.starts(with: "submitted") {
@@ -852,11 +871,6 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
         } else {
             print("[MercariPostingState] Holding submit — photo upload failed after re-checks")
         }
-
-        // Watch for the post-success screen regardless of whether WE clicked List. The user often
-        // finishes by hand (e.g. after fixing photos the autofill missed), and that path needs to
-        // capture the item ID too. Guarded by hasDetectedSuccess, so it's a no-op once detected.
-        Task { await pollForSuccessModal() }
 
         // Poll once to set isListingComplete so the banner accurately reflects form state.
         // (The List button becomes enabled only after Mercari validates all required fields.)
@@ -871,6 +885,16 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
     /// Polls the DOM for Mercari's post-success modal ("Post another item" / "Share your listing").
     /// Mercari's React router does not navigate away from /sell/ after submission, so the
     /// navigation delegate never fires. This is the only reliable success signal.
+    /// Starts `pollForSuccessModal` once per page load (reset by reload / resume).
+    private func startSuccessWatch() {
+        guard !isWatchingForSuccess, !hasDetectedSuccess else { return }
+        isWatchingForSuccess = true
+        Task { [weak self] in
+            await self?.pollForSuccessModal()
+            self?.isWatchingForSuccess = false
+        }
+    }
+
     private func pollForSuccessModal() async {
         guard !hasDetectedSuccess else { return }
         let js = """
@@ -886,15 +910,15 @@ class MercariPostingState: NSObject, ObservableObject, WKNavigationDelegate {
             var body = (document.body && document.body.innerText) || '';
             if (body.indexOf('Listed!') !== -1
                 || body.indexOf('Your item has been listed') !== -1
-                || body.indexOf('Your listing is live') !== -1
-                || /your listing is live/i.test(body)) {
+                || /your listing is live|listed successfully|successfully listed/i.test(body)) {
                 return 'success';
             }
             return 'not-found';
         })();
         """
-        // Up to ~4 minutes — long enough to cover the user manually finishing the listing by hand.
-        for _ in 0..<240 {
+        // Up to 20 minutes: it now runs alongside autofill (which alone can take minutes) and
+        // must still cover the user finishing the listing by hand afterwards.
+        for _ in 0..<1200 {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             guard !hasDetectedSuccess else { return }
             let result = (try? await webView.callJS(js)) as? String ?? "not-found"

@@ -10,6 +10,7 @@ import FirebaseStorage
 import FirebaseAuth
 import _PhotosUI_SwiftUI // required for PhotosPicker
 import AuthenticationServices
+import UniformTypeIdentifiers
 import FirebaseFunctions
 import FirebaseFirestore
 import CoreLocation
@@ -1365,6 +1366,20 @@ struct EditListingSheet: View {
                         Text(err).font(.caption).foregroundStyle(.red)
                     }
                     HStack {
+                        // The field's own edit menu only offered AutoFill on device, never
+                        // Paste (2026-11-28). PasteButton reads the clipboard with no prompt
+                        // and links straight away. Mercari's Share › Copy Link puts a URL
+                        // (not text) on the clipboard, so accept both.
+                        PasteButton(supportedContentTypes: [.url, .plainText]) { providers in
+                            Task { @MainActor in
+                                guard let text = await Self.pastedText(providers) else { return }
+                                mercariLinkInput = text
+                                linkMercari()
+                            }
+                        }
+                        .labelStyle(.titleAndIcon)
+                        .buttonBorderShape(.capsule)
+                        .disabled(isLinkingMercari)
                         Spacer()
                         Button {
                             linkMercari()
@@ -1843,15 +1858,52 @@ struct EditListingSheet: View {
         return nil
     }
 
+    /// First URL or text among pasted items.
+    private static func pastedText(_ providers: [NSItemProvider]) async -> String? {
+        for provider in providers {
+            if provider.canLoadObject(ofClass: URL.self) {
+                let url: URL? = await withCheckedContinuation { done in
+                    _ = provider.loadObject(ofClass: URL.self) { value, _ in done.resume(returning: value) }
+                }
+                if let url { return url.absoluteString }
+            }
+            if provider.canLoadObject(ofClass: String.self) {
+                let text: String? = await withCheckedContinuation { done in
+                    _ = provider.loadObject(ofClass: String.self) { value, _ in done.resume(returning: value) }
+                }
+                if let text { return text }
+            }
+        }
+        return nil
+    }
+
+    /// Mercari's app shares short links (`https://merc.li/…`) with no item id in them.
+    /// Follows the redirect and returns where it lands.
+    private static func resolveShortLink(in input: String) async -> String? {
+        guard let match = input.range(of: #"https?://[^\s]+"#, options: .regularExpression),
+              let url = URL(string: String(input[match])),
+              url.host?.contains("mercari.com") != true else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+        guard let (_, response) = try? await URLSession.shared.data(for: request) else { return nil }
+        return response.url?.absoluteString
+    }
+
     private func linkMercari() {
         mercariLinkError = nil
-        guard let itemId = parseMercariItemId(mercariLinkInput) else {
-            mercariLinkError = "Couldn't find a Mercari item ID in that link."
-            return
-        }
         guard let listingId = listing.id else { return }
+        let input = mercariLinkInput
         isLinkingMercari = true
         Task {
+            var itemId = parseMercariItemId(input)
+            if itemId == nil, let resolved = await Self.resolveShortLink(in: input) {
+                itemId = parseMercariItemId(resolved)
+            }
+            guard let itemId else {
+                mercariLinkError = "Couldn't find a Mercari item ID in that link."
+                isLinkingMercari = false
+                return
+            }
             do {
                 try await Firestore.firestore().collection("listings").document(listingId).updateData([
                     "crossPostListingIds.mercari": itemId,

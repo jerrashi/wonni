@@ -2002,6 +2002,8 @@ class UploadManager: ObservableObject {
         // Finished one while in the background: keep the pending notice's count current.
         if UIApplication.shared.applicationState != .active {
             schedulePausedNotification(for: run)
+            // The run finished in the background: give the grace period back now.
+            if run == nil { endCrossPostBackgroundTask() }
         }
     }
 
@@ -2011,8 +2013,12 @@ class UploadManager: ObservableObject {
     func appDidEnterBackground() {
         guard hasLiveCrossPostWork, let run = CrossPostRunStore.load(), run.hasUnfinishedJobs else { return }
         if crossPostBackgroundTask == .invalid {
+            // The expiration handler MUST end the task before it returns. Deferring it with
+            // `Task { @MainActor in … }` let the handler return first, and iOS terminates an
+            // app whose background task outlives its grace period — the crash seen mid-Mercari
+            // post while backgrounded (2026-11-28). iOS calls this on the main thread.
             crossPostBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "crossPostQueue") { [weak self] in
-                Task { @MainActor in self?.endCrossPostBackgroundTask() }
+                MainActor.assumeIsolated { self?.endCrossPostBackgroundTask() }
             }
         }
         schedulePausedNotification(for: run)
