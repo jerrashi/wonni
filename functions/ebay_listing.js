@@ -827,41 +827,75 @@ async function getEbayAppTokenCached() {
   return token;
 }
 
-// Taxonomy API is a public lookup — app token, no user scope.
+// Public lookups (Taxonomy, listing-structure policy) — app token, no user scope.
+// eBay answers 503/429 when ~10 posts run at once (2026-11-27: 5 of 9 posts failed
+// on taxonomy 503s), so retry with backoff before failing the post.
+let _ebayPublicFetch = (...args) => fetch(...args);
+let _ebayPublicSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function ebayTaxonomyFetch(path) {
   const appToken = await getEbayAppTokenCached();
-  const res = await fetch(`https://${ebayApiHost()}${path}`, {
-    headers: {
-      Authorization: `Bearer ${appToken}`,
-      Accept: "application/json",
-      "Accept-Language": "en-US", // see ebayRestHeaders — undici's `*` default is rejected
-    },
-  });
-  if (!res.ok) {
+  for (let attempt = 0; ; attempt++) {
+    const res = await _ebayPublicFetch(`https://${ebayApiHost()}${path}`, {
+      headers: {
+        Authorization: `Bearer ${appToken}`,
+        Accept: "application/json",
+        "Accept-Language": "en-US", // see ebayRestHeaders — undici's `*` default is rejected
+      },
+    });
+    if (res.ok) return res.json();
+    if ((res.status === 429 || res.status >= 500) && attempt < 3) {
+      await _ebayPublicSleep(1000 * 2 ** attempt + Math.floor(Math.random() * 500));
+      continue;
+    }
     const detail = await res.json().catch(() => ({}));
     throw new Error(`eBay taxonomy ${path} failed (${res.status}): ${detail?.errors?.[0]?.message ?? JSON.stringify(detail)}`);
   }
-  return res.json();
 }
 
-// Auto-pick a leaf category from the title (+ the Gemini category leaf as a
-// query hint when present — no extra Gemini call, just uses an existing field).
-async function suggestCategoryId(uid, title, geminiCategory) {
-  let query = title || "";
-  if (geminiCategory) {
-    const leaf = String(geminiCategory).split(">").pop().trim();
-    if (leaf && !query.toLowerCase().includes(leaf.toLowerCase())) query = `${leaf} ${query}`;
-  }
-  query = query.trim().slice(0, 80);
+// EBAY_US's default category tree is "0" (getCategoryAspects already assumes it);
+// asking for it on every post was one more call to fail under load.
+const CATEGORY_TREE_ID = "0";
 
-  const tree = await ebayTaxonomyFetch(`/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=${MARKETPLACE_ID}`);
-  const treeId = tree?.categoryTreeId ?? "0";
+// Category search text. The Gemini/import category leaf is a hint in front of the
+// title, but only when both fit in eBay's 80 characters: cutting the title lost the
+// product word ("…Distressed Zip-Up Ho", 2026-11-27) and put a hoodie in "Other
+// Animation Merchandise", which refuses sizes.
+function categoryQuery(title, geminiCategory) {
+  const t = String(title || "").trim();
+  const leaf = geminiCategory ? String(geminiCategory).split(">").pop().trim() : "";
+  const withLeaf = leaf && !t.toLowerCase().includes(leaf.toLowerCase()) ? `${leaf} ${t}` : t;
+  return (withLeaf.length <= 80 ? withLeaf : t).slice(0, 80);
+}
+
+// Auto-pick a leaf category. `needsVariations`: the product posts with sizes/colors,
+// so take the first suggestion eBay allows variations in (one policy call for all).
+// With `options`, prefer a category where eBay lets the product's Size/Color vary
+// (a hoodie in "Other Music Memorabilia" allows variations, but not sizes).
+async function suggestCategoryId(uid, title, geminiCategory, { needsVariations = false, options = [] } = {}) {
   const suggestions = await ebayTaxonomyFetch(
-    `/commerce/taxonomy/v1/category_tree/${treeId}/get_category_suggestions?q=${encodeURIComponent(query)}`
+    `/commerce/taxonomy/v1/category_tree/${CATEGORY_TREE_ID}/get_category_suggestions?q=${encodeURIComponent(categoryQuery(title, geminiCategory))}`
   );
-  const categoryId = suggestions?.categorySuggestions?.[0]?.category?.categoryId;
-  if (!categoryId) throw new HttpsError("not-found", "eBay could not suggest a category for this title.");
-  return categoryId;
+  const ids = (suggestions?.categorySuggestions || []).map((s) => s?.category?.categoryId).filter(Boolean);
+  if (!ids.length) throw new HttpsError("not-found", "eBay could not suggest a category for this title.");
+  if (!needsVariations || ids.length === 1) return ids[0];
+  try {
+    const top = ids.slice(0, 8);
+    const data = await ebayTaxonomyFetch(
+      `/sell/metadata/v1/marketplace/${MARKETPLACE_ID}/get_listing_structure_policies?filter=${encodeURIComponent(`categoryIds:{${top.join("|")}}`)}`
+    );
+    const ok = new Set((data?.listingStructurePolicies || []).filter((p) => p.variationsSupported).map((p) => String(p.categoryId)));
+    const allowed = top.filter((id) => ok.has(String(id)));
+    for (const id of allowed.slice(0, 4)) {
+      const aspects = await getCategoryAspects(id);
+      const byName = new Map(aspects.map((a) => [a.name.toLowerCase(), a]));
+      const targets = Object.values(ebayVariationNames(options, aspects)).filter((n) => /^(size|color)$/i.test(n));
+      if (targets.every((n) => byName.get(n.toLowerCase())?.variationEnabled)) return id;
+    }
+    return allowed[0] || ids[0];
+  } catch (err) {
+    console.warn(`[suggestCategoryId] variation policy lookup failed: ${err.message}`);
+    return ids[0];
+  }
 }
 
 // A draft made from a pasted list ("sell similar", bulk_text_drafts.js)
@@ -870,18 +904,26 @@ async function suggestCategoryId(uid, title, geminiCategory) {
 async function resolveCategoryId(uid, title, product) {
   const pinned = product?.ebayCategoryId;
   if (pinned != null && /^\d+$/.test(String(pinned))) return String(pinned);
-  return suggestCategoryId(uid, title, product?.geminiCategory || product?.category);
+  return suggestCategoryId(uid, title, product?.geminiCategory || product?.category, {
+    needsVariations: hasRealOptions(product || {}),
+    options: product?.options || [],
+  });
 }
 
 // All item aspects for a category: [{ name, mode, values, required }].
 // mode = FREE_TEXT | SELECTION_ONLY. Returns [] on failure (the reactive
 // publish-retry is the safety net).
+// Cached per instance (6 h): a batch of posts in one category asked eBay for the
+// same list every time, and a failed (503) lookup posted with no aspects at all.
+const _aspectCache = new Map();
 async function getCategoryAspects(categoryId) {
+  const hit = _aspectCache.get(String(categoryId));
+  if (hit && Date.now() - hit.at < 6 * 3600 * 1000) return hit.aspects;
   try {
     const data = await ebayTaxonomyFetch(
-      `/commerce/taxonomy/v1/category_tree/0/get_item_aspects_for_category?category_id=${encodeURIComponent(categoryId)}`
+      `/commerce/taxonomy/v1/category_tree/${CATEGORY_TREE_ID}/get_item_aspects_for_category?category_id=${encodeURIComponent(categoryId)}`
     );
-    return (data.aspects || []).map((a) => ({
+    const aspects = (data.aspects || []).map((a) => ({
       name: a.localizedAspectName,
       mode: a.aspectConstraint ? a.aspectConstraint.aspectMode : "FREE_TEXT",
       values: (a.aspectValues || []).map((v) => v.localizedValue),
@@ -890,6 +932,8 @@ async function getCategoryAspects(categoryId) {
       // time even when mode is FREE_TEXT (err 25129) — e.g. apparel "Size".
       variationEnabled: !!(a.aspectConstraint && a.aspectConstraint.aspectEnabledForVariations),
     }));
+    _aspectCache.set(String(categoryId), { at: Date.now(), aspects });
+    return aspects;
   } catch (err) {
     console.warn(`[getCategoryAspects] ${err.message}`);
     return [];
@@ -935,7 +979,38 @@ function resolveBrand(product = {}) {
   return "Unbranded";
 }
 
-function findMatchingAspectValue(aspectMeta, title = "", optionValues = {}) {
+// Color words → eBay's standard color names (charcoal is Gray, maroon is Red).
+const COLOR_WORDS = {
+  black: "Black", white: "White", red: "Red", blue: "Blue", navy: "Blue", green: "Green",
+  yellow: "Yellow", pink: "Pink", purple: "Purple", orange: "Orange", grey: "Gray", gray: "Gray",
+  charcoal: "Gray", brown: "Brown", beige: "Beige", cream: "Beige", khaki: "Beige", ivory: "Ivory",
+  gold: "Gold", silver: "Silver", maroon: "Red", burgundy: "Red", mint: "Green", lavender: "Purple",
+};
+const MATERIAL_WORDS = [
+  "cotton", "polyester", "nylon", "spandex", "elastane", "acrylic", "wool", "fleece", "leather",
+  "rayon", "linen", "silk", "denim", "zinc alloy", "stainless steel", "steel", "aluminum", "plastic",
+  "pvc", "silicone", "acrylic resin", "ceramic", "glass", "paper", "canvas",
+];
+const titleCase = (w) => w.replace(/\b\w/g, (c) => c.toUpperCase());
+const wordRe = (w) => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+// First word from `words` found in the title, else in the description.
+function firstWordIn(texts, words) {
+  for (const text of texts) {
+    let best = null;
+    for (const w of words) {
+      const m = wordRe(w).exec(text || "");
+      if (m && (best === null || m.index < best.index)) best = { w, index: m.index };
+    }
+    if (best) return best.w;
+  }
+  return null;
+}
+const fromList = (meta, value) => (meta.values || []).find((v) => v.toLowerCase() === String(value).toLowerCase()) || value;
+
+// `description` (2026-11-27): Color and materials are usually in the description,
+// not the title — "Charcoal Fleece Jacket" and "Photo T-Shirt" failed with
+// "Color is missing".
+function findMatchingAspectValue(aspectMeta, title = "", optionValues = {}, description = "") {
   for (const [optName, optVal] of Object.entries(optionValues)) {
     if (typeof optVal === "string" && optVal.trim()) {
       if (optName.toLowerCase() === aspectMeta.name.toLowerCase()) return optVal.trim();
@@ -958,12 +1033,17 @@ function findMatchingAspectValue(aspectMeta, title = "", optionValues = {}) {
       return { SMALL: "S", MEDIUM: "M", LARGE: "L", "X-LARGE": "XL", "XX-LARGE": "2XL" }[s] || s;
     }
   }
-  if (a === "color") {
-    const m = title.match(/\b(Black|White|Red|Blue|Navy|Green|Yellow|Pink|Purple|Orange|Grey|Gray|Brown|Beige|Gold|Silver)\b/i);
-    if (m) return m[1];
+  if (a === "color" || a === "colour") {
+    const w = firstWordIn([title, description], Object.keys(COLOR_WORDS));
+    return w ? fromList(aspectMeta, COLOR_WORDS[w.toLowerCase()]) : null;
   }
+  if (/material/.test(a)) {
+    const w = firstWordIn([title, description], MATERIAL_WORDS);
+    return w ? fromList(aspectMeta, titleCase(w === "pvc" ? "PVC" : w)) : null;
+  }
+  // Title only: a description mentions too much ("Style: Country", 2026-11-27).
   for (const val of aspectMeta.values || []) {
-    if (val.length >= 3 && new RegExp(`\\b${val.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(title)) return val;
+    if (val.length >= 3 && wordRe(val).test(title)) return val;
   }
   return null;
 }
@@ -971,18 +1051,20 @@ function findMatchingAspectValue(aspectMeta, title = "", optionValues = {}) {
 // Aspects where a made-up value is a wrong listing: never filled with the brand or
 // eBay's first allowed value. A Size of "BTS" (the brand) failed every apparel post
 // 2026-11-26 (25129); guessing "XS" would post the wrong size. Left missing, eBay
-// asks for it by name, which is the error the seller can act on.
+// asks for it by name, which is the error the seller can act on. Materials too
+// ("Outer Shell Material: BTS", 2026-11-27).
 const NO_GUESS_ASPECTS = new Set(["size", "color", "colour"]);
+const isNoGuess = (name) => NO_GUESS_ASPECTS.has(String(name).toLowerCase()) || /material/i.test(String(name));
 
-function fillValueForAspect(name, categoryAspects, brand, title = "", optionValues = {}) {
+function fillValueForAspect(name, categoryAspects, brand, title = "", optionValues = {}, description = "") {
   const meta = categoryAspects.find((a) => a.name === name);
   if (meta) {
-    const matched = findMatchingAspectValue(meta, title, optionValues);
+    const matched = findMatchingAspectValue(meta, title, optionValues, description);
     if (matched) return [matched];
-    if (NO_GUESS_ASPECTS.has(String(name).toLowerCase())) return null;
+    if (isNoGuess(name)) return null;
     if (meta.mode === "SELECTION_ONLY" && meta.values.length > 0) return [meta.values[0]];
   }
-  if (NO_GUESS_ASPECTS.has(String(name).toLowerCase())) return null;
+  if (isNoGuess(name)) return null;
   return [brand && brand !== "Generic" && brand !== "Unbranded" ? brand : "Unbranded"];
 }
 
@@ -1045,13 +1127,13 @@ function toAspectArrays(obj = {}) {
   return out;
 }
 
-function buildProductAspects(categoryAspects, brand, title = "", optionValues = {}, customAspects = {}) {
+function buildProductAspects(categoryAspects, brand, title = "", optionValues = {}, customAspects = {}, description = "") {
   const aspects = { ...customAspects };
   aspects.Brand = [brand && brand !== "Generic" ? brand : "Unbranded"];
   for (const aspect of categoryAspects) {
     if (aspects[aspect.name]) continue;
     if (!aspect.required && aspect.name !== "Size Type" && aspect.name !== "Department") continue;
-    const value = fillValueForAspect(aspect.name, categoryAspects, brand, title, optionValues);
+    const value = fillValueForAspect(aspect.name, categoryAspects, brand, title, optionValues, description);
     if (value) aspects[aspect.name] = value;
   }
   return aspects;
@@ -1240,7 +1322,7 @@ async function createOrAdoptOffer(uid, sku, offerBody, waits = 0) {
 // aspect, retry) and a condition the category rejects (downgrade once to
 // generic Used, retry). `refresh({ addedAspects, condition })` re-PUTs the
 // inventory item(s)/group so the changes take effect before the next attempt.
-async function publishWithRecovery({ doPublish, refresh, categoryAspects, brand, title }) {
+async function publishWithRecovery({ doPublish, refresh, categoryAspects, brand, title, description = "" }) {
   const addedAspects = {};
   let conditionOverride = null;
   let triedCondition = false;
@@ -1276,7 +1358,7 @@ async function publishWithRecovery({ doPublish, refresh, categoryAspects, brand,
         continue;
       }
       const missing = extractMissingAspects(errs).filter((n) => !addedAspects[n]);
-      const fillable = missing.map((n) => [n, fillValueForAspect(n, categoryAspects, brand, title, {})]).filter(([, v]) => v);
+      const fillable = missing.map((n) => [n, fillValueForAspect(n, categoryAspects, brand, title, {}, description)]).filter(([, v]) => v);
       if (!fillable.length || attempt === 5) throw ebayPolicyError(e) || e;
       for (const [n, v] of fillable) addedAspects[n] = v;
       console.warn(`[ebay publish] filling missing aspects: ${fillable.map(([n]) => n).join(", ")}`);
@@ -1290,7 +1372,7 @@ async function postSingleVariant(ctx) {
   const { uid, product, productId, docRef, basePrice, categoryId, listingPolicies, merchantLocationKey, title, description, categoryAspects, brand, conditionEnum, conditionDescriptors } = ctx;
   const sku = productId;
   const itemQty = typeof product.quantity === "number" && product.quantity > 0 ? product.quantity : 1;
-  const productAspects = buildProductAspects(categoryAspects, brand, title, {}, { ...toAspectArrays(product.geminiItemSpecifics), ...toAspectArrays(product.ebayAspects) });
+  const productAspects = buildProductAspects(categoryAspects, brand, title, {}, { ...toAspectArrays(product.geminiItemSpecifics), ...toAspectArrays(product.ebayAspects) }, description);
 
   const putItem = ({ addedAspects = {}, condition } = {}) =>
     ebayRequest(uid, "PUT", `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
@@ -1327,7 +1409,7 @@ async function postSingleVariant(ctx) {
   const published = await publishWithRecovery({
     doPublish: () => ebayRequest(uid, "POST", `/sell/inventory/v1/offer/${offerId}/publish`),
     refresh: putItem,
-    categoryAspects, brand, title,
+    categoryAspects, brand, title, description,
   });
   const listingId = published?.listingId ?? null;
 
@@ -1487,7 +1569,7 @@ async function postVariantGroup(ctx, { groupKey, activeVariants }) {
   // variant item carries those + its own option values (Size/Color). Drop
   // any aspect that IS a variation dimension — it belongs in variesBy, not
   // as a fixed value.
-  const productAspects = buildProductAspects(categoryAspects, brand, title, {}, { ...toAspectArrays(product.geminiItemSpecifics), ...toAspectArrays(product.ebayAspects) });
+  const productAspects = buildProductAspects(categoryAspects, brand, title, {}, { ...toAspectArrays(product.geminiItemSpecifics), ...toAspectArrays(product.ebayAspects) }, description);
   for (const opt of options) { delete productAspects[opt.name]; delete productAspects[nameFor(opt.name)]; }
 
   // 25 items per eBay call (bulk), single-PUT fallback per failed row.
@@ -1552,7 +1634,7 @@ async function postVariantGroup(ctx, { groupKey, activeVariants }) {
       await putAllItems({ addedAspects, condition });
       await putGroup({ addedAspects });
     },
-    categoryAspects, brand, title,
+    categoryAspects, brand, title, description,
   });
   const listingId = published?.listingId ?? null;
   return { listingId, groupKey, perVariant };
@@ -1981,7 +2063,7 @@ function buildSingleVariantEditPayloads({
     ...buildProductAspects(categoryAspects, brand, title, {}, {
       ...toAspectArrays(product.geminiItemSpecifics),
       ...toAspectArrays(product.ebayAspects),
-    }),
+    }, description),
   };
   const itemPayload = {
     product: { ...toEbayInventoryProduct(product, { imageLimit: 12, title }), aspects },
@@ -2074,7 +2156,7 @@ async function pushSingleVariantEdit(uid, product, productId) {
       }
     },
     refresh: putItem,
-    categoryAspects, brand, title,
+    categoryAspects, brand, title, description,
   });
   return { offerId, sku };
 }
@@ -2629,6 +2711,8 @@ module.exports = {
     buildShippingRuleName, buildShippingRulePayload,
     validateListingFormatInput, buildEbayOfferPayload,
     buildSingleVariantEditPayloads, pushSingleVariantEdit, pushEbayEdit, mapLimit,
-    fillValueForAspect, buildProductAspects, hasRealOptions,
+    fillValueForAspect, buildProductAspects, hasRealOptions, getCategoryAspects, resolveBrand,
+    categoryQuery, suggestCategoryId, ebayTaxonomyFetch,
+    setPublicFetch: (f, sleepFn) => { _aspectCache.clear(); _ebayPublicFetch = f || ((...a) => fetch(...a)); _ebayPublicSleep = sleepFn || ((ms) => new Promise((r) => setTimeout(r, ms))); _appTokenCache = { token: f ? "test" : null, exp: f ? Date.now() + 1e9 : 0 }; },
   },
 };
